@@ -50,8 +50,24 @@ public class PojoArrayToFlussArray {
         ArrayType arrayType = (ArrayType) fieldType;
         DataType elementType = arrayType.getElementType();
 
-        // Handle primitive arrays directly
-        if (obj instanceof Boolean[]) {
+        // Handle primitive arrays
+        if (obj instanceof boolean[]) {
+            return new GenericArray((boolean[]) obj);
+        } else if (obj instanceof long[]) {
+            return new GenericArray((long[]) obj);
+        } else if (obj instanceof double[]) {
+            return new GenericArray((double[]) obj);
+        } else if (obj instanceof float[]) {
+            return new GenericArray((float[]) obj);
+        } else if (obj instanceof short[]) {
+            return new GenericArray((short[]) obj);
+        } else if (obj instanceof byte[]) {
+            return new GenericArray((byte[]) obj);
+        } else if (obj instanceof int[]) {
+            return new GenericArray((int[]) obj);
+        }
+        // Handle boxed wrapper arrays
+        else if (obj instanceof Boolean[]) {
             return new GenericArray((Boolean[]) obj);
         } else if (obj instanceof Long[]) {
             return new GenericArray((Long[]) obj);

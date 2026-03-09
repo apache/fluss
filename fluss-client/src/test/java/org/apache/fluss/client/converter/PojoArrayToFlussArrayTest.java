@@ -43,6 +43,13 @@ public class PojoArrayToFlussArrayTest {
         // Schema with all array types
         RowType table =
                 RowType.builder()
+                        .field("primitiveBooleanArray", DataTypes.ARRAY(DataTypes.BOOLEAN()))
+                        .field("primitiveByteArray", DataTypes.ARRAY(DataTypes.TINYINT()))
+                        .field("primitiveShortArray", DataTypes.ARRAY(DataTypes.SMALLINT()))
+                        .field("primitiveIntArray", DataTypes.ARRAY(DataTypes.INT()))
+                        .field("primitiveLongArray", DataTypes.ARRAY(DataTypes.BIGINT()))
+                        .field("primitiveFloatArray", DataTypes.ARRAY(DataTypes.FLOAT()))
+                        .field("primitiveDoubleArray", DataTypes.ARRAY(DataTypes.DOUBLE()))
                         .field("booleanArray", DataTypes.ARRAY(DataTypes.BOOLEAN()))
                         .field("byteArray", DataTypes.ARRAY(DataTypes.TINYINT()))
                         .field("shortArray", DataTypes.ARRAY(DataTypes.SMALLINT()))
@@ -67,56 +74,98 @@ public class PojoArrayToFlussArrayTest {
         ArrayPojo pojo = ArrayPojo.sample();
         GenericRow row = writer.toRow(pojo);
 
+        // Verify primitive boolean array
+        InternalArray primitiveBoolArray = row.getArray(0);
+        assertThat(primitiveBoolArray.size()).isEqualTo(2);
+        assertThat(primitiveBoolArray.getBoolean(0)).isTrue();
+        assertThat(primitiveBoolArray.getBoolean(1)).isFalse();
+
+        // Verify primitive byte array
+        InternalArray primitiveByteArray = row.getArray(1);
+        assertThat(primitiveByteArray.size()).isEqualTo(2);
+        assertThat(primitiveByteArray.getByte(0)).isEqualTo((byte) 1);
+        assertThat(primitiveByteArray.getByte(1)).isEqualTo((byte) 2);
+
+        // Verify primitive short array
+        InternalArray primitiveShortArray = row.getArray(2);
+        assertThat(primitiveShortArray.size()).isEqualTo(2);
+        assertThat(primitiveShortArray.getShort(0)).isEqualTo((short) 100);
+        assertThat(primitiveShortArray.getShort(1)).isEqualTo((short) 200);
+
+        // Verify primitive int array
+        InternalArray primitiveIntArray = row.getArray(3);
+        assertThat(primitiveIntArray.size()).isEqualTo(2);
+        assertThat(primitiveIntArray.getInt(0)).isEqualTo(1000);
+        assertThat(primitiveIntArray.getInt(1)).isEqualTo(2000);
+
+        // Verify primitive long array
+        InternalArray primitiveLongArray = row.getArray(4);
+        assertThat(primitiveLongArray.size()).isEqualTo(2);
+        assertThat(primitiveLongArray.getLong(0)).isEqualTo(10000L);
+        assertThat(primitiveLongArray.getLong(1)).isEqualTo(20000L);
+
+        // Verify primitive float array
+        InternalArray primitiveFloatArray = row.getArray(5);
+        assertThat(primitiveFloatArray.size()).isEqualTo(2);
+        assertThat(primitiveFloatArray.getFloat(0)).isEqualTo(1.1f);
+        assertThat(primitiveFloatArray.getFloat(1)).isEqualTo(2.2f);
+
+        // Verify primitive double array
+        InternalArray primitiveDoubleArray = row.getArray(6);
+        assertThat(primitiveDoubleArray.size()).isEqualTo(2);
+        assertThat(primitiveDoubleArray.getDouble(0)).isEqualTo(1.11);
+        assertThat(primitiveDoubleArray.getDouble(1)).isEqualTo(2.22);
+
         // Verify boolean array
-        InternalArray boolArray = row.getArray(0);
+        InternalArray boolArray = row.getArray(7);
         assertThat(boolArray.size()).isEqualTo(2);
         assertThat(boolArray.getBoolean(0)).isTrue();
         assertThat(boolArray.getBoolean(1)).isFalse();
 
         // Verify byte array
-        InternalArray byteArray = row.getArray(1);
+        InternalArray byteArray = row.getArray(8);
         assertThat(byteArray.size()).isEqualTo(2);
         assertThat(byteArray.getByte(0)).isEqualTo((byte) 1);
         assertThat(byteArray.getByte(1)).isEqualTo((byte) 2);
 
         // Verify short array
-        InternalArray shortArray = row.getArray(2);
+        InternalArray shortArray = row.getArray(9);
         assertThat(shortArray.size()).isEqualTo(2);
         assertThat(shortArray.getShort(0)).isEqualTo((short) 100);
         assertThat(shortArray.getShort(1)).isEqualTo((short) 200);
 
         // Verify int array
-        InternalArray intArray = row.getArray(3);
+        InternalArray intArray = row.getArray(10);
         assertThat(intArray.size()).isEqualTo(2);
         assertThat(intArray.getInt(0)).isEqualTo(1000);
         assertThat(intArray.getInt(1)).isEqualTo(2000);
 
         // Verify long array
-        InternalArray longArray = row.getArray(4);
+        InternalArray longArray = row.getArray(11);
         assertThat(longArray.size()).isEqualTo(2);
         assertThat(longArray.getLong(0)).isEqualTo(10000L);
         assertThat(longArray.getLong(1)).isEqualTo(20000L);
 
         // Verify float array
-        InternalArray floatArray = row.getArray(5);
+        InternalArray floatArray = row.getArray(12);
         assertThat(floatArray.size()).isEqualTo(2);
         assertThat(floatArray.getFloat(0)).isEqualTo(1.1f);
         assertThat(floatArray.getFloat(1)).isEqualTo(2.2f);
 
         // Verify double array
-        InternalArray doubleArray = row.getArray(6);
+        InternalArray doubleArray = row.getArray(13);
         assertThat(doubleArray.size()).isEqualTo(2);
         assertThat(doubleArray.getDouble(0)).isEqualTo(1.11);
         assertThat(doubleArray.getDouble(1)).isEqualTo(2.22);
 
         // Verify string array
-        InternalArray stringArray = row.getArray(7);
+        InternalArray stringArray = row.getArray(14);
         assertThat(stringArray.size()).isEqualTo(2);
         assertThat(stringArray.getString(0).toString()).isEqualTo("hello");
         assertThat(stringArray.getString(1).toString()).isEqualTo("world");
 
         // Verify decimal array
-        InternalArray decimalArray = row.getArray(8);
+        InternalArray decimalArray = row.getArray(15);
         assertThat(decimalArray.size()).isEqualTo(2);
         assertThat(decimalArray.getDecimal(0, 10, 2).toBigDecimal())
                 .isEqualTo(new BigDecimal("123.45"));
@@ -124,20 +173,20 @@ public class PojoArrayToFlussArrayTest {
                 .isEqualTo(new BigDecimal("678.90"));
 
         // Verify date array (days since epoch)
-        InternalArray dateArray = row.getArray(9);
+        InternalArray dateArray = row.getArray(16);
         assertThat(dateArray.size()).isEqualTo(2);
         assertThat(dateArray.getInt(0)).isEqualTo((int) LocalDate.of(2025, 1, 1).toEpochDay());
         assertThat(dateArray.getInt(1)).isEqualTo((int) LocalDate.of(2025, 12, 31).toEpochDay());
 
         // Verify time array (millis of day)
-        InternalArray timeArray = row.getArray(10);
+        InternalArray timeArray = row.getArray(17);
         assertThat(timeArray.size()).isEqualTo(2);
         assertThat(timeArray.getInt(0)).isEqualTo(0); // midnight
         assertThat(timeArray.getInt(1))
                 .isEqualTo((int) (LocalTime.of(12, 30, 0).toNanoOfDay() / 1_000_000));
 
         // Verify timestamp array
-        InternalArray timestampArray = row.getArray(11);
+        InternalArray timestampArray = row.getArray(18);
         assertThat(timestampArray.size()).isEqualTo(2);
         assertThat(timestampArray.getTimestampNtz(0, 3).getMillisecond())
                 .isEqualTo(
@@ -147,13 +196,13 @@ public class PojoArrayToFlussArrayTest {
                                 .toEpochMilli());
 
         // Verify timestampLtz array
-        InternalArray timestampLtzArray = row.getArray(12);
+        InternalArray timestampLtzArray = row.getArray(19);
         assertThat(timestampLtzArray.size()).isEqualTo(2);
         assertThat(timestampLtzArray.getTimestampLtz(0, 3).getEpochMillisecond())
                 .isEqualTo(Instant.parse("2025-01-01T00:00:00Z").toEpochMilli());
 
         // Verify nested array (array<array<int>>)
-        InternalArray nestedArray = row.getArray(13);
+        InternalArray nestedArray = row.getArray(20);
         assertThat(nestedArray.size()).isEqualTo(2);
         InternalArray innerArray1 = nestedArray.getArray(0);
         assertThat(innerArray1.getInt(0)).isEqualTo(1);
@@ -164,7 +213,7 @@ public class PojoArrayToFlussArrayTest {
         assertThat(innerArray2.getInt(2)).isEqualTo(5);
 
         // Verify map array (array<map<string, int>>)
-        InternalArray mapArray = row.getArray(14);
+        InternalArray mapArray = row.getArray(21);
         assertThat(mapArray.size()).isEqualTo(2);
         // Verify inner map 1
         InternalMap innerMap1 = mapArray.getMap(0);
@@ -240,6 +289,13 @@ public class PojoArrayToFlussArrayTest {
     /** POJO for testing all array types. */
     @SuppressWarnings("unchecked")
     public static class ArrayPojo {
+        public boolean[] primitiveBooleanArray;
+        public byte[] primitiveByteArray;
+        public short[] primitiveShortArray;
+        public int[] primitiveIntArray;
+        public long[] primitiveLongArray;
+        public float[] primitiveFloatArray;
+        public double[] primitiveDoubleArray;
         public Boolean[] booleanArray;
         public Byte[] byteArray;
         public Short[] shortArray;
@@ -260,6 +316,13 @@ public class PojoArrayToFlussArrayTest {
 
         public static ArrayPojo sample() {
             ArrayPojo pojo = new ArrayPojo();
+            pojo.primitiveBooleanArray = new boolean[] {true, false};
+            pojo.primitiveByteArray = new byte[] {1, 2};
+            pojo.primitiveShortArray = new short[] {100, 200};
+            pojo.primitiveIntArray = new int[] {1000, 2000};
+            pojo.primitiveLongArray = new long[] {10000L, 20000L};
+            pojo.primitiveFloatArray = new float[] {1.1f, 2.2f};
+            pojo.primitiveDoubleArray = new double[] {1.11, 2.22};
             pojo.booleanArray = new Boolean[] {true, false};
             pojo.byteArray = new Byte[] {1, 2};
             pojo.shortArray = new Short[] {100, 200};
