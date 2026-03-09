@@ -17,7 +17,9 @@
 
 package org.apache.fluss.client.converter;
 
+import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DecimalType;
@@ -135,27 +137,43 @@ public final class RowToPojoConverter<T> {
             case BYTES:
                 return InternalRow::getBytes;
             case DECIMAL:
+                DecimalType decimalType = (DecimalType) fieldType;
                 return (row, pos) ->
                         FlussTypeToPojoTypeConverter.convertDecimalValue(
-                                (DecimalType) fieldType, row, pos);
+                                row.getDecimal(
+                                        pos, decimalType.getPrecision(), decimalType.getScale()));
             case DATE:
-                return FlussTypeToPojoTypeConverter::convertDateValue;
+                return (row, pos) -> FlussTypeToPojoTypeConverter.convertDateValue(row.getInt(pos));
             case TIME_WITHOUT_TIME_ZONE:
-                return FlussTypeToPojoTypeConverter::convertTimeValue;
+                return (row, pos) -> FlussTypeToPojoTypeConverter.convertTimeValue(row.getInt(pos));
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 {
                     final int precision = DataTypeChecks.getPrecision(fieldType);
                     return (row, pos) ->
                             FlussTypeToPojoTypeConverter.convertTimestampNtzValue(
-                                    precision, row, pos);
+                                    row.getTimestampNtz(pos, precision));
                 }
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 {
                     final int precision = DataTypeChecks.getPrecision(fieldType);
                     return (row, pos) ->
                             FlussTypeToPojoTypeConverter.convertTimestampLtzValue(
-                                    precision, prop, row, pos);
+                                    row.getTimestampLtz(pos, precision), prop.name, prop.type);
                 }
+            case ARRAY:
+                ArrayType arrayType = (ArrayType) fieldType;
+                Class<?> componentType = prop.type.getComponentType();
+                return (row, pos) -> {
+                    InternalArray array = row.getArray(pos);
+                    return array == null
+                            ? null
+                            : new FlussArrayToPojoArray(
+                                            array,
+                                            arrayType.getElementType(),
+                                            prop.name,
+                                            prop.type.getComponentType())
+                                    .convertArray();
+                };
             default:
                 throw new UnsupportedOperationException(
                         String.format(

@@ -20,12 +20,10 @@ package org.apache.fluss.client.converter;
 
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
-import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
-import org.apache.fluss.types.DecimalType;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -53,6 +51,10 @@ public class FlussTypeToPojoTypeConverter {
      */
     static Object convertTextValue(
             DataType fieldType, String fieldName, Class<?> pojoType, BinaryString s) {
+        if (s == null) {
+            return null;
+        }
+
         String v = s.toString();
         if (pojoType == String.class) {
             if (fieldType.getTypeRoot() == DataTypeRoot.CHAR && v.length() != 1) {
@@ -83,24 +85,22 @@ public class FlussTypeToPojoTypeConverter {
      * Converts a DECIMAL value from an InternalRow into a BigDecimal using the column's precision
      * and scale. The row position is assumed non-null (caller checks), so this never returns null.
      */
-    static BigDecimal convertDecimalValue(DecimalType decimalType, InternalRow row, int pos) {
-        Decimal d = row.getDecimal(pos, decimalType.getPrecision(), decimalType.getScale());
+    static BigDecimal convertDecimalValue(Decimal d) {
         return d.toBigDecimal();
     }
 
     /** Converts a DATE value stored as int days since epoch to a LocalDate. */
-    static LocalDate convertDateValue(InternalRow row, int pos) {
-        return LocalDate.ofEpochDay(row.getInt(pos));
+    static LocalDate convertDateValue(int daysSinceEpoch) {
+        return LocalDate.ofEpochDay(daysSinceEpoch);
     }
 
     /** Converts a TIME_WITHOUT_TIME_ZONE value stored as int millis of day to a LocalTime. */
-    static LocalTime convertTimeValue(InternalRow row, int pos) {
-        return LocalTime.ofNanoOfDay(row.getInt(pos) * 1_000_000L);
+    static LocalTime convertTimeValue(int millisOfDay) {
+        return LocalTime.ofNanoOfDay(millisOfDay * 1_000_000L);
     }
 
     /** Converts a TIMESTAMP_WITHOUT_TIME_ZONE value to a LocalDateTime honoring precision. */
-    static Object convertTimestampNtzValue(int precision, InternalRow row, int pos) {
-        TimestampNtz t = row.getTimestampNtz(pos, precision);
+    static Object convertTimestampNtzValue(TimestampNtz t) {
         return t.toLocalDateTime();
     }
 
@@ -108,17 +108,15 @@ public class FlussTypeToPojoTypeConverter {
      * Converts a TIMESTAMP_WITH_LOCAL_TIME_ZONE value to either Instant or OffsetDateTime in UTC,
      * depending on the target POJO property type.
      */
-    static Object convertTimestampLtzValue(
-            int precision, PojoType.Property prop, InternalRow row, int pos) {
-        TimestampLtz t = row.getTimestampLtz(pos, precision);
-        if (prop.type == Instant.class) {
+    static Object convertTimestampLtzValue(TimestampLtz t, String fieldName, Class<?> pojoType) {
+        if (pojoType == Instant.class) {
             return t.toInstant();
-        } else if (prop.type == OffsetDateTime.class) {
+        } else if (pojoType == OffsetDateTime.class) {
             return OffsetDateTime.ofInstant(t.toInstant(), ZoneOffset.UTC);
         }
         throw new IllegalArgumentException(
                 String.format(
                         "Field %s is not an Instant or OffsetDateTime. Cannot convert from TimestampData.",
-                        prop.name));
+                        fieldName));
     }
 }
