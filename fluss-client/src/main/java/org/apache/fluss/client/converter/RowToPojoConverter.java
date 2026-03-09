@@ -23,6 +23,7 @@ import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DecimalType;
+import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
@@ -174,6 +175,10 @@ public final class RowToPojoConverter<T> {
                                             prop.type.getComponentType())
                                     .convertArray();
                 };
+            case MAP:
+                return (row, pos) ->
+                        new FlussMapToPojoMap(row.getMap(pos), (MapType) fieldType, prop.name)
+                                .convertMap();
             default:
                 throw new UnsupportedOperationException(
                         String.format(

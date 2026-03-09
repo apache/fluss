@@ -29,6 +29,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -52,6 +53,9 @@ public class FlussArrayToPojoArrayTest {
                         .field("timestampArray", DataTypes.ARRAY(DataTypes.TIMESTAMP(3)))
                         .field("timestampLtzArray", DataTypes.ARRAY(DataTypes.TIMESTAMP_LTZ(3)))
                         .field("nestedIntArray", DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.INT())))
+                        .field(
+                                "mapArray",
+                                DataTypes.ARRAY(DataTypes.MAP(DataTypes.STRING(), DataTypes.INT())))
                         .build();
 
         PojoToRowConverter<ArrayPojo> writer = PojoToRowConverter.of(ArrayPojo.class, table, table);
@@ -150,6 +154,14 @@ public class FlussArrayToPojoArrayTest {
                             {1, 2},
                             {3, 4, 5}
                         });
+        // Verify map array (array<map<string, int>>)
+        Object[] mapArray = back.mapArray;
+        assertThat(mapArray.length).isEqualTo(2);
+        assertThat(back.mapArray)
+                .isEqualTo(
+                        new Map[] {
+                            Map.of("test_1", 1, "test_2", 2), Map.of("test_3", 3, "test_4", 4)
+                        });
     }
 
     @Test
@@ -202,6 +214,7 @@ public class FlussArrayToPojoArrayTest {
     }
 
     /** POJO for testing all array types. */
+    @SuppressWarnings("unchecked")
     public static class ArrayPojo {
         public Object[] booleanArray;
         public Object[] byteArray;
@@ -217,6 +230,7 @@ public class FlussArrayToPojoArrayTest {
         public Object[] timestampArray;
         public Object[] timestampLtzArray;
         public Object[][] nestedIntArray;
+        public Map<Object, Object>[] mapArray;
 
         public ArrayPojo() {}
 
@@ -248,6 +262,8 @@ public class FlussArrayToPojoArrayTest {
                         {1, 2},
                         {3, 4, 5}
                     };
+            pojo.mapArray =
+                    new Map[] {Map.of("test_1", 1, "test_2", 2), Map.of("test_3", 3, "test_4", 4)};
             return pojo;
         }
     }
