@@ -138,7 +138,12 @@ public final class ConvertersTestFixtures {
                     Instant.parse("2025-07-23T15:01:30Z"),
                     OffsetDateTime.of(2025, 7, 23, 15, 1, 30, 0, ZoneOffset.UTC),
                     new Integer[] {1, 2},
-                    new HashMap<>(Map.of("test_1", 1, "test_2", 2)));
+                    new HashMap<String, Integer>() {
+                        {
+                            put("test_1", 1);
+                            put("test_2", 2);
+                        }
+                    });
         }
 
         @Override

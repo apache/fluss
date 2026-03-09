@@ -288,7 +288,20 @@ public class PojoArrayToFlussArrayTest {
                     };
 
             pojo.mapArray =
-                    new Map[] {Map.of("test_1", 1, "test_2", 2), Map.of("test_3", 3, "test_4", 4)};
+                    new HashMap[] {
+                        new HashMap<Object, Object>() {
+                            {
+                                put("test_1", 1);
+                                put("test_2", 2);
+                            }
+                        },
+                        new HashMap<Object, Object>() {
+                            {
+                                put("test_3", 3);
+                                put("test_4", 4);
+                            }
+                        }
+                    };
             return pojo;
         }
     }

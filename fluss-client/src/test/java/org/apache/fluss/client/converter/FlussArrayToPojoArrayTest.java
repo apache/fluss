@@ -29,6 +29,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.HashMap;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -159,8 +160,19 @@ public class FlussArrayToPojoArrayTest {
         assertThat(mapArray.length).isEqualTo(2);
         assertThat(back.mapArray)
                 .isEqualTo(
-                        new Map[] {
-                            Map.of("test_1", 1, "test_2", 2), Map.of("test_3", 3, "test_4", 4)
+                        new HashMap[] {
+                            new HashMap<String, Integer>() {
+                                {
+                                    put("test_1", 1);
+                                    put("test_2", 2);
+                                }
+                            },
+                            new HashMap<String, Integer>() {
+                                {
+                                    put("test_3", 3);
+                                    put("test_4", 4);
+                                }
+                            }
                         });
     }
 
@@ -263,7 +275,20 @@ public class FlussArrayToPojoArrayTest {
                         {3, 4, 5}
                     };
             pojo.mapArray =
-                    new Map[] {Map.of("test_1", 1, "test_2", 2), Map.of("test_3", 3, "test_4", 4)};
+                    new HashMap[] {
+                        new HashMap<Object, Object>() {
+                            {
+                                put("test_1", 1);
+                                put("test_2", 2);
+                            }
+                        },
+                        new HashMap<Object, Object>() {
+                            {
+                                put("test_3", 3);
+                                put("test_4", 4);
+                            }
+                        }
+                    };
             return pojo;
         }
     }

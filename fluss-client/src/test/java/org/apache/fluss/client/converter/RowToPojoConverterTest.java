@@ -159,7 +159,13 @@ public class RowToPojoConverterTest {
 
         public static MapPojo sample() {
             MapPojo pojo = new MapPojo();
-            pojo.mapField = new HashMap<>(Map.of("test_1", 1, "test_2", 2));
+            pojo.mapField =
+                    new HashMap<Object, Object>() {
+                        {
+                            put("test_1", 1);
+                            put("test_2", 2);
+                        }
+                    };
             return pojo;
         }
     }
