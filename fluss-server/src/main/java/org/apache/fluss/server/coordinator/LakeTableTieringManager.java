@@ -138,7 +138,7 @@ public class LakeTableTieringManager implements AutoCloseable {
     // table_id -> delayed tiering task
     private final Map<Long, DelayedTiering> delayedTieringByTableId;
 
-    private final ReadWriteLock lock = new ReentrantReadWriteLock();
+    private final ReadWriteLock lock = new ReentrantReadWriteLock(true);
 
     private final LakeTieringMetricGroup tieringMetricGroup;
 
@@ -536,6 +536,7 @@ public class LakeTableTieringManager implements AutoCloseable {
         }
 
         lakeTieringScheduleTimer.shutdown();
+        tieringMetricGroup.close();
     }
 
     private class DelayedTiering extends TimerTask {
