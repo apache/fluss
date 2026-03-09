@@ -121,7 +121,7 @@ public class TableDescriptorValidation {
     }
 
     public static void validateAlterTableProperties(
-            TableInfo currentTable, Set<String> tableKeysToChange, Set<String> customKeysToChange) {
+            TableInfo currentTable, Set<String> tableKeysToChange) {
         TableConfig currentConfig = currentTable.getTableConfig();
         tableKeysToChange.forEach(
                 k -> {
@@ -139,19 +139,6 @@ public class TableDescriptorValidation {
                                         ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
                     }
                 });
-
-        if (currentConfig.isDataLakeEnabled() && currentConfig.getDataLakeFormat().isPresent()) {
-            String format = currentConfig.getDataLakeFormat().get().toString();
-            customKeysToChange.forEach(
-                    k -> {
-                        if (k.startsWith(format + ".")) {
-                            throw new InvalidConfigException(
-                                    String.format(
-                                            "Property '%s' is not supported to alter which is for datalake table.",
-                                            k));
-                        }
-                    });
-        }
     }
 
     private static void checkSystemColumns(RowType schema) {
