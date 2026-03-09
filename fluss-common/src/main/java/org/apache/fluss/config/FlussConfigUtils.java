@@ -19,12 +19,15 @@ package org.apache.fluss.config;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.exception.IllegalConfigurationException;
+import org.apache.fluss.fs.FsPath;
 
 import java.lang.reflect.Field;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /** Utilities of Fluss {@link ConfigOptions}. */
 @Internal
@@ -76,5 +79,119 @@ public class FlussConfigUtils {
             }
         }
         return options;
+    }
+
+    public static void validateCoordinatorConfigs(Configuration conf) {
+        validateServerConfigs(conf);
+    }
+
+    public static void validateTabletConfigs(Configuration conf) {
+        validateServerConfigs(conf);
+
+        Optional<Integer> serverId = conf.getOptional(ConfigOptions.TABLET_SERVER_ID);
+        if (!serverId.isPresent()) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Configuration %s must be set.", ConfigOptions.TABLET_SERVER_ID.key()));
+        }
+        validMinValue(ConfigOptions.TABLET_SERVER_ID, serverId.get(), 0);
+    }
+
+    /** Validate common server configs. */
+    protected static void validateServerConfigs(Configuration conf) {
+        // Validate remote.data.dir and remote.data.dirs
+        String remoteDataDir = conf.get(ConfigOptions.REMOTE_DATA_DIR);
+        List<String> remoteDataDirs = conf.get(ConfigOptions.REMOTE_DATA_DIRS);
+        if (conf.get(ConfigOptions.REMOTE_DATA_DIR) == null
+                && conf.get(ConfigOptions.REMOTE_DATA_DIRS).isEmpty()) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Either %s or %s must be configured.",
+                            ConfigOptions.REMOTE_DATA_DIR.key(),
+                            ConfigOptions.REMOTE_DATA_DIRS.key()));
+        }
+
+        if (remoteDataDir != null) {
+            // Must validate that remote.data.dir is a valid FsPath
+            try {
+                new FsPath(conf.get(ConfigOptions.REMOTE_DATA_DIR));
+            } catch (Exception e) {
+                throw new IllegalConfigurationException(
+                        String.format(
+                                "Invalid configuration for %s.",
+                                ConfigOptions.REMOTE_DATA_DIR.key()),
+                        e);
+            }
+        }
+
+        // Validate remote.data.dirs
+        for (int i = 0; i < remoteDataDirs.size(); i++) {
+            String dir = remoteDataDirs.get(i);
+            try {
+                new FsPath(dir);
+            } catch (Exception e) {
+                throw new IllegalConfigurationException(
+                        String.format(
+                                "Invalid remote path for %s at index %d.",
+                                ConfigOptions.REMOTE_DATA_DIRS.key(), i),
+                        e);
+            }
+        }
+
+        // Validate remote.data.dirs.strategy
+        ConfigOptions.RemoteDataDirStrategy remoteDataDirStrategy =
+                conf.get(ConfigOptions.REMOTE_DATA_DIRS_STRATEGY);
+        if (remoteDataDirStrategy == ConfigOptions.RemoteDataDirStrategy.WEIGHTED_ROUND_ROBIN) {
+            List<Integer> weights = conf.get(ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS);
+            if (!remoteDataDirs.isEmpty()) {
+                if (remoteDataDirs.size() != weights.size()) {
+                    throw new IllegalConfigurationException(
+                            String.format(
+                                    "The size of '%s' (%d) must match the size of '%s' (%d) when using WEIGHTED_ROUND_ROBIN strategy.",
+                                    ConfigOptions.REMOTE_DATA_DIRS.key(),
+                                    remoteDataDirs.size(),
+                                    ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS.key(),
+                                    weights.size()));
+                }
+
+                // Validate all weights are no less than 0
+                for (int i = 0; i < weights.size(); i++) {
+                    if (weights.get(i) < 0) {
+                        throw new IllegalConfigurationException(
+                                String.format(
+                                        "All weights in '%s' must be no less than 0, but found %d at index %d.",
+                                        ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS.key(),
+                                        weights.get(i),
+                                        i));
+                    }
+                }
+            }
+        }
+
+        validMinValue(conf, ConfigOptions.DEFAULT_REPLICATION_FACTOR, 1);
+        validMinValue(conf, ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, 1);
+        validMinValue(conf, ConfigOptions.SERVER_IO_POOL_SIZE, 1);
+        validMinValue(conf, ConfigOptions.BACKGROUND_THREADS, 1);
+
+        if (conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes() > Integer.MAX_VALUE) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s, it must be less than or equal %d bytes.",
+                            ConfigOptions.LOG_SEGMENT_FILE_SIZE.key(), Integer.MAX_VALUE));
+        }
+    }
+
+    private static void validMinValue(
+            Configuration conf, ConfigOption<Integer> option, int minValue) {
+        validMinValue(option, conf.get(option), minValue);
+    }
+
+    private static void validMinValue(ConfigOption<Integer> option, int value, int minValue) {
+        if (value < minValue) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than or equal %d.",
+                            option.key(), minValue));
+        }
     }
 }
