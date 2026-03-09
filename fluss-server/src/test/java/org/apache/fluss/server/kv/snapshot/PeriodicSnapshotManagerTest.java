@@ -36,6 +36,7 @@ import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.RunnableFuture;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators.getOnlyElement;
@@ -125,6 +126,45 @@ class PeriodicSnapshotManagerTest {
                 .cause()
                 .isInstanceOf(FlussRuntimeException.class)
                 .hasMessage(exceptionMessage);
+    }
+
+    @Test
+    void testDynamicSnapshotInterval() {
+        long initialInterval = 10_000L;
+        long updatedInterval = 5_000L;
+        AtomicLong currentInterval = new AtomicLong(initialInterval);
+
+        periodicSnapshotManager =
+                new PeriodicSnapshotManager(
+                        tableBucket,
+                        NopSnapshotTarget.INSTANCE,
+                        initialInterval,
+                        currentInterval::get,
+                        asyncSnapshotExecutorService,
+                        scheduledExecutorService,
+                        TestingMetricGroups.BUCKET_METRICS);
+        periodicSnapshotManager.start();
+
+        // Trigger the initial task; NopTarget returns empty, so scheduleNextSnapshot() is
+        // called with the current supplier value (initialInterval = 10000ms).
+        scheduledExecutorService.triggerNonPeriodicScheduledTasks();
+        assertThat(
+                        getOnlyElement(scheduledExecutorService.getAllScheduledTasks().iterator())
+                                .getDelay(MILLISECONDS))
+                .as("next snapshot should be scheduled with the initial interval")
+                .isGreaterThan(updatedInterval)
+                .isLessThanOrEqualTo(initialInterval);
+
+        // Update snapshot interval to 5000ms via the supplier.
+        currentInterval.set(updatedInterval);
+
+        // Trigger again; scheduleNextSnapshot() should now use updatedInterval (5000ms).
+        scheduledExecutorService.triggerNonPeriodicScheduledTasks();
+        assertThat(
+                        getOnlyElement(scheduledExecutorService.getAllScheduledTasks().iterator())
+                                .getDelay(MILLISECONDS))
+                .as("next snapshot should be scheduled with the updated interval")
+                .isLessThanOrEqualTo(updatedInterval);
     }
 
     private void checkOnlyOneScheduledTasks() {

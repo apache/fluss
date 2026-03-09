@@ -41,6 +41,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.LongSupplier;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -70,6 +71,12 @@ public class PeriodicSnapshotManager implements Closeable {
     private final ExecutorService asyncOperationsThreadPool;
 
     private final long periodicSnapshotDelay;
+
+    /**
+     * A supplier to get the current snapshot delay. This allows dynamic reconfiguration of the
+     * snapshot interval at runtime.
+     */
+    private final LongSupplier snapshotIntervalSupplier;
 
     /** Number of consecutive snapshot failures. */
     private final AtomicInteger numberOfConsecutiveFailures;
@@ -104,6 +111,7 @@ public class PeriodicSnapshotManager implements Closeable {
                 tableBucket,
                 target,
                 periodicSnapshotDelay,
+                () -> periodicSnapshotDelay,
                 asyncOperationsThreadPool,
                 periodicExecutor,
                 Executors.directExecutor(),
@@ -115,6 +123,26 @@ public class PeriodicSnapshotManager implements Closeable {
             TableBucket tableBucket,
             SnapshotTarget target,
             long periodicSnapshotDelay,
+            LongSupplier snapshotIntervalSupplier,
+            ExecutorService asyncOperationsThreadPool,
+            ScheduledExecutorService periodicExecutor,
+            BucketMetricGroup bucketMetricGroup) {
+        this(
+                tableBucket,
+                target,
+                periodicSnapshotDelay,
+                snapshotIntervalSupplier,
+                asyncOperationsThreadPool,
+                periodicExecutor,
+                Executors.directExecutor(),
+                bucketMetricGroup);
+    }
+
+    private PeriodicSnapshotManager(
+            TableBucket tableBucket,
+            SnapshotTarget target,
+            long periodicSnapshotDelay,
+            LongSupplier snapshotIntervalSupplier,
             ExecutorService asyncOperationsThreadPool,
             ScheduledExecutorService periodicExecutor,
             Executor guardedExecutor,
@@ -122,6 +150,7 @@ public class PeriodicSnapshotManager implements Closeable {
         this.tableBucket = tableBucket;
         this.target = target;
         this.periodicSnapshotDelay = periodicSnapshotDelay;
+        this.snapshotIntervalSupplier = snapshotIntervalSupplier;
 
         this.numberOfConsecutiveFailures = new AtomicInteger(0);
         this.periodicExecutor = periodicExecutor;
@@ -143,6 +172,7 @@ public class PeriodicSnapshotManager implements Closeable {
                 tableBucket,
                 target,
                 snapshotContext.getSnapshotIntervalMs(),
+                snapshotContext::getSnapshotIntervalMs,
                 snapshotContext.getAsyncOperationsThreadPool(),
                 snapshotContext.getSnapshotScheduler(),
                 guardedExecutor,
@@ -324,7 +354,7 @@ public class PeriodicSnapshotManager implements Closeable {
     }
 
     private void scheduleNextSnapshot() {
-        scheduleNextSnapshot(periodicSnapshotDelay);
+        scheduleNextSnapshot(snapshotIntervalSupplier.getAsLong());
     }
 
     /** {@link SnapshotRunnable} provider and consumer. */

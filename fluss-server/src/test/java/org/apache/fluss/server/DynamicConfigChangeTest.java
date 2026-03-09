@@ -21,6 +21,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.zk.NOPErrorHandler;
@@ -41,6 +42,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
@@ -346,5 +348,68 @@ public class DynamicConfigChangeTest {
             assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
                     .isEqualTo(PAIMON);
         }
+    }
+
+    @Test
+    void testPreventInvalidSnapshotInterval() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofMinutes(10));
+
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+        dynamicConfigManager.startup();
+
+        // Try to set snapshot interval to an invalid value - should be rejected by type validation
+        assertThatThrownBy(
+                        () ->
+                                dynamicConfigManager.alterConfigs(
+                                        Collections.singletonList(
+                                                new AlterConfig(
+                                                        ConfigOptions.KV_SNAPSHOT_INTERVAL.key(),
+                                                        "invalid_value",
+                                                        AlterConfigOpType.SET))))
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining(
+                        "Cannot parse 'invalid_value' as Duration for config 'kv.snapshot.interval'");
+    }
+
+    @Test
+    void testDynamicSnapshotIntervalChange() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofMinutes(10));
+
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+
+        AtomicReference<Duration> reconfiguredInterval = new AtomicReference<>();
+        dynamicConfigManager.register(
+                new ServerReconfigurable() {
+                    @Override
+                    public void validate(Configuration newConfig) throws ConfigException {}
+
+                    @Override
+                    public void reconfigure(Configuration newConfig) {
+                        reconfiguredInterval.set(newConfig.get(ConfigOptions.KV_SNAPSHOT_INTERVAL));
+                    }
+                });
+        dynamicConfigManager.startup();
+
+        // Change snapshot interval to 5 minutes - should succeed
+        assertThatCode(
+                        () ->
+                                dynamicConfigManager.alterConfigs(
+                                        Collections.singletonList(
+                                                new AlterConfig(
+                                                        ConfigOptions.KV_SNAPSHOT_INTERVAL.key(),
+                                                        "5min",
+                                                        AlterConfigOpType.SET))))
+                .doesNotThrowAnyException();
+
+        // Verify config was persisted to ZK
+        Map<String, String> zkConfig = zookeeperClient.fetchEntityConfig();
+        assertThat(zkConfig.get(ConfigOptions.KV_SNAPSHOT_INTERVAL.key())).isEqualTo("5min");
+
+        // Verify the reconfigurable was notified with the new value
+        assertThat(reconfiguredInterval.get()).isEqualTo(Duration.ofMinutes(5));
     }
 }
