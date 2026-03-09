@@ -98,9 +98,9 @@ public class ConfigOptions {
                     .withDescription(
                             "The directory used for storing the kv snapshot data files and remote log for log tiered storage"
                                     + " in a Fluss supported filesystem. "
-                                    + "For clusters that already have this configured, do not remove it when upgrading, "
-                                    + "even after adding `remote.data.dirs`. "
-                                    + "For new clusters, it is recommended to use `remote.data.dirs` instead.");
+                                    + "When upgrading to `remote.data.dirs`, please ensure this value is placed as the first entry in the new configuration."
+                                    + "For new clusters, it is recommended to use `remote.data.dirs` instead. "
+                                    + "If `remote.data.dirs` is configured, this value will be ignored.");
 
     public static final ConfigOption<List<String>> REMOTE_DATA_DIRS =
             key("remote.data.dirs")
