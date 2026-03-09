@@ -29,6 +29,7 @@ import static org.apache.fluss.config.FlussConfigUtils.CLIENT_OPTIONS;
 import static org.apache.fluss.config.FlussConfigUtils.TABLE_OPTIONS;
 import static org.apache.fluss.config.FlussConfigUtils.extractConfigOptions;
 import static org.apache.fluss.config.FlussConfigUtils.validateCoordinatorConfigs;
+import static org.apache.fluss.config.FlussConfigUtils.validateTabletConfigs;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -58,44 +59,18 @@ class FlussConfigUtilsTest {
 
     @Test
     void testValidateCoordinatorConfigs() {
-        // Test valid configuration
-        Configuration validConf = new Configuration();
-        validConf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
-        validateCoordinatorConfigs(validConf);
-
-        // Test invalid DEFAULT_REPLICATION_FACTOR
-        Configuration invalidReplicationConf = new Configuration();
-        invalidReplicationConf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
-        invalidReplicationConf.set(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 0);
-        assertThatThrownBy(() -> validateCoordinatorConfigs(invalidReplicationConf))
-                .isInstanceOf(IllegalConfigurationException.class)
-                .hasMessageContaining(ConfigOptions.DEFAULT_REPLICATION_FACTOR.key())
-                .hasMessageContaining("must be greater than or equal 1");
-
-        // Test invalid KV_MAX_RETAINED_SNAPSHOTS
-        Configuration invalidSnapshotConf = new Configuration();
-        invalidSnapshotConf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
-        invalidSnapshotConf.set(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, 0);
-        assertThatThrownBy(() -> validateCoordinatorConfigs(invalidSnapshotConf))
-                .isInstanceOf(IllegalConfigurationException.class)
-                .hasMessageContaining(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS.key())
-                .hasMessageContaining("must be greater than or equal 1");
-
-        // Test invalid SERVER_IO_POOL_SIZE
-        Configuration invalidIoPoolConf = new Configuration();
-        invalidIoPoolConf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
-        invalidIoPoolConf.set(ConfigOptions.SERVER_IO_POOL_SIZE, 0);
-        assertThatThrownBy(() -> validateCoordinatorConfigs(invalidIoPoolConf))
-                .isInstanceOf(IllegalConfigurationException.class)
-                .hasMessageContaining(ConfigOptions.SERVER_IO_POOL_SIZE.key())
-                .hasMessageContaining("must be greater than or equal 1");
-
-        // Test REMOTE_DATA_DIR not set
-        Configuration noRemoteDirConf = new Configuration();
-        assertThatThrownBy(() -> validateCoordinatorConfigs(noRemoteDirConf))
+        // Test empty configuration
+        Configuration emptyConf = new Configuration();
+        assertThatThrownBy(() -> validateCoordinatorConfigs(emptyConf))
                 .isInstanceOf(IllegalConfigurationException.class)
                 .hasMessageContaining(ConfigOptions.REMOTE_DATA_DIR.key())
-                .hasMessageContaining("must be set");
+                .hasMessageContaining(ConfigOptions.REMOTE_DATA_DIRS.key())
+                .hasMessageContaining("must be configured");
+
+        // Test configuration with only REMOTE_DATA_DIR set
+        Configuration remoteDataDirConf = new Configuration();
+        remoteDataDirConf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
+        validateCoordinatorConfigs(remoteDataDirConf);
 
         // Test invalid REMOTE_DATA_DIR
         Configuration invalidRemoteDirConf = new Configuration();
@@ -105,6 +80,12 @@ class FlussConfigUtilsTest {
                 .hasMessageContaining(ConfigOptions.REMOTE_DATA_DIR.key())
                 .hasMessageContaining("Invalid configuration for remote.data.dir");
 
+        // Test configuration with only REMOTE_DATA_DIRS set
+        Configuration remoteDataDirsConf = new Configuration();
+        remoteDataDirsConf.set(
+                ConfigOptions.REMOTE_DATA_DIRS, Arrays.asList("s3://bucket1", "s3://bucket2"));
+        validateCoordinatorConfigs(remoteDataDirConf);
+
         // Test REMOTE_DATA_DIRS contains invalid path
         Configuration invalidRemoteDirsConf = new Configuration();
         invalidRemoteDirsConf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
@@ -113,7 +94,7 @@ class FlussConfigUtilsTest {
         assertThatThrownBy(() -> validateCoordinatorConfigs(invalidRemoteDirsConf))
                 .isInstanceOf(IllegalConfigurationException.class)
                 .hasMessageContaining(ConfigOptions.REMOTE_DATA_DIRS.key())
-                .hasMessageContaining("Invalid remote path for remote.data.dirs");
+                .hasMessageContaining("Invalid remote path for");
 
         // Test WEIGHTED_ROUND_ROBIN with mismatched sizes
         Configuration mismatchedWeightsConf = new Configuration();
@@ -155,5 +136,43 @@ class FlussConfigUtilsTest {
                 .hasMessageContaining(ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS.key())
                 .hasMessageContaining(
                         "All weights in 'remote.data.dirs.weights' must be no less than 0");
+
+        // Test invalid DEFAULT_REPLICATION_FACTOR
+        Configuration invalidReplicationConf = new Configuration();
+        invalidReplicationConf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
+        invalidReplicationConf.set(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 0);
+        assertThatThrownBy(() -> validateCoordinatorConfigs(invalidReplicationConf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.DEFAULT_REPLICATION_FACTOR.key())
+                .hasMessageContaining("must be greater than or equal 1");
+
+        // Test invalid KV_MAX_RETAINED_SNAPSHOTS
+        Configuration invalidSnapshotConf = new Configuration();
+        invalidSnapshotConf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
+        invalidSnapshotConf.set(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, 0);
+        assertThatThrownBy(() -> validateCoordinatorConfigs(invalidSnapshotConf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS.key())
+                .hasMessageContaining("must be greater than or equal 1");
+
+        // Test invalid SERVER_IO_POOL_SIZE
+        Configuration invalidIoPoolConf = new Configuration();
+        invalidIoPoolConf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
+        invalidIoPoolConf.set(ConfigOptions.SERVER_IO_POOL_SIZE, 0);
+        assertThatThrownBy(() -> validateCoordinatorConfigs(invalidIoPoolConf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.SERVER_IO_POOL_SIZE.key())
+                .hasMessageContaining("must be greater than or equal 1");
+    }
+
+    @Test
+    void testValidateTabletConfigs() {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");
+        conf.set(ConfigOptions.TABLET_SERVER_ID, -1);
+        assertThatThrownBy(() -> validateTabletConfigs(conf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.TABLET_SERVER_ID.key())
+                .hasMessageContaining("it must be greater than or equal 0");
     }
 }

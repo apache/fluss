@@ -91,17 +91,27 @@ public class FlussConfigUtils {
         Optional<Integer> serverId = conf.getOptional(ConfigOptions.TABLET_SERVER_ID);
         if (!serverId.isPresent()) {
             throw new IllegalConfigurationException(
-                    String.format("Configuration %s must be set.", ConfigOptions.TABLET_SERVER_ID));
+                    String.format(
+                            "Configuration %s must be set.", ConfigOptions.TABLET_SERVER_ID.key()));
         }
         validMinValue(ConfigOptions.TABLET_SERVER_ID, serverId.get(), 0);
     }
 
     /** Validate common server configs. */
-    private static void validateServerConfigs(Configuration conf) {
-        if (conf.get(ConfigOptions.REMOTE_DATA_DIR) == null) {
+    protected static void validateServerConfigs(Configuration conf) {
+        // Validate remote.data.dir and remote.data.dirs
+        String remoteDataDir = conf.get(ConfigOptions.REMOTE_DATA_DIR);
+        List<String> remoteDataDirs = conf.get(ConfigOptions.REMOTE_DATA_DIRS);
+        if (conf.get(ConfigOptions.REMOTE_DATA_DIR) == null
+                && conf.get(ConfigOptions.REMOTE_DATA_DIRS).isEmpty()) {
             throw new IllegalConfigurationException(
-                    String.format("Configuration %s must be set.", ConfigOptions.REMOTE_DATA_DIR));
-        } else {
+                    String.format(
+                            "Either %s or %s must be configured.",
+                            ConfigOptions.REMOTE_DATA_DIR.key(),
+                            ConfigOptions.REMOTE_DATA_DIRS.key()));
+        }
+
+        if (remoteDataDir != null) {
             // Must validate that remote.data.dir is a valid FsPath
             try {
                 new FsPath(conf.get(ConfigOptions.REMOTE_DATA_DIR));
@@ -114,24 +124,11 @@ public class FlussConfigUtils {
             }
         }
 
-        validMinValue(conf, ConfigOptions.DEFAULT_REPLICATION_FACTOR, 1);
-        validMinValue(conf, ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, 1);
-        validMinValue(conf, ConfigOptions.SERVER_IO_POOL_SIZE, 1);
-        validMinValue(conf, ConfigOptions.BACKGROUND_THREADS, 1);
-
-        if (conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes() > Integer.MAX_VALUE) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be less than or equal %d bytes.",
-                            ConfigOptions.LOG_SEGMENT_FILE_SIZE.key(), Integer.MAX_VALUE));
-        }
-
         // Validate remote.data.dirs
-        List<String> remoteDataDirs = conf.get(ConfigOptions.REMOTE_DATA_DIRS);
         for (int i = 0; i < remoteDataDirs.size(); i++) {
-            String remoteDataDir = remoteDataDirs.get(i);
+            String dir = remoteDataDirs.get(i);
             try {
-                new FsPath(remoteDataDir);
+                new FsPath(dir);
             } catch (Exception e) {
                 throw new IllegalConfigurationException(
                         String.format(
@@ -156,6 +153,7 @@ public class FlussConfigUtils {
                                     ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS.key(),
                                     weights.size()));
                 }
+
                 // Validate all weights are no less than 0
                 for (int i = 0; i < weights.size(); i++) {
                     if (weights.get(i) < 0) {
@@ -168,6 +166,18 @@ public class FlussConfigUtils {
                     }
                 }
             }
+        }
+
+        validMinValue(conf, ConfigOptions.DEFAULT_REPLICATION_FACTOR, 1);
+        validMinValue(conf, ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, 1);
+        validMinValue(conf, ConfigOptions.SERVER_IO_POOL_SIZE, 1);
+        validMinValue(conf, ConfigOptions.BACKGROUND_THREADS, 1);
+
+        if (conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes() > Integer.MAX_VALUE) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s, it must be less than or equal %d bytes.",
+                            ConfigOptions.LOG_SEGMENT_FILE_SIZE.key(), Integer.MAX_VALUE));
         }
     }
 

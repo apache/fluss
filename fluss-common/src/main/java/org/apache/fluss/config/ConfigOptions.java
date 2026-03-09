@@ -96,14 +96,11 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The directory in a Fluss supported filesystem for remote data storage. "
-                                    + "This configuration is required. "
-                                    + "If `remote.data.dirs` is not configured, all remote data files "
-                                    + "(kv snapshots, remote log, producer offsets, kv snapshot leases, etc.) "
-                                    + "will be stored under this directory. "
-                                    + "If `remote.data.dirs` is configured, the kv snapshot data files and remote log files "
-                                    + "for tables/partitions will be stored in one of the directories specified by `remote.data.dirs`, "
-                                    + "while producer offsets and kv snapshot leases are always stored under this directory.");
+                            "The directory used for storing the kv snapshot data files and remote log for log tiered storage"
+                                    + " in a Fluss supported filesystem. "
+                                    + "For clusters that already have this configured, do not remove it when upgrading, "
+                                    + "even after adding `remote.data.dirs`. "
+                                    + "For new clusters, it is recommended to use `remote.data.dirs` instead.");
 
     public static final ConfigOption<List<String>> REMOTE_DATA_DIRS =
             key("remote.data.dirs")
@@ -113,12 +110,9 @@ public class ConfigOptions {
                     .withDescription(
                             "A comma-separated list of directories in Fluss supported filesystems "
                                     + "for storing the kv snapshot data files and remote log files of tables/partitions. "
-                                    + "This configuration is optional. "
                                     + "If configured, when a new table or a new partition is created, "
                                     + "one of the directories from this list will be selected according to the strategy "
                                     + "specified by `remote.data.dirs.strategy` (`ROUND_ROBIN` by default). "
-                                    + "Once assigned, the table/partition will keep using the selected directory for "
-                                    + "storing the kv snapshot data files and remote log files. "
                                     + "If not configured, the system uses `"
                                     + REMOTE_DATA_DIR.key()
                                     + "` as the sole remote data directory for all data.");
