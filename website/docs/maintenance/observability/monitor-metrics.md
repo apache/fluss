@@ -294,7 +294,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="17"><strong>coordinator</strong></th>
+       <th rowspan="19"><strong>coordinator</strong></th>
       <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="10">-</td>
       <td>activeCoordinatorCount</td>
       <td>The number of active CoordinatorServer in this cluster.</td>
@@ -382,6 +382,17 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
      <tr>
       <td>allKvSnapshotSize</td>
       <td>All kv snapshot size of each table bucket.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td rowspan="2">lakeTiering</td>
+      <td>pendingTablesCount</td>
+      <td>The number of tables waiting to be tiered.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>runningTablesCount</td>
+      <td>The number of tables currently being tiered.</td>
       <td>Gauge</td>
     </tr>
   </tbody>

@@ -25,6 +25,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.entity.LakeTieringTableInfo;
+import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.utils.timer.DefaultTimer;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.DataTypes;
@@ -62,7 +63,8 @@ class LakeTableTieringManagerTest {
         return new LakeTableTieringManager(
                 new DefaultTimer("delay lake tiering", 1_000, 20, manualClock),
                 lakeTieringServiceTimeoutChecker,
-                manualClock);
+                manualClock,
+                TestingMetricGroups.LAKE_TIERING_METRICS);
     }
 
     @Test
@@ -236,6 +238,44 @@ class LakeTableTieringManagerTest {
         tableTieringManager.reportTieringFail(tableId1, 1);
         // we should get the table again
         assertRequestTable(tableId1, tablePath1, 2);
+    }
+
+    @Test
+    void testGlobalMetrics() throws Exception {
+        // Initially no tables - verify counts are 0
+        assertThat(tableTieringManager.getPendingTablesCount()).isEqualTo(0);
+        assertThat(tableTieringManager.getRunningTablesCount()).isEqualTo(0);
+
+        // Add a table
+        long tableId1 = 1L;
+        TablePath tablePath1 = TablePath.of("db", "table1");
+        TableInfo tableInfo1 = createTableInfo(tableId1, tablePath1, Duration.ofSeconds(10));
+        tableTieringManager.addNewLakeTable(tableInfo1);
+
+        // Advance time to make it pending - need to wait for timer to trigger
+        manualClock.advanceTime(Duration.ofSeconds(10));
+
+        // Wait for the delayed task to execute and move to pending
+        waitValue(
+                () ->
+                        tableTieringManager.getPendingTablesCount() == 1
+                                ? Optional.of(1)
+                                : Optional.empty(),
+                Duration.ofSeconds(5),
+                "Table should be in pending state");
+
+        assertThat(tableTieringManager.getPendingTablesCount()).isEqualTo(1);
+        assertThat(tableTieringManager.getRunningTablesCount()).isEqualTo(0);
+
+        // Request table - should transition to tiering
+        assertRequestTable(tableId1, tablePath1, 1);
+        assertThat(tableTieringManager.getPendingTablesCount()).isEqualTo(0);
+        assertThat(tableTieringManager.getRunningTablesCount()).isEqualTo(1);
+
+        // Report failure
+        tableTieringManager.reportTieringFail(tableId1, 1);
+        assertThat(tableTieringManager.getRunningTablesCount()).isEqualTo(0);
+        assertThat(tableTieringManager.getPendingTablesCount()).isEqualTo(1); // back to pending
     }
 
     @Test

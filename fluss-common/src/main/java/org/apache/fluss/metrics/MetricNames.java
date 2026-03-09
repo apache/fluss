@@ -59,6 +59,10 @@ public class MetricNames {
     public static final String KV_SNAPSHOT_LEASE_COUNT = "kvSnapshotLeaseCount";
     public static final String LEASED_KV_SNAPSHOT_COUNT = "leasedKvSnapshotCount";
 
+    // for lake tiering metrics - global level
+    public static final String LAKE_TIERING_PENDING_TABLES_COUNT = "pendingTablesCount";
+    public static final String LAKE_TIERING_RUNNING_TABLES_COUNT = "runningTablesCount";
+
     // --------------------------------------------------------------------------------------------
     // metrics for tablet server
     // --------------------------------------------------------------------------------------------
