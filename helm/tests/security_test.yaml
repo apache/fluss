@@ -19,7 +19,7 @@
 suite: plain-sasl-config
 templates:
   - templates/secret-jaas-config.yaml
-  - templates/sts-coordinator.yaml
+  - templates/configmap.yaml
 tests:
   - it: renders JAAS secret and protocol map for plain mechanisms
     template: templates/secret-jaas-config.yaml
@@ -40,8 +40,8 @@ tests:
       - matchRegex:
           path: stringData["jaas.conf"]
           pattern: 'client\.FlussServer\s*\{'
-  - it: writes SASL protocol map and enabled mechanisms
-    template: templates/sts-coordinator.yaml
+  - it: writes SASL protocol map and enabled mechanisms in configmap
+    template: templates/configmap.yaml
     set:
       security.client.sasl.mechanism: plain
       security.client.sasl.plain.users:
@@ -52,17 +52,17 @@ tests:
       security.internal.sasl.plain.password: internal-pass
     asserts:
       - matchRegex:
-          path: spec.template.spec.containers[0].command[2]
+          path: data["server.yaml"]
           pattern: 'security\.protocol\.map: INTERNAL:SASL,CLIENT:SASL'
       - matchRegex:
-          path: spec.template.spec.containers[0].command[2]
+          path: data["server.yaml"]
           pattern: 'security\.sasl\.enabled\.mechanisms: PLAIN'
 
 ---
 
 suite: plain-validation
 templates:
-  - templates/secret-jaas-config.yaml
+  - templates/NOTES.txt
 tests:
   - it: fails when client plain users are empty
     set:
@@ -100,21 +100,25 @@ suite: security-disabled-defaults
 templates:
   - templates/secret-jaas-config.yaml
   - templates/sts-coordinator.yaml
+  - templates/configmap.yaml
 tests:
   - it: does not render JAAS secret by default
     template: templates/secret-jaas-config.yaml
     asserts:
       - hasDocuments:
           count: 0
-  - it: does not render SASL settings or volumes by default
-    template: templates/sts-coordinator.yaml
+  - it: does not render SASL settings in configmap by default
+    template: templates/configmap.yaml
     asserts:
       - notMatchRegex:
-          path: spec.template.spec.containers[0].command[2]
+          path: data["server.yaml"]
           pattern: 'security\.sasl\.enabled\.mechanisms:'
       - notMatchRegex:
-          path: spec.template.spec.containers[0].command[2]
+          path: data["server.yaml"]
           pattern: 'client\.security\.protocol: SASL'
+  - it: does not render SASL volumes by default
+    template: templates/sts-coordinator.yaml
+    asserts:
       - notContains:
           path: spec.template.spec.volumes
           content:
@@ -126,6 +130,7 @@ suite: plain-internal-only
 templates:
   - templates/secret-jaas-config.yaml
   - templates/sts-coordinator.yaml
+  - templates/configmap.yaml
 tests:
   - it: renders internal server and client JAAS blocks only
     template: templates/secret-jaas-config.yaml
@@ -146,8 +151,8 @@ tests:
       - notMatchRegex:
           path: stringData["jaas.conf"]
           pattern: 'client\.FlussServer\s*\{'
-  - it: renders internal SASL client properties and mounts secret
-    template: templates/sts-coordinator.yaml
+  - it: renders security config in configmap for internal SASL
+    template: templates/configmap.yaml
     set:
       security.client.sasl.mechanism: none
       security.internal.sasl.mechanism: plain
@@ -155,20 +160,30 @@ tests:
       security.internal.sasl.plain.password: internal-pass
     asserts:
       - matchRegex:
-          path: spec.template.spec.containers[0].command[2]
+          path: data["server.yaml"]
           pattern: 'security\.protocol\.map: INTERNAL:SASL,CLIENT:PLAINTEXT'
       - matchRegex:
-          path: spec.template.spec.containers[0].command[2]
+          path: data["server.yaml"]
           pattern: 'security\.sasl\.enabled\.mechanisms: PLAIN'
       - matchRegex:
-          path: spec.template.spec.containers[0].command[2]
+          path: data["server.yaml"]
           pattern: 'client\.security\.protocol: SASL'
       - matchRegex:
-          path: spec.template.spec.containers[0].command[2]
+          path: data["server.yaml"]
           pattern: 'client\.security\.sasl\.mechanism: PLAIN'
-      - matchRegex:
-          path: spec.template.spec.containers[0].command[2]
-          pattern: 'FLUSS_ENV_JAVA_OPTS="-Djava\.security\.auth\.login\.config=/etc/fluss/conf/jaas\.conf \$\{FLUSS_ENV_JAVA_OPTS\}"'
+  - it: renders JAAS env var and mounts secret volume
+    template: templates/sts-coordinator.yaml
+    set:
+      security.client.sasl.mechanism: none
+      security.internal.sasl.mechanism: plain
+      security.internal.sasl.plain.username: internal-user
+      security.internal.sasl.plain.password: internal-pass
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FLUSS_ENV_JAVA_OPTS
+            value: "-Djava.security.auth.login.config=/etc/fluss/conf/jaas.conf"
       - contains:
           path: spec.template.spec.volumes
           content:
@@ -182,6 +197,7 @@ suite: plain-client-only
 templates:
   - templates/secret-jaas-config.yaml
   - templates/sts-coordinator.yaml
+  - templates/configmap.yaml
 tests:
   - it: renders client JAAS block only
     template: templates/secret-jaas-config.yaml
@@ -203,8 +219,8 @@ tests:
       - notMatchRegex:
           path: stringData["jaas.conf"]
           pattern: 'FlussClient\s*\{'
-  - it: does not render internal client sasl properties
-    template: templates/sts-coordinator.yaml
+  - it: does not render internal client sasl config for coordinator when internal listener is plaintext
+    template: templates/configmap.yaml
     set:
       security.client.sasl.mechanism: plain
       security.client.sasl.plain.users:
@@ -213,13 +229,13 @@ tests:
       security.internal.sasl.mechanism: none
     asserts:
       - matchRegex:
-          path: spec.template.spec.containers[0].command[2]
+          path: data["server.yaml"]
           pattern: 'security\.protocol\.map: INTERNAL:PLAINTEXT,CLIENT:SASL'
       - matchRegex:
-          path: spec.template.spec.containers[0].command[2]
+          path: data["server.yaml"]
           pattern: 'security\.sasl\.enabled\.mechanisms: PLAIN'
       - notMatchRegex:
-          path: spec.template.spec.containers[0].command[2]
+          path: data["server.yaml"]
           pattern: 'client\.security\.protocol: SASL'
 
 ---
@@ -234,14 +250,22 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: 'security.client.sasl.mechanism must be one of: none, plain'
+  - it: accepts empty mechanism as none
+    set:
+      security.client.sasl.mechanism: ""
+    asserts:
+      - isKind:
+          of: StatefulSet
 
 ---
 
 suite: mechanism-dedup-and-path
 templates:
+  - templates/configmap.yaml
   - templates/sts-tablet.yaml
 tests:
   - it: deduplicates enabled mechanisms when both listeners use plain
+    template: templates/configmap.yaml
     set:
       security.client.sasl.mechanism: plain
       security.client.sasl.plain.users:
@@ -252,12 +276,13 @@ tests:
       security.internal.sasl.plain.password: internal-pass
     asserts:
       - matchRegex:
-          path: spec.template.spec.containers[0].command[2]
+          path: data["server.yaml"]
           pattern: 'security\.sasl\.enabled\.mechanisms: PLAIN'
       - notMatchRegex:
-          path: spec.template.spec.containers[0].command[2]
+          path: data["server.yaml"]
           pattern: 'security\.sasl\.enabled\.mechanisms: PLAIN,PLAIN'
   - it: writes server yaml using expected destination path
+    template: templates/sts-tablet.yaml
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]

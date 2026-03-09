@@ -27,3 +27,4 @@ data:
     {{- range $key, $val := .Values.configurationOverrides }}
     {{ $key }}: {{ tpl (printf "%v" $val) $ }}
     {{- end }}
+    {{- include "fluss.security.config" . | nindent 4 }}

@@ -21,34 +21,15 @@ Returns the authentication mechanism value of a given listener.
 Allowed mechanism values: 'none', 'plain'
 Usage:
   include "fluss.security.listener.mechanism" (dict "Values" .Values "listener" "client")
-
-Explanation:
-(dict "Values" .Values "listener" "client") is a Helm template map, literally passed as a single argument to include.
-
-- dict: creates a key value map
-- "Values": is a key, .Values is its value
-- "listener": is a key, "client" is its value
-
-So this builds an object like:
-{
-  Values: .Values,
-  listener: "client"
-}
-
-Inside the called helper, in this case, 'fluss.security.listener.mechanism', it is accessed as:
-- .Values -> the chart values
-- .listener -> "client"
-
-The reason for this is that include can only pass one argument, so dict is a standard way to pass multiple named inputs.
 */}}
 {{- define "fluss.security.listener.mechanism" -}}
 {{- $listener := index .Values.security .listener | default (dict) -}}
 {{- $sasl := $listener.sasl | default (dict) -}}
-{{- $mechanism := lower (default "" $sasl.mechanism) -}}
-{{- if not (has $mechanism (list "none" "plain")) -}}
+{{- $mechanism := lower (default "none" $sasl.mechanism) -}}
+{{- if and (ne $mechanism "") (not (has $mechanism (list "none" "plain"))) -}}
 {{- fail (printf "security.%s.sasl.mechanism must be one of: none, plain" .listener) -}}
 {{- end -}}
-{{- $mechanism -}}
+{{- if eq $mechanism "" -}}none{{- else -}}{{- $mechanism -}}{{- end -}}
 {{- end -}}
 
 {{/*
@@ -87,9 +68,6 @@ Usage:
 Returns comma separated list of enabled mechanisms.
 Usage:
   include "fluss.security.sasl.enabledMechanisms" .
-
-Example usage:
-  echo "security.sasl.enabled.mechanisms: {{ include "fluss.security.sasl.enabledMechanisms" . | trim }}"
 */}}
 {{- define "fluss.security.sasl.enabledMechanisms" -}}
 {{- $mechanisms := list -}}
@@ -104,7 +82,6 @@ Example usage:
 
 {{/*
 Validates that the client PLAIN mechanism block contains the required users.
-
 Usage:
   include "fluss.security.sasl.validateClientPlainUsers" .
 */}}
@@ -125,25 +102,47 @@ Usage:
 {{- end -}}
 
 {{/*
-Renders security configuration lines that are appended to the server.yaml file.
+Renders security configuration properties for the server.yaml configmap.
 Usage:
-  include "fluss.security.renderSecurityOptions" .
+  include "fluss.security.config" .
 */}}
-{{- define "fluss.security.renderSecurityOptions" -}}
+{{- define "fluss.security.config" -}}
 {{- $internalProtocol := include "fluss.security.listener.protocol" (dict "Values" .Values "listener" "internal") | trim -}}
-{{- $enabledMechanisms := include "fluss.security.sasl.enabledMechanisms" . | trim }}
-{{- $internalClientMechanism := include "fluss.security.listener.mechanism" (dict "Values" .Values "listener" "internal") | upper }}
-
+{{- $clientProtocol := include "fluss.security.listener.protocol" (dict "Values" .Values "listener" "client") | trim -}}
+{{- $enabledMechanisms := include "fluss.security.sasl.enabledMechanisms" . | trim -}}
+{{- $internalMechanism := include "fluss.security.listener.mechanism" (dict "Values" .Values "listener" "internal") -}}
 {{- if (include "fluss.security.sasl.enabled" .) }}
-echo "security.sasl.enabled.mechanisms: {{ $enabledMechanisms }}" >> $FLUSS_HOME/conf/server.yaml && \
-{{- if eq $internalProtocol "SASL" }}
-echo "client.security.protocol: SASL" >> $FLUSS_HOME/conf/server.yaml && \
-echo "client.security.sasl.mechanism: {{ $internalClientMechanism }}" >> $FLUSS_HOME/conf/server.yaml && \
+security.protocol.map: INTERNAL:{{ $internalProtocol }},CLIENT:{{ $clientProtocol }}
+security.sasl.enabled.mechanisms: {{ $enabledMechanisms }}
+{{- if ne $internalMechanism "none" }}
+client.security.protocol: SASL
+client.security.sasl.mechanism: {{ upper $internalMechanism }}
 {{- end }}
+{{- end }}
+{{- end -}}
 
+{{/*
+Returns SASL volume mount entries for StatefulSet containers.
+Usage:
+  include "fluss.security.sasl.volumeMountPath" . | nindent 12
+*/}}
+{{- define "fluss.security.sasl.volumeMountPath" -}}
 {{- if (include "fluss.security.sasl.plain.enabled" .) }}
-export FLUSS_ENV_JAVA_OPTS="-Djava.security.auth.login.config=/etc/fluss/conf/jaas.conf ${FLUSS_ENV_JAVA_OPTS}" && \
+- name: sasl-config
+  mountPath: /etc/fluss/conf
+  readOnly: true
 {{- end }}
-{{- end }}
+{{- end -}}
 
+{{/*
+Returns SASL volume entries for StatefulSet pod spec.
+Usage:
+  include "fluss.security.sasl.volumeMountName" . | nindent 8
+*/}}
+{{- define "fluss.security.sasl.volumeMountName" -}}
+{{- if (include "fluss.security.sasl.plain.enabled" .) }}
+- name: sasl-config
+  secret:
+    secretName: {{ include "fluss.fullname" . }}-sasl-jaas-config
+{{- end }}
 {{- end -}}
