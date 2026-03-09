@@ -194,7 +194,8 @@ class CoordinatorEventProcessorTest {
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
         autoPartitionManager =
                 new AutoPartitionManager(serverMetadataCache, metadataManager, new Configuration());
-        lakeTableTieringManager = new LakeTableTieringManager();
+        lakeTableTieringManager =
+                new LakeTableTieringManager(TestingMetricGroups.LAKE_TIERING_METRICS);
         Configuration conf = new Configuration();
         String remoteDataDir = "/tmp/fluss/remote-data";
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
