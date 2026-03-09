@@ -101,10 +101,10 @@ Example:
 
 ```bash
 helm install fluss ./fluss-helm \
-  --set metrics.enabled=true
+  --set metrics.reporters=prometheus
 ```
 
-When enabled, the chart will:
+When `metrics.reporters` is not `none`, the chart will:
 
 - configure `metrics.reporters` from reporter names in values
 - configure `metrics.reporter.<name>.<option>` entries from values
@@ -113,13 +113,12 @@ Values:
 
 | Key | Description |
 | --- | --- |
-| `metrics.enabled` | Enables metrics reporting and endpoint exposure. |
-| `metrics.reporters` | Map of Fluss metric reporters and their options. |
-| `metrics.reporters.jmx.port` | JMX reporter port range (e.g. `9250-9260`). |
-| `metrics.reporters.prometheus.port` | Prometheus reporter port (default `9249`). |
-| `metrics.reporters.prometheus.service.portName` | Named port exposed by metrics services (default `metrics`). |
-| `metrics.reporters.prometheus.service.labels` | Optional labels on metrics services (useful for [ServiceMonitor](https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.ServiceMonitor) selectors). |
-| `metrics.reporters.prometheus.service.annotations` | Optional annotations on metrics services (useful for annotation-based scraping). |
+| `metrics.reporters` | Comma-separated reporter selector. Use `none` to disable metrics. |
+| `metrics.jmx.port` | JMX reporter port range (e.g. `9250`). |
+| `metrics.prometheus.port` | Prometheus reporter port (default `9249`). |
+| `metrics.prometheus.service.portName` | Named port exposed by metrics services (default `metrics`). |
+| `metrics.prometheus.service.labels` | Optional labels on metrics services (useful for [ServiceMonitor](https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.ServiceMonitor) selectors). |
+| `metrics.prometheus.service.annotations` | Optional annotations on metrics services (useful for annotation-based scraping). |
 
 #### Prometheus Annotation Based Scraping
 
@@ -127,15 +126,14 @@ The values below enable annotation based scraping:
 
 ```yaml
 metrics:
-  enabled: true
-  reporters:
-    prometheus:
-      port: 9249
-      service:
-        annotations:
-          prometheus.io/scrape: "true"
-          prometheus.io/path: "/metrics"
-          prometheus.io/port: "9249"
+  reporters: prometheus
+  prometheus:
+    port: 9249
+    service:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "9249"
 ```
 
 #### Prometheus ServiceMonitor Based Scraping
@@ -144,14 +142,13 @@ When using the [Prometheus Operator](https://prometheus-operator.dev/), use the 
 
 ```yaml
 metrics:
-  enabled: true
-  reporters:
-    prometheus:
-      port: 9249
-      service:
-        portName: metrics
-        labels:
-          monitoring: enabled
+  reporters: prometheus
+  prometheus:
+    port: 9249
+    service:
+      portName: metrics
+      labels:
+        monitoring: enabled
 ```
 
 Apply the following to create a `ServiceMonitor` resource that matches the label:

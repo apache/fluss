@@ -59,14 +59,15 @@ listeners:
     port: 9124
 
 metrics:
-  enabled: false
-  reporters:
-    prometheus:
-      port: 9249
-      service:
-        portName: metrics
-        labels: {}
-        annotations: {}
+  reporters: none
+  prometheus:
+    port: 9249
+    service:
+      portName: metrics
+      labels: {}
+      annotations: {}
+  jmx:
+    port: 9250
 
 resources: {}
   # We usually recommend not to specify default resources and to leave this as a conscious

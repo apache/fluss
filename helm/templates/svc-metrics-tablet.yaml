@@ -16,8 +16,9 @@
 # limitations under the License.
 #
 
-{{- if and .Values.metrics.enabled .Values.metrics.reporters.prometheus }}
-{{- $promSvc := .Values.metrics.reporters.prometheus.service | default dict }}
+{{- if include "fluss.metrics.prometheusEnabled" . }}
+{{- $prometheus := .Values.metrics.prometheus | default dict }}
+{{- $promSvc := $prometheus.service | default dict }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -38,8 +39,8 @@ spec:
   ports:
     - name: {{ default "metrics" $promSvc.portName }}
       protocol: TCP
-      port: {{ default 9249 .Values.metrics.reporters.prometheus.port }}
-      targetPort: {{ default 9249 .Values.metrics.reporters.prometheus.port }}
+      port: {{ default 9249 $prometheus.port }}
+      targetPort: {{ default 9249 $prometheus.port }}
   selector:
     {{- include "fluss.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: tablet

@@ -17,14 +17,47 @@
 #
 
 {{/*
+Returns list of provided reporter names.
+*/}}
+{{- define "fluss.metrics.reporterNames" -}}
+{{- $metrics := .Values.metrics | default dict -}}
+{{- $reportersValue := default "none" $metrics.reporters | toString | trim -}}
+{{- if or (eq $reportersValue "") (eq $reportersValue "none") -}}
+[]
+{{- else -}}
+{{- $selected := list -}}
+{{- range $raw := regexSplit "\\s*,\\s*" $reportersValue -1 -}}
+{{- $name := trim $raw -}}
+{{- if ne $name "" -}}
+{{- if eq $name "none" -}}
+{{- fail "metrics.reporters cannot combine 'none' with other reporters" -}}
+{{- end -}}
+{{- $selected = append $selected $name -}}
+{{- end -}}
+{{- end -}}
+{{- $selected | toYaml -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Checks if prometheus reporter is enabled.
+*/}}
+{{- define "fluss.metrics.prometheusEnabled" -}}
+{{- $reporterNames := include "fluss.metrics.reporterNames" . | fromYamlArray -}}
+{{- if has "prometheus" $reporterNames -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/*
 Renders metrics reporter configuration entries.
 Expects the root context as argument.
 
 From values:
   metrics:
-    reporters:
-      prometheus:
-        port: 9249
+    reporters: prometheus
+    prometheus:
+      port: 9249
 
 Renders:
   metrics.reporters: prometheus
@@ -33,18 +66,19 @@ Renders:
 Keys already present in configurationOverrides are not rendered.
 */}}
 {{- define "fluss.metrics.config" -}}
-{{- if .Values.metrics.enabled -}}
 {{- $config := .Values.configurationOverrides | default dict -}}
-{{- $reporters := .Values.metrics.reporters | default dict -}}
-{{- $reporterNames := keys $reporters | sortAlpha -}}
-{{- if eq (len $reporterNames) 0 -}}
-{{- fail "metrics.reporters must contain at least one reporter when metrics.enabled is true" -}}
-{{- end -}}
+{{- $metrics := .Values.metrics | default dict -}}
+{{- $reporterNames := include "fluss.metrics.reporterNames" . | fromYamlArray -}}
+{{- if gt (len $reporterNames) 0 -}}
 {{- if not (hasKey $config "metrics.reporters") }}
 metrics.reporters: {{ join "," $reporterNames }}
 {{- end -}}
 {{- range $name := $reporterNames -}}
-{{- range $option, $value := index $reporters $name -}}
+{{- if not (hasKey $metrics $name) -}}
+{{- fail (printf "metrics.%s must be configured when metrics.reporters includes %s" $name $name) -}}
+{{- end -}}
+{{- $reporterConfig := index $metrics $name -}}
+{{- range $option, $value := $reporterConfig -}}
 {{- if ne $option "service" -}}
 {{- $fullKey := printf "metrics.reporter.%s.%s" $name $option -}}
 {{- if not (hasKey $config $fullKey) }}
@@ -55,4 +89,3 @@ metrics.reporters: {{ join "," $reporterNames }}
 {{- end -}}
 {{- end -}}
 {{- end -}}
-
