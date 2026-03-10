@@ -267,19 +267,27 @@ public class IdempotenceManager {
             return false;
         }
 
-        if (error == Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION
-                && (batch.sequenceHasBeenReset()
-                        || !isNextSequence(tableBucket, batch.batchSequence()))) {
-            // We should retry the OutOfOrderSequenceException if the batch is not the next batch,
-            // i.e. its batch sequence isn't the lastAckedBatchSequence + 1. However, if the first
-            // in flight batch fails fatally, we will adjust the batch sequences of the other
-            // inflight batches to account for the 'loss' of the sequence range in the batch which
-            // failed. In this case, an inflight batch will have a batch sequence which is the
-            // lastAckedSequence + 1 after adjustment. When this batch fails with an
-            // OutOfOrderSequence, we want to retry it. To account for the latter case, we check
-            // whether the sequence has been reset since the last drain. If it has, we will retry it
-            // anyway.
-            return true;
+        if (error == Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION) {
+            // If the batch's sequence is already <= lastAckedBatchSequence, it means the batch
+            // was successfully written on the server but its response was lost. We should not
+            // retry it; instead, it will be completed as a success by the caller.
+            if (isAlreadyCommitted(batch, tableBucket)) {
+                return false;
+            }
+
+            if (batch.sequenceHasBeenReset()
+                    || !isNextSequence(tableBucket, batch.batchSequence())) {
+                // We should retry the OutOfOrderSequenceException if the batch is not the next
+                // batch, i.e. its batch sequence isn't the lastAckedBatchSequence + 1. However,
+                // if the first in flight batch fails fatally, we will adjust the batch sequences
+                // of the other inflight batches to account for the 'loss' of the sequence range
+                // in the batch which failed. In this case, an inflight batch will have a batch
+                // sequence which is the lastAckedSequence + 1 after adjustment. When this batch
+                // fails with an OutOfOrderSequence, we want to retry it. To account for the
+                // latter case, we check whether the sequence has been reset since the last drain.
+                // If it has, we will retry it anyway.
+                return true;
+            }
         }
 
         if (error == Errors.UNKNOWN_WRITER_ID_EXCEPTION) {
@@ -292,6 +300,23 @@ public class IdempotenceManager {
         }
 
         return false;
+    }
+
+    /**
+     * Returns true if the batch has already been committed on the server.
+     *
+     * <p>If the batch's sequence is less than or equal to {@code lastAckedBatchSequence}, it means
+     * a higher-sequence batch has already been acknowledged. This implies the previous batch was
+     * also successfully written on the server (otherwise the higher-sequence batch could not have
+     * been committed).
+     *
+     * @param batch the batch to check
+     * @param tableBucket the target table-bucket
+     * @return true if the batch is already committed on the server
+     */
+    synchronized boolean isAlreadyCommitted(WriteBatch batch, TableBucket tableBucket) {
+        Optional<Integer> lastAcked = lastAckedBatchSequence(tableBucket);
+        return lastAcked.isPresent() && batch.batchSequence() <= lastAcked.get();
     }
 
     void maybeWaitForWriterId(Set<PhysicalTablePath> tablePaths) throws Throwable {
