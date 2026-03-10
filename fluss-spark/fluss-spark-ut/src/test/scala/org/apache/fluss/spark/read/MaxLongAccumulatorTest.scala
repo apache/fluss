@@ -18,7 +18,6 @@
 package org.apache.fluss.spark.read
 
 import org.apache.spark.util.LongAccumulator
-
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.scalatest.funsuite.AnyFunSuite
