@@ -86,7 +86,7 @@ public class CompositeBatchScanner implements BatchScanner {
                     scanner.close();
                 }
             } catch (Exception e) {
-                 scannerQueue.add(scanner);
+                scannerQueue.add(scanner);
                 throw new IOException("Failed to collect rows", e);
             }
         }
