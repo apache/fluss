@@ -105,7 +105,11 @@ spec:
               mountPath: /opt/conf
             - name: data
               mountPath: /tmp/fluss/data
-            {{- include "fluss.security.sasl.volumeMountPath" . | nindent 12 }}
+            {{- if (include "fluss.security.sasl.plain.enabled" .) }}
+            - name: sasl-config
+              mountPath: /etc/fluss/conf
+              readOnly: true
+            {{- end }}
       volumes:
         - name: fluss-conf
           configMap:
@@ -114,7 +118,11 @@ spec:
         - name: data
           emptyDir: {}
         {{- end }}
-        {{- include "fluss.security.sasl.volumeMountName" . | nindent 8 }}
+        {{- if (include "fluss.security.sasl.plain.enabled" .) }}
+        - name: sasl-config
+          secret:
+            secretName: {{ include "fluss.security.sasl.configName" . }}
+        {{- end }}
   {{- if .Values.coordinator.storage.enabled }}
   volumeClaimTemplates:
     - metadata:

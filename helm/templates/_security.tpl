@@ -122,27 +122,10 @@ client.security.sasl.mechanism: {{ upper $internalMechanism }}
 {{- end -}}
 
 {{/*
-Returns SASL volume mount entries for StatefulSet containers.
+Returns the SASL JAAS config name.
 Usage:
-  include "fluss.security.sasl.volumeMountPath" . | nindent 12
+  include "fluss.security.sasl.configName" .
 */}}
-{{- define "fluss.security.sasl.volumeMountPath" -}}
-{{- if (include "fluss.security.sasl.plain.enabled" .) }}
-- name: sasl-config
-  mountPath: /etc/fluss/conf
-  readOnly: true
-{{- end }}
-{{- end -}}
-
-{{/*
-Returns SASL volume entries for StatefulSet pod spec.
-Usage:
-  include "fluss.security.sasl.volumeMountName" . | nindent 8
-*/}}
-{{- define "fluss.security.sasl.volumeMountName" -}}
-{{- if (include "fluss.security.sasl.plain.enabled" .) }}
-- name: sasl-config
-  secret:
-    secretName: {{ include "fluss.fullname" . }}-sasl-jaas-config
-{{- end }}
+{{- define "fluss.security.sasl.configName" -}}
+{{ include "fluss.fullname" . }}-sasl-jaas-config
 {{- end -}}
