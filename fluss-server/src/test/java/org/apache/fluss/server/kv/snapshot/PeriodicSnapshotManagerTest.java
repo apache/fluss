@@ -20,7 +20,6 @@ package org.apache.fluss.server.kv.snapshot;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 
 import org.junit.jupiter.api.AfterEach;
@@ -138,11 +137,9 @@ class PeriodicSnapshotManagerTest {
                 new PeriodicSnapshotManager(
                         tableBucket,
                         NopSnapshotTarget.INSTANCE,
-                        initialInterval,
                         currentInterval::get,
                         asyncSnapshotExecutorService,
-                        scheduledExecutorService,
-                        TestingMetricGroups.BUCKET_METRICS);
+                        scheduledExecutorService);
         periodicSnapshotManager.start();
 
         // Trigger the initial task; NopTarget returns empty, so scheduleNextSnapshot() is
@@ -190,8 +187,7 @@ class PeriodicSnapshotManagerTest {
                 target,
                 periodicMaterializeDelay,
                 asyncSnapshotExecutorService,
-                scheduledExecutorService,
-                TestingMetricGroups.BUCKET_METRICS);
+                scheduledExecutorService);
     }
 
     private static class NopSnapshotTarget implements PeriodicSnapshotManager.SnapshotTarget {
