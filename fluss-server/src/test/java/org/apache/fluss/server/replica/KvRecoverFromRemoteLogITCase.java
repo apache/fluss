@@ -43,6 +43,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -215,6 +216,7 @@ class KvRecoverFromRemoteLogITCase {
                         followerToPromote,
                         currentLeaderAndIsr.leaderEpoch() + 1,
                         currentLeaderAndIsr.isr(),
+                        Collections.emptyList(),
                         currentLeaderAndIsr.coordinatorEpoch(),
                         currentLeaderAndIsr.bucketEpoch() + 1);
 

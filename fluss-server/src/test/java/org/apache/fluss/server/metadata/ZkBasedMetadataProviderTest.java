@@ -108,8 +108,10 @@ class ZkBasedMetadataProviderTest {
         TableBucket tableBucket0 = new TableBucket(tableId, 0);
         TableBucket tableBucket1 = new TableBucket(tableId, 1);
 
-        LeaderAndIsr leaderAndIsr0 = new LeaderAndIsr(1, 10, Arrays.asList(1, 2, 3), 100, 1000);
-        LeaderAndIsr leaderAndIsr1 = new LeaderAndIsr(2, 20, Arrays.asList(2, 3, 4), 200, 2000);
+        LeaderAndIsr leaderAndIsr0 =
+                new LeaderAndIsr(1, 10, Arrays.asList(1, 2, 3), Collections.emptyList(), 100, 1000);
+        LeaderAndIsr leaderAndIsr1 =
+                new LeaderAndIsr(2, 20, Arrays.asList(2, 3, 4), Collections.emptyList(), 200, 2000);
 
         zookeeperClient.registerLeaderAndIsr(
                 tableBucket0, leaderAndIsr0, ZkVersion.MATCH_ANY_VERSION.getVersion());
@@ -176,8 +178,10 @@ class ZkBasedMetadataProviderTest {
         TableBucket partitionBucket0 = new TableBucket(tableId, partitionId, 0);
         TableBucket partitionBucket1 = new TableBucket(tableId, partitionId, 1);
 
-        LeaderAndIsr leaderAndIsr0 = new LeaderAndIsr(1, 10, Arrays.asList(1, 2), 100, 1000);
-        LeaderAndIsr leaderAndIsr1 = new LeaderAndIsr(2, 20, Arrays.asList(2, 3), 200, 2000);
+        LeaderAndIsr leaderAndIsr0 =
+                new LeaderAndIsr(1, 10, Arrays.asList(1, 2), Collections.emptyList(), 100, 1000);
+        LeaderAndIsr leaderAndIsr1 =
+                new LeaderAndIsr(2, 20, Arrays.asList(2, 3), Collections.emptyList(), 200, 2000);
 
         zookeeperClient.registerLeaderAndIsr(
                 partitionBucket0, leaderAndIsr0, ZkVersion.MATCH_ANY_VERSION.getVersion());
@@ -281,15 +285,15 @@ class ZkBasedMetadataProviderTest {
 
         zookeeperClient.registerLeaderAndIsr(
                 bucket1,
-                new LeaderAndIsr(1, 10, Arrays.asList(1, 2), 100, 1000),
+                new LeaderAndIsr(1, 10, Arrays.asList(1, 2), Collections.emptyList(), 100, 1000),
                 ZkVersion.MATCH_ANY_VERSION.getVersion());
         zookeeperClient.registerLeaderAndIsr(
                 bucket2,
-                new LeaderAndIsr(2, 20, Arrays.asList(2, 3), 200, 2000),
+                new LeaderAndIsr(2, 20, Arrays.asList(2, 3), Collections.emptyList(), 200, 2000),
                 ZkVersion.MATCH_ANY_VERSION.getVersion());
         zookeeperClient.registerLeaderAndIsr(
                 bucket3,
-                new LeaderAndIsr(1, 30, Arrays.asList(1, 3), 300, 3000),
+                new LeaderAndIsr(1, 30, Arrays.asList(1, 3), Collections.emptyList(), 300, 3000),
                 ZkVersion.MATCH_ANY_VERSION.getVersion());
 
         // Test getPartitionsMetadataFromZK

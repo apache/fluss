@@ -199,10 +199,12 @@ public final class Replica {
      */
     private final Map<Integer, FollowerReplica> followerReplicasMap = new ConcurrentHashMap<>();
 
-    private volatile IsrState isrState = new IsrState.CommittedIsrState(Collections.emptyList());
+    private volatile IsrState isrState =
+            new IsrState.CommittedIsrState(Collections.emptyList(), Collections.emptyList());
     private volatile int leaderEpoch = LeaderAndIsr.INITIAL_LEADER_EPOCH - 1;
     private volatile int bucketEpoch = LeaderAndIsr.INITIAL_BUCKET_EPOCH;
     private volatile int coordinatorEpoch = CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
+    private volatile boolean isStandbyReplica = false;
 
     // null if table without pk or haven't become leader
     private volatile @Nullable KvTablet kvTablet;
@@ -413,7 +415,11 @@ public final class Replica {
                             long currentTimeMs = clock.milliseconds();
                             // Updating the assignment and ISR state is safe if the bucket epoch is
                             // larger or equal to the current bucket epoch.
-                            updateAssignmentAndIsr(data.getReplicas(), true, data.getIsr());
+                            updateAssignmentAndIsr(
+                                    data.getReplicas(),
+                                    true,
+                                    data.getIsr(),
+                                    data.getStandbyReplicas());
 
                             int requestLeaderEpoch = data.getLeaderEpoch();
                             if (requestLeaderEpoch > leaderEpoch) {
@@ -464,7 +470,11 @@ public final class Replica {
 
                     coordinatorEpoch = data.getCoordinatorEpoch();
 
-                    updateAssignmentAndIsr(Collections.emptyList(), false, Collections.emptyList());
+                    updateAssignmentAndIsr(
+                            Collections.emptyList(),
+                            false,
+                            Collections.emptyList(),
+                            Collections.emptyList());
 
                     int requestLeaderEpoch = data.getLeaderEpoch();
                     boolean isNewLeaderEpoch = requestLeaderEpoch > leaderEpoch;
@@ -474,7 +484,10 @@ public final class Replica {
                                 tableBucket,
                                 requestLeaderEpoch,
                                 logTablet.localLogEndOffset());
-                        onBecomeNewFollower();
+                        // Currently, we only support one standby replica.
+                        List<Integer> standbyReplicas = data.getStandbyReplicas();
+                        onBecomeNewFollower(
+                                standbyReplicas.isEmpty() ? -1 : standbyReplicas.get(0));
                     } else if (requestLeaderEpoch == leaderEpoch) {
                         LOG.info(
                                 "Skipped the become-follower state change for bucket {} since "
@@ -575,11 +588,28 @@ public final class Replica {
                                 : logTablet.localMaxTimestamp() - logTablet.getLakeMaxTimestamp());
     }
 
-    private void onBecomeNewFollower() {
+    private void onBecomeNewFollower(int standbyReplica) {
         if (isKvTable()) {
+            boolean isNowStandby = (standbyReplica == localTabletServerId);
+            boolean wasLeader = isLeader();
+            boolean wasStandby = this.isStandbyReplica;
+            if (isNowStandby) {
+                // Mark as standby immediately to ensure coordinator's state is consistent.
+                isStandbyReplica = true;
+            } else {
+                if (wasStandby || wasLeader) {
+                    // standby -> follower or leader -> follower
+                    if (wasStandby) {
+                        isStandbyReplica = false;
+                    }
+                }
+                // follower -> follower: do nothing.
+            }
+
             // it should be from leader to follower, we need to destroy the kv tablet
             dropKv();
         }
+
         if (lakeTieringMetricGroup != null) {
             lakeTieringMetricGroup.close();
         }
@@ -1165,7 +1195,10 @@ public final class Replica {
     }
 
     private void updateAssignmentAndIsr(
-            List<Integer> replicas, boolean isLeader, List<Integer> isr) {
+            List<Integer> replicas,
+            boolean isLeader,
+            List<Integer> isr,
+            List<Integer> standbyReplicas) {
         if (isLeader) {
             List<Integer> followers =
                     replicas.stream()
@@ -1188,7 +1221,7 @@ public final class Replica {
         }
 
         // update isr info.
-        isrState = new IsrState.CommittedIsrState(isr);
+        isrState = new IsrState.CommittedIsrState(isr, standbyReplicas);
     }
 
     private void updateFollowerFetchState(
@@ -1721,7 +1754,12 @@ public final class Replica {
 
         LeaderAndIsr newLeaderAndIsr =
                 new LeaderAndIsr(
-                        localTabletServerId, leaderEpoch, isrToSend, coordinatorEpoch, bucketEpoch);
+                        localTabletServerId,
+                        leaderEpoch,
+                        isrToSend,
+                        currentState.standbyReplicas(),
+                        coordinatorEpoch,
+                        bucketEpoch);
 
         IsrState.PendingExpandIsrState updatedState =
                 new IsrState.PendingExpandIsrState(
@@ -1743,7 +1781,12 @@ public final class Replica {
 
         LeaderAndIsr newLeaderAndIsr =
                 new LeaderAndIsr(
-                        localTabletServerId, leaderEpoch, isrToSend, coordinatorEpoch, bucketEpoch);
+                        localTabletServerId,
+                        leaderEpoch,
+                        isrToSend,
+                        currentState.standbyReplicas(),
+                        coordinatorEpoch,
+                        bucketEpoch);
         IsrState.PendingShrinkIsrState updatedState =
                 new IsrState.PendingShrinkIsrState(
                         outOfSyncFollowerReplicas, newLeaderAndIsr, currentState);
@@ -1838,7 +1881,9 @@ public final class Replica {
             // proposed and actual state are the same.
             // In both cases, we want to move from Pending to Committed state to ensure new updates
             // are processed.
-            isrState = new IsrState.CommittedIsrState(leaderAndIsr.isr());
+            isrState =
+                    new IsrState.CommittedIsrState(
+                            leaderAndIsr.isr(), leaderAndIsr.standbyReplicas());
             bucketEpoch = leaderAndIsr.bucketEpoch();
             LOG.info(
                     "ISR updated to {} and bucket epoch updated to {} for bucket {}",

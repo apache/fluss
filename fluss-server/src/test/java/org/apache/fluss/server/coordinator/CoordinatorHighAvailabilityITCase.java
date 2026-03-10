@@ -56,6 +56,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletionException;
@@ -332,7 +333,8 @@ class CoordinatorHighAvailabilityITCase {
                 .isEqualTo(standby.getServerId());
 
         TableBucket tableBucket = new TableBucket(1, 1);
-        LeaderAndIsr leaderAndIsr = new LeaderAndIsr(0, 0, Arrays.asList(2, 3), 0, 0);
+        LeaderAndIsr leaderAndIsr =
+                new LeaderAndIsr(0, 0, Arrays.asList(2, 3), Collections.emptyList(), 0, 0);
 
         int newLeaderEpochZkVersion =
                 standby.getCoordinatorEventProcessor()
