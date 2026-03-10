@@ -338,8 +338,7 @@ class BatchScannerITCase extends ClientToServerITCaseBase {
                 BatchScanner scanner = table.newScan().limit(limit).createBatchScanner()) {
             List<InternalRow> actual = collectRows(scanner);
             // collectLimitedRows stops once >= limit rows are collected
-            assertThat(actual.size()).isGreaterThanOrEqualTo(limit);
-            assertThat(actual.size()).isLessThanOrEqualTo(9);
+            assertThat(actual.size()).isEqualTo(limit);
         }
     }
 

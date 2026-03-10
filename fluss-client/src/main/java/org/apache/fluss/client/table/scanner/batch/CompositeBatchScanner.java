@@ -56,7 +56,9 @@ public class CompositeBatchScanner implements BatchScanner {
 
     @Override
     public void close() throws IOException {
+        // Ensure all scanners are closed on failure to avoid resource leaks
         scannerQueue.forEach(IOUtils::closeQuietly);
+        scannerQueue.clear();
     }
 
     @Nullable
@@ -84,10 +86,7 @@ public class CompositeBatchScanner implements BatchScanner {
                     scanner.close();
                 }
             } catch (Exception e) {
-                // Ensure all scanners are closed on failure to avoid resource leaks
-                IOUtils.closeQuietly(scanner);
-                scannerQueue.forEach(IOUtils::closeQuietly);
-                scannerQueue.clear();
+                 scannerQueue.add(scanner);
                 throw new IOException("Failed to collect rows", e);
             }
         }

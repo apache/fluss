@@ -96,7 +96,7 @@ class CompositeBatchScannerTest {
         while (batch.hasNext()) {
             values.add(batch.next().getInt(0));
         }
-        assertThat(values.size()).isGreaterThanOrEqualTo(3);
+        assertThat(values.size()).isEqualTo(3);
     }
 
     @Test
