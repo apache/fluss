@@ -801,6 +801,7 @@ final class ReplicaTest extends ReplicaTestBase {
                                 TABLET_SERVER_ID,
                                 leaderEpoch,
                                 Collections.singletonList(TABLET_SERVER_ID),
+                                Collections.emptyList(),
                                 INITIAL_COORDINATOR_EPOCH,
                                 // we also use the leader epoch as bucket epoch
                                 leaderEpoch)));
@@ -818,6 +819,7 @@ final class ReplicaTest extends ReplicaTestBase {
                                 TABLET_SERVER_ID,
                                 leaderEpoch,
                                 Collections.singletonList(TABLET_SERVER_ID),
+                                Collections.emptyList(),
                                 INITIAL_COORDINATOR_EPOCH,
                                 // we also use the leader epoch as bucket epoch
                                 leaderEpoch)));
