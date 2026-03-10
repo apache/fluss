@@ -41,6 +41,7 @@ import org.apache.fluss.exception.UnknownServerException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.lake.committer.TieringStats;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
@@ -106,6 +107,7 @@ import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbHeartbeatRespForTable;
 import org.apache.fluss.rpc.messages.PbKvSnapshotLeaseForTable;
+import org.apache.fluss.rpc.messages.PbLakeTieringStats;
 import org.apache.fluss.rpc.messages.PbPrepareLakeTableRespForTable;
 import org.apache.fluss.rpc.messages.PbProducerTableOffsets;
 import org.apache.fluss.rpc.messages.PbTableBucket;
@@ -853,10 +855,19 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     heartbeatResponse.addFinishedTableResp().setTableId(finishTable.getTableId());
             try {
                 validateHeartbeatRequest(finishTable, currentCoordinatorEpoch);
+                PbLakeTieringStats pbStats =
+                        finishTable.hasLakeTieringStats()
+                                ? finishTable.getLakeTieringStats()
+                                : null;
+                TieringStats stats =
+                        pbStats != null
+                                ? new TieringStats(pbStats.getFileSize(), pbStats.getRecordCount())
+                                : TieringStats.UNKNOWN;
                 lakeTableTieringManager.finishTableTiering(
                         finishTable.getTableId(),
                         finishTable.getTieringEpoch(),
-                        forceFinishedTableId.contains(finishTable.getTableId()));
+                        forceFinishedTableId.contains(finishTable.getTableId()),
+                        stats);
             } catch (Throwable e) {
                 pbHeartbeatRespForTable.setError(ApiError.fromThrowable(e).toErrorResponse());
             }

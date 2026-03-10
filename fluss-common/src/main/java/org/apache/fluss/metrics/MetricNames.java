@@ -63,6 +63,13 @@ public class MetricNames {
     public static final String LAKE_TIERING_PENDING_TABLES_COUNT = "pendingTablesCount";
     public static final String LAKE_TIERING_RUNNING_TABLES_COUNT = "runningTablesCount";
 
+    // for lake tiering table-level metrics
+    public static final String LAKE_TIERING_TABLE_TIER_LAG = "tierLag";
+    public static final String LAKE_TIERING_TABLE_TIER_DURATION = "tierDuration";
+    public static final String LAKE_TIERING_TABLE_FAILURES_TOTAL = "failuresTotal";
+    public static final String LAKE_TIERING_TABLE_FILE_SIZE = "fileSize";
+    public static final String LAKE_TIERING_TABLE_RECORD_COUNT = "recordCount";
+
     // --------------------------------------------------------------------------------------------
     // metrics for tablet server
     // --------------------------------------------------------------------------------------------

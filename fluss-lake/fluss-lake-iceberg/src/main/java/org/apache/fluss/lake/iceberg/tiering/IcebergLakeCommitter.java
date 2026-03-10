@@ -59,6 +59,18 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
 
     private static final String COMMITTER_USER = "commit-user";
 
+    /**
+     * Iceberg snapshot summary key for the total size (in bytes) of all live data files. This is a
+     * cumulative total written by Iceberg into every snapshot's summary map.
+     */
+    private static final String SNAPSHOT_TOTAL_FILE_SIZE = "total-files-size";
+
+    /**
+     * Iceberg snapshot summary key for the total number of records across all live data files. This
+     * is a cumulative total written by Iceberg into every snapshot's summary map.
+     */
+    private static final String SNAPSHOT_TOTAL_RECORDS = "total-records";
+
     private final Catalog icebergCatalog;
     private final Table icebergTable;
     private static final ThreadLocal<Long> currentCommitSnapshotId = new ThreadLocal<>();
@@ -141,10 +153,45 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
                     snapshotId = rewriteCommitSnapshotId;
                 }
             }
-            return LakeCommitResult.committedIsReadable(snapshotId);
+
+            // collect cumulative table stats from the committed snapshot's summary.
+            // Use the specific committed snapshotId rather than currentSnapshot() to avoid
+            // reading a different snapshot in case of concurrent commits.
+            Snapshot committedSnapshot = icebergTable.snapshot(snapshotId);
+            long[] stats = extractSnapshotStats(committedSnapshot);
+            return LakeCommitResult.committedIsReadable(snapshotId, stats[0], stats[1]);
         } catch (Exception e) {
             throw new IOException("Failed to commit to Iceberg table.", e);
         }
+    }
+
+    /**
+     * Extracts cumulative file size and record count from an Iceberg snapshot's summary map.
+     *
+     * <p>Stats collection is best-effort: if the snapshot is null, the summary is missing, or a
+     * value cannot be parsed as a long, the corresponding stat is left as {@code -1} and a warning
+     * is logged instead of propagating an exception.
+     *
+     * @param snapshot the committed Iceberg snapshot, may be {@code null}
+     * @return a two-element array {@code [totalFileSize, totalRecordCount]}, with {@code -1}
+     *     indicating an unknown value
+     */
+    private long[] extractSnapshotStats(@Nullable Snapshot snapshot) {
+        long totalFileSize = -1L;
+        long totalRecordCount = -1L;
+        if (snapshot == null || snapshot.summary() == null) {
+            return new long[] {totalFileSize, totalRecordCount};
+        }
+        Map<String, String> summary = snapshot.summary();
+        try {
+            totalFileSize = Long.parseLong(summary.get(SNAPSHOT_TOTAL_FILE_SIZE));
+            totalRecordCount = Long.parseLong(summary.get(SNAPSHOT_TOTAL_RECORDS));
+        } catch (Exception e) {
+            LOG.warn(
+                    "Failed to parse snapshot summary for snapshotId {}; treating as unknown.",
+                    snapshot.snapshotId());
+        }
+        return new long[] {totalFileSize, totalRecordCount};
     }
 
     private Long commitRewrite(
