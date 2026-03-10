@@ -193,7 +193,8 @@ public final class ConvertersTestFixtures {
                             timestampLtzField,
                             offsetDateTimeField,
                             mapField);
-            result = 31 * result + Arrays.hashCode(bytesField) + Arrays.hashCode(arrayField);
+            result = 31 * result + Arrays.hashCode(bytesField);
+            result = 31 * result + Arrays.hashCode(arrayField);
             return result;
         }
     }

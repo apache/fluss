@@ -24,8 +24,8 @@ import org.apache.fluss.types.RowType;
 
 import java.math.BigDecimal;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.EnumMap;
-import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -41,8 +41,6 @@ import java.util.Set;
 final class ConverterCommons {
 
     static final Map<DataTypeRoot, Set<Class<?>>> SUPPORTED_TYPES = createSupportedTypes();
-    static final Set<DataTypeRoot> SUPPORTED_COMPLEX_TYPES =
-            EnumSet.of(DataTypeRoot.ARRAY, DataTypeRoot.MAP);
 
     private static Map<DataTypeRoot, Set<Class<?>>> createSupportedTypes() {
         Map<DataTypeRoot, Set<Class<?>>> map = new EnumMap<>(DataTypeRoot.class);
@@ -64,8 +62,6 @@ final class ConverterCommons {
         map.put(
                 DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE,
                 setOf(java.time.Instant.class, java.time.OffsetDateTime.class));
-        map.put(DataTypeRoot.ARRAY, setOf(java.util.Arrays.class));
-        map.put(DataTypeRoot.MAP, setOf(java.util.Map.class));
         return map;
     }
 
@@ -115,16 +111,36 @@ final class ConverterCommons {
     }
 
     static void validateCompatibility(DataType fieldType, PojoType.Property prop) {
-        Set<Class<?>> supported = SUPPORTED_TYPES.get(fieldType.getTypeRoot());
+        DataTypeRoot typeRoot = fieldType.getTypeRoot();
         Class<?> actual = prop.type;
+        if (typeRoot == DataTypeRoot.ARRAY) {
+            if (!actual.isArray() && !Collection.class.isAssignableFrom(actual)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Field '%s' must be an array or Collection for ARRAY type, got %s",
+                                prop.name, actual.getName()));
+            }
+            return;
+        }
+
+        if (typeRoot == DataTypeRoot.MAP) {
+            if (!Map.class.isAssignableFrom(actual)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Field '%s' must be a Map for MAP type, got %s",
+                                prop.name, actual.getName()));
+            }
+            return;
+        }
+
+        Set<Class<?>> supported = SUPPORTED_TYPES.get(fieldType.getTypeRoot());
         if (supported == null) {
             throw new UnsupportedOperationException(
                     String.format(
                             "Unsupported field type %s for field %s.",
                             fieldType.getTypeRoot(), prop.name));
         }
-        if (!supported.contains(actual)
-                & !SUPPORTED_COMPLEX_TYPES.contains(fieldType.getTypeRoot())) {
+        if (!supported.contains(actual)) {
             throw new IllegalArgumentException(
                     String.format(
                             "Field '%s' in POJO has Java type %s which is incompatible with Fluss type %s. Supported Java types: %s",
