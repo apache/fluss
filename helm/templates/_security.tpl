@@ -20,10 +20,10 @@
 Returns the authentication mechanism value of a given listener.
 Allowed mechanism values: 'none', 'plain'
 Usage:
-  include "fluss.security.listener.mechanism" (dict "Values" .Values "listener" "client")
+  include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "client")
 */}}
 {{- define "fluss.security.listener.mechanism" -}}
-{{- $listener := index .Values.security .listener | default (dict) -}}
+{{- $listener := index .context.security .listener | default (dict) -}}
 {{- $sasl := $listener.sasl | default (dict) -}}
 {{- $mechanism := lower (default "none" $sasl.mechanism) -}}
 {{- if and (ne $mechanism "") (not (has $mechanism (list "none" "plain"))) -}}
@@ -38,8 +38,8 @@ Usage:
   include "fluss.security.sasl.enabled" .
 */}}
 {{- define "fluss.security.sasl.enabled" -}}
-{{- $internal := include "fluss.security.listener.mechanism" (dict "Values" .Values "listener" "internal") -}}
-{{- $client := include "fluss.security.listener.mechanism" (dict "Values" .Values "listener" "client") -}}
+{{- $internal := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "internal") -}}
+{{- $client := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "client") -}}
 {{- if or (ne $internal "none") (ne $client "none") -}}true{{- end -}}
 {{- end -}}
 
@@ -49,18 +49,18 @@ Usage:
   include "fluss.security.sasl.plain.enabled" .
 */}}
 {{- define "fluss.security.sasl.plain.enabled" -}}
-{{- $internal := include "fluss.security.listener.mechanism" (dict "Values" .Values "listener" "internal") -}}
-{{- $client := include "fluss.security.listener.mechanism" (dict "Values" .Values "listener" "client") -}}
+{{- $internal := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "internal") -}}
+{{- $client := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "client") -}}
 {{- if or (eq $internal "plain") (eq $client "plain") -}}true{{- end -}}
 {{- end -}}
 
 {{/*
 Returns protocol value derived from listener mechanism.
 Usage:
-  include "fluss.security.listener.protocol" (dict "Values" .Values "listener" "internal")
+  include "fluss.security.listener.protocol" (dict "context" .Values "listener" "internal")
 */}}
 {{- define "fluss.security.listener.protocol" -}}
-{{- $mechanism := include "fluss.security.listener.mechanism" (dict "Values" .Values "listener" .listener) -}}
+{{- $mechanism := include "fluss.security.listener.mechanism" (dict "context" .context "listener" .listener) -}}
 {{- if eq $mechanism "none" -}}PLAINTEXT{{- else -}}SASL{{- end -}}
 {{- end -}}
 
@@ -72,7 +72,7 @@ Usage:
 {{- define "fluss.security.sasl.enabledMechanisms" -}}
 {{- $mechanisms := list -}}
 {{- range $listener := list "internal" "client" -}}
-  {{- $current := include "fluss.security.listener.mechanism" (dict "Values" $.Values "listener" $listener) -}}
+  {{- $current := include "fluss.security.listener.mechanism" (dict "context" $.Values "listener" $listener) -}}
   {{- if and (ne $current "none") (not (has (upper $current) $mechanisms)) -}}
     {{- $mechanisms = append $mechanisms (upper $current) -}}
   {{- end -}}
@@ -86,7 +86,7 @@ Usage:
   include "fluss.security.sasl.validateClientPlainUsers" .
 */}}
 {{- define "fluss.security.sasl.validateClientPlainUsers" -}}
-{{- $clientMechanism := include "fluss.security.listener.mechanism" (dict "Values" .Values "listener" "client") -}}
+{{- $clientMechanism := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "client") -}}
 
 {{- if eq $clientMechanism "plain" -}}
   {{- $users := .Values.security.client.sasl.plain.users | default (list) -}}
@@ -107,10 +107,10 @@ Usage:
   include "fluss.security.config" .
 */}}
 {{- define "fluss.security.config" -}}
-{{- $internalProtocol := include "fluss.security.listener.protocol" (dict "Values" .Values "listener" "internal") | trim -}}
-{{- $clientProtocol := include "fluss.security.listener.protocol" (dict "Values" .Values "listener" "client") | trim -}}
+{{- $internalProtocol := include "fluss.security.listener.protocol" (dict "context" .Values "listener" "internal") | trim -}}
+{{- $clientProtocol := include "fluss.security.listener.protocol" (dict "context" .Values "listener" "client") | trim -}}
 {{- $enabledMechanisms := include "fluss.security.sasl.enabledMechanisms" . | trim -}}
-{{- $internalMechanism := include "fluss.security.listener.mechanism" (dict "Values" .Values "listener" "internal") -}}
+{{- $internalMechanism := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "internal") -}}
 {{- if (include "fluss.security.sasl.enabled" .) }}
 security.protocol.map: INTERNAL:{{ $internalProtocol }},CLIENT:{{ $clientProtocol }}
 security.sasl.enabled.mechanisms: {{ $enabledMechanisms }}
