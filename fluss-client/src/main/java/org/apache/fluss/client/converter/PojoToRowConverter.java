@@ -154,8 +154,9 @@ public final class PojoToRowConverter<T> {
                                 .convertArray();
             case MAP:
                 return (obj) ->
-                        new PojoMaptoFlussMap(
-                                (Map<?, ?>) prop.read(obj), (MapType) fieldType, prop.name);
+                        new PojoMapToFlussMap(
+                                        (Map<?, ?>) prop.read(obj), (MapType) fieldType, prop.name)
+                                .convertMap();
             default:
                 throw new UnsupportedOperationException(
                         String.format(

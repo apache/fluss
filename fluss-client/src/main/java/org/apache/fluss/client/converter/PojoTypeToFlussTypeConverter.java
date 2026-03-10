@@ -23,7 +23,9 @@ import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DecimalType;
+import org.apache.fluss.types.MapType;
 
 import javax.annotation.Nullable;
 
@@ -34,6 +36,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
+import java.util.Map;
 
 /** Shared utilities for POJO type and Fluss type. */
 public class PojoTypeToFlussTypeConverter {
@@ -204,5 +207,64 @@ public class PojoTypeToFlussTypeConverter {
     private static int truncateNanos(int nanos, int precision) {
         int divisor = (int) Math.pow(10, 9 - precision);
         return (nanos / divisor) * divisor;
+    }
+
+    /**
+     * Converts a Pojo element to Fluss internal type.
+     *
+     * @param obj the pojo
+     * @param elementType the data type of Fluss
+     * @param fieldName the field name
+     */
+    static @Nullable Object convertElementValue(
+            @Nullable Object obj, DataType elementType, String fieldName) {
+        if (obj == null) {
+            return null;
+        }
+
+        switch (elementType.getTypeRoot()) {
+            case BOOLEAN:
+            case TINYINT:
+            case SMALLINT:
+            case INTEGER:
+            case BIGINT:
+            case FLOAT:
+            case DOUBLE:
+            case BINARY:
+            case BYTES:
+                return obj;
+            case CHAR:
+            case STRING:
+                return PojoTypeToFlussTypeConverter.convertTextValue(elementType, fieldName, obj);
+            case DECIMAL:
+                return PojoTypeToFlussTypeConverter.convertDecimalValue(
+                        (DecimalType) elementType, fieldName, obj);
+            case DATE:
+                return PojoTypeToFlussTypeConverter.convertDateValue(fieldName, obj);
+            case TIME_WITHOUT_TIME_ZONE:
+                return PojoTypeToFlussTypeConverter.convertTimeValue(fieldName, obj);
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+                {
+                    final int precision = DataTypeChecks.getPrecision(elementType);
+                    return PojoTypeToFlussTypeConverter.convertTimestampNtzValue(
+                            precision, fieldName, obj);
+                }
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                {
+                    final int precision = DataTypeChecks.getPrecision(elementType);
+                    return PojoTypeToFlussTypeConverter.convertTimestampLtzValue(
+                            precision, fieldName, obj);
+                }
+            case ARRAY:
+                return new PojoArrayToFlussArray(obj, elementType, fieldName).convertArray();
+            case MAP:
+                return new PojoMapToFlussMap((Map<?, ?>) obj, (MapType) elementType, fieldName)
+                        .convertMap();
+            default:
+                throw new UnsupportedOperationException(
+                        String.format(
+                                "Unsupported field type %s for field %s.",
+                                elementType.getTypeRoot(), fieldName));
+        }
     }
 }

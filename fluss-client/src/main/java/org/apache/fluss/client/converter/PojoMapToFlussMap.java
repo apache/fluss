@@ -18,43 +18,43 @@
 
 package org.apache.fluss.client.converter;
 
-import org.apache.fluss.row.InternalArray;
-import org.apache.fluss.row.InternalMap;
-import org.apache.fluss.types.ArrayType;
+import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.types.MapType;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static org.apache.fluss.client.converter.PojoTypeToFlussTypeConverter.convertElementValue;
+
 /** Adapter class for converting Pojo Map to Fluss InternalMap. */
-public class PojoMaptoFlussMap implements InternalMap {
+public class PojoMapToFlussMap {
     private final Map<?, ?> pojoMap;
     private final MapType mapType;
     private final String fieldName;
 
-    public PojoMaptoFlussMap(Map<?, ?> pojoMap, MapType mapType, String fieldName) {
+    public PojoMapToFlussMap(Map<?, ?> pojoMap, MapType mapType, String fieldName) {
         this.pojoMap = pojoMap;
         this.mapType = mapType;
         this.fieldName = fieldName;
     }
 
-    @Override
-    public int size() {
-        return pojoMap.size();
-    }
+    public GenericMap convertMap() {
+        if (pojoMap == null) {
+            return null;
+        }
 
-    @Override
-    public InternalArray keyArray() {
-        List<?> pojoArray = new ArrayList<>(pojoMap.keySet());
-        ArrayType keyArrayType = new ArrayType(mapType.getKeyType());
-        return new PojoArrayToFlussArray(pojoArray, keyArrayType, fieldName).convertArray();
-    }
+        List<Object> keyArray = new ArrayList<>(pojoMap.keySet());
+        Map<Object, Object> converted = new HashMap<>();
+        for (Object key : keyArray) {
+            Object convertedKey = convertElementValue(key, mapType.getKeyType(), fieldName);
+            Object convertedValue =
+                    convertElementValue(pojoMap.get(key), mapType.getValueType(), fieldName);
+            converted.put(convertedKey, convertedValue);
+        }
 
-    @Override
-    public InternalArray valueArray() {
-        List<?> pojoArray = new ArrayList<>(pojoMap.values());
-        ArrayType valueArrayType = new ArrayType(mapType.getValueType());
-        return new PojoArrayToFlussArray(pojoArray, valueArrayType, fieldName).convertArray();
+        // Build the result map
+        return new GenericMap(converted);
     }
 }
