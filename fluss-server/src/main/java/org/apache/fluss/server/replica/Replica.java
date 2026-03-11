@@ -123,6 +123,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -154,7 +155,7 @@ public final class Replica {
     /** A closeable registry to register all registered {@link Closeable}s. */
     private final CloseableRegistry closeableRegistry;
 
-    private final int minInSyncReplicas;
+    private final IntSupplier minInSyncReplicasSupplier;
     private final ServerMetadataCache metadataCache;
     private final FatalErrorHandler fatalErrorHandler;
     private final BucketMetricGroup bucketMetricGroup;
@@ -212,7 +213,7 @@ public final class Replica {
             LogManager logManager,
             @Nullable KvManager kvManager,
             long replicaMaxLagTime,
-            int minInSyncReplicas,
+            IntSupplier minInSyncReplicasSupplier,
             int localTabletServerId,
             OffsetCheckpointFile.LazyOffsetCheckpoints lazyHighWatermarkCheckpoint,
             DelayedOperationManager<DelayedWrite<?>> delayedWriteManager,
@@ -231,7 +232,7 @@ public final class Replica {
         this.kvManager = kvManager;
         this.metadataCache = metadataCache;
         this.replicaMaxLagTime = replicaMaxLagTime;
-        this.minInSyncReplicas = minInSyncReplicas;
+        this.minInSyncReplicasSupplier = minInSyncReplicasSupplier;
         this.localTabletServerId = localTabletServerId;
         this.delayedWriteManager = delayedWriteManager;
         this.delayedFetchLogManager = delayedFetchLogManager;
@@ -373,7 +374,7 @@ public final class Replica {
     }
 
     public boolean isAtMinIsr() {
-        return isLeader() && isrState.isr().size() == minInSyncReplicas;
+        return isLeader() && isrState.isr().size() == minInSyncReplicasSupplier.getAsInt();
     }
 
     public BucketMetricGroup bucketMetrics() {
@@ -1365,7 +1366,7 @@ public final class Replica {
             }
 
             if (logTablet.getHighWatermark() >= requiredOffset) {
-                if (minInSyncReplicas <= curMaximalIsr.size()) {
+                if (minInSyncReplicasSupplier.getAsInt() <= curMaximalIsr.size()) {
                     return Tuple2.of(true, Errors.NONE);
                 } else {
                     return Tuple2.of(true, Errors.NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION);
@@ -1902,7 +1903,7 @@ public final class Replica {
 
     private void validateInSyncReplicaSize(int requiredAcks) {
         int inSyncSize = isrState.isr().size();
-        if (inSyncSize < minInSyncReplicas && requiredAcks == -1) {
+        if (inSyncSize < minInSyncReplicasSupplier.getAsInt() && requiredAcks == -1) {
             throw new NotEnoughReplicasException(
                     String.format(
                             "The size of the current ISR %s is insufficient to satisfy "
@@ -1917,7 +1918,7 @@ public final class Replica {
     }
 
     public boolean isUnderMinIsr() {
-        return isLeader() && isrState.isr().size() < minInSyncReplicas;
+        return isLeader() && isrState.isr().size() < minInSyncReplicasSupplier.getAsInt();
     }
 
     private LogTablet localLogOrThrow(boolean requireLeader) {

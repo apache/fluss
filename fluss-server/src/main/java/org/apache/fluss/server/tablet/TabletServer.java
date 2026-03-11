@@ -275,6 +275,8 @@ public class TabletServer extends ServerBase {
 
             // Register DefaultSnapshotContext for dynamic kv.snapshot.interval
             dynamicConfigManager.register(replicaManager.getKvSnapshotContext());
+            // Register replicaManager to dynamicConfigManager for dynamic config
+            dynamicConfigManager.register(replicaManager);
             // Start dynamicConfigManager after all reconfigurable components are registered
             dynamicConfigManager.startup();
 

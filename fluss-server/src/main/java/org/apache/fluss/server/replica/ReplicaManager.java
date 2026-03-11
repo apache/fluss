@@ -21,6 +21,8 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
+import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
@@ -147,7 +149,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /** A manager for replica. */
-public class ReplicaManager {
+public class ReplicaManager implements ServerReconfigurable {
     private static final Logger LOG = LoggerFactory.getLogger(ReplicaManager.class);
 
     public static final String HIGH_WATERMARK_CHECKPOINT_FILE_NAME = "high-watermark-checkpoint";
@@ -193,6 +195,9 @@ public class ReplicaManager {
     // for kv snapshot
     private final KvSnapshotResource kvSnapshotResource;
     private final DefaultSnapshotContext kvSnapshotContext;
+
+    /** The minimum number of in-sync replicas required for writes with acks=-1. */
+    private volatile int minInSyncReplicas;
 
     // remote log manager for remote log storage.
     private final RemoteLogManager remoteLogManager;
@@ -304,6 +309,7 @@ public class ReplicaManager {
         this.userMetrics = userMetrics;
         this.clock = clock;
         this.ioExecutor = ioExecutor;
+        this.minInSyncReplicas = conf.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER);
         registerMetrics();
     }
 
@@ -324,6 +330,44 @@ public class ReplicaManager {
 
     public DefaultSnapshotContext getKvSnapshotContext() {
         return kvSnapshotContext;
+    }
+
+    public int getMinInSyncReplicas() {
+        return minInSyncReplicas;
+    }
+
+    // ============ ServerReconfigurable Implementation ============
+
+    @Override
+    public void validate(Configuration newConfig) throws ConfigException {
+        // Type validation is already handled by DynamicServerConfig.
+        // Here we only do basic sanity checks.
+        int newMinInSyncReplicas =
+                newConfig.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER);
+        if (newMinInSyncReplicas <= 0) {
+            throw new ConfigException(
+                    String.format(
+                            "Invalid log.replica.min-in-sync-replicas-number can not be "
+                                    + "negative or zero: %d",
+                            newMinInSyncReplicas));
+        }
+    }
+
+    @Override
+    public void reconfigure(Configuration newConfig) {
+        int newMinInSyncReplicas =
+                newConfig.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER);
+        if (newMinInSyncReplicas == minInSyncReplicas) {
+            LOG.debug(
+                    "log.replica.min-in-sync-replicas-number unchanged: {}", newMinInSyncReplicas);
+            return;
+        }
+        int oldMinInSyncReplicas = minInSyncReplicas;
+        minInSyncReplicas = newMinInSyncReplicas;
+        LOG.info(
+                "log.replica.min-in-sync-replicas-number reconfigured: {} -> {}",
+                oldMinInSyncReplicas,
+                newMinInSyncReplicas);
     }
 
     private void registerMetrics() {
@@ -1865,7 +1909,7 @@ public class ReplicaManager {
                                 logManager,
                                 isKvTable ? kvManager : null,
                                 conf.get(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME).toMillis(),
-                                conf.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER),
+                                this::getMinInSyncReplicas,
                                 serverId,
                                 new OffsetCheckpointFile.LazyOffsetCheckpoints(
                                         highWatermarkCheckpoint),
