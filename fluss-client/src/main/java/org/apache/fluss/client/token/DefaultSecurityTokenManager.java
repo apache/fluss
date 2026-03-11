@@ -31,6 +31,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
 import java.time.Clock;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -95,7 +96,7 @@ public class DefaultSecurityTokenManager implements SecurityTokenManager {
     void startTokensUpdate() {
         try {
             LOG.info("Starting tokens update task");
-            AtomicReference<ObtainedSecurityToken> tokenContainer = new AtomicReference<>();
+            AtomicReference<List<ObtainedSecurityToken>> tokenContainer = new AtomicReference<>();
             Optional<Long> nextRenewal = obtainSecurityTokensAndGetNextRenewal(tokenContainer);
 
             if (tokenContainer.get() != null) {
@@ -133,17 +134,17 @@ public class DefaultSecurityTokenManager implements SecurityTokenManager {
     }
 
     protected Optional<Long> obtainSecurityTokensAndGetNextRenewal(
-            AtomicReference<ObtainedSecurityToken> tokenContainer) {
+            AtomicReference<List<ObtainedSecurityToken>> tokenContainer) {
         try {
-            LOG.debug("Obtaining security token.");
-            ObtainedSecurityToken token = securityTokenProvider.obtainSecurityToken();
-            tokenContainer.set(token);
-            checkNotNull(token, "Obtained security tokens must not be null");
-            LOG.debug("Obtained security token successfully");
-            return token.getValidUntil();
+            LOG.debug("Obtaining security tokens.");
+            List<ObtainedSecurityToken> tokens = securityTokenProvider.obtainSecurityTokens();
+            tokenContainer.set(tokens);
+            checkNotNull(tokens, "Obtained security tokens must not be null");
+            LOG.debug("Obtained security tokens successfully");
+            return tokens.get(0).getValidUntil();
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
-            LOG.error("Failed to obtain security token.", t);
+            LOG.error("Failed to obtain security tokens.", t);
             throw new FlussRuntimeException(t);
         }
     }

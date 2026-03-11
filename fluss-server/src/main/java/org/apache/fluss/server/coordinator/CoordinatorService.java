@@ -36,6 +36,7 @@ import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.TableAlreadyExistException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.exception.UnknownServerException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
@@ -149,6 +150,7 @@ import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseHandler;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.producer.ProducerOffsetsManager;
 import org.apache.fluss.server.coordinator.rebalance.goal.Goal;
+import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.LakeTieringTableInfo;
 import org.apache.fluss.server.entity.TablePropertyChanges;
@@ -243,6 +245,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             @Nullable Authorizer authorizer,
             LakeCatalogDynamicLoader lakeCatalogDynamicLoader,
             LakeTableTieringManager lakeTableTieringManager,
+            RemoteDirDynamicLoader remoteDirDynamicLoader,
             DynamicConfigManager dynamicConfigManager,
             ExecutorService ioExecutor,
             KvSnapshotLeaseManager kvSnapshotLeaseManager) {
@@ -253,6 +256,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 metadataManager,
                 authorizer,
                 dynamicConfigManager,
+                remoteDirDynamicLoader,
                 ioExecutor);
         this.defaultBucketNumber = conf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER);
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
@@ -266,8 +270,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         this.metadataCache = metadataCache;
         this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
         this.ioExecutor = ioExecutor;
-        this.lakeTableHelper =
-                new LakeTableHelper(zkClient, conf.getString(ConfigOptions.REMOTE_DATA_DIR));
+        this.lakeTableHelper = new LakeTableHelper(zkClient);
 
         // Initialize and start the producer snapshot manager
         this.producerOffsetsManager = new ProducerOffsetsManager(conf, zkClient);
@@ -432,9 +435,18 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             }
         }
 
+        // select remote data dir for table.
+        // remote data dir will be used to store table data for non-partitioned table and metadata
+        // (such as lake snapshot offset file) for partitioned table
+        String remoteDataDir = remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
+
         // then create table;
         metadataManager.createTable(
-                tablePath, tableDescriptor, tableAssignment, request.isIgnoreIfExists());
+                tablePath,
+                remoteDataDir,
+                tableDescriptor,
+                tableAssignment,
+                request.isIgnoreIfExists());
 
         return CompletableFuture.completedFuture(new CreateTableResponse());
     }
@@ -637,9 +649,13 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         PartitionAssignment partitionAssignment =
                 new PartitionAssignment(table.tableId, bucketAssignments);
 
+        // select remote data dir for partition
+        String remoteDataDir = remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
+
         metadataManager.createPartition(
                 tablePath,
                 table.tableId,
+                remoteDataDir,
                 partitionAssignment,
                 partitionToCreate,
                 request.isIgnoreIfNotExists());
@@ -688,6 +704,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         return metadataResponseAccessContextEvent.getResultFuture();
     }
 
+    @Override
     public CompletableFuture<AdjustIsrResponse> adjustIsr(AdjustIsrRequest request) {
         CompletableFuture<AdjustIsrResponse> response = new CompletableFuture<>();
         eventManagerSupplier
@@ -776,9 +793,19 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                     }
                                 }
                                 TablePath tablePath = toTablePath(bucketOffsets.getTablePath());
+                                Optional<TableRegistration> tableRegistration =
+                                        zkClient.getTable(tablePath);
+                                if (!tableRegistration.isPresent()) {
+                                    throw new TableNotExistException(
+                                            String.format(
+                                                    "Try to prepare lake table snapshot for table %s, but table not exist.",
+                                                    tablePath));
+                                }
                                 FsPath fsPath =
                                         lakeTableHelper.storeLakeTableOffsetsFile(
-                                                tablePath, tableBucketOffsets);
+                                                tableRegistration.get().remoteDataDir,
+                                                tablePath,
+                                                tableBucketOffsets);
                                 pbPrepareLakeTableRespForTable.setTableId(tableId);
                                 pbPrepareLakeTableRespForTable.setLakeTableOffsetsPath(
                                         fsPath.toString());

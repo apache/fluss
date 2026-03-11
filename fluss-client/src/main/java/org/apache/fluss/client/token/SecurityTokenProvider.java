@@ -19,13 +19,15 @@ package org.apache.fluss.client.token;
 
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 
+import java.util.List;
+
 /** Security token provider API. */
 public interface SecurityTokenProvider {
 
     /**
-     * Obtain security token.
+     * Obtain security tokens for all file systems configured in the target cluster.
      *
-     * @return the obtained security token.
+     * @return the obtained security tokens.
      */
-    ObtainedSecurityToken obtainSecurityToken() throws Exception;
+    List<ObtainedSecurityToken> obtainSecurityTokens() throws Exception;
 }

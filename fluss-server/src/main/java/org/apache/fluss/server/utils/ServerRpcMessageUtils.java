@@ -112,6 +112,7 @@ import org.apache.fluss.rpc.messages.PbFetchLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForTable;
+import org.apache.fluss.rpc.messages.PbFileSystemSecurityToken;
 import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbKvSnapshot;
 import org.apache.fluss.rpc.messages.PbKvSnapshotLeaseForBucket;
@@ -530,6 +531,7 @@ public class ServerRpcMessageUtils {
                         .setTableId(tableInfo.getTableId())
                         .setSchemaId(tableInfo.getSchemaId())
                         .setTableJson(tableInfo.toTableDescriptor().toJsonBytes())
+                        .setRemoteDataDir(tableInfo.getRemoteDataDir())
                         .setCreatedTime(tableInfo.getCreatedTime())
                         .setModifiedTime(tableInfo.getModifiedTime());
         TablePath tablePath = tableInfo.getTablePath();
@@ -588,6 +590,14 @@ public class ServerRpcMessageUtils {
                         tableId,
                         pbTableMetadata.getSchemaId(),
                         TableDescriptor.fromJsonBytes(pbTableMetadata.getTableJson()),
+                        // For backword capability. When an older Coordinator sends an
+                        // UpdateMetadataRequest to a newer TabletServer, the remoteDataDir will be
+                        // missing. In this case, setting it to null is acceptable because the
+                        // TabletServerMetadataCache does not maintain any remoteDataDir
+                        // information.
+                        pbTableMetadata.hasRemoteDataDir()
+                                ? pbTableMetadata.getRemoteDataDir()
+                                : null,
                         pbTableMetadata.getCreatedTime(),
                         pbTableMetadata.getModifiedTime());
 
@@ -1469,24 +1479,47 @@ public class ServerRpcMessageUtils {
     }
 
     public static GetFileSystemSecurityTokenResponse toGetFileSystemSecurityTokenResponse(
-            String filesystemSchema, ObtainedSecurityToken obtainedSecurityToken) {
+            ObtainedSecurityToken obtainedSecurityToken,
+            Collection<ObtainedSecurityToken> obtainedSecurityTokens) {
         GetFileSystemSecurityTokenResponse getFileSystemSecurityTokenResponse =
                 new GetFileSystemSecurityTokenResponse()
                         .setToken(obtainedSecurityToken.getToken())
-                        .setSchema(filesystemSchema);
+                        .setSchema(obtainedSecurityToken.getScheme());
+
+        obtainedSecurityToken
+                .getAuthority()
+                .ifPresent(getFileSystemSecurityTokenResponse::setAuthority);
 
         obtainedSecurityToken
                 .getValidUntil()
                 .ifPresent(getFileSystemSecurityTokenResponse::setExpirationTime);
 
-        List<PbKeyValue> pbKeyValues =
-                new ArrayList<>(obtainedSecurityToken.getAdditionInfos().size());
-        for (Map.Entry<String, String> entry :
-                obtainedSecurityToken.getAdditionInfos().entrySet()) {
+        getFileSystemSecurityTokenResponse.addAllAdditionInfos(
+                toPbKeyValues(obtainedSecurityToken.getAdditionInfos()));
+
+        List<PbFileSystemSecurityToken> securityTokens = new ArrayList<>();
+        for (ObtainedSecurityToken token : obtainedSecurityTokens) {
+            PbFileSystemSecurityToken pbFileSystemSecurityToken =
+                    new PbFileSystemSecurityToken()
+                            .setToken(token.getToken())
+                            .setSchema(token.getScheme());
+
+            token.getAuthority().ifPresent(pbFileSystemSecurityToken::setAuthority);
+            token.getValidUntil().ifPresent(pbFileSystemSecurityToken::setExpirationTime);
+            pbFileSystemSecurityToken.addAllAdditionInfos(toPbKeyValues(token.getAdditionInfos()));
+        }
+
+        getFileSystemSecurityTokenResponse.addAllTokens(securityTokens);
+
+        return getFileSystemSecurityTokenResponse;
+    }
+
+    private static List<PbKeyValue> toPbKeyValues(Map<String, String> keyValues) {
+        List<PbKeyValue> pbKeyValues = new ArrayList<>(keyValues.size());
+        for (Map.Entry<String, String> entry : keyValues.entrySet()) {
             pbKeyValues.add(new PbKeyValue().setKey(entry.getKey()).setValue(entry.getValue()));
         }
-        getFileSystemSecurityTokenResponse.addAllAdditionInfos(pbKeyValues);
-        return getFileSystemSecurityTokenResponse;
+        return pbKeyValues;
     }
 
     public static CommitRemoteLogManifestData getCommitRemoteLogManifestData(

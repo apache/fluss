@@ -22,6 +22,8 @@ import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
 
+import java.util.List;
+
 /** A default implementation of {@link SecurityTokenProvider} to get token from server. */
 public class DefaultSecurityTokenProvider implements SecurityTokenProvider {
 
@@ -32,10 +34,10 @@ public class DefaultSecurityTokenProvider implements SecurityTokenProvider {
     }
 
     @Override
-    public ObtainedSecurityToken obtainSecurityToken() throws Exception {
+    public List<ObtainedSecurityToken> obtainSecurityTokens() throws Exception {
         return adminReadOnlyGateway
                 .getFileSystemSecurityToken(new GetFileSystemSecurityTokenRequest())
-                .thenApply(ClientRpcMessageUtils::toSecurityToken)
+                .thenApply(ClientRpcMessageUtils::toSecurityTokens)
                 .get();
     }
 }

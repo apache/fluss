@@ -21,6 +21,7 @@ import org.apache.fluss.fs.oss.OSSFileSystemPlugin;
 import org.apache.fluss.fs.token.CredentialsJsonSerde;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.fs.token.SecurityTokenReceiver;
+import org.apache.fluss.utils.MapUtils;
 
 import com.aliyun.oss.common.auth.Credentials;
 import com.aliyun.oss.common.auth.DefaultCredentials;
@@ -29,22 +30,28 @@ import org.apache.hadoop.fs.aliyun.oss.Constants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.net.URI;
 import java.util.Map;
+
+import static org.apache.fluss.fs.FileSystem.FSKey;
 
 /** Security token receiver for OSS filesystem. */
 public class OSSSecurityTokenReceiver implements SecurityTokenReceiver {
 
     private static final Logger LOG = LoggerFactory.getLogger(OSSSecurityTokenReceiver.class);
 
-    static volatile Credentials credentials;
-    static volatile Map<String, String> additionInfos;
+    static Map<FSKey, Credentials> credentialsCache = MapUtils.newConcurrentHashMap();
+    static Map<FSKey, Map<String, String>> additionInfosCache = MapUtils.newConcurrentHashMap();
 
-    public static void updateHadoopConfig(org.apache.hadoop.conf.Configuration hadoopConfig) {
-        updateHadoopConfig(hadoopConfig, DynamicTemporaryOssCredentialsProvider.NAME);
+    public static void updateHadoopConfig(
+            URI fsUri, org.apache.hadoop.conf.Configuration hadoopConfig) {
+        updateHadoopConfig(fsUri, hadoopConfig, DynamicTemporaryOssCredentialsProvider.NAME);
     }
 
     protected static void updateHadoopConfig(
-            org.apache.hadoop.conf.Configuration hadoopConfig, String credentialsProviderName) {
+            URI fsUri,
+            org.apache.hadoop.conf.Configuration hadoopConfig,
+            String credentialsProviderName) {
         LOG.info("Updating Hadoop configuration");
 
         String providers = hadoopConfig.get(Constants.CREDENTIALS_PROVIDER_KEY, "");
@@ -62,6 +69,8 @@ public class OSSSecurityTokenReceiver implements SecurityTokenReceiver {
             LOG.debug("Provider already exists");
         }
 
+        FSKey fsKey = new FSKey(fsUri.getScheme(), fsUri.getAuthority());
+        Map<String, String> additionInfos = additionInfosCache.get(fsKey);
         // then, set addition info
         if (additionInfos == null) {
             // if addition info is null, it also means we have not received any token,
@@ -90,19 +99,23 @@ public class OSSSecurityTokenReceiver implements SecurityTokenReceiver {
         org.apache.fluss.fs.token.Credentials flussCredentials =
                 CredentialsJsonSerde.fromJson(tokenBytes);
 
-        credentials =
+        FSKey fsKey = new FSKey(token.getScheme(), token.getAuthority().orElse(null));
+
+        Credentials credentials =
                 new DefaultCredentials(
                         flussCredentials.getAccessKeyId(),
                         flussCredentials.getSecretAccessKey(),
                         flussCredentials.getSecurityToken());
-        additionInfos = token.getAdditionInfos();
+        credentialsCache.put(fsKey, credentials);
+
+        additionInfosCache.put(fsKey, token.getAdditionInfos());
 
         LOG.info(
                 "Session credentials updated successfully with access key: {}.",
                 credentials.getAccessKeyId());
     }
 
-    public static Credentials getCredentials() {
-        return credentials;
+    public static Credentials getCredentials(URI uri) {
+        return credentialsCache.get(new FSKey(uri.getScheme(), uri.getAuthority()));
     }
 }

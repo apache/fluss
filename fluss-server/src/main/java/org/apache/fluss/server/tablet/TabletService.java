@@ -71,6 +71,7 @@ import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.RpcServiceBase;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.UserContext;
@@ -142,6 +143,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             MetadataManager metadataManager,
             @Nullable Authorizer authorizer,
             DynamicConfigManager dynamicConfigManager,
+            RemoteDirDynamicLoader remoteDirDynamicLoader,
             ExecutorService ioExecutor) {
         super(
                 remoteFileSystem,
@@ -150,6 +152,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 metadataManager,
                 authorizer,
                 dynamicConfigManager,
+                remoteDirDynamicLoader,
                 ioExecutor);
         this.serviceName = "server-" + serverId;
         this.replicaManager = replicaManager;
