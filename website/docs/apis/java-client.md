@@ -305,7 +305,7 @@ The supported type mappings are:
 | TIMESTAMP | LocalDateTime |
 | TIMESTAMP_LTZ | Instant |
 | BINARY / BYTES | byte[] |
-| ARRAY | T[] / Collection<> |
+| ARRAY | T[] / Collection |
 | MAP | Map |
 ### Writing Data
 
