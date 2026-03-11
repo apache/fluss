@@ -59,7 +59,7 @@ listeners:
     port: 9124
 
 metrics:
-  reporters: none
+  reporters: ""
   prometheus:
     port: 9249
     service:

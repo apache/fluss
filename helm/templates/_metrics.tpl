@@ -21,17 +21,14 @@ Returns list of provided reporter names.
 */}}
 {{- define "fluss.metrics.reporterNames" -}}
 {{- $metrics := .Values.metrics | default dict -}}
-{{- $reportersValue := default "none" $metrics.reporters | toString | trim -}}
-{{- if or (eq $reportersValue "") (eq $reportersValue "none") -}}
+{{- $reportersValue := $metrics.reporters | default "" | toString | trim -}}
+{{- if eq $reportersValue "" -}}
 []
 {{- else -}}
 {{- $selected := list -}}
 {{- range $raw := regexSplit "\\s*,\\s*" $reportersValue -1 -}}
 {{- $name := trim $raw -}}
 {{- if ne $name "" -}}
-{{- if eq $name "none" -}}
-{{- fail "metrics.reporters cannot combine 'none' with other reporters" -}}
-{{- end -}}
 {{- $selected = append $selected $name -}}
 {{- end -}}
 {{- end -}}

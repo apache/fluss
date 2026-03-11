@@ -104,7 +104,7 @@ helm install fluss ./fluss-helm \
   --set metrics.reporters=prometheus
 ```
 
-When `metrics.reporters` is not `none`, the chart will:
+When `metrics.reporters` is set, the chart will:
 
 - configure `metrics.reporters` from reporter names in values
 - configure `metrics.reporter.<name>.<option>` entries from values
@@ -113,7 +113,7 @@ Values:
 
 | Key | Description |
 | --- | --- |
-| `metrics.reporters` | Comma-separated reporter selector. Use `none` to disable metrics. |
+| `metrics.reporters` | Comma-separated reporter selector. Leave empty to disable metrics. |
 | `metrics.jmx.port` | JMX reporter port range (e.g. `9250`). |
 | `metrics.prometheus.port` | Prometheus reporter port (default `9249`). |
 | `metrics.prometheus.service.portName` | Named port exposed by metrics services (default `metrics`). |

@@ -269,7 +269,7 @@ listeners:
 
 ### Metrics and Monitoring
 
-When `metrics.reporters` is not `none`, the chart adds the following `server.yaml` config entries:
+When `metrics.reporters` is set, the chart adds the following `server.yaml` config entries:
 
 - `metrics.reporters`: comma-separated reporter names from `metrics.reporters`
 - `metrics.reporter.<name>.<option>`: one entry per reporter option in `metrics.<name>`

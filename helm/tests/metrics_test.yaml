@@ -20,7 +20,7 @@ suite: metrics-disabled-configmap
 templates:
   - templates/configmap.yaml
 tests:
-  - it: does not add metrics reporter settings when reporters are none
+  - it: does not add metrics reporter settings when reporters are empty
     asserts:
       - notMatchRegex:
           path: data["server.yaml"]
@@ -105,13 +105,6 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: metrics.prometheus must be configured when metrics.reporters includes prometheus
-  - it: fails when none is combined with another reporter
-    set:
-      metrics.reporters: none,prometheus
-      metrics.prometheus: {}
-    asserts:
-      - failedTemplate:
-          errorMessage: metrics.reporters cannot combine 'none' with other reporters
 ---
 
 suite: metrics-config-overrides-precedence
@@ -154,7 +147,7 @@ suite: metrics-service-disabled
 templates:
   - templates/svc-metrics-coordinator.yaml
 tests:
-  - it: does not render coordinator metrics service when reporters are none
+  - it: does not render coordinator metrics service when reporters are empty
     asserts:
       - hasDocuments:
           count: 0
