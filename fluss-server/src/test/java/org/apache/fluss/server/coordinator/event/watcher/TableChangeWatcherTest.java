@@ -58,6 +58,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -79,7 +80,6 @@ class TableChangeWatcherTest {
             new AllCallbackWrapper<>(new ZooKeeperExtension());
 
     private static ZooKeeperClient zookeeperClient;
-    private static String remoteDataDir;
     private TestingEventManager eventManager;
     private TableChangeWatcher tableChangeWatcher;
     private static MetadataManager metadataManager;
@@ -90,7 +90,6 @@ class TableChangeWatcherTest {
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
-        remoteDataDir = zookeeperClient.getDefaultRemoteDataDir();
         metadataManager =
                 new MetadataManager(
                         zookeeperClient,
@@ -137,7 +136,7 @@ class TableChangeWatcherTest {
                             });
             long tableId =
                     metadataManager.createTable(
-                            tablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
+                            tablePath, DEFAULT_REMOTE_DATA_DIR, TEST_TABLE, tableAssignment, false);
             SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
             long currentMillis = System.currentTimeMillis();
             expectedEvents.add(
@@ -147,7 +146,7 @@ class TableChangeWatcherTest {
                                     tableId,
                                     schemaInfo.getSchemaId(),
                                     TEST_TABLE,
-                                    remoteDataDir,
+                                    DEFAULT_REMOTE_DATA_DIR,
                                     currentMillis,
                                     currentMillis),
                             tableAssignment));
@@ -200,7 +199,7 @@ class TableChangeWatcherTest {
                         .withReplicationFactor(3);
         long tableId =
                 metadataManager.createTable(
-                        tablePath, remoteDataDir, partitionedTable, null, false);
+                        tablePath, DEFAULT_REMOTE_DATA_DIR, partitionedTable, null, false);
         List<CoordinatorEvent> expectedEvents = new ArrayList<>();
         SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
         // create table event
@@ -212,7 +211,7 @@ class TableChangeWatcherTest {
                                 tableId,
                                 schemaInfo.getSchemaId(),
                                 partitionedTable,
-                                remoteDataDir,
+                                DEFAULT_REMOTE_DATA_DIR,
                                 currentMillis,
                                 currentMillis),
                         TableAssignment.builder().build()));
@@ -233,15 +232,27 @@ class TableChangeWatcherTest {
                                 .getBucketAssignments());
         // register assignment and metadata
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                1L, "2011", partitionAssignment, remoteDataDir, tablePath, tableId);
+                1L, "2011", partitionAssignment, DEFAULT_REMOTE_DATA_DIR, tablePath, tableId);
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                2L, "2022", partitionAssignment, remoteDataDir, tablePath, tableId);
+                2L, "2022", partitionAssignment, DEFAULT_REMOTE_DATA_DIR, tablePath, tableId);
 
         // create partitions events
         expectedEvents.add(
-                new CreatePartitionEvent(tablePath, tableId, 1L, "2011", partitionAssignment));
+                new CreatePartitionEvent(
+                        tablePath,
+                        tableId,
+                        1L,
+                        "2011",
+                        partitionAssignment,
+                        DEFAULT_REMOTE_DATA_DIR));
         expectedEvents.add(
-                new CreatePartitionEvent(tablePath, tableId, 2L, "2022", partitionAssignment));
+                new CreatePartitionEvent(
+                        tablePath,
+                        tableId,
+                        2L,
+                        "2022",
+                        partitionAssignment,
+                        DEFAULT_REMOTE_DATA_DIR));
 
         retry(
                 Duration.ofMinutes(1),
@@ -281,7 +292,7 @@ class TableChangeWatcherTest {
                             });
             long tableId =
                     metadataManager.createTable(
-                            tablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
+                            tablePath, DEFAULT_REMOTE_DATA_DIR, TEST_TABLE, tableAssignment, false);
             SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
             long currentMillis = System.currentTimeMillis();
             expectedEvents.add(
@@ -291,7 +302,7 @@ class TableChangeWatcherTest {
                                     tableId,
                                     schemaInfo.getSchemaId(),
                                     TEST_TABLE,
-                                    remoteDataDir,
+                                    DEFAULT_REMOTE_DATA_DIR,
                                     currentMillis,
                                     currentMillis),
                             tableAssignment));
@@ -356,7 +367,7 @@ class TableChangeWatcherTest {
                         });
         long tableId =
                 metadataManager.createTable(
-                        tablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
+                        tablePath, DEFAULT_REMOTE_DATA_DIR, TEST_TABLE, tableAssignment, false);
         SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
         long currentMillis = System.currentTimeMillis();
 
@@ -368,7 +379,7 @@ class TableChangeWatcherTest {
                                 tableId,
                                 schemaInfo.getSchemaId(),
                                 TEST_TABLE,
-                                remoteDataDir,
+                                DEFAULT_REMOTE_DATA_DIR,
                                 currentMillis,
                                 currentMillis),
                         tableAssignment));
