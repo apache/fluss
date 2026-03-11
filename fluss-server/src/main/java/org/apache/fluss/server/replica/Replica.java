@@ -931,8 +931,7 @@ public final class Replica {
                             tableBucket,
                             kvTabletSnapshotTarget,
                             snapshotContext,
-                            kvTablet.getGuardedExecutor(),
-                            bucketMetricGroup);
+                            kvTablet.getGuardedExecutor());
             kvSnapshotManager.start();
             closeableRegistryForKv.registerCloseable(kvSnapshotManager);
         } catch (Exception e) {

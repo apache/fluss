@@ -231,8 +231,6 @@ public class TabletServer extends ServerBase {
 
             // Register kvManager to dynamicConfigManager for dynamic reconfiguration
             dynamicConfigManager.register(kvManager);
-            // Start dynamicConfigManager after all reconfigurable components are registered
-            dynamicConfigManager.startup();
 
             this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);
             if (authorizer != null) {
@@ -274,6 +272,11 @@ public class TabletServer extends ServerBase {
                             clock,
                             ioExecutor);
             replicaManager.startup();
+
+            // Register DefaultSnapshotContext for dynamic kv.snapshot.interval
+            dynamicConfigManager.register(replicaManager.getKvSnapshotContext());
+            // Start dynamicConfigManager after all reconfigurable components are registered
+            dynamicConfigManager.startup();
 
             this.tabletService =
                     new TabletService(

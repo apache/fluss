@@ -79,7 +79,6 @@ import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvSnapshotResource;
 import org.apache.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
 import org.apache.fluss.server.kv.snapshot.DefaultSnapshotContext;
-import org.apache.fluss.server.kv.snapshot.SnapshotContext;
 import org.apache.fluss.server.log.FetchDataInfo;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.ListOffsetsParam;
@@ -193,7 +192,7 @@ public class ReplicaManager {
 
     // for kv snapshot
     private final KvSnapshotResource kvSnapshotResource;
-    private final SnapshotContext kvSnapshotContext;
+    private final DefaultSnapshotContext kvSnapshotContext;
 
     // remote log manager for remote log storage.
     private final RemoteLogManager remoteLogManager;
@@ -321,6 +320,10 @@ public class ReplicaManager {
 
     public RemoteLogManager getRemoteLogManager() {
         return remoteLogManager;
+    }
+
+    public DefaultSnapshotContext getKvSnapshotContext() {
+        return kvSnapshotContext;
     }
 
     private void registerMetrics() {
