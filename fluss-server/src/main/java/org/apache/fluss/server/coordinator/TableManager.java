@@ -17,12 +17,14 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.coordinator.remote.RemoteStorageCleaner;
 import org.apache.fluss.server.coordinator.statemachine.BucketState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaStateMachine;
@@ -132,16 +134,16 @@ public class TableManager {
      *
      * @param tablePath the table path
      * @param tableId the table id
-     * @param partitionId the id for the created partition
-     * @param partitionName the name for the created partition
+     * @param partitionInfo the info for the created partition
      * @param partitionAssignment the assignment for the created partition.
      */
     public void onCreateNewPartition(
             TablePath tablePath,
             long tableId,
-            long partitionId,
-            String partitionName,
+            PartitionInfo partitionInfo,
             PartitionAssignment partitionAssignment) {
+        String partitionName = partitionInfo.getPartitionName();
+        long partitionId = partitionInfo.getPartitionId();
         LOG.info(
                 "New partition {} with partition id {} and assignment {} for table {}.",
                 partitionName,
@@ -158,7 +160,7 @@ public class TableManager {
             TableBucket tableBucket = new TableBucket(tableId, partitionId, bucket);
             coordinatorContext.updateBucketReplicaAssignment(tableBucket, replicas);
             coordinatorContext.putPartition(
-                    partitionId, PhysicalTablePath.of(tablePath, partitionName));
+                    partitionId, PhysicalTablePath.of(tablePath, partitionName), partitionInfo);
             newTableBuckets.add(tableBucket);
         }
         onCreateNewTableBucket(tableId, newTableBuckets);
@@ -306,11 +308,21 @@ public class TableManager {
         resumePartitionDeletions();
     }
 
-    private void resumeTableDeletions() {
+    public void resumeTableDeletions() {
         Set<Long> tablesToBeDeleted = new HashSet<>(coordinatorContext.getTablesToBeDeleted());
         for (long tableId : tablesToBeDeleted) {
             if (coordinatorContext.areAllReplicasInState(
                     tableId, ReplicaState.ReplicaDeletionSuccessful)) {
+                TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
+                if (tableInfo != null && tableInfo.isPartitioned()) {
+                    if (coordinatorContext.hasPartitionsToDelete(tableId)) {
+                        // Skip table deletion until all partitions are deleted
+                        LOG.debug(
+                                "Table {} has partitions still being deleted, skip table deletion for now.",
+                                tableId);
+                        continue;
+                    }
+                }
                 completeDeleteTable(tableId);
                 LOG.info("Deletion of table with id {} successfully completed.", tableId);
             } else if (isEligibleForDeletion(tableId)) {
@@ -322,11 +334,14 @@ public class TableManager {
     private void resumePartitionDeletions() {
         Set<TablePartition> partitionsToDelete =
                 new HashSet<>(coordinatorContext.getPartitionsToBeDeleted());
+        boolean hasPartitionCompleted = false;
+
         for (TablePartition partition : partitionsToDelete) {
             // if all replicas are marked as deleted successfully, then partition deletion is done
             if (coordinatorContext.areAllReplicasInState(
                     partition, ReplicaState.ReplicaDeletionSuccessful)) {
                 completeDeletePartition(partition);
+                hasPartitionCompleted = true;
                 LOG.info("Deletion of partition {} successfully completed.", partition);
             } else if (isEligibleForDeletion(partition)) {
                 long tableId = partition.getTableId();
@@ -335,6 +350,12 @@ public class TableManager {
                 lifecycleThrottler.submitPartitionDropForResume(
                         tableId, partitionId, partitionName);
             }
+        }
+
+        // If any partition was completed, check if we can now complete the table deletion
+        // for partitioned tables that were waiting for all partitions to be deleted.
+        if (hasPartitionCompleted) {
+            resumeTableDeletions();
         }
     }
 
@@ -365,7 +386,10 @@ public class TableManager {
         TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
         if (tableInfo != null) {
             remoteStorageCleaner.asyncDeleteTableRemoteDir(
-                    tableInfo.getTablePath(), tableInfo.hasPrimaryKey(), tableId);
+                    tableInfo.getRemoteDataDir(),
+                    tableInfo.getTablePath(),
+                    tableInfo.hasPrimaryKey(),
+                    tableId);
         }
     }
 
@@ -376,8 +400,11 @@ public class TableManager {
         if (tableInfo != null) {
             String partitionName =
                     coordinatorContext.getPartitionName(tablePartition.getPartitionId());
+            PartitionInfo partitionInfo =
+                    coordinatorContext.getPartitionInfoById(tablePartition.getPartitionId());
             if (partitionName != null) {
                 remoteStorageCleaner.asyncDeletePartitionRemoteDir(
+                        partitionInfo.getRemoteDataDir(),
                         PhysicalTablePath.of(tableInfo.getTablePath(), partitionName),
                         tableInfo.hasPrimaryKey(),
                         tablePartition);

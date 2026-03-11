@@ -19,6 +19,8 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TableInfo;
@@ -27,6 +29,7 @@ import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.ResumeDropEvent;
 import org.apache.fluss.server.coordinator.event.TestingEventManager;
+import org.apache.fluss.server.coordinator.remote.RemoteStorageCleaner;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaStateMachine;
 import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine;
 import org.apache.fluss.server.entity.DeleteReplicaResultForBucket;
@@ -63,6 +66,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
@@ -417,8 +421,16 @@ class TableManagerTest {
                 partitionAssignment.getBucketAssignments().size());
 
         // create partition
+        PartitionInfo partitionInfo =
+                new PartitionInfo(
+                        partitionId,
+                        ResolvedPartitionSpec.fromPartitionName(
+                                DATA1_PARTITIONED_TABLE_DESCRIPTOR.getPartitionKeys(),
+                                partitionName),
+                        DEFAULT_REMOTE_DATA_DIR,
+                        partitionAssignment.getBucketAssignments().size());
         tableManager.onCreateNewPartition(
-                DATA1_TABLE_PATH, tableId, partitionId, partitionName, partitionAssignment);
+                DATA1_TABLE_PATH, tableId, partitionInfo, partitionAssignment);
 
         // all replicas should be online
         checkReplicaOnline(tableId, partitionId, partitionAssignment);
