@@ -116,34 +116,9 @@ public class FlussConfigUtils {
         validMinValue(ConfigOptions.TABLET_SERVER_ID, serverId.get(), 0);
     }
 
-    /** Validate common server configs. */
-    protected static void validateServerConfigs(Configuration conf) {
-        // Validate remote.data.dir and remote.data.dirs
-        String remoteDataDir = conf.get(ConfigOptions.REMOTE_DATA_DIR);
-        List<String> remoteDataDirs = conf.get(ConfigOptions.REMOTE_DATA_DIRS);
-        if (conf.get(ConfigOptions.REMOTE_DATA_DIR) == null
-                && conf.get(ConfigOptions.REMOTE_DATA_DIRS).isEmpty()) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Either %s or %s must be configured.",
-                            ConfigOptions.REMOTE_DATA_DIR.key(),
-                            ConfigOptions.REMOTE_DATA_DIRS.key()));
-        }
-
-        if (remoteDataDir != null) {
-            // Must validate that remote.data.dir is a valid FsPath
-            try {
-                new FsPath(conf.get(ConfigOptions.REMOTE_DATA_DIR));
-            } catch (Exception e) {
-                throw new IllegalConfigurationException(
-                        String.format(
-                                "Invalid configuration for %s.",
-                                ConfigOptions.REMOTE_DATA_DIR.key()),
-                        e);
-            }
-        }
-
+    public static void validateRemoteDataDirs(Configuration conf) {
         // Validate remote.data.dirs
+        List<String> remoteDataDirs = conf.get(ConfigOptions.REMOTE_DATA_DIRS);
         for (int i = 0; i < remoteDataDirs.size(); i++) {
             String dir = remoteDataDirs.get(i);
             try {
@@ -173,19 +148,56 @@ public class FlussConfigUtils {
                                     weights.size()));
                 }
 
-                // Validate all weights are no less than 0
+                // Verify that each weight is non-negative and that the total weight is greater than
+                // 0.
+                int totalWeight = 0;
                 for (int i = 0; i < weights.size(); i++) {
-                    if (weights.get(i) < 0) {
+                    int weight = weights.get(i);
+                    if (weight < 0) {
                         throw new IllegalConfigurationException(
                                 String.format(
                                         "All weights in '%s' must be no less than 0, but found %d at index %d.",
-                                        ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS.key(),
-                                        weights.get(i),
-                                        i));
+                                        ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS.key(), weight, i));
                     }
+                    totalWeight += weight;
+                }
+                if (totalWeight <= 0) {
+                    throw new IllegalConfigurationException(
+                            String.format(
+                                    "The sum of all weights in '%s' must be greater than 0, but the current sum is %d.",
+                                    ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS.key(), totalWeight));
                 }
             }
         }
+    }
+
+    /** Validate common server configs. */
+    protected static void validateServerConfigs(Configuration conf) {
+        // Validate remote.data.dir and remote.data.dirs
+        String remoteDataDir = conf.get(ConfigOptions.REMOTE_DATA_DIR);
+        List<String> remoteDataDirs = conf.get(ConfigOptions.REMOTE_DATA_DIRS);
+        if (remoteDataDir == null && remoteDataDirs.isEmpty()) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Either %s or %s must be configured.",
+                            ConfigOptions.REMOTE_DATA_DIR.key(),
+                            ConfigOptions.REMOTE_DATA_DIRS.key()));
+        }
+
+        if (remoteDataDir != null) {
+            // Must validate that remote.data.dir is a valid FsPath
+            try {
+                new FsPath(conf.get(ConfigOptions.REMOTE_DATA_DIR));
+            } catch (Exception e) {
+                throw new IllegalConfigurationException(
+                        String.format(
+                                "Invalid configuration for %s.",
+                                ConfigOptions.REMOTE_DATA_DIR.key()),
+                        e);
+            }
+        }
+
+        validateRemoteDataDirs(conf);
 
         validMinValue(conf, ConfigOptions.DEFAULT_REPLICATION_FACTOR, 1);
         validMinValue(conf, ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, 1);
