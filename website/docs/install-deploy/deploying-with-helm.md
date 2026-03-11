@@ -190,9 +190,9 @@ The following table lists the configurable parameters of the Fluss chart and the
 | `metrics.reporters` | Comma-separated reporter selector; use `none` to disable metrics | `none` |
 | `metrics.jmx.port` | JMX reporter port range | `9250` |
 | `metrics.prometheus.port` | Prometheus reporter port | `9249` |
-| `metrics.prometheus.service.portName` | Named port exposed on metrics services (used by ServiceMonitor endpoint `port`) | `metrics` |
-| `metrics.prometheus.service.labels` | Additional labels added to metrics services for ServiceMonitor selectors | `{}` |
-| `metrics.prometheus.service.annotations` | Optional annotations added to metrics services (for annotation-based scraping) | `{}` |
+| `metrics.prometheus.service.portName` | Named port exposed on metrics services | `metrics` |
+| `metrics.prometheus.service.labels` | Additional labels added to metrics services | `{}` |
+| `metrics.prometheus.service.annotations` | Optional annotations added to metrics services | `{}` |
 
 ### Fluss Configuration Overrides
 
@@ -277,7 +277,7 @@ If a metrics key is already provided in `configurationOverrides` (for example, `
 
 #### Prometheus Annotation Based Scraping
 
-The example values below show how to add annotations to the metrics services so that a Prometheus server can discovery and scrape them automatically based on the annotations:
+The example values below show how to add annotations to the metrics services so that a Prometheus server can discover and scrape them automatically based on the annotations:
 
 ```yaml
 metrics:
@@ -293,7 +293,7 @@ metrics:
 
 #### Prometheus ServiceMonitor Based Scraping
 
-Similarly, if using the [Prometheus Operator](https://prometheus-operator.dev/), use the values below to add labels to the metrics services and then create a [`ServiceMonitor`](https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.ServiceMonitor) that selects them:
+Similarly, if using the [Prometheus Operator](https://prometheus-operator.dev/), use the values below to add labels to the metrics services:
 
 ```yaml
 metrics:
@@ -306,7 +306,7 @@ metrics:
         monitoring: enabled
 ```
 
-Then create a `ServiceMonitor` resource that matches the label:
+Then create a [`ServiceMonitor`](https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.ServiceMonitor) that selects them matching the labels:
 
 ```yaml
 apiVersion: monitoring.coreos.com/v1
@@ -318,6 +318,7 @@ spec:
     matchLabels:
       monitoring: enabled
   endpoints:
+    # Matches `metrics.prometheus.service.portName`
     - port: metrics
 ```
 
