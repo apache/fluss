@@ -508,7 +508,7 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
     // -------------------------------------------------------------------------
 
     /**
-     * POJO covering the complex-type fields that are new in this PR:
+     * POJO covering the complex-type fields that are new in this PR.
      *
      * <ul>
      *   <li>ARRAY&lt;INT&gt; — Integer[]
