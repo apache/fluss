@@ -102,26 +102,6 @@ Usage:
 {{- end -}}
 
 {{/*
-Renders security configuration properties for the server.yaml configmap.
-Usage:
-  include "fluss.security.config" .
-*/}}
-{{- define "fluss.security.config" -}}
-{{- $internalProtocol := include "fluss.security.listener.protocol" (dict "context" .Values "listener" "internal") | trim -}}
-{{- $clientProtocol := include "fluss.security.listener.protocol" (dict "context" .Values "listener" "client") | trim -}}
-{{- $enabledMechanisms := include "fluss.security.sasl.enabledMechanisms" . | trim -}}
-{{- $internalMechanism := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "internal") -}}
-{{- if (include "fluss.security.sasl.enabled" .) }}
-security.protocol.map: INTERNAL:{{ $internalProtocol }},CLIENT:{{ $clientProtocol }}
-security.sasl.enabled.mechanisms: {{ $enabledMechanisms }}
-{{- if ne $internalMechanism "none" }}
-client.security.protocol: SASL
-client.security.sasl.mechanism: {{ upper $internalMechanism }}
-{{- end }}
-{{- end }}
-{{- end -}}
-
-{{/*
 Returns the SASL JAAS config name.
 Usage:
   include "fluss.security.sasl.configName" .
