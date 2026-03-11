@@ -44,6 +44,9 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.config.ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC;
 import static org.apache.fluss.config.ConfigOptions.KV_SNAPSHOT_INTERVAL;
+import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS;
+import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS_STRATEGY;
+import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS;
 import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
 import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 
@@ -62,7 +65,11 @@ class DynamicServerConfig {
                     Arrays.asList(
                             DATALAKE_FORMAT.key(),
                             KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key(),
-                            KV_SNAPSHOT_INTERVAL.key()));
+                            KV_SNAPSHOT_INTERVAL.key(),
+                            // Config options for remote.data.dirs
+                            REMOTE_DATA_DIRS.key(),
+                            REMOTE_DATA_DIRS_STRATEGY.key(),
+                            REMOTE_DATA_DIRS_WEIGHTS.key()));
     private static final Set<String> ALLOWED_CONFIG_PREFIXES = Collections.singleton("datalake.");
 
     private final ReadWriteLock lock = new ReentrantReadWriteLock();

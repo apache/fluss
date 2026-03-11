@@ -48,6 +48,7 @@ class TableRegistrationJsonSerdeTest extends JsonSerdeTestBase<TableRegistration
                                         new TableDistribution(null, Arrays.asList("b", "c")),
                                         Maps.newHashMap(),
                                         Collections.singletonMap("custom-3", "\"300\""),
+                                        "file://local/remote",
                                         1735538268L,
                                         1735538268L))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -58,6 +59,7 @@ class TableRegistrationJsonSerdeTest extends JsonSerdeTestBase<TableRegistration
                         () ->
                                 TableRegistration.newTable(
                                         11,
+                                        "file://local/remote",
                                         TableDescriptor.builder()
                                                 .schema(TestData.DATA1_SCHEMA)
                                                 .build()))
@@ -77,6 +79,7 @@ class TableRegistrationJsonSerdeTest extends JsonSerdeTestBase<TableRegistration
                         new TableDistribution(16, Arrays.asList("b", "c")),
                         Maps.newHashMap(),
                         Collections.singletonMap("custom-3", "\"300\""),
+                        "file://local/remote",
                         1735538268L,
                         1735538268L);
 
@@ -88,6 +91,7 @@ class TableRegistrationJsonSerdeTest extends JsonSerdeTestBase<TableRegistration
                         new TableDistribution(32, Collections.emptyList()),
                         Collections.singletonMap("option-3", "300"),
                         Maps.newHashMap(),
+                        "file://local/remote",
                         -1,
                         -1);
 
@@ -98,8 +102,8 @@ class TableRegistrationJsonSerdeTest extends JsonSerdeTestBase<TableRegistration
     protected String[] expectedJsons() {
         return new String[] {
             "{\"version\":1,\"table_id\":1234,\"comment\":\"first-table\",\"partition_key\":[\"a\",\"b\"],"
-                    + "\"bucket_key\":[\"b\",\"c\"],\"bucket_count\":16,\"properties\":{},\"custom_properties\":{\"custom-3\":\"\\\"300\\\"\"},\"created_time\":1735538268,\"modified_time\":1735538268}",
-            "{\"version\":1,\"table_id\":1234,\"comment\":\"second-table\",\"bucket_count\":32,\"properties\":{\"option-3\":\"300\"},\"custom_properties\":{},\"created_time\":-1,\"modified_time\":-1}",
+                    + "\"bucket_key\":[\"b\",\"c\"],\"bucket_count\":16,\"properties\":{},\"custom_properties\":{\"custom-3\":\"\\\"300\\\"\"},\"remote_data_dir\":\"file://local/remote\",\"created_time\":1735538268,\"modified_time\":1735538268}",
+            "{\"version\":1,\"table_id\":1234,\"comment\":\"second-table\",\"bucket_count\":32,\"properties\":{\"option-3\":\"300\"},\"custom_properties\":{},\"remote_data_dir\":\"file://local/remote\",\"created_time\":-1,\"modified_time\":-1}",
         };
     }
 }

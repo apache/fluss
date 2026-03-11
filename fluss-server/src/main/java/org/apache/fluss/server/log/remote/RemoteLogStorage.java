@@ -67,13 +67,6 @@ public interface RemoteLogStorage extends Closeable {
     }
 
     /**
-     * Returns the remote log directory.
-     *
-     * @return the remote log directory.
-     */
-    FsPath getRemoteLogDir();
-
-    /**
      * Copies the given {@link LogSegmentFiles} provided for the given {@link RemoteLogSegment}.
      * This includes log segment and its auxiliary indexes like offset index and writer id snapshot
      * index.
@@ -154,11 +147,13 @@ public interface RemoteLogStorage extends Closeable {
      * Deletes the remote log data and metadata from remote storage for the input table bucket as
      * this table have been deleted.
      *
+     * @param remoteLogDir the remote log directory for the table bucket.
      * @param physicalTablePath the physical table path.
      * @param tableBucket the table bucket.
      * @throws RemoteStorageException if there are any errors while delete remote log data and
      *     metadata.
      */
-    void deleteTableBucket(PhysicalTablePath physicalTablePath, TableBucket tableBucket)
+    void deleteTableBucket(
+            FsPath remoteLogDir, PhysicalTablePath physicalTablePath, TableBucket tableBucket)
             throws RemoteStorageException;
 }
