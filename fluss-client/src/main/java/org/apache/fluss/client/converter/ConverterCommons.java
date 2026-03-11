@@ -24,13 +24,12 @@ import org.apache.fluss.types.RowType;
 
 import java.math.BigDecimal;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-
-import static org.apache.fluss.client.converter.RowToPojoConverter.charLengthExceptionMessage;
 
 /**
  * Internal shared utilities for POJO and Fluss InternalRow conversions.
@@ -112,8 +111,29 @@ final class ConverterCommons {
     }
 
     static void validateCompatibility(DataType fieldType, PojoType.Property prop) {
-        Set<Class<?>> supported = SUPPORTED_TYPES.get(fieldType.getTypeRoot());
+        DataTypeRoot typeRoot = fieldType.getTypeRoot();
         Class<?> actual = prop.type;
+        if (typeRoot == DataTypeRoot.ARRAY) {
+            if (!actual.isArray() && !Collection.class.isAssignableFrom(actual)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Field '%s' must be an array or Collection for ARRAY type, got %s",
+                                prop.name, actual.getName()));
+            }
+            return;
+        }
+
+        if (typeRoot == DataTypeRoot.MAP) {
+            if (!Map.class.isAssignableFrom(actual)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Field '%s' must be a Map for MAP type, got %s",
+                                prop.name, actual.getName()));
+            }
+            return;
+        }
+
+        Set<Class<?>> supported = SUPPORTED_TYPES.get(fieldType.getTypeRoot());
         if (supported == null) {
             throw new UnsupportedOperationException(
                     String.format(
@@ -126,6 +146,12 @@ final class ConverterCommons {
                             "Field '%s' in POJO has Java type %s which is incompatible with Fluss type %s. Supported Java types: %s",
                             prop.name, actual.getName(), fieldType.getTypeRoot(), supported));
         }
+    }
+
+    public static String charLengthExceptionMessage(String fieldName, int length) {
+        return String.format(
+                "Field %s expects exactly one character for CHAR type, got length %d.",
+                fieldName, length);
     }
 
     static BinaryString toBinaryStringForText(Object v, String fieldName, DataTypeRoot root) {

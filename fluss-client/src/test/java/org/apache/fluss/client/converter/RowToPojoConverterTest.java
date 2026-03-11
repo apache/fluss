@@ -23,6 +23,9 @@ import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.HashMap;
+import java.util.Map;
+
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -41,7 +44,7 @@ public class RowToPojoConverterTest {
 
         ConvertersTestFixtures.TestPojo pojo = ConvertersTestFixtures.TestPojo.sample();
         GenericRow row = writer.toRow(pojo);
-        assertThat(row.getFieldCount()).isEqualTo(15);
+        assertThat(row.getFieldCount()).isEqualTo(17);
 
         ConvertersTestFixtures.TestPojo back = scanner.fromRow(row);
         assertThat(back).isEqualTo(pojo);
@@ -125,5 +128,107 @@ public class RowToPojoConverterTest {
         assertThat(row.getString(0).toString()).isEqualTo("A");
         ConvertersTestFixtures.CharacterFieldPojo back = scanner.fromRow(row);
         assertThat(back.charField).isEqualTo('A');
+    }
+
+    @Test
+    public void testMapType() {
+        RowType table =
+                RowType.builder()
+                        .field("mapField", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()))
+                        .build();
+
+        PojoToRowConverter<MapPojo> writer = PojoToRowConverter.of(MapPojo.class, table, table);
+        RowToPojoConverter<MapPojo> reader = RowToPojoConverter.of(MapPojo.class, table, table);
+
+        MapPojo pojo = MapPojo.sample();
+        GenericRow row = writer.toRow(pojo);
+        MapPojo back = reader.fromRow(row);
+
+        // Verify map field
+        Map<Object, Object> mapField = back.mapField;
+        assertThat(mapField.size()).isEqualTo(2);
+        assertThat(mapField).containsEntry("test_1", 1);
+        assertThat(mapField).containsEntry("test_2", 2);
+    }
+
+    @Test
+    public void testNullMapField() {
+        RowType table =
+                RowType.builder()
+                        .field("mapField", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()))
+                        .build();
+
+        PojoToRowConverter<MapPojo> writer = PojoToRowConverter.of(MapPojo.class, table, table);
+        RowToPojoConverter<MapPojo> reader = RowToPojoConverter.of(MapPojo.class, table, table);
+
+        MapPojo pojo = new MapPojo();
+        pojo.mapField = null;
+
+        GenericRow row = writer.toRow(pojo);
+        assertThat(row.isNullAt(0)).isTrue();
+
+        MapPojo back = reader.fromRow(row);
+        assertThat(back.mapField).isNull();
+    }
+
+    @Test
+    public void testMapWithNullValues() {
+        RowType table =
+                RowType.builder()
+                        .field("mapField", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()))
+                        .build();
+
+        PojoToRowConverter<MapPojo> writer = PojoToRowConverter.of(MapPojo.class, table, table);
+        RowToPojoConverter<MapPojo> reader = RowToPojoConverter.of(MapPojo.class, table, table);
+
+        MapPojo pojo = new MapPojo();
+        pojo.mapField = new HashMap<>();
+        pojo.mapField.put("a", 1);
+        pojo.mapField.put("b", null);
+
+        GenericRow row = writer.toRow(pojo);
+        MapPojo back = reader.fromRow(row);
+
+        assertThat(back.mapField).containsEntry("a", 1);
+        assertThat(back.mapField).containsKey("b");
+        assertThat(back.mapField.get("b")).isNull();
+    }
+
+    @Test
+    public void testEmptyMap() {
+        RowType table =
+                RowType.builder()
+                        .field("mapField", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()))
+                        .build();
+
+        PojoToRowConverter<MapPojo> writer = PojoToRowConverter.of(MapPojo.class, table, table);
+        RowToPojoConverter<MapPojo> reader = RowToPojoConverter.of(MapPojo.class, table, table);
+
+        MapPojo pojo = new MapPojo();
+        pojo.mapField = new HashMap<>();
+
+        GenericRow row = writer.toRow(pojo);
+        MapPojo back = reader.fromRow(row);
+
+        assertThat(back.mapField).isEmpty();
+    }
+
+    /** POJO for testing map type. */
+    public static class MapPojo {
+        public Map<Object, Object> mapField;
+
+        public MapPojo() {}
+
+        public static MapPojo sample() {
+            MapPojo pojo = new MapPojo();
+            pojo.mapField =
+                    new HashMap<Object, Object>() {
+                        {
+                            put("test_1", 1);
+                            put("test_2", 2);
+                        }
+                    };
+            return pojo;
+        }
     }
 }
