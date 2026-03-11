@@ -187,12 +187,13 @@ The following table lists the configurable parameters of the Fluss chart and the
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `metrics.reporters` | Comma-separated reporter selector; use `none` to disable metrics | `none` |
+| `metrics.reporters` | Comma-separated reporter selector; use `""` to disable metrics | `""` |
 | `metrics.jmx.port` | JMX reporter port range | `9250` |
 | `metrics.prometheus.port` | Prometheus reporter port | `9249` |
 | `metrics.prometheus.service.portName` | Named port exposed on metrics services | `metrics` |
 | `metrics.prometheus.service.labels` | Additional labels added to metrics services | `{}` |
 | `metrics.prometheus.service.annotations` | Optional annotations added to metrics services | `{}` |
+| `metrics.reporter.<reporter>.<option>` | Configure `<option>` for `<reporter>` (refer to the [Fluss configuration](https://fluss.apache.org/docs/maintenance/configuration/#metrics) | NA |
 
 ### Fluss Configuration Overrides
 
