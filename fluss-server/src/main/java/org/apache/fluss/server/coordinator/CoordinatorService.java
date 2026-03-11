@@ -233,7 +233,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final LakeTableHelper lakeTableHelper;
     private final ProducerOffsetsManager producerOffsetsManager;
     private final KvSnapshotLeaseManager kvSnapshotLeaseManager;
-    private final RemoteDirDynamicLoader remoteDirDynamicLoader;
 
     public CoordinatorService(
             Configuration conf,
@@ -256,6 +255,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 metadataManager,
                 authorizer,
                 dynamicConfigManager,
+                remoteDirDynamicLoader,
                 ioExecutor);
         this.defaultBucketNumber = conf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER);
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
@@ -271,7 +271,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         this.ioExecutor = ioExecutor;
         this.lakeTableHelper =
                 new LakeTableHelper(zkClient, conf.getString(ConfigOptions.REMOTE_DATA_DIR));
-        this.remoteDirDynamicLoader = remoteDirDynamicLoader;
 
         // Initialize and start the producer snapshot manager
         this.producerOffsetsManager = new ProducerOffsetsManager(conf, zkClient);

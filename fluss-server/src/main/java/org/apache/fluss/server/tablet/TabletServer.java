@@ -39,6 +39,7 @@ import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.authorizer.AuthorizerLoader;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.snapshot.DefaultCompletedKvSnapshotCommitter;
 import org.apache.fluss.server.log.LogManager;
@@ -165,6 +166,9 @@ public class TabletServer extends ServerBase {
     private LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
 
     @GuardedBy("lock")
+    private RemoteDirDynamicLoader remoteDirDynamicLoader;
+
+    @GuardedBy("lock")
     private CoordinatorGateway coordinatorGateway;
 
     @GuardedBy("lock")
@@ -215,10 +219,12 @@ public class TabletServer extends ServerBase {
 
             this.lakeCatalogDynamicLoader =
                     new LakeCatalogDynamicLoader(conf, pluginManager, false);
+            this.remoteDirDynamicLoader = new RemoteDirDynamicLoader(conf);
             MetadataManager metadataManager =
                     new MetadataManager(zkClient, conf, lakeCatalogDynamicLoader);
             this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf, false);
             dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            dynamicConfigManager.register(remoteDirDynamicLoader);
 
             this.metadataCache = new TabletServerMetadataCache(metadataManager);
 
@@ -288,6 +294,7 @@ public class TabletServer extends ServerBase {
                             metadataManager,
                             authorizer,
                             dynamicConfigManager,
+                            remoteDirDynamicLoader,
                             ioExecutor);
 
             RequestsMetrics requestsMetrics =

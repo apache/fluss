@@ -21,49 +21,65 @@ import org.apache.fluss.fs.token.ObtainedSecurityToken;
 
 import java.time.Clock;
 import java.util.Collections;
+import java.util.List;
 import java.util.Queue;
 import java.util.concurrent.LinkedBlockingDeque;
+import java.util.stream.Collectors;
 
 /** A {@link SecurityTokenProvider} for testing purpose. */
 public class TestingSecurityTokenProvider implements SecurityTokenProvider {
 
-    private final Queue<String> historyTokens = new LinkedBlockingDeque<>();
-    private volatile String currentToken;
+    private final Queue<List<String>> historyTokens = new LinkedBlockingDeque<>();
+    private volatile List<String> currentTokens;
 
-    public TestingSecurityTokenProvider(String currentToken) {
-        this.currentToken = currentToken;
+    public TestingSecurityTokenProvider(List<String> currentTokens) {
+        this.currentTokens = currentTokens;
     }
 
-    public void setCurrentToken(String currentToken) {
+    public void setCurrentTokens(List<String> currentTokens) {
         synchronized (this) {
-            this.currentToken = currentToken;
+            this.currentTokens = currentTokens;
         }
     }
 
     @Override
-    public ObtainedSecurityToken obtainSecurityToken() {
+    public List<ObtainedSecurityToken> obtainSecurityTokens() {
         synchronized (this) {
-            String previousToken = historyTokens.peek();
+            List<String> previousTokens = historyTokens.peek();
             long currentTime = Clock.systemDefaultZone().millis();
             // we set expire time to 2s later, should be large enough for testing.
             // if it's too small, DefaultSecurityTokenManager#calculateRenewalDelay will
             // get a negative value by formula ‘Math.round(tokensRenewalTimeRatio * (nextRenewal -
-            // now))’ which causes never renewal token
+            // now))’ which causes never renewal tokens
             long expireTime = currentTime + 2000;
-            if (previousToken != null && previousToken.equals(currentToken)) {
-                // just return the previous one token
-                return new ObtainedSecurityToken(
-                        "testing", previousToken.getBytes(), expireTime, Collections.emptyMap());
+            if (previousTokens != null && previousTokens.equals(currentTokens)) {
+                // just return the previous tokens
+                return previousTokens.stream()
+                        .map(
+                                t ->
+                                        new ObtainedSecurityToken(
+                                                "testing",
+                                                t.getBytes(),
+                                                expireTime,
+                                                Collections.emptyMap()))
+                        .collect(Collectors.toList());
             } else {
-                // return the current token and push back to the queue
-                historyTokens.add(currentToken);
-                return new ObtainedSecurityToken(
-                        "testing", currentToken.getBytes(), expireTime, Collections.emptyMap());
+                // return the current tokens and push back to the queue
+                historyTokens.add(currentTokens);
+                return currentTokens.stream()
+                        .map(
+                                t ->
+                                        new ObtainedSecurityToken(
+                                                "testing",
+                                                t.getBytes(),
+                                                expireTime,
+                                                Collections.emptyMap()))
+                        .collect(Collectors.toList());
             }
         }
     }
 
-    public Queue<String> getHistoryTokens() {
+    public Queue<List<String>> getHistoryTokens() {
         return historyTokens;
     }
 }

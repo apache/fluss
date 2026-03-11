@@ -29,6 +29,8 @@ import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.SecurityTokenException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.fs.FileSystem.FSKey;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -83,6 +85,7 @@ import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.coordinator.CoordinatorService;
 import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.metadata.MetadataProvider;
 import org.apache.fluss.server.metadata.PartitionMetadata;
@@ -102,6 +105,7 @@ import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -142,9 +146,11 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     protected final MetadataManager metadataManager;
     protected final @Nullable Authorizer authorizer;
     protected final DynamicConfigManager dynamicConfigManager;
+    protected final RemoteDirDynamicLoader remoteDirDynamicLoader;
 
     private long tokenLastUpdateTimeMs = 0;
     private ObtainedSecurityToken securityToken = null;
+    private final Map<FSKey, ObtainedSecurityToken> securityTokenMap = new HashMap<>();
 
     private final ExecutorService ioExecutor;
 
@@ -155,6 +161,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             MetadataManager metadataManager,
             @Nullable Authorizer authorizer,
             DynamicConfigManager dynamicConfigManager,
+            RemoteDirDynamicLoader remoteDirDynamicLoader,
             ExecutorService ioExecutor) {
         this.remoteFileSystem = remoteFileSystem;
         this.provider = provider;
@@ -163,6 +170,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         this.metadataManager = metadataManager;
         this.authorizer = authorizer;
         this.dynamicConfigManager = dynamicConfigManager;
+        this.remoteDirDynamicLoader = remoteDirDynamicLoader;
         this.ioExecutor = ioExecutor;
     }
 
@@ -415,15 +423,33 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         try {
             // In order to avoid repeatedly obtaining security token, cache it for a while.
             long currentTimeMs = System.currentTimeMillis();
+            List<FsPath> remoteDataDirs =
+                    remoteDirDynamicLoader.getRemoteDataDirs().stream()
+                            .map(FsPath::new)
+                            .collect(Collectors.toList());
+            List<FSKey> remoteFSKeys =
+                    remoteDataDirs.stream()
+                            .map(FsPath::toUri)
+                            .map(uri -> new FSKey(uri.getScheme(), uri.getAuthority()))
+                            .collect(Collectors.toList());
             if (securityToken == null
-                    || currentTimeMs - tokenLastUpdateTimeMs > TOKEN_EXPIRATION_TIME_MS) {
+                    || currentTimeMs - tokenLastUpdateTimeMs > TOKEN_EXPIRATION_TIME_MS
+                    || !securityTokenMap.keySet().containsAll(remoteFSKeys)) {
                 securityToken = remoteFileSystem.obtainSecurityToken();
                 tokenLastUpdateTimeMs = currentTimeMs;
+
+                securityTokenMap.clear();
+                for (int i = 0; i < remoteDataDirs.size(); i++) {
+                    FsPath remoteDataDir = remoteDataDirs.get(i);
+                    FSKey fsKey = remoteFSKeys.get(i);
+                    ObtainedSecurityToken token =
+                            remoteDataDir.getFileSystem().obtainSecurityToken();
+                    securityTokenMap.put(fsKey, token);
+                }
             }
 
             return CompletableFuture.completedFuture(
-                    toGetFileSystemSecurityTokenResponse(
-                            remoteFileSystem.getUri().getScheme(), securityToken));
+                    toGetFileSystemSecurityTokenResponse(securityToken, securityTokenMap.values()));
         } catch (Exception e) {
             throw new SecurityTokenException(
                     "Failed to get file access security token: " + e.getMessage());

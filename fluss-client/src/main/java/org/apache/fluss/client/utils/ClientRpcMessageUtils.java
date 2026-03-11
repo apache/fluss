@@ -291,11 +291,34 @@ public class ClientRpcMessageUtils {
     public static ObtainedSecurityToken toSecurityToken(
             GetFileSystemSecurityTokenResponse response) {
         String scheme = response.getSchema();
+        String authority = response.hasAuthority() ? response.getAuthority() : null;
         byte[] tokens = response.getToken();
         Long validUntil = response.hasExpirationTime() ? response.getExpirationTime() : null;
 
         Map<String, String> additionInfo = toKeyValueMap(response.getAdditionInfosList());
-        return new ObtainedSecurityToken(scheme, tokens, validUntil, additionInfo);
+        return new ObtainedSecurityToken(scheme, authority, tokens, validUntil, additionInfo);
+    }
+
+    public static List<ObtainedSecurityToken> toSecurityTokens(
+            GetFileSystemSecurityTokenResponse response) {
+        List<ObtainedSecurityToken> obtainedSecurityTokens = new ArrayList<>();
+
+        obtainedSecurityTokens.add(toSecurityToken(response));
+
+        response.getTokensList()
+                .forEach(
+                        token ->
+                                obtainedSecurityTokens.add(
+                                        new ObtainedSecurityToken(
+                                                token.getSchema(),
+                                                token.hasAuthority() ? token.getAuthority() : null,
+                                                token.getToken(),
+                                                token.hasExpirationTime()
+                                                        ? token.getExpirationTime()
+                                                        : null,
+                                                toKeyValueMap(token.getAdditionInfosList()))));
+
+        return obtainedSecurityTokens;
     }
 
     public static MetadataRequest makeMetadataRequest(

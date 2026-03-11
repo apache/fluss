@@ -80,7 +80,7 @@ public class OSSFileSystemPlugin implements FileSystemPlugin {
                 // no ak, no credentialsProvider,
                 // set default credential provider which will get token from
                 // OSSSecurityTokenReceiver
-                setDefaultCredentialProvider(flussConfig, hadoopConfig);
+                setDefaultCredentialProvider(fsUri, flussConfig, hadoopConfig);
             }
         } else {
             LOG.info("{} is set, using provided access key id and secret.", ACCESS_KEY_ID);
@@ -99,7 +99,7 @@ public class OSSFileSystemPlugin implements FileSystemPlugin {
         }
 
         org.apache.hadoop.fs.FileSystem fileSystem = initFileSystem(fsUri, hadoopConfig);
-        return new OSSFileSystem(fileSystem, getScheme(), hadoopConfig);
+        return new OSSFileSystem(fileSystem, getScheme(), authority, hadoopConfig);
     }
 
     protected org.apache.hadoop.fs.FileSystem initFileSystem(
@@ -111,9 +111,11 @@ public class OSSFileSystemPlugin implements FileSystemPlugin {
     }
 
     protected void setDefaultCredentialProvider(
-            Configuration flussConfig, org.apache.hadoop.conf.Configuration hadoopConfig) {
+            URI fsUri,
+            Configuration flussConfig,
+            org.apache.hadoop.conf.Configuration hadoopConfig) {
         // use OSSSecurityTokenReceiver to update hadoop config to set credentialsProvider
-        OSSSecurityTokenReceiver.updateHadoopConfig(hadoopConfig);
+        OSSSecurityTokenReceiver.updateHadoopConfig(fsUri, hadoopConfig);
     }
 
     @VisibleForTesting
