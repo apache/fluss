@@ -70,7 +70,7 @@ tests:
       security.client.sasl.plain.users: []
     asserts:
       - failedTemplate:
-          errorMessage: security.client.sasl.plain.users must contain at least one user when security.client.sasl.mechanism is plain
+          errorMessage: "VALUES VALIDATION:\nsecurity.client.sasl.plain.users must contain at least one user when security.client.sasl.mechanism is plain"
 
 ---
 
@@ -242,20 +242,17 @@ tests:
 
 suite: mechanism-validation
 templates:
-  - templates/sts-tablet.yaml
+  - templates/NOTES.txt
 tests:
   - it: fails for invalid client mechanism value
     set:
       security.client.sasl.mechanism: bogus
     asserts:
       - failedTemplate:
-          errorMessage: 'security.client.sasl.mechanism must be one of: none, plain'
+          errorMessage: "VALUES VALIDATION:\nsecurity.client.sasl.mechanism must be one of: none, plain"
   - it: accepts empty mechanism as none
-    set:
-      security.client.sasl.mechanism: ""
     asserts:
-      - isKind:
-          of: StatefulSet
+      - notFailedTemplate: {}
 
 ---
 

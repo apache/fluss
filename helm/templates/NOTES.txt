@@ -20,17 +20,4 @@ CHART NAME: {{ .Chart.Name }}
 CHART VERSION: {{ .Chart.Version }}
 APP VERSION: {{ .Chart.AppVersion }}
 
-{{- if (include "fluss.security.sasl.enabled" .) }}
-{{- $internalMechanism := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "internal") }}
-{{- if eq $internalMechanism "plain" }}
-{{- if and (eq .Values.security.internal.sasl.plain.username "fluss-internal-user") (eq .Values.security.internal.sasl.plain.password "fluss-internal-password") }}
-
-  WARNING: You are using the DEFAULT SASL credentials for internal communication.
-  It is strongly recommended to override the following values in production:
-    - security.internal.sasl.plain.username
-    - security.internal.sasl.plain.password
-{{- end }}
-{{- end }}
-{{- end }}
-
-{{ include "fluss.security.sasl.validateClientPlainUsers" . }}
+{{ include "fluss.security.validateValues" . }}

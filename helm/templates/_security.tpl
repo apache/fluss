@@ -26,9 +26,6 @@ Usage:
 {{- $listener := index .context.security .listener | default (dict) -}}
 {{- $sasl := $listener.sasl | default (dict) -}}
 {{- $mechanism := lower (default "none" $sasl.mechanism) -}}
-{{- if and (ne $mechanism "") (not (has $mechanism (list "none" "plain"))) -}}
-{{- fail (printf "security.%s.sasl.mechanism must be one of: none, plain" .listener) -}}
-{{- end -}}
 {{- if eq $mechanism "" -}}none{{- else -}}{{- $mechanism -}}{{- end -}}
 {{- end -}}
 
@@ -81,24 +78,89 @@ Usage:
 {{- end -}}
 
 {{/*
+Validates that SASL mechanisms are valid.
+Returns an error message if invalid, empty string otherwise.
+Usage:
+  include "fluss.security.sasl.validateMechanisms" .
+*/}}
+{{- define "fluss.security.sasl.validateMechanisms" -}}
+{{- $allowedMechanisms := list "none" "plain" -}}
+{{- range $listener := list "internal" "client" -}}
+  {{- $listenerValues := index $.Values.security $listener | default (dict) -}}
+  {{- $sasl := $listenerValues.sasl | default (dict) -}}
+  {{- $mechanism := lower (default "none" $sasl.mechanism) -}}
+  {{- if and (ne $mechanism "") (not (has $mechanism $allowedMechanisms)) -}}
+    {{- printf "security.%s.sasl.mechanism must be one of: none, plain" $listener -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Validates that the client PLAIN mechanism block contains the required users.
+Returns an error message if invalid, empty string otherwise.
 Usage:
   include "fluss.security.sasl.validateClientPlainUsers" .
 */}}
 {{- define "fluss.security.sasl.validateClientPlainUsers" -}}
 {{- $clientMechanism := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "client") -}}
-
 {{- if eq $clientMechanism "plain" -}}
   {{- $users := .Values.security.client.sasl.plain.users | default (list) -}}
   {{- if eq (len $users) 0 -}}
-  {{- fail "security.client.sasl.plain.users must contain at least one user when security.client.sasl.mechanism is plain" -}}
-  {{- end -}}
-  {{- range $idx, $user := $users -}}
-    {{- if or (empty $user.username) (empty $user.password) -}}
-    {{- fail (printf "security.client.sasl.plain.users[%d] must set both username and password" $idx) -}}
+    {{- print "security.client.sasl.plain.users must contain at least one user when security.client.sasl.mechanism is plain" -}}
+  {{- else -}}
+    {{- range $idx, $user := $users -}}
+      {{- if or (empty $user.username) (empty $user.password) -}}
+        {{- printf "security.client.sasl.plain.users[%d] must set both username and password" $idx -}}
+      {{- end -}}
     {{- end -}}
   {{- end -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+Returns a warning if the internal SASL user is using default credentials.
+Usage:
+  include "fluss.security.sasl.warnInternalUser" .
+*/}}
+{{- define "fluss.security.sasl.warnInternalUser" -}}
+{{- if (include "fluss.security.sasl.enabled" .) -}}
+  {{- $internalMechanism := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "internal") -}}
+  {{- if eq $internalMechanism "plain" -}}
+    {{- if and (eq .Values.security.internal.sasl.plain.username "fluss-internal-user") (eq .Values.security.internal.sasl.plain.password "fluss-internal-password") -}}
+      {{- print "You are using the DEFAULT SASL credentials for internal communication.\n  It is strongly recommended to override the following values in production:\n    - security.internal.sasl.plain.username\n    - security.internal.sasl.plain.password" -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Compile all warnings and errors into a single message.
+Usage:
+  include "fluss.security.validateValues" .
+*/}}
+{{- define "fluss.security.validateValues" -}}
+
+{{- $errMessages := list -}}
+{{- $errMessages = append $errMessages (include "fluss.security.sasl.validateMechanisms" .) -}}
+{{- $errMessages = append $errMessages (include "fluss.security.sasl.validateClientPlainUsers" .) -}}
+
+{{- $errMessages = without $errMessages "" -}}
+{{- $errMessage := join "\n" $errMessages -}}
+
+{{- $warnMessages := list -}}
+{{- $warnMessages = append $warnMessages (include "fluss.security.sasl.warnInternalUser" .) -}}
+
+{{- $warnMessages = without $warnMessages "" -}}
+{{- $warnMessage := join "\n" $warnMessages -}}
+
+{{- if $warnMessage -}}
+{{-   printf "\nVALUES WARNING:\n%s" $warnMessage -}}
+{{- end -}}
+
+{{- if $errMessage -}}
+{{-   printf "\nVALUES VALIDATION:\n%s" $errMessage | fail -}}
+{{- end -}}
+
 {{- end -}}
 
 {{/*
