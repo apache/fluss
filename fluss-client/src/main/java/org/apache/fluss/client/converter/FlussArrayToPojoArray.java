@@ -130,11 +130,9 @@ public class FlussArrayToPojoArray {
                     };
                 }
             case DATE:
-                return (arr, i) ->
-                        FlussTypeToPojoTypeConverter.convertDateValue(arr.getInt(i));
+                return (arr, i) -> FlussTypeToPojoTypeConverter.convertDateValue(arr.getInt(i));
             case TIME_WITHOUT_TIME_ZONE:
-                return (arr, i) ->
-                        FlussTypeToPojoTypeConverter.convertTimeValue(arr.getInt(i));
+                return (arr, i) -> FlussTypeToPojoTypeConverter.convertTimeValue(arr.getInt(i));
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 {
                     final int precision = DataTypeChecks.getPrecision(elementType);
@@ -146,8 +144,7 @@ public class FlussArrayToPojoArray {
                 {
                     final int precision = DataTypeChecks.getPrecision(elementType);
                     // Default to Instant when the POJO element type is unspecified (Object[])
-                    final Class<?> tsTarget =
-                            (pojoType == Object.class) ? Instant.class : pojoType;
+                    final Class<?> tsTarget = (pojoType == Object.class) ? Instant.class : pojoType;
                     return (arr, i) ->
                             FlussTypeToPojoTypeConverter.convertTimestampLtzValue(
                                     arr.getTimestampLtz(i, precision), fieldName, tsTarget);

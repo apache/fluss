@@ -311,9 +311,7 @@ public class FlussArrayToPojoArrayTest {
         // A Fluss ARRAY<INT> with a null element cannot be read into an int[] POJO field.
         // The converter must throw a clear NullPointerException rather than a cryptic one.
         RowType table =
-                RowType.builder()
-                        .field("intObjectArray", DataTypes.ARRAY(DataTypes.INT()))
-                        .build();
+                RowType.builder().field("intObjectArray", DataTypes.ARRAY(DataTypes.INT())).build();
 
         PojoToRowConverter<NullableArrayPojo> writer =
                 PojoToRowConverter.of(NullableArrayPojo.class, table, table);

@@ -552,8 +552,7 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
                     && mapsOfArraysEqual(mapOfArrays, that.mapOfArrays);
         }
 
-        private static boolean mapsOfArraysEqual(
-                Map<String, Object[]> a, Map<String, Object[]> b) {
+        private static boolean mapsOfArraysEqual(Map<String, Object[]> a, Map<String, Object[]> b) {
             if (a == b) {
                 return true;
             }
@@ -653,10 +652,7 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
     void testComplexTypesAppendWriteAndScan() throws Exception {
         TablePath path = TablePath.of("pojo_db", "complex_types_log");
         TableDescriptor td =
-                TableDescriptor.builder()
-                        .schema(complexTypesLogSchema())
-                        .distributedBy(1)
-                        .build();
+                TableDescriptor.builder().schema(complexTypesLogSchema()).distributedBy(1).build();
         createTable(path, td, true);
 
         try (Table table = conn.getTable(path)) {
