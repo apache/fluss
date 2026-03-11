@@ -21,11 +21,9 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
-import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.kv.KvSnapshotResource;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.function.FunctionWithException;
 
 import org.slf4j.Logger;
@@ -57,8 +55,6 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
 
     private final int maxFetchLogSizeInRecoverKv;
 
-    private final FsPath remoteKvDir;
-
     private DefaultSnapshotContext(
             ZooKeeperClient zooKeeperClient,
             CompletedKvSnapshotCommitter completedKvSnapshotCommitter,
@@ -68,7 +64,6 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
             KvSnapshotDataDownloader kvSnapshotDataDownloader,
             long kvSnapshotIntervalMs,
             int writeBufferSizeInBytes,
-            FsPath remoteKvDir,
             CompletedSnapshotHandleStore completedSnapshotHandleStore,
             int maxFetchLogSizeInRecoverKv) {
         this.zooKeeperClient = zooKeeperClient;
@@ -79,7 +74,6 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
         this.kvSnapshotDataDownloader = kvSnapshotDataDownloader;
         this.kvSnapshotIntervalMs = kvSnapshotIntervalMs;
         this.writeBufferSizeInBytes = writeBufferSizeInBytes;
-        this.remoteKvDir = remoteKvDir;
 
         this.completedSnapshotHandleStore = completedSnapshotHandleStore;
         this.maxFetchLogSizeInRecoverKv = maxFetchLogSizeInRecoverKv;
@@ -99,19 +93,21 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
                 kvSnapshotResource.getKvSnapshotDataDownloader(),
                 conf.get(ConfigOptions.KV_SNAPSHOT_INTERVAL).toMillis(),
                 (int) conf.get(ConfigOptions.REMOTE_FS_WRITE_BUFFER_SIZE).getBytes(),
-                FlussPaths.remoteKvDir(conf),
                 new ZooKeeperCompletedSnapshotHandleStore(zkClient),
                 (int) conf.get(ConfigOptions.KV_RECOVER_LOG_RECORD_BATCH_MAX_SIZE).getBytes());
     }
 
+    @Override
     public ZooKeeperClient getZooKeeperClient() {
         return zooKeeperClient;
     }
 
+    @Override
     public ExecutorService getAsyncOperationsThreadPool() {
         return asyncOperationsThreadPool;
     }
 
+    @Override
     public KvSnapshotDataUploader getSnapshotDataUploader() {
         return kvSnapshotDataUploader;
     }
@@ -121,6 +117,7 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
         return kvSnapshotDataDownloader;
     }
 
+    @Override
     public ScheduledExecutorService getSnapshotScheduler() {
         return snapshotScheduler;
     }
@@ -138,10 +135,6 @@ public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigur
     @Override
     public int getSnapshotFsWriteBufferSize() {
         return writeBufferSizeInBytes;
-    }
-
-    public FsPath getRemoteKvDir() {
-        return remoteKvDir;
     }
 
     @Override
