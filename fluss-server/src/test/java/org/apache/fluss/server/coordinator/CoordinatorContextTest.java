@@ -20,11 +20,15 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.zk.ZkEpoch;
@@ -45,6 +49,44 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link CoordinatorContext}. */
 class CoordinatorContextTest {
+
+    @Test
+    void testRemovePartitionClearsPartitionInfo() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        PartitionInfo removedPartition = createPartitionInfo(100L, "2026");
+        PartitionInfo retainedPartition = createPartitionInfo(101L, "2027");
+        PhysicalTablePath removedPath = PhysicalTablePath.of("db1", "table1", "2026");
+        PhysicalTablePath retainedPath = PhysicalTablePath.of("db1", "table1", "2027");
+        context.putPartition(100L, removedPath, removedPartition);
+        context.putPartition(101L, retainedPath, retainedPartition);
+
+        assertThat(context.getPartitionInfoById(100L)).isSameAs(removedPartition);
+        assertThat(context.getPartitionInfoById(101L)).isSameAs(retainedPartition);
+
+        context.removePartition(new TablePartition(1L, 100L));
+
+        assertThat(context.getPhysicalTablePath(100L)).isEmpty();
+        assertThat(context.getPartitionId(removedPath)).isEmpty();
+        assertThat(context.getPhysicalTablePath(101L)).contains(retainedPath);
+        assertThat(context.getPartitionInfoById(101L)).isSameAs(retainedPartition);
+        assertThat(context.getPartitionInfoById(100L)).isNull();
+    }
+
+    @Test
+    void testResetContextClearsPartitionInfo() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        PartitionInfo partitionInfo = createPartitionInfo(100L, "2026");
+        PhysicalTablePath partitionPath = PhysicalTablePath.of("db1", "table1", "2026");
+        context.putPartition(100L, partitionPath, partitionInfo);
+
+        assertThat(context.getPartitionInfoById(100L)).isSameAs(partitionInfo);
+
+        context.resetContext();
+
+        assertThat(context.getPhysicalTablePath(100L)).isEmpty();
+        assertThat(context.getPartitionId(partitionPath)).isEmpty();
+        assertThat(context.getPartitionInfoById(100L)).isNull();
+    }
 
     @Test
     void testKvBucketsAreTrackedIdempotently() {
@@ -250,6 +292,14 @@ class CoordinatorContextTest {
                 new LeaderAndIsr(
                         99, 1, Collections.singletonList(99), Collections.emptyList(), 0, 1));
         assertThat(context.isLeaderActive(tb)).isFalse();
+    }
+
+    private PartitionInfo createPartitionInfo(long partitionId, String partitionName) {
+        return new PartitionInfo(
+                partitionId,
+                ResolvedPartitionSpec.fromPartitionValue("year", partitionName),
+                DEFAULT_REMOTE_DATA_DIR,
+                1);
     }
 
     private TableInfo createTableInfo(long tableId, TablePath tablePath, boolean isLake) {
