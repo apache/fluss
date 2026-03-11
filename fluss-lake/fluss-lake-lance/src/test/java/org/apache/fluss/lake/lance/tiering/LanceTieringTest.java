@@ -21,6 +21,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
+import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.lance.LanceConfig;
 import org.apache.fluss.lake.lance.utils.LanceArrowUtils;
@@ -434,9 +435,10 @@ class LanceTieringTest {
                             committableSerializer.getVersion(), serialized);
             Map<String, String> snapshotProperties =
                     Collections.singletonMap(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "offsets");
-            long snapshot = lakeCommitter.commit(lanceCommittable, snapshotProperties);
+            LakeCommitResult commitResult =
+                    lakeCommitter.commit(lanceCommittable, snapshotProperties);
             // lance dataset version starts from 1
-            assertThat(snapshot).isEqualTo(2);
+            assertThat(commitResult.getCommittedSnapshotId()).isEqualTo(2);
         }
 
         try (Dataset dataset =
