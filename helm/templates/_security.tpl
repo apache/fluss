@@ -18,15 +18,15 @@
 
 {{/*
 Returns the authentication mechanism value of a given listener.
-Allowed mechanism values: 'none', 'plain'
+Allowed mechanism values: '', 'plain'
 Usage:
   include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "client")
 */}}
 {{- define "fluss.security.listener.mechanism" -}}
 {{- $listener := index .context.security .listener | default (dict) -}}
 {{- $sasl := $listener.sasl | default (dict) -}}
-{{- $mechanism := lower (default "none" $sasl.mechanism) -}}
-{{- if eq $mechanism "" -}}none{{- else -}}{{- $mechanism -}}{{- end -}}
+{{- $mechanism := lower (default "" $sasl.mechanism) -}}
+{{- $mechanism -}}
 {{- end -}}
 
 {{/*
@@ -37,7 +37,7 @@ Usage:
 {{- define "fluss.security.sasl.enabled" -}}
 {{- $internal := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "internal") -}}
 {{- $client := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "client") -}}
-{{- if or (ne $internal "none") (ne $client "none") -}}true{{- end -}}
+{{- if or (ne $internal "") (ne $client "") -}}true{{- end -}}
 {{- end -}}
 
 {{/*
@@ -58,7 +58,7 @@ Usage:
 */}}
 {{- define "fluss.security.listener.protocol" -}}
 {{- $mechanism := include "fluss.security.listener.mechanism" (dict "context" .context "listener" .listener) -}}
-{{- if eq $mechanism "none" -}}PLAINTEXT{{- else -}}SASL{{- end -}}
+{{- if eq $mechanism "" -}}PLAINTEXT{{- else -}}SASL{{- end -}}
 {{- end -}}
 
 {{/*
@@ -70,7 +70,7 @@ Usage:
 {{- $mechanisms := list -}}
 {{- range $listener := list "internal" "client" -}}
   {{- $current := include "fluss.security.listener.mechanism" (dict "context" $.Values "listener" $listener) -}}
-  {{- if and (ne $current "none") (not (has (upper $current) $mechanisms)) -}}
+  {{- if and (ne $current "") (not (has (upper $current) $mechanisms)) -}}
     {{- $mechanisms = append $mechanisms (upper $current) -}}
   {{- end -}}
 {{- end -}}
@@ -84,13 +84,13 @@ Usage:
   include "fluss.security.sasl.validateMechanisms" .
 */}}
 {{- define "fluss.security.sasl.validateMechanisms" -}}
-{{- $allowedMechanisms := list "none" "plain" -}}
+{{- $allowedMechanisms := list "" "plain" -}}
 {{- range $listener := list "internal" "client" -}}
   {{- $listenerValues := index $.Values.security $listener | default (dict) -}}
   {{- $sasl := $listenerValues.sasl | default (dict) -}}
-  {{- $mechanism := lower (default "none" $sasl.mechanism) -}}
-  {{- if and (ne $mechanism "") (not (has $mechanism $allowedMechanisms)) -}}
-    {{- printf "security.%s.sasl.mechanism must be one of: none, plain" $listener -}}
+  {{- $mechanism := lower (default "" $sasl.mechanism) -}}
+  {{- if not (has $mechanism $allowedMechanisms) -}}
+    {{- printf "security.%s.sasl.mechanism must be one of: empty, plain" $listener -}}
   {{- end -}}
 {{- end -}}
 {{- end -}}

@@ -62,15 +62,15 @@ listeners:
 security:
   client:
     sasl:
-      # none | plain
-      mechanism: none
+      # "" | plain
+      mechanism: ""
       plain:
         users: []
 
   internal:
     sasl:
-      # none | plain
-      mechanism: none
+      # "" | plain
+      mechanism: ""
       plain:
         username: "fluss-internal-user"
         password: "fluss-internal-password"

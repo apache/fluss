@@ -135,7 +135,6 @@ tests:
   - it: renders internal server and client JAAS blocks only
     template: templates/secret-jaas-config.yaml
     set:
-      security.client.sasl.mechanism: none
       security.internal.sasl.mechanism: plain
       security.internal.sasl.plain.username: internal-user
       security.internal.sasl.plain.password: internal-pass
@@ -154,7 +153,6 @@ tests:
   - it: renders security config in configmap for internal SASL
     template: templates/configmap.yaml
     set:
-      security.client.sasl.mechanism: none
       security.internal.sasl.mechanism: plain
       security.internal.sasl.plain.username: internal-user
       security.internal.sasl.plain.password: internal-pass
@@ -174,7 +172,6 @@ tests:
   - it: renders JAAS env var and mounts secret volume
     template: templates/sts-coordinator.yaml
     set:
-      security.client.sasl.mechanism: none
       security.internal.sasl.mechanism: plain
       security.internal.sasl.plain.username: internal-user
       security.internal.sasl.plain.password: internal-pass
@@ -206,7 +203,6 @@ tests:
       security.client.sasl.plain.users:
         - username: app
           password: app-pass
-      security.internal.sasl.mechanism: none
     asserts:
       - hasDocuments:
           count: 1
@@ -226,7 +222,6 @@ tests:
       security.client.sasl.plain.users:
         - username: app
           password: app-pass
-      security.internal.sasl.mechanism: none
     asserts:
       - matchRegex:
           path: data["server.yaml"]
@@ -249,8 +244,8 @@ tests:
       security.client.sasl.mechanism: bogus
     asserts:
       - failedTemplate:
-          errorMessage: "VALUES VALIDATION:\nsecurity.client.sasl.mechanism must be one of: none, plain"
-  - it: accepts empty mechanism as none
+          errorMessage: "VALUES VALIDATION:\nsecurity.client.sasl.mechanism must be one of: empty, plain"
+  - it: accepts empty mechanism as default
     asserts:
       - notFailedTemplate: {}
 

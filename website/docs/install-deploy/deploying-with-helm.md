@@ -187,13 +187,13 @@ The following table lists the configurable parameters of the Fluss chart, and th
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `security.client.sasl.mechanism` | Client listener SASL mechanism (`none`, `plain`) | `none` |
-| `security.internal.sasl.mechanism` | Internal listener SASL mechanism (`none`, `plain`) | `none` |
+| `security.client.sasl.mechanism` | Client listener SASL mechanism (`""`, `plain`) | `""` |
+| `security.internal.sasl.mechanism` | Internal listener SASL mechanism (`""`, `plain`) | `""` |
 | `security.client.sasl.plain.users` | Client listener username and password pairs for PLAIN | `[]` |
 | `security.internal.sasl.plain.username` | Internal listener PLAIN username | `"fluss-internal-user"` |
 | `security.internal.sasl.plain.password` | Internal listener PLAIN password | `"fluss-internal-password"` |
 
-Only 'none' and 'plain' mechanisms are supported for now. The `none` mechanism maps to the `PLAINTEXT` protocol.
+Only `plain` mechanism is supported for now. An empty string disables the SASL authentication, and maps to the `PLAINTEXT` protocol.
 
 ### Fluss Configuration Overrides
 
@@ -269,10 +269,10 @@ listeners:
 security:
   client:
     sasl:
-      mechanism: none
+      mechanism: ""
   internal:
     sasl:
-      mechanism: none
+      mechanism: ""
 ```
 
 ### Enabling Secure Connection
@@ -283,7 +283,7 @@ The following table shows the supported mechanisms and security they provide:
 
 | Mechanism | Method      | Authentication | TLS Encryption     |
 |:---------:|:-----------:|:--------------:|:------------------:|
-| `none`    | `PLAINTEXT` | No             | No                 |
+| `""`      | `PLAINTEXT` | No             | No                 |
 | `plain`   | `SASL`      | Yes            | No                 |
 
 By default, the `PLAINTEXT` protocol is used.

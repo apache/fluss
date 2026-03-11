@@ -37,7 +37,7 @@ data:
     {{- if (include "fluss.security.sasl.enabled" .) }}
     security.protocol.map: INTERNAL:{{ $internalProtocol }},CLIENT:{{ $clientProtocol }}
     security.sasl.enabled.mechanisms: {{ $enabledMechanisms }}
-    {{- if ne $internalMechanism "none" }}
+    {{- if ne $internalMechanism "" }}
     client.security.protocol: SASL
     client.security.sasl.mechanism: {{ upper $internalMechanism }}
     {{- end }}
