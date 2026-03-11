@@ -19,11 +19,10 @@
 package org.apache.fluss.client.converter;
 
 import org.apache.fluss.row.InternalMap;
-import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.MapType;
 
-import java.lang.reflect.Array;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /** Adapter class for converting Fluss InternalMap to Pojo map. */
@@ -43,23 +42,27 @@ public class FlussMapToPojoMap {
             return null;
         }
 
-        DataType elementKeyType = mapType.getKeyType();
-        Object keys =
+        List<Object> keys =
                 new FlussArrayToPojoArray(
-                                flussMap.keyArray(), elementKeyType, fieldName, Object.class)
-                        .convertArray();
+                                flussMap.keyArray(), mapType.getKeyType(), fieldName, Object.class)
+                        .convertList();
 
-        DataType elementValueType = mapType.getValueType();
-        Object values =
+        if (keys == null || keys.isEmpty()) {
+            return new HashMap<>();
+        }
+
+        List<Object> values =
                 new FlussArrayToPojoArray(
-                                flussMap.valueArray(), elementValueType, fieldName, Object.class)
-                        .convertArray();
+                                flussMap.valueArray(),
+                                mapType.getValueType(),
+                                fieldName,
+                                Object.class)
+                        .convertList();
 
         // Build the result map
-        Map<Object, Object> result = new HashMap<>();
-        int size = Array.getLength(keys);
-        for (int i = 0; i < size; i++) {
-            result.put(Array.get(keys, i), Array.get(values, i));
+        Map<Object, Object> result = new HashMap<>(keys.size() * 2);
+        for (int i = 0; i < keys.size(); i++) {
+            result.put(keys.get(i), values == null ? null : values.get(i));
         }
         return result;
     }

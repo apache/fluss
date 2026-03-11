@@ -29,10 +29,15 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link FlussArrayToPojoArray}. */
 public class FlussArrayToPojoArrayTest {
@@ -223,6 +228,124 @@ public class FlussArrayToPojoArrayTest {
         GenericRow row = writer.toRow(pojo);
         SimpleArrayPojo back = reader.fromRow(row);
         assertThat(back.intArray).isEqualTo(null);
+    }
+
+    @Test
+    public void testListFieldsOnReadPath() {
+        // POJO fields declared as List<T> should deserialize as ArrayList<Object>
+        RowType table =
+                RowType.builder()
+                        .field("intList", DataTypes.ARRAY(DataTypes.INT()))
+                        .field("strList", DataTypes.ARRAY(DataTypes.STRING()))
+                        .field("nullableList", DataTypes.ARRAY(DataTypes.INT()))
+                        .build();
+
+        PojoToRowConverter<ListFieldPojo> writer =
+                PojoToRowConverter.of(ListFieldPojo.class, table, table);
+        RowToPojoConverter<ListFieldPojo> reader =
+                RowToPojoConverter.of(ListFieldPojo.class, table, table);
+
+        ListFieldPojo pojo = new ListFieldPojo();
+        pojo.intList = Arrays.asList(1, 2, 3);
+        pojo.strList = Arrays.asList("x", "y");
+        pojo.nullableList = Arrays.asList(10, null, 30);
+
+        GenericRow row = writer.toRow(pojo);
+        ListFieldPojo back = reader.fromRow(row);
+
+        assertThat(back.intList).isInstanceOf(List.class).containsExactly(1, 2, 3);
+        assertThat(back.strList).isInstanceOf(List.class).containsExactly("x", "y");
+        assertThat(back.nullableList).isInstanceOf(List.class).containsExactly(10, null, 30);
+    }
+
+    /** POJO with List fields for read-path List deserialization tests. */
+    public static class ListFieldPojo {
+        public List<Integer> intList;
+        public List<String> strList;
+        public List<Integer> nullableList;
+
+        public ListFieldPojo() {}
+    }
+
+    @Test
+    public void testTypedArrayFieldsOnReadPath() {
+        // Verify that typed POJO array fields (String[], Character[], OffsetDateTime[]) are
+        // handled correctly on the read path — not just Object[].
+        RowType table =
+                RowType.builder()
+                        .field("stringArray", DataTypes.ARRAY(DataTypes.STRING()))
+                        .field("charArray", DataTypes.ARRAY(DataTypes.STRING()))
+                        .field("intArray", DataTypes.ARRAY(DataTypes.INT()))
+                        .field("timestampLtzArray", DataTypes.ARRAY(DataTypes.TIMESTAMP_LTZ(3)))
+                        .build();
+
+        PojoToRowConverter<TypedArrayPojo> writer =
+                PojoToRowConverter.of(TypedArrayPojo.class, table, table);
+        RowToPojoConverter<TypedArrayPojo> reader =
+                RowToPojoConverter.of(TypedArrayPojo.class, table, table);
+
+        TypedArrayPojo pojo = new TypedArrayPojo();
+        pojo.stringArray = new String[] {"hello", "world"};
+        pojo.charArray = new Character[] {'A', 'B'};
+        pojo.intArray = new Integer[] {10, 20};
+        pojo.timestampLtzArray =
+                new OffsetDateTime[] {
+                    OffsetDateTime.of(2025, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC),
+                    OffsetDateTime.of(2025, 6, 15, 12, 0, 0, 0, ZoneOffset.UTC)
+                };
+
+        GenericRow row = writer.toRow(pojo);
+        TypedArrayPojo back = reader.fromRow(row);
+
+        assertThat((String[]) back.stringArray).isEqualTo(new String[] {"hello", "world"});
+        assertThat((Character[]) back.charArray).isEqualTo(new Character[] {'A', 'B'});
+        assertThat((Integer[]) back.intArray).isEqualTo(new Integer[] {10, 20});
+        assertThat(((OffsetDateTime[]) back.timestampLtzArray)[0])
+                .isEqualTo(OffsetDateTime.of(2025, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC));
+        assertThat(((OffsetDateTime[]) back.timestampLtzArray)[1])
+                .isEqualTo(OffsetDateTime.of(2025, 6, 15, 12, 0, 0, 0, ZoneOffset.UTC));
+    }
+
+    @Test
+    public void testNullElementInPrimitiveArrayThrows() {
+        // A Fluss ARRAY<INT> with a null element cannot be read into an int[] POJO field.
+        // The converter must throw a clear NullPointerException rather than a cryptic one.
+        RowType table =
+                RowType.builder()
+                        .field("intObjectArray", DataTypes.ARRAY(DataTypes.INT()))
+                        .build();
+
+        PojoToRowConverter<NullableArrayPojo> writer =
+                PojoToRowConverter.of(NullableArrayPojo.class, table, table);
+        RowToPojoConverter<PrimitiveIntArrayPojo> reader =
+                RowToPojoConverter.of(PrimitiveIntArrayPojo.class, table, table);
+
+        NullableArrayPojo pojo = new NullableArrayPojo();
+        pojo.stringArray = null; // unused — only intObjectArray is in projection
+        pojo.intObjectArray = new Integer[] {1, null, 3};
+
+        GenericRow row = writer.toRow(pojo);
+        assertThatThrownBy(() -> reader.fromRow(row))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("primitive array")
+                .hasMessageContaining("intObjectArray");
+    }
+
+    /** POJO with typed (non-Object[]) array fields for read-path type-fidelity tests. */
+    public static class TypedArrayPojo {
+        public String[] stringArray;
+        public Character[] charArray;
+        public Integer[] intArray;
+        public OffsetDateTime[] timestampLtzArray;
+
+        public TypedArrayPojo() {}
+    }
+
+    /** POJO with primitive int[] for null-element guard test. */
+    public static class PrimitiveIntArrayPojo {
+        public int[] intObjectArray;
+
+        public PrimitiveIntArrayPojo() {}
     }
 
     /** POJO for testing all array types. */

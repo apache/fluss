@@ -29,6 +29,7 @@ import org.apache.fluss.types.RowType;
 import javax.annotation.Nullable;
 
 import java.lang.reflect.InvocationTargetException;
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -42,6 +43,7 @@ public final class RowToPojoConverter<T> {
     private final RowType projection;
     private final List<String> projectionFieldNames;
     private final RowToField[] rowReaders;
+    private final PojoType.Property[] rowProps;
 
     private RowToPojoConverter(PojoType<T> pojoType, RowType tableSchema, RowType projection) {
         this.pojoType = pojoType;
@@ -50,7 +52,10 @@ public final class RowToPojoConverter<T> {
         this.projectionFieldNames = projection.getFieldNames();
         ConverterCommons.validatePojoMatchesTable(pojoType, tableSchema);
         ConverterCommons.validateProjectionSubset(projection, tableSchema);
-        this.rowReaders = createRowReaders();
+        int fieldCount = projection.getFieldCount();
+        this.rowReaders = new RowToField[fieldCount];
+        this.rowProps = new PojoType.Property[fieldCount];
+        createRowReaders();
     }
 
     public static <T> RowToPojoConverter<T> of(
@@ -67,9 +72,8 @@ public final class RowToPojoConverter<T> {
             for (int i = 0; i < rowReaders.length; i++) {
                 if (!row.isNullAt(i)) {
                     Object v = rowReaders[i].convert(row, i);
-                    PojoType.Property prop = pojoType.getProperty(projectionFieldNames.get(i));
                     if (v != null) {
-                        prop.write(pojo, v);
+                        rowProps[i].write(pojo, v);
                     }
                 }
             }
@@ -88,16 +92,15 @@ public final class RowToPojoConverter<T> {
         }
     }
 
-    private RowToField[] createRowReaders() {
-        RowToField[] arr = new RowToField[projection.getFieldCount()];
-        for (int i = 0; i < projection.getFieldCount(); i++) {
+    private void createRowReaders() {
+        for (int i = 0; i < rowReaders.length; i++) {
             String name = projectionFieldNames.get(i);
             DataType type = projection.getTypeAt(i);
             PojoType.Property prop = requireProperty(name);
             ConverterCommons.validateCompatibility(type, prop);
-            arr[i] = createRowReader(type, prop);
+            rowReaders[i] = createRowReader(type, prop);
+            rowProps[i] = prop;
         }
-        return arr;
     }
 
     private PojoType.Property requireProperty(String fieldName) {
@@ -163,7 +166,21 @@ public final class RowToPojoConverter<T> {
                 }
             case ARRAY:
                 ArrayType arrayType = (ArrayType) fieldType;
-                Class<?> componentType = prop.type.getComponentType();
+                if (Collection.class.isAssignableFrom(prop.type)) {
+                    // POJO field is a List / Collection — deserialize as ArrayList<Object>
+                    return (row, pos) -> {
+                        InternalArray array = row.getArray(pos);
+                        return array == null
+                                ? null
+                                : new FlussArrayToPojoArray(
+                                                array,
+                                                arrayType.getElementType(),
+                                                prop.name,
+                                                Object.class)
+                                        .convertList();
+                    };
+                }
+                final Class<?> componentType = prop.type.getComponentType();
                 return (row, pos) -> {
                     InternalArray array = row.getArray(pos);
                     return array == null
@@ -172,7 +189,7 @@ public final class RowToPojoConverter<T> {
                                             array,
                                             arrayType.getElementType(),
                                             prop.name,
-                                            prop.type.getComponentType())
+                                            componentType)
                                     .convertArray();
                 };
             case MAP:

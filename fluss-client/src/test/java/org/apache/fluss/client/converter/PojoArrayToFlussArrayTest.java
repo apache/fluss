@@ -31,7 +31,10 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -367,6 +370,54 @@ public class PojoArrayToFlussArrayTest {
                     };
             return pojo;
         }
+    }
+
+    @Test
+    public void testCollectionFields() {
+        // PojoArrayToFlussArray must accept java.util.Collection (List, ArrayList, etc.)
+        RowType table =
+                RowType.builder()
+                        .field("listOfStrings", DataTypes.ARRAY(DataTypes.STRING()))
+                        .field("listOfInts", DataTypes.ARRAY(DataTypes.INT()))
+                        .field("listWithNull", DataTypes.ARRAY(DataTypes.STRING()))
+                        .build();
+
+        PojoToRowConverter<CollectionArrayPojo> writer =
+                PojoToRowConverter.of(CollectionArrayPojo.class, table, table);
+
+        CollectionArrayPojo pojo = new CollectionArrayPojo();
+        pojo.listOfStrings = Arrays.asList("alpha", "beta", "gamma");
+        pojo.listOfInts = new ArrayList<>(Arrays.asList(10, 20, 30));
+        pojo.listWithNull = Arrays.asList("a", null, "b");
+
+        GenericRow row = writer.toRow(pojo);
+
+        InternalArray strArray = row.getArray(0);
+        assertThat(strArray.size()).isEqualTo(3);
+        assertThat(strArray.getString(0).toString()).isEqualTo("alpha");
+        assertThat(strArray.getString(1).toString()).isEqualTo("beta");
+        assertThat(strArray.getString(2).toString()).isEqualTo("gamma");
+
+        InternalArray intArray = row.getArray(1);
+        assertThat(intArray.size()).isEqualTo(3);
+        assertThat(intArray.getInt(0)).isEqualTo(10);
+        assertThat(intArray.getInt(1)).isEqualTo(20);
+        assertThat(intArray.getInt(2)).isEqualTo(30);
+
+        InternalArray nullableArray = row.getArray(2);
+        assertThat(nullableArray.size()).isEqualTo(3);
+        assertThat(nullableArray.getString(0).toString()).isEqualTo("a");
+        assertThat(nullableArray.isNullAt(1)).isTrue();
+        assertThat(nullableArray.getString(2).toString()).isEqualTo("b");
+    }
+
+    /** POJO with Collection fields for array conversion tests. */
+    public static class CollectionArrayPojo {
+        public List<String> listOfStrings;
+        public ArrayList<Integer> listOfInts;
+        public List<String> listWithNull;
+
+        public CollectionArrayPojo() {}
     }
 
     /** POJO for testing arrays with null elements. */

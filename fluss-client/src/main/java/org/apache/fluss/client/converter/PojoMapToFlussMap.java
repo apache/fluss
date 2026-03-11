@@ -21,9 +21,7 @@ package org.apache.fluss.client.converter;
 import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.types.MapType;
 
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 import static org.apache.fluss.client.converter.PojoTypeToFlussTypeConverter.convertElementValue;
@@ -45,12 +43,12 @@ public class PojoMapToFlussMap {
             return null;
         }
 
-        List<Object> keyArray = new ArrayList<>(pojoMap.keySet());
-        Map<Object, Object> converted = new HashMap<>();
-        for (Object key : keyArray) {
-            Object convertedKey = convertElementValue(key, mapType.getKeyType(), fieldName);
+        Map<Object, Object> converted = new HashMap<>(pojoMap.size() * 2);
+        for (Map.Entry<?, ?> entry : pojoMap.entrySet()) {
+            Object convertedKey =
+                    convertElementValue(entry.getKey(), mapType.getKeyType(), fieldName);
             Object convertedValue =
-                    convertElementValue(pojoMap.get(key), mapType.getValueType(), fieldName);
+                    convertElementValue(entry.getValue(), mapType.getValueType(), fieldName);
             converted.put(convertedKey, convertedValue);
         }
 

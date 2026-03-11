@@ -48,7 +48,9 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -498,6 +500,345 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
                 assertThat(u).isEqualTo(expectedPojo);
                 i++;
             }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Complex-type (ARRAY / MAP) POJO and helpers
+    // -------------------------------------------------------------------------
+
+    /**
+     * POJO covering the complex-type fields that are new in this PR:
+     *
+     * <ul>
+     *   <li>ARRAY&lt;INT&gt; — Integer[]
+     *   <li>ARRAY&lt;STRING&gt; — String[]
+     *   <li>ARRAY&lt;ARRAY&lt;INT&gt;&gt; — Integer[][]
+     *   <li>MAP&lt;STRING, INT&gt; — Map&lt;String, Integer&gt;
+     *   <li>MAP&lt;STRING, ARRAY&lt;INT&gt;&gt; — Map&lt;String, Object[]&gt; (generic type is
+     *       erased at runtime; inner arrays always come back as Object[])
+     * </ul>
+     */
+    public static class ComplexTypesPojo {
+        public Integer id;
+        public Integer[] intArray;
+        public String[] strArray;
+        public Integer[][] nestedArray;
+        public Map<String, Integer> simpleMap;
+        // Map values that are arrays are always deserialized as Object[] (type erasure)
+        public Map<String, Object[]> mapOfArrays;
+
+        public ComplexTypesPojo() {}
+
+        /** Constructor that sets only the id; all array/map fields default to null. */
+        public ComplexTypesPojo(Integer id) {
+            this.id = id;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            ComplexTypesPojo that = (ComplexTypesPojo) o;
+            return Objects.equals(id, that.id)
+                    && Arrays.equals(intArray, that.intArray)
+                    && Arrays.equals(strArray, that.strArray)
+                    && Arrays.deepEquals(nestedArray, that.nestedArray)
+                    && Objects.equals(simpleMap, that.simpleMap)
+                    && mapsOfArraysEqual(mapOfArrays, that.mapOfArrays);
+        }
+
+        private static boolean mapsOfArraysEqual(
+                Map<String, Object[]> a, Map<String, Object[]> b) {
+            if (a == b) {
+                return true;
+            }
+            if (a == null || b == null || a.size() != b.size()) {
+                return false;
+            }
+            for (Map.Entry<String, Object[]> e : a.entrySet()) {
+                if (!Arrays.equals(e.getValue(), b.get(e.getKey()))) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        @Override
+        public int hashCode() {
+            int result = Objects.hash(id, simpleMap);
+            result = 31 * result + Arrays.hashCode(intArray);
+            result = 31 * result + Arrays.hashCode(strArray);
+            result = 31 * result + Arrays.deepHashCode(nestedArray);
+            return result;
+        }
+
+        @Override
+        public String toString() {
+            return "ComplexTypesPojo{"
+                    + "id="
+                    + id
+                    + ", intArray="
+                    + Arrays.toString(intArray)
+                    + ", strArray="
+                    + Arrays.toString(strArray)
+                    + ", nestedArray="
+                    + Arrays.deepToString(nestedArray)
+                    + ", simpleMap="
+                    + simpleMap
+                    + ", mapOfArrays="
+                    + mapOfArrays
+                    + '}';
+        }
+    }
+
+    /** Primary-key lookup POJO for {@link ComplexTypesPojo}. */
+    public static class ComplexTypesLookupKey {
+        public Integer id;
+
+        public ComplexTypesLookupKey() {}
+
+        public ComplexTypesLookupKey(Integer id) {
+            this.id = id;
+        }
+    }
+
+    private static Schema complexTypesLogSchema() {
+        return Schema.newBuilder()
+                .column("id", DataTypes.INT())
+                .column("intArray", DataTypes.ARRAY(DataTypes.INT()))
+                .column("strArray", DataTypes.ARRAY(DataTypes.STRING()))
+                .column("nestedArray", DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.INT())))
+                .column("simpleMap", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()))
+                .column(
+                        "mapOfArrays",
+                        DataTypes.MAP(DataTypes.STRING(), DataTypes.ARRAY(DataTypes.INT())))
+                .build();
+    }
+
+    private static Schema complexTypesPkSchema() {
+        return Schema.newBuilder()
+                .column("id", DataTypes.INT())
+                .column("intArray", DataTypes.ARRAY(DataTypes.INT()))
+                .column("strArray", DataTypes.ARRAY(DataTypes.STRING()))
+                .column("nestedArray", DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.INT())))
+                .column("simpleMap", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()))
+                .column(
+                        "mapOfArrays",
+                        DataTypes.MAP(DataTypes.STRING(), DataTypes.ARRAY(DataTypes.INT())))
+                .primaryKey("id")
+                .build();
+    }
+
+    private static ComplexTypesPojo newComplexTypesPojo(int i) {
+        ComplexTypesPojo p = new ComplexTypesPojo();
+        p.id = i;
+        p.intArray = new Integer[] {i, i + 1, i + 2};
+        p.strArray = new String[] {"s" + i, "s" + (i + 1)};
+        p.nestedArray = new Integer[][] {{i, i + 1}, {i + 2, i + 3}};
+        p.simpleMap = new HashMap<>();
+        p.simpleMap.put("k" + i, i * 10);
+        p.simpleMap.put("k" + (i + 1), (i + 1) * 10);
+        p.mapOfArrays = new HashMap<>();
+        p.mapOfArrays.put("arr" + i, new Object[] {i * 100, i * 100 + 1});
+        p.mapOfArrays.put("arr" + (i + 1), new Object[] {(i + 1) * 100, (i + 1) * 100 + 1});
+        return p;
+    }
+
+    @Test
+    void testComplexTypesAppendWriteAndScan() throws Exception {
+        TablePath path = TablePath.of("pojo_db", "complex_types_log");
+        TableDescriptor td =
+                TableDescriptor.builder()
+                        .schema(complexTypesLogSchema())
+                        .distributedBy(1)
+                        .build();
+        createTable(path, td, true);
+
+        try (Table table = conn.getTable(path)) {
+            TypedAppendWriter<ComplexTypesPojo> writer =
+                    table.newAppend().createTypedWriter(ComplexTypesPojo.class);
+
+            List<ComplexTypesPojo> expected = new ArrayList<>();
+            for (int i = 1; i <= 3; i++) {
+                ComplexTypesPojo p = newComplexTypesPojo(i);
+                expected.add(p);
+                writer.append(p);
+            }
+
+            // also write a row with null array / map fields to verify null propagation
+            ComplexTypesPojo nullFieldPojo = new ComplexTypesPojo(99);
+            expected.add(nullFieldPojo);
+            writer.append(nullFieldPojo);
+
+            writer.flush();
+
+            TypedLogScanner<ComplexTypesPojo> scanner =
+                    table.newScan().createTypedLogScanner(ComplexTypesPojo.class);
+            subscribeFromBeginning(scanner, table);
+
+            List<ComplexTypesPojo> actual = new ArrayList<>();
+            while (actual.size() < expected.size()) {
+                TypedScanRecords<ComplexTypesPojo> recs = scanner.poll(Duration.ofSeconds(2));
+                for (TypedScanRecord<ComplexTypesPojo> r : recs) {
+                    assertThat(r.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
+                    actual.add(r.getValue());
+                }
+            }
+
+            // verify all elements (custom equals handles deep array comparison)
+            assertThat(actual).containsExactlyInAnyOrderElementsOf(expected);
+
+            // spot-check the null-field row
+            ComplexTypesPojo nullBack =
+                    actual.stream().filter(p -> p.id == 99).findFirst().orElse(null);
+            assertThat(nullBack).isNotNull();
+            assertThat(nullBack.intArray).isNull();
+            assertThat(nullBack.strArray).isNull();
+            assertThat(nullBack.nestedArray).isNull();
+            assertThat(nullBack.simpleMap).isNull();
+            assertThat(nullBack.mapOfArrays).isNull();
+        }
+    }
+
+    @Test
+    void testComplexTypesUpsertAndLookup() throws Exception {
+        TablePath path = TablePath.of("pojo_db", "complex_types_pk");
+        TableDescriptor td =
+                TableDescriptor.builder()
+                        .schema(complexTypesPkSchema())
+                        .distributedBy(1, "id")
+                        .build();
+        createTable(path, td, true);
+
+        try (Table table = conn.getTable(path)) {
+            TypedUpsertWriter<ComplexTypesPojo> writer =
+                    table.newUpsert().createTypedWriter(ComplexTypesPojo.class);
+
+            ComplexTypesPojo original = newComplexTypesPojo(10);
+            writer.upsert(original).get();
+
+            // overwrite with updated arrays/maps
+            ComplexTypesPojo updated = new ComplexTypesPojo();
+            updated.id = 10;
+            updated.intArray = new Integer[] {100, 200, 300};
+            updated.strArray = new String[] {"updated"};
+            updated.nestedArray = new Integer[][] {{9, 8}, {7}};
+            updated.simpleMap = new HashMap<>();
+            updated.simpleMap.put("new_key", 999);
+            updated.mapOfArrays = new HashMap<>();
+            updated.mapOfArrays.put("new_arr", new Object[] {-1, -2});
+            writer.upsert(updated).get();
+            writer.flush();
+
+            // verify via typed lookup
+            RowType tableSchema = table.getTableInfo().getRowType();
+            RowToPojoConverter<ComplexTypesPojo> rowConv =
+                    RowToPojoConverter.of(ComplexTypesPojo.class, tableSchema, tableSchema);
+
+            TypedLookuper<ComplexTypesLookupKey> lookuper =
+                    table.newLookup().createTypedLookuper(ComplexTypesLookupKey.class);
+            ComplexTypesPojo lookedUp =
+                    rowConv.fromRow(
+                            lookuper.lookup(new ComplexTypesLookupKey(10)).get().getSingletonRow());
+
+            assertThat(lookedUp.id).isEqualTo(10);
+            assertThat(lookedUp.intArray).isEqualTo(new Integer[] {100, 200, 300});
+            assertThat(lookedUp.strArray).isEqualTo(new String[] {"updated"});
+            assertThat(Arrays.deepEquals(lookedUp.nestedArray, new Integer[][] {{9, 8}, {7}}))
+                    .isTrue();
+            assertThat(lookedUp.simpleMap).containsEntry("new_key", 999);
+            assertThat(lookedUp.mapOfArrays).containsKey("new_arr");
+            // inner arrays are deserialized as Object[] due to type erasure
+            assertThat(lookedUp.mapOfArrays.get("new_arr")).isEqualTo(new Object[] {-1, -2});
+
+            // verify non-existent key returns null row
+            assertThat(lookuper.lookup(new ComplexTypesLookupKey(999)).get().getSingletonRow())
+                    .isNull();
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // List-field POJO — verifies that java.util.List fields work on both paths
+    // -------------------------------------------------------------------------
+
+    /**
+     * POJO where ARRAY columns are mapped to {@link List} fields instead of Java arrays. Both the
+     * write path ({@link PojoArrayToFlussArray}) and the read path ({@link FlussArrayToPojoArray})
+     * support {@link java.util.Collection} types.
+     */
+    public static class ListTypesPojo {
+        public Integer id;
+        public List<Integer> intList;
+        public List<String> strList;
+        public List<Integer> nullableIntList;
+
+        public ListTypesPojo() {}
+    }
+
+    @Test
+    void testListFieldsRoundTrip() throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("intList", DataTypes.ARRAY(DataTypes.INT()))
+                        .column("strList", DataTypes.ARRAY(DataTypes.STRING()))
+                        .column("nullableIntList", DataTypes.ARRAY(DataTypes.INT()))
+                        .build();
+
+        TablePath path = TablePath.of("pojo_db", "list_fields_log");
+        TableDescriptor td = TableDescriptor.builder().schema(schema).distributedBy(1).build();
+        createTable(path, td, true);
+
+        try (Table table = conn.getTable(path)) {
+            TypedAppendWriter<ListTypesPojo> writer =
+                    table.newAppend().createTypedWriter(ListTypesPojo.class);
+
+            ListTypesPojo p1 = new ListTypesPojo();
+            p1.id = 1;
+            p1.intList = new ArrayList<>(Arrays.asList(10, 20, 30));
+            p1.strList = Arrays.asList("alpha", "beta");
+            p1.nullableIntList = Arrays.asList(1, null, 3);
+
+            ListTypesPojo p2 = new ListTypesPojo();
+            p2.id = 2;
+            p2.intList = new ArrayList<>(); // empty list
+            p2.strList = Arrays.asList("only");
+            p2.nullableIntList = null; // null list field
+
+            writer.append(p1);
+            writer.append(p2);
+            writer.flush();
+
+            TypedLogScanner<ListTypesPojo> scanner =
+                    table.newScan().createTypedLogScanner(ListTypesPojo.class);
+            subscribeFromBeginning(scanner, table);
+
+            Map<Integer, ListTypesPojo> actual = new HashMap<>();
+            while (actual.size() < 2) {
+                TypedScanRecords<ListTypesPojo> recs = scanner.poll(Duration.ofSeconds(2));
+                for (TypedScanRecord<ListTypesPojo> r : recs) {
+                    actual.put(r.getValue().id, r.getValue());
+                }
+            }
+
+            // verify row 1
+            ListTypesPojo back1 = actual.get(1);
+            assertThat(back1.intList).isInstanceOf(List.class);
+            assertThat(back1.intList).containsExactly(10, 20, 30);
+            assertThat(back1.strList).containsExactly("alpha", "beta");
+            assertThat(back1.nullableIntList).containsExactly(1, null, 3);
+
+            // verify row 2
+            ListTypesPojo back2 = actual.get(2);
+            assertThat(back2.intList).isInstanceOf(List.class);
+            assertThat(back2.intList).isEmpty();
+            assertThat(back2.strList).containsExactly("only");
+            assertThat(back2.nullableIntList).isNull();
         }
     }
 

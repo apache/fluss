@@ -151,6 +151,68 @@ public class RowToPojoConverterTest {
         assertThat(mapField).containsEntry("test_2", 2);
     }
 
+    @Test
+    public void testNullMapField() {
+        RowType table =
+                RowType.builder()
+                        .field("mapField", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()))
+                        .build();
+
+        PojoToRowConverter<MapPojo> writer = PojoToRowConverter.of(MapPojo.class, table, table);
+        RowToPojoConverter<MapPojo> reader = RowToPojoConverter.of(MapPojo.class, table, table);
+
+        MapPojo pojo = new MapPojo();
+        pojo.mapField = null;
+
+        GenericRow row = writer.toRow(pojo);
+        assertThat(row.isNullAt(0)).isTrue();
+
+        MapPojo back = reader.fromRow(row);
+        assertThat(back.mapField).isNull();
+    }
+
+    @Test
+    public void testMapWithNullValues() {
+        RowType table =
+                RowType.builder()
+                        .field("mapField", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()))
+                        .build();
+
+        PojoToRowConverter<MapPojo> writer = PojoToRowConverter.of(MapPojo.class, table, table);
+        RowToPojoConverter<MapPojo> reader = RowToPojoConverter.of(MapPojo.class, table, table);
+
+        MapPojo pojo = new MapPojo();
+        pojo.mapField = new HashMap<>();
+        pojo.mapField.put("a", 1);
+        pojo.mapField.put("b", null);
+
+        GenericRow row = writer.toRow(pojo);
+        MapPojo back = reader.fromRow(row);
+
+        assertThat(back.mapField).containsEntry("a", 1);
+        assertThat(back.mapField).containsKey("b");
+        assertThat(back.mapField.get("b")).isNull();
+    }
+
+    @Test
+    public void testEmptyMap() {
+        RowType table =
+                RowType.builder()
+                        .field("mapField", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()))
+                        .build();
+
+        PojoToRowConverter<MapPojo> writer = PojoToRowConverter.of(MapPojo.class, table, table);
+        RowToPojoConverter<MapPojo> reader = RowToPojoConverter.of(MapPojo.class, table, table);
+
+        MapPojo pojo = new MapPojo();
+        pojo.mapField = new HashMap<>();
+
+        GenericRow row = writer.toRow(pojo);
+        MapPojo back = reader.fromRow(row);
+
+        assertThat(back.mapField).isEmpty();
+    }
+
     /** POJO for testing map type. */
     public static class MapPojo {
         public Map<Object, Object> mapField;
