@@ -498,6 +498,20 @@ public class ConfigOptions {
                             "This configuration controls the directory where fluss will store its data. "
                                     + "The default value is /tmp/fluss-data");
 
+    public static final ConfigOption<List<String>> DATA_DIRS =
+            key("data.dirs")
+                    .stringType()
+                    .asList()
+                    .noDefaultValue()
+                    .withDescription(
+                            "A comma-separated list of local directories used by TabletServer to store "
+                                    + "local log, kv, checkpoints, and other node-local files. "
+                                    + "If configured, this option takes precedence over `"
+                                    + DATA_DIR.key()
+                                    + "`. If not configured, `"
+                                    + DATA_DIR.key()
+                                    + "` is used as the only local data directory.");
+
     public static final ConfigOption<Duration> WRITER_ID_EXPIRATION_TIME =
             key("server.writer-id.expiration-time")
                     .durationType()

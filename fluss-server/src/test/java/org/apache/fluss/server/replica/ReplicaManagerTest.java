@@ -68,6 +68,7 @@ import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.ListOffsetsParam;
+import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
@@ -84,12 +85,14 @@ import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.types.Tuple2;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -132,6 +135,7 @@ import static org.apache.fluss.record.TestData.EXPECTED_LOG_RESULTS_FOR_DATA_1_W
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
 import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
+import static org.apache.fluss.server.replica.ReplicaManager.HIGH_WATERMARK_CHECKPOINT_FILE_NAME;
 import static org.apache.fluss.server.testutils.PartitionMetadataAssert.assertPartitionMetadata;
 import static org.apache.fluss.server.testutils.TableMetadataAssert.assertTableMetadata;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
@@ -2412,5 +2416,71 @@ class ReplicaManagerTest extends ReplicaTestBase {
         future.get();
 
         assertThat(scannerManager.activeScannerCount()).isEqualTo(0);
+    }
+
+    // ---- JBOD multi-directory tests ----
+
+    @Test
+    @Tag(ReplicaTestBase.JBOD_MULTI_DIR_TAG)
+    void testNewBucketsDistributedAcrossDataDirs() throws Exception {
+        File dataDir1 = new File(tempDir, "data-1");
+        File dataDir2 = new File(tempDir, "data-2");
+        makeLogTableAsLeader(0);
+        makeLogTableAsLeader(1);
+
+        Replica logReplica1 =
+                replicaManager.getReplicaOrException(new TableBucket(DATA1_TABLE_ID, 0));
+        Replica logReplica2 =
+                replicaManager.getReplicaOrException(new TableBucket(DATA1_TABLE_ID, 1));
+        assertThat(logReplica1.getDataDir()).isEqualTo(dataDir1.getAbsoluteFile());
+        assertThat(logReplica2.getDataDir()).isEqualTo(dataDir2.getAbsoluteFile());
+    }
+
+    @Test
+    @Tag(ReplicaTestBase.JBOD_MULTI_DIR_TAG)
+    void testLogAndKvCoLocatedForPrimaryKeyTable() throws Exception {
+        File dataDir1 = new File(tempDir, "data-1");
+        File dataDir2 = new File(tempDir, "data-2");
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, 0);
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, 1);
+
+        Replica kvReplica1 =
+                replicaManager.getReplicaOrException(new TableBucket(DATA1_TABLE_ID_PK, 0));
+        Replica kvReplica2 =
+                replicaManager.getReplicaOrException(new TableBucket(DATA1_TABLE_ID_PK, 1));
+        assertThat(kvReplica1.getLogTablet().getLogDir().toPath()).startsWith(dataDir1.toPath());
+        assertThat(kvReplica1.getKvTablet().getKvTabletDir().toPath())
+                .startsWith(dataDir1.toPath());
+        assertThat(kvReplica2.getLogTablet().getLogDir().toPath()).startsWith(dataDir2.toPath());
+        assertThat(kvReplica2.getKvTablet().getKvTabletDir().toPath())
+                .startsWith(dataDir2.toPath());
+    }
+
+    @Test
+    @Tag(ReplicaTestBase.JBOD_MULTI_DIR_TAG)
+    void testHighWatermarkCheckpointIsWrittenPerDirectory() throws Exception {
+        File dataDir1 = new File(tempDir, "data-1");
+        File dataDir2 = new File(tempDir, "data-2");
+        makeLogTableAsLeader(0);
+        makeLogTableAsLeader(1);
+
+        Replica replica1 = replicaManager.getReplicaOrException(new TableBucket(DATA1_TABLE_ID, 0));
+        Replica replica2 = replicaManager.getReplicaOrException(new TableBucket(DATA1_TABLE_ID, 1));
+        replica1.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 1);
+        replica2.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 1);
+
+        replicaManager.checkpointHighWatermarks();
+
+        Map<TableBucket, Long> checkpoint1 =
+                new OffsetCheckpointFile(new File(dataDir1, HIGH_WATERMARK_CHECKPOINT_FILE_NAME))
+                        .read();
+        Map<TableBucket, Long> checkpoint2 =
+                new OffsetCheckpointFile(new File(dataDir2, HIGH_WATERMARK_CHECKPOINT_FILE_NAME))
+                        .read();
+
+        assertThat(checkpoint1).containsOnlyKeys(new TableBucket(DATA1_TABLE_ID, 0));
+        assertThat(checkpoint1.get(new TableBucket(DATA1_TABLE_ID, 0))).isEqualTo(10L);
+        assertThat(checkpoint2).containsOnlyKeys(new TableBucket(DATA1_TABLE_ID, 1));
+        assertThat(checkpoint2.get(new TableBucket(DATA1_TABLE_ID, 1))).isEqualTo(10L);
     }
 }

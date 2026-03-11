@@ -159,6 +159,7 @@ public final class Replica {
 
     private static final Logger LOG = LoggerFactory.getLogger(Replica.class);
 
+    private final File dataDir;
     private final PhysicalTablePath physicalPath;
     private final TableBucket tableBucket;
 
@@ -230,6 +231,7 @@ public final class Replica {
     private MetricGroup lakeTieringMetricGroup;
 
     public Replica(
+            File dataDir,
             PhysicalTablePath physicalPath,
             TableBucket tableBucket,
             LogManager logManager,
@@ -250,6 +252,7 @@ public final class Replica {
             RemoteLogManager remoteLogManager,
             ScannerManager scannerManager)
             throws Exception {
+        this.dataDir = dataDir;
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
         this.logManager = logManager;
@@ -384,7 +387,11 @@ public final class Replica {
     }
 
     public Path getTabletParentDir() {
-        return logManager.getTabletParentDir(physicalPath, tableBucket);
+        return logManager.getTabletParentDir(dataDir, physicalPath, tableBucket);
+    }
+
+    public File getDataDir() {
+        return dataDir;
     }
 
     public @Nullable KvTablet getKvTablet() {
@@ -776,7 +783,7 @@ public final class Replica {
                         physicalPath);
                 CompletedSnapshot completedSnapshot = optCompletedSnapshot.get();
                 // always create a new dir for the kv tablet
-                File tabletDir = kvManager.createTabletDir(physicalPath, tableBucket);
+                File tabletDir = kvManager.createTabletDir(dataDir, physicalPath, tableBucket);
                 // down the snapshot to target tablet dir
                 downloadKvSnapshots(completedSnapshot, tabletDir.toPath());
 
@@ -798,6 +805,7 @@ public final class Replica {
                 // if it exists before init kv tablet
                 kvTablet =
                         kvManager.getOrCreateKv(
+                                dataDir,
                                 physicalPath,
                                 tableBucket,
                                 logTablet,
@@ -2151,6 +2159,7 @@ public final class Replica {
             throws Exception {
         LogTablet log =
                 logManager.getOrCreateLog(
+                        dataDir,
                         physicalPath,
                         tableBucket,
                         tableConfig.getLogFormat(),

@@ -41,6 +41,7 @@ import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
+import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
@@ -105,6 +106,8 @@ public class ReplicaFetcherThreadTest {
     private ReplicaManager followerRM;
     private ReplicaFetcherThread followerFetcher;
     private ExecutorService ioExecutor;
+    private LocalDiskManager leaderLocalDiskManager;
+    private LocalDiskManager followerLocalDiskManager;
 
     @BeforeAll
     static void baseBeforeAll() {
@@ -120,8 +123,10 @@ public class ReplicaFetcherThreadTest {
         manualClock = new ManualClock(System.currentTimeMillis());
         Configuration conf = new Configuration();
         tb = new TableBucket(DATA1_TABLE_ID, 0);
-        leaderRM = createReplicaManager(leaderServerId);
-        followerRM = createReplicaManager(followerServerId);
+        leaderLocalDiskManager = createLocalDiskManager(leaderServerId);
+        leaderRM = createReplicaManager(leaderServerId, leaderLocalDiskManager);
+        followerLocalDiskManager = createLocalDiskManager(followerServerId);
+        followerRM = createReplicaManager(followerServerId, followerLocalDiskManager);
         // with local test leader end point.
         leader =
                 new ServerNode(
@@ -144,6 +149,12 @@ public class ReplicaFetcherThreadTest {
 
     @AfterEach
     public void tearDown() throws Exception {
+        if (leaderLocalDiskManager != null) {
+            leaderLocalDiskManager.close();
+        }
+        if (followerLocalDiskManager != null) {
+            followerLocalDiskManager.close();
+        }
         if (ioExecutor != null) {
             ioExecutor.shutdownNow();
         }
@@ -499,8 +510,17 @@ public class ReplicaFetcherThreadTest {
                 result -> {});
     }
 
-    private ReplicaManager createReplicaManager(int serverId) throws Exception {
+    private LocalDiskManager createLocalDiskManager(int serverId) throws Exception {
         Configuration conf = new Configuration();
+        conf.set(ConfigOptions.TABLET_SERVER_ID, serverId);
+        conf.setString(ConfigOptions.DATA_DIR, tempDir.getAbsolutePath() + "/server-" + serverId);
+        return LocalDiskManager.create(conf);
+    }
+
+    private ReplicaManager createReplicaManager(int serverId, LocalDiskManager localDiskManager)
+            throws Exception {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.TABLET_SERVER_ID, serverId);
         conf.setString(ConfigOptions.DATA_DIR, tempDir.getAbsolutePath() + "/server-" + serverId);
         conf.set(ConfigOptions.WRITER_ID_EXPIRATION_TIME, Duration.ofHours(12));
         Scheduler scheduler = new FlussScheduler(2);
@@ -512,7 +532,8 @@ public class ReplicaFetcherThreadTest {
                         zkClient,
                         scheduler,
                         manualClock,
-                        TestingMetricGroups.TABLET_SERVER_METRICS);
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager);
         logManager.startup();
         ReplicaManager replicaManager =
                 new TestingReplicaManager(
@@ -530,7 +551,8 @@ public class ReplicaFetcherThreadTest {
                         RpcClient.create(conf, TestingClientMetricGroup.newInstance()),
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         manualClock,
-                        ioExecutor);
+                        ioExecutor,
+                        localDiskManager);
         replicaManager.startup();
         return replicaManager;
     }
@@ -551,7 +573,8 @@ public class ReplicaFetcherThreadTest {
                 RpcClient rpcClient,
                 TabletServerMetricGroup serverMetricGroup,
                 Clock clock,
-                ExecutorService ioExecutor)
+                ExecutorService ioExecutor,
+                LocalDiskManager localDiskManager)
                 throws IOException {
             super(
                     conf,
@@ -569,7 +592,8 @@ public class ReplicaFetcherThreadTest {
                     USER_METRICS,
                     new ScannerManager(conf, scheduler),
                     clock,
-                    ioExecutor);
+                    ioExecutor,
+                    localDiskManager);
         }
 
         @Override

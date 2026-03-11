@@ -26,6 +26,7 @@ import org.apache.fluss.record.LogTestBase;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
+import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
@@ -37,7 +38,9 @@ import org.apache.fluss.utils.concurrent.FlussScheduler;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.TestInfo;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -68,6 +71,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link LogManager}. */
 final class LogManagerTest extends LogTestBase {
+
+    private static final String JBOD_MULTI_DIR_TAG = "jbod-multidir";
+
     @RegisterExtension
     public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
             new AllCallbackWrapper<>(new ZooKeeperExtension());
@@ -78,6 +84,7 @@ final class LogManagerTest extends LogTestBase {
     private TablePath tablePath2;
     private TableBucket tableBucket1;
     private TableBucket tableBucket2;
+    private LocalDiskManager localDiskManager;
     private LogManager logManager;
 
     // TODO add more tests refer to kafka's LogManagerTest.
@@ -91,23 +98,34 @@ final class LogManagerTest extends LogTestBase {
     }
 
     @BeforeEach
-    public void setup() throws Exception {
+    public void setup(TestInfo testInfo) throws Exception {
         super.before();
-        conf.setString(ConfigOptions.DATA_DIR, tempDir.getAbsolutePath());
+        if (testInfo.getTags().contains(JBOD_MULTI_DIR_TAG)) {
+            conf.set(
+                    ConfigOptions.DATA_DIRS,
+                    Arrays.asList(
+                            new File(tempDir, "data-1").getAbsolutePath(),
+                            new File(tempDir, "data-2").getAbsolutePath()));
+        } else {
+            conf.setString(ConfigOptions.DATA_DIR, tempDir.getAbsolutePath());
+        }
         conf.setString(ConfigOptions.COORDINATOR_HOST, "localhost");
+        conf.set(ConfigOptions.TABLET_SERVER_ID, 1);
 
         String dbName = "db1";
         tablePath1 = TablePath.of(dbName, "t1");
         tablePath2 = TablePath.of(dbName, "t2");
 
         registerTableInZkClient();
+        localDiskManager = LocalDiskManager.create(conf);
         logManager =
                 LogManager.create(
                         conf,
                         zkClient,
                         new FlussScheduler(1),
                         SystemClock.getInstance(),
-                        TestingMetricGroups.TABLET_SERVER_METRICS);
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager);
         logManager.startup();
     }
 
@@ -176,7 +194,7 @@ final class LogManagerTest extends LogTestBase {
         }
         log2.flush(false);
 
-        logManager.checkpointRecoveryOffsets();
+        logManager.checkpointRecoveryOffsets(tempDir);
         Map<TableBucket, Long> checkpoints =
                 new OffsetCheckpointFile(
                                 new File(tempDir, LogManager.RECOVERY_POINT_CHECKPOINT_FILE))
@@ -210,7 +228,8 @@ final class LogManagerTest extends LogTestBase {
                         zkClient,
                         new FlussScheduler(1),
                         SystemClock.getInstance(),
-                        TestingMetricGroups.TABLET_SERVER_METRICS);
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager);
         newLogManager.startup();
         logManager = newLogManager;
         log1 = getOrCreateLog(tablePath1, null, tableBucket1);
@@ -255,7 +274,8 @@ final class LogManagerTest extends LogTestBase {
                         zkClient,
                         new FlussScheduler(1),
                         SystemClock.getInstance(),
-                        TestingMetricGroups.TABLET_SERVER_METRICS);
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager);
         assertThat(new File(dataDir, CLEAN_SHUTDOWN_FILE).exists()).isTrue();
         newLogManager.startup();
         logManager = newLogManager;
@@ -300,15 +320,100 @@ final class LogManagerTest extends LogTestBase {
         assertThat(logManager.getLog(log1.getTableBucket()).isPresent()).isTrue();
     }
 
+    @Test
+    @Tag(JBOD_MULTI_DIR_TAG)
+    void testCheckpointRecoveryPointsAreWrittenPerDirectory() throws Exception {
+        File dataDir1 = new File(tempDir, "data-1");
+        File dataDir2 = new File(tempDir, "data-2");
+        initTableBuckets(null);
+
+        LogTablet log1 = createLog(tablePath1, tableBucket1, dataDir1);
+        LogTablet log2 = createLog(tablePath2, tableBucket2, dataDir2);
+
+        MemoryLogRecords records = genMemoryLogRecordsByObject(DATA1);
+        log1.appendAsLeader(records);
+        log2.appendAsLeader(records);
+        log1.flush(false);
+        log2.flush(false);
+
+        logManager.checkpointRecoveryOffsets(dataDir1);
+        logManager.checkpointRecoveryOffsets(dataDir2);
+
+        Map<TableBucket, Long> dir1Checkpoints =
+                new OffsetCheckpointFile(
+                                new File(dataDir1, LogManager.RECOVERY_POINT_CHECKPOINT_FILE))
+                        .read();
+        Map<TableBucket, Long> dir2Checkpoints =
+                new OffsetCheckpointFile(
+                                new File(dataDir2, LogManager.RECOVERY_POINT_CHECKPOINT_FILE))
+                        .read();
+
+        assertThat(dir1Checkpoints).containsOnlyKeys(tableBucket1);
+        assertThat(dir1Checkpoints.get(tableBucket1)).isEqualTo(log1.getRecoveryPoint());
+        assertThat(dir2Checkpoints).containsOnlyKeys(tableBucket2);
+        assertThat(dir2Checkpoints.get(tableBucket2)).isEqualTo(log2.getRecoveryPoint());
+    }
+
+    @Test
+    @Tag(JBOD_MULTI_DIR_TAG)
+    void testPerDirectoryCleanShutdownAndRecovery() throws Exception {
+        File dataDir1 = new File(tempDir, "data-1");
+        File dataDir2 = new File(tempDir, "data-2");
+        initTableBuckets(null);
+
+        createLog(tablePath1, tableBucket1, dataDir1)
+                .appendAsLeader(genMemoryLogRecordsByObject(DATA1));
+        createLog(tablePath2, tableBucket2, dataDir2)
+                .appendAsLeader(genMemoryLogRecordsByObject(DATA1));
+
+        logManager.shutdown();
+        logManager = null;
+        localDiskManager.close();
+
+        assertThat(new File(dataDir1, LogManager.CLEAN_SHUTDOWN_FILE)).exists();
+        assertThat(new File(dataDir2, LogManager.CLEAN_SHUTDOWN_FILE)).exists();
+
+        localDiskManager = LocalDiskManager.create(conf);
+        logManager =
+                LogManager.create(
+                        conf,
+                        zkClient,
+                        new FlussScheduler(1),
+                        SystemClock.getInstance(),
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager);
+        logManager.startup();
+
+        assertThat(new File(dataDir1, LogManager.CLEAN_SHUTDOWN_FILE)).doesNotExist();
+        assertThat(new File(dataDir2, LogManager.CLEAN_SHUTDOWN_FILE)).doesNotExist();
+        assertThat(logManager.getLog(tableBucket1)).isPresent();
+        assertThat(
+                        localDiskManager.resolveDataDir(
+                                logManager.getLog(tableBucket1).get().getLogDir()))
+                .isEqualTo(dataDir1.getAbsoluteFile());
+        assertThat(logManager.getLog(tableBucket2)).isPresent();
+        assertThat(
+                        localDiskManager.resolveDataDir(
+                                logManager.getLog(tableBucket2).get().getLogDir()))
+                .isEqualTo(dataDir2.getAbsoluteFile());
+    }
+
     private LogTablet getOrCreateLog(
             TablePath tablePath, String partitionName, TableBucket tableBucket) throws Exception {
         return logManager.getOrCreateLog(
+                tempDir,
                 PhysicalTablePath.of(
                         tablePath.getDatabaseName(), tablePath.getTableName(), partitionName),
                 tableBucket,
                 LogFormat.ARROW,
                 1,
                 false);
+    }
+
+    private LogTablet createLog(TablePath tablePath, TableBucket tableBucket, File dataDir)
+            throws Exception {
+        return logManager.getOrCreateLog(
+                dataDir, PhysicalTablePath.of(tablePath), tableBucket, LogFormat.ARROW, 1, false);
     }
 
     private void initTableBuckets(@Nullable String partitionName) {
@@ -326,9 +431,12 @@ final class LogManagerTest extends LogTestBase {
     }
 
     @AfterEach
-    public void tearDown() {
+    public void tearDown() throws Exception {
         if (logManager != null) {
             logManager.shutdown();
+        }
+        if (localDiskManager != null) {
+            localDiskManager.close();
         }
     }
 }

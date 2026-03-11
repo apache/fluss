@@ -106,6 +106,7 @@ import org.apache.fluss.server.replica.delay.DelayedTableBucketKey;
 import org.apache.fluss.server.replica.delay.DelayedWrite;
 import org.apache.fluss.server.replica.fetcher.InitialFetchStatus;
 import org.apache.fluss.server.replica.fetcher.ReplicaFetcherManager;
+import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
@@ -161,7 +162,8 @@ public class ReplicaManager implements ServerReconfigurable {
     private final ZooKeeperClient zkClient;
     protected final int serverId;
     private final AtomicBoolean highWatermarkCheckPointThreadStarted = new AtomicBoolean(false);
-    private final OffsetCheckpointFile highWatermarkCheckpoint;
+    private final Map<File, OffsetCheckpointFile> highWatermarkCheckpoints;
+    private final LocalDiskManager localDiskManager;
 
     @GuardedBy("replicaStateChangeLock")
     private final Map<TableBucket, HostedReplica> allReplicas = new ConcurrentHashMap<>();
@@ -228,7 +230,8 @@ public class ReplicaManager implements ServerReconfigurable {
             UserMetrics userMetrics,
             ScannerManager scannerManager,
             Clock clock,
-            ExecutorService ioExecutor)
+            ExecutorService ioExecutor,
+            LocalDiskManager localDiskManager)
             throws IOException {
         this(
                 conf,
@@ -244,10 +247,18 @@ public class ReplicaManager implements ServerReconfigurable {
                 fatalErrorHandler,
                 serverMetricGroup,
                 userMetrics,
-                new RemoteLogManager(conf, zkClient, coordinatorGateway, clock, ioExecutor),
+                new RemoteLogManager(
+                        conf,
+                        zkClient,
+                        coordinatorGateway,
+                        localDiskManager,
+                        logManager,
+                        clock,
+                        ioExecutor),
                 scannerManager,
                 clock,
-                ioExecutor);
+                ioExecutor,
+                localDiskManager);
     }
 
     @VisibleForTesting
@@ -268,21 +279,25 @@ public class ReplicaManager implements ServerReconfigurable {
             RemoteLogManager remoteLogManager,
             ScannerManager scannerManager,
             Clock clock,
-            ExecutorService ioExecutor)
+            ExecutorService ioExecutor,
+            LocalDiskManager localDiskManager)
             throws IOException {
         this.conf = conf;
         this.zkClient = zkClient;
         this.scheduler = scheduler;
+        this.localDiskManager = localDiskManager;
         this.logManager = logManager;
         this.kvManager = kvManager;
         this.serverId = serverId;
         this.metadataCache = metadataCache;
 
-        this.highWatermarkCheckpoint =
-                new OffsetCheckpointFile(
-                        new File(
-                                logManager.getDataDir().getAbsolutePath(),
-                                HIGH_WATERMARK_CHECKPOINT_FILE_NAME));
+        this.highWatermarkCheckpoints = new HashMap<>();
+        for (File dataDir : localDiskManager.dataDirs()) {
+            highWatermarkCheckpoints.put(
+                    dataDir,
+                    new OffsetCheckpointFile(
+                            new File(dataDir, HIGH_WATERMARK_CHECKPOINT_FILE_NAME)));
+        }
         this.delayedWriteManager =
                 new DelayedOperationManager<>(
                         "delay write",
@@ -1576,18 +1591,31 @@ public class ReplicaManager implements ServerReconfigurable {
     @VisibleForTesting
     void checkpointHighWatermarks() {
         List<Replica> onlineReplicasList = getOnlineReplicaList();
-        Map<TableBucket, Long> highWatermarks = new HashMap<>();
-        for (Replica replica : onlineReplicasList) {
-            LogTablet logTablet = replica.getLogTablet();
-            highWatermarks.put(logTablet.getTableBucket(), logTablet.getHighWatermark());
+        if (onlineReplicasList.isEmpty()) {
+            return;
         }
 
-        if (!highWatermarks.isEmpty()) {
-            try {
-                highWatermarkCheckpoint.write(highWatermarks);
-            } catch (Exception e) {
-                throw new LogStorageException("Error while writing to high watermark file", e);
+        Map<File, Map<TableBucket, Long>> highWatermarksByDir = new HashMap<>();
+        for (Replica replica : onlineReplicasList) {
+            LogTablet logTablet = replica.getLogTablet();
+            highWatermarksByDir
+                    .computeIfAbsent(replica.getDataDir(), ignored -> new HashMap<>())
+                    .put(logTablet.getTableBucket(), logTablet.getHighWatermark());
+        }
+
+        try {
+            for (Map.Entry<File, Map<TableBucket, Long>> entry : highWatermarksByDir.entrySet()) {
+                if (!entry.getValue().isEmpty()) {
+                    try {
+                        highWatermarkCheckpoints.get(entry.getKey()).write(entry.getValue());
+                    } catch (Exception e) {
+                        throw new LogStorageException(
+                                "Error while writing to high watermark file", e);
+                    }
+                }
             }
+        } catch (LogStorageException e) {
+            throw e;
         }
     }
 
@@ -1851,6 +1879,8 @@ public class ReplicaManager implements ServerReconfigurable {
                     serverMetricGroup.removeTableBucketMetricGroup(
                             replicaToDelete.getPhysicalTablePath().getTablePath(), tb);
                     replicaToDelete.delete();
+                    localDiskManager.recordReplicaDelete(
+                            replicaToDelete.getDataDir(), replicaToDelete.isKvTable());
                     Path tabletParentDir = replicaToDelete.getTabletParentDir();
                     if (tb.getPartitionId() != null) {
                         deletedPartitionIds.put(tb.getPartitionId(), tabletParentDir);
@@ -1932,11 +1962,22 @@ public class ReplicaManager implements ServerReconfigurable {
                 TableInfo tableInfo = getTableInfo(zkClient, tablePath);
 
                 boolean isKvTable = tableInfo.hasPrimaryKey();
+                Optional<File> dataDirOpt =
+                        logManager
+                                .getLog(tb)
+                                .map(
+                                        logTablet ->
+                                                localDiskManager.resolveDataDir(
+                                                        logTablet.getLogDir()));
+                File localDataDir =
+                        dataDirOpt.orElseGet(
+                                () -> localDiskManager.selectDataDirForNewBucket(isKvTable));
                 BucketMetricGroup bucketMetricGroup =
                         serverMetricGroup.addTableBucketMetricGroup(
                                 physicalTablePath, tb, isKvTable);
                 Replica replica =
                         new Replica(
+                                localDataDir,
                                 physicalTablePath,
                                 tb,
                                 logManager,
@@ -1945,7 +1986,7 @@ public class ReplicaManager implements ServerReconfigurable {
                                 this::getMinInSyncReplicas,
                                 serverId,
                                 new OffsetCheckpointFile.LazyOffsetCheckpoints(
-                                        highWatermarkCheckpoint),
+                                        highWatermarkCheckpoints.get(localDataDir)),
                                 delayedWriteManager,
                                 delayedFetchLogManager,
                                 adjustIsrManager,
@@ -1957,6 +1998,9 @@ public class ReplicaManager implements ServerReconfigurable {
                                 clock,
                                 remoteLogManager,
                                 scannerManager);
+                if (!dataDirOpt.isPresent()) {
+                    localDiskManager.recordReplicaLoad(localDataDir, isKvTable);
+                }
                 allReplicas.put(tb, new OnlineReplica(replica));
                 replicaOpt = Optional.of(replica);
             } else if (hostedReplica instanceof OnlineReplica) {

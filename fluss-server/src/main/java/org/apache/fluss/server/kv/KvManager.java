@@ -42,6 +42,7 @@ import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
+import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocatorUtil;
@@ -110,6 +111,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
     }
 
     private final LogManager logManager;
+    private final LocalDiskManager localDiskManager;
 
     private final TabletServerMetricGroup serverMetricGroup;
 
@@ -141,14 +143,15 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
     private volatile boolean isShutdown = false;
 
     private KvManager(
-            File dataDir,
+            LocalDiskManager localDiskManager,
             Configuration conf,
             ZooKeeperClient zkClient,
             int recoveryThreadsPerDataDir,
             LogManager logManager,
             TabletServerMetricGroup tabletServerMetricGroup)
             throws IOException {
-        super(TabletType.KV, dataDir, conf, recoveryThreadsPerDataDir);
+        super(TabletType.KV, localDiskManager.dataDirs(), conf, recoveryThreadsPerDataDir);
+        this.localDiskManager = localDiskManager;
         this.logManager = logManager;
         this.arrowBufferAllocator = BufferAllocatorUtil.createBufferAllocator(null);
         this.memorySegmentPool = LazyMemorySegmentPool.createServerBufferPool(conf);
@@ -183,12 +186,11 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             Configuration conf,
             ZooKeeperClient zkClient,
             LogManager logManager,
-            TabletServerMetricGroup tabletServerMetricGroup)
+            TabletServerMetricGroup tabletServerMetricGroup,
+            LocalDiskManager localDiskManager)
             throws IOException {
-        String dataDirString = conf.getString(ConfigOptions.DATA_DIR);
-        File dataDir = new File(dataDirString).getAbsoluteFile();
         return new KvManager(
-                dataDir,
+                localDiskManager,
                 conf,
                 zkClient,
                 conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS),
@@ -233,6 +235,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
      * @param kvFormat the kv format
      */
     public KvTablet getOrCreateKv(
+            File dataDir,
             PhysicalTablePath tablePath,
             TableBucket tableBucket,
             LogTablet logTablet,
@@ -248,7 +251,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                         return currentKvs.get(tableBucket);
                     }
 
-                    File tabletDir = getOrCreateTabletDir(tablePath, tableBucket);
+                    File tabletDir = getOrCreateTabletDir(dataDir, tablePath, tableBucket);
                     RowMerger merger = RowMerger.create(tableConfig, kvFormat, schemaGetter);
                     AutoIncrementManager autoIncrementManager =
                             new AutoIncrementManager(
@@ -294,8 +297,9 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
      * @param tableBucket the table bucket
      * @return the tablet directory
      */
-    public File createTabletDir(PhysicalTablePath tablePath, TableBucket tableBucket) {
-        File tabletDir = getTabletDir(tablePath, tableBucket);
+    public File createTabletDir(
+            File dataDir, PhysicalTablePath tablePath, TableBucket tableBucket) {
+        File tabletDir = getTabletDir(dataDir, tablePath, tableBucket);
 
         // delete the tablet dir if exists
         FileUtils.deleteDirectoryQuietly(tabletDir);
