@@ -57,6 +57,7 @@ import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
 import static org.apache.fluss.flink.utils.CatalogTableTestUtils.addOptions;
 import static org.apache.fluss.flink.utils.CatalogTableTestUtils.checkEqualsIgnoreSchema;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.types.DataTypes.FIELD;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -257,6 +258,7 @@ public class FlinkConversionsTest {
                         1L,
                         1,
                         flussTable.withBucketCount(1),
+                        DEFAULT_REMOTE_DATA_DIR,
                         currentMillis,
                         currentMillis);
         // get the converted flink table
@@ -446,6 +448,7 @@ public class FlinkConversionsTest {
                         1L,
                         1,
                         flussTable.withBucketCount(1),
+                        DEFAULT_REMOTE_DATA_DIR,
                         currentMillis,
                         currentMillis);
         // get the converted flink table
@@ -508,6 +511,7 @@ public class FlinkConversionsTest {
                         1L,
                         1,
                         flussTable.withBucketCount(1),
+                        DEFAULT_REMOTE_DATA_DIR,
                         currentMillis,
                         currentMillis);
         CatalogTable convertedFlinkTable = (CatalogTable) FlinkConversions.toFlinkTable(tableInfo);

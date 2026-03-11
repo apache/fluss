@@ -25,6 +25,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.ServiceLoader;
 import java.util.function.Consumer;
@@ -71,23 +72,25 @@ class SecurityTokenReceiverRepository {
     }
 
     /**
-     * Callback function when new security token obtained.
+     * Callback function when new security tokens obtained.
      *
-     * @param token security token obtained. The token will be forwarded to the appropriate {@link
-     *     SecurityTokenReceiver} based on scheme name.
+     * @param tokens security tokens obtained. The tokens will be forwarded to the appropriate
+     *     {@link SecurityTokenReceiver} based on scheme name.
      */
-    void onNewTokensObtained(ObtainedSecurityToken token) {
-        String schemeName = token.getScheme();
-        LOG.info("New security tokens arrived, sending them to receiver");
-        if (!securityTokenReceivers.containsKey(schemeName)) {
-            throw new IllegalStateException(
-                    "Token arrived for service but no receiver found for it: " + schemeName);
+    void onNewTokensObtained(List<ObtainedSecurityToken> tokens) {
+        for (ObtainedSecurityToken token : tokens) {
+            String schemeName = token.getScheme();
+            LOG.info("New security tokens arrived, sending them to receiver");
+            if (!securityTokenReceivers.containsKey(schemeName)) {
+                throw new IllegalStateException(
+                        "Tokens arrived for service but no receiver found for them: " + schemeName);
+            }
+            try {
+                securityTokenReceivers.get(schemeName).onNewTokensObtained(token);
+            } catch (Exception e) {
+                LOG.warn("Failed to send tokens to security token receiver {}", schemeName, e);
+            }
+            LOG.info("Security tokens sent to receiver");
         }
-        try {
-            securityTokenReceivers.get(schemeName).onNewTokensObtained(token);
-        } catch (Exception e) {
-            LOG.warn("Failed to send token to security token receiver {}", schemeName, e);
-        }
-        LOG.info("Security token sent to receiver");
     }
 }

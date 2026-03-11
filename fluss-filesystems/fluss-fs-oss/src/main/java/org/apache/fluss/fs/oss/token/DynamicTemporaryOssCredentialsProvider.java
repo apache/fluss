@@ -23,9 +23,12 @@ import com.aliyun.oss.common.auth.BasicCredentials;
 import com.aliyun.oss.common.auth.Credentials;
 import com.aliyun.oss.common.auth.CredentialsProvider;
 import com.aliyun.oss.common.auth.InvalidCredentialsException;
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.aliyun.oss.AliyunOSSFileSystem;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.net.URI;
 
 /**
  * Support dynamic session credentials for authenticating with OSS. It'll get credentials from
@@ -40,6 +43,12 @@ public class DynamicTemporaryOssCredentialsProvider implements CredentialsProvid
 
     public static final String NAME = DynamicTemporaryOssCredentialsProvider.class.getName();
 
+    private final URI uri;
+
+    public DynamicTemporaryOssCredentialsProvider(URI uri, Configuration conf) {
+        this.uri = uri;
+    }
+
     @Override
     public void setCredentials(Credentials credentials) {
         // do nothing
@@ -47,7 +56,7 @@ public class DynamicTemporaryOssCredentialsProvider implements CredentialsProvid
 
     @Override
     public Credentials getCredentials() {
-        Credentials credentials = OSSSecurityTokenReceiver.getCredentials();
+        Credentials credentials = OSSSecurityTokenReceiver.getCredentials(uri);
         if (credentials == null) {
             throw new InvalidCredentialsException("Credentials is not ready.");
         }

@@ -19,6 +19,8 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TableInfo;
@@ -26,6 +28,7 @@ import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.TestingEventManager;
+import org.apache.fluss.server.coordinator.remote.RemoteStorageCleaner;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaStateMachine;
 import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine;
 import org.apache.fluss.server.entity.DeleteReplicaResultForBucket;
@@ -58,11 +61,13 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionSuccessful;
@@ -162,6 +167,7 @@ class TableManagerTest {
                         tableId,
                         0,
                         DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, assignment);
@@ -185,6 +191,7 @@ class TableManagerTest {
                         tableId,
                         0,
                         DATA1_TABLE_DESCRIPTOR_PK,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH_PK, tableId, assignment);
@@ -224,6 +231,7 @@ class TableManagerTest {
                         tableId,
                         0,
                         DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, assignment);
@@ -271,6 +279,7 @@ class TableManagerTest {
                         tableId,
                         0,
                         DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, assignment);
@@ -280,11 +289,23 @@ class TableManagerTest {
         String partitionName = "2024";
         long partitionId = zookeeperClient.getPartitionIdAndIncrement();
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                partitionId, partitionName, partitionAssignment, DATA1_TABLE_PATH, tableId);
+                partitionId,
+                partitionName,
+                partitionAssignment,
+                DEFAULT_REMOTE_DATA_DIR,
+                DATA1_TABLE_PATH,
+                tableId);
 
         // create partition
+        PartitionInfo partitionInfo =
+                new PartitionInfo(
+                        partitionId,
+                        ResolvedPartitionSpec.fromPartitionName(
+                                DATA1_PARTITIONED_TABLE_DESCRIPTOR.getPartitionKeys(),
+                                partitionName),
+                        DEFAULT_REMOTE_DATA_DIR);
         tableManager.onCreateNewPartition(
-                DATA1_TABLE_PATH, tableId, partitionId, partitionName, partitionAssignment);
+                DATA1_TABLE_PATH, tableId, partitionInfo, partitionAssignment);
 
         // all replicas should be online
         checkReplicaOnline(tableId, partitionId, partitionAssignment);
