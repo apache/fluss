@@ -53,6 +53,7 @@ import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvRecoverHelper;
 import org.apache.fluss.server.kv.KvTablet;
+import org.apache.fluss.server.kv.RemoteLogFetcher;
 import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import org.apache.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
@@ -179,6 +180,7 @@ public final class Replica {
     private final AtomicReference<Integer> leaderReplicaIdOpt = new AtomicReference<>();
     private final ReadWriteLock leaderIsrUpdateLock = new ReentrantReadWriteLock();
     private final Clock clock;
+    @Nullable private final RemoteLogManager remoteLogManager;
 
     private static final int INIT_KV_TABLET_MAX_RETRY_TIMES = 5;
     /**
@@ -226,6 +228,47 @@ public final class Replica {
             TableInfo tableInfo,
             Clock clock)
             throws Exception {
+        this(
+                physicalPath,
+                tableBucket,
+                logManager,
+                kvManager,
+                replicaMaxLagTime,
+                minInSyncReplicasSupplier,
+                localTabletServerId,
+                lazyHighWatermarkCheckpoint,
+                delayedWriteManager,
+                delayedFetchLogManager,
+                adjustIsrManager,
+                snapshotContext,
+                metadataCache,
+                fatalErrorHandler,
+                bucketMetricGroup,
+                tableInfo,
+                clock,
+                null);
+    }
+
+    public Replica(
+            PhysicalTablePath physicalPath,
+            TableBucket tableBucket,
+            LogManager logManager,
+            @Nullable KvManager kvManager,
+            long replicaMaxLagTime,
+            IntSupplier minInSyncReplicasSupplier,
+            int localTabletServerId,
+            OffsetCheckpointFile.LazyOffsetCheckpoints lazyHighWatermarkCheckpoint,
+            DelayedOperationManager<DelayedWrite<?>> delayedWriteManager,
+            DelayedOperationManager<DelayedFetchLog> delayedFetchLogManager,
+            AdjustIsrManager adjustIsrManager,
+            SnapshotContext snapshotContext,
+            TabletServerMetadataCache metadataCache,
+            FatalErrorHandler fatalErrorHandler,
+            BucketMetricGroup bucketMetricGroup,
+            TableInfo tableInfo,
+            Clock clock,
+            @Nullable RemoteLogManager remoteLogManager)
+            throws Exception {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
         this.logManager = logManager;
@@ -256,6 +299,7 @@ public final class Replica {
         this.logTablet = createLog(lazyHighWatermarkCheckpoint);
         this.logTablet.updateIsDataLakeEnabled(tableConfig.isDataLakeEnabled());
         this.clock = clock;
+        this.remoteLogManager = remoteLogManager;
         registerMetrics();
     }
 
@@ -829,18 +873,45 @@ public final class Replica {
                             getTablePath(),
                             snapshotContext.getZooKeeperClient(),
                             snapshotContext.maxFetchLogSizeInRecoverKv());
-            KvRecoverHelper kvRecoverHelper =
-                    new KvRecoverHelper(
-                            kvTablet,
-                            logTablet,
-                            startRecoverLogOffset,
-                            rowCount,
-                            autoIncIDRange,
-                            recoverContext,
-                            tableConfig.getKvFormat(),
-                            tableConfig.getLogFormat(),
-                            schemaGetter);
-            kvRecoverHelper.recover();
+
+            // Create RemoteLogFetcher if remote log manager is available and the recover point
+            // offset is before the local log start offset, meaning we need to fetch logs from
+            // remote storage to fill the gap.
+            RemoteLogFetcher remoteLogFetcher = null;
+            if (remoteLogManager != null
+                    && startRecoverLogOffset < logTablet.localLogStartOffset()) {
+                LOG.info(
+                        "Creating RemoteLogFetcher for {} of table {} because recover offset {} "
+                                + "is before local log start offset {}",
+                        tableBucket,
+                        physicalPath,
+                        startRecoverLogOffset,
+                        logTablet.localLogStartOffset());
+                remoteLogFetcher =
+                        new RemoteLogFetcher(
+                                remoteLogManager, tableBucket, logManager.getDataDir());
+            }
+
+            try {
+                KvRecoverHelper kvRecoverHelper =
+                        new KvRecoverHelper(
+                                kvTablet,
+                                logTablet,
+                                startRecoverLogOffset,
+                                rowCount,
+                                autoIncIDRange,
+                                recoverContext,
+                                tableConfig.getKvFormat(),
+                                tableConfig.getLogFormat(),
+                                schemaGetter,
+                                remoteLogFetcher);
+                kvRecoverHelper.recover();
+            } finally {
+                // Always clean up the temp directory used for remote log recovery
+                if (remoteLogFetcher != null) {
+                    remoteLogFetcher.close();
+                }
+            }
         } catch (Exception e) {
             throw new KvStorageException(
                     String.format(
