@@ -90,7 +90,7 @@ Usage:
   {{- $sasl := $listenerValues.sasl | default (dict) -}}
   {{- $mechanism := lower (default "" $sasl.mechanism) -}}
   {{- if not (has $mechanism $allowedMechanisms) -}}
-    {{- printf "security.%s.sasl.mechanism must be one of: empty, plain" $listener -}}
+    {{- printf "security.%s.sasl.mechanism must be empty or: plain" $listener -}}
   {{- end -}}
 {{- end -}}
 {{- end -}}
