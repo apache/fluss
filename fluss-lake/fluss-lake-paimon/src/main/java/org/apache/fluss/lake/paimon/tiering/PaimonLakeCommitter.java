@@ -167,7 +167,7 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
                 new Identifier(tablePath.getDatabaseName(), tablePath.getTableName());
         try {
             Optional<TableSnapshot> snapshot = paimonCatalog.loadSnapshot(identifier);
-            if (snapshot.isEmpty()) {
+            if (!snapshot.isPresent()) {
                 LOG.warn(
                         "No snapshot found for table {}, "
                                 + "fileSize and recordCount will be reported as -1.",
