@@ -898,7 +898,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                 Collectors.toMap(
                                         DatabaseSummary::getDatabaseName,
                                         DatabaseSummary::getTableCount));
-        assertThat(databaseSummaries.get("db1")).isEqualTo(1);
+        assertThat(databaseSummaries.get("db1")).isEqualTo(2);
         assertThat(databaseSummaries.get("db2")).isEqualTo(0);
 
         assertThatThrownBy(() -> admin.listTables("unknown_db").get())
