@@ -20,6 +20,7 @@ package org.apache.fluss.rpc.protocol;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.CorruptMessageException;
 import org.apache.fluss.exception.CorruptRecordException;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
@@ -245,7 +246,8 @@ public enum Errors {
     INVALID_PRODUCER_ID_EXCEPTION(
             63,
             "The client has attempted to perform an operation with an invalid producer ID.",
-            InvalidProducerIdException::new);
+            InvalidProducerIdException::new),
+    CONFIG_EXCEPTION(64, "A configuration error occurred.", ConfigException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

@@ -32,6 +32,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ConfigEntry;
+import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
@@ -1366,6 +1367,20 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 },
                 Duration.ofMinutes(1),
                 "Get lakehouse info");
+
+        // Test alter invalid config
+        assertThatThrownBy(
+                        () ->
+                                admin.alterClusterConfigs(
+                                                Collections.singletonList(
+                                                        new AlterConfig(
+                                                                "not.exist.key",
+                                                                "value",
+                                                                AlterConfigOpType.SET)))
+                                        .get())
+                .cause()
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining("not.exist.key");
     }
 
     private void assertConfigEntry(
