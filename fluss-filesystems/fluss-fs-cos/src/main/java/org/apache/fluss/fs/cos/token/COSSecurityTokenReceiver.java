@@ -22,6 +22,7 @@ import org.apache.fluss.fs.token.CredentialsJsonSerde;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.fs.token.SecurityTokenReceiver;
 
+import com.qcloud.cos.auth.BasicCOSCredentials;
 import com.qcloud.cos.auth.BasicSessionCredentials;
 import com.qcloud.cos.auth.COSCredentials;
 import org.slf4j.Logger;
@@ -65,7 +66,10 @@ public class COSSecurityTokenReceiver implements SecurityTokenReceiver {
         // then, set addition info
         if (additionInfos == null) {
             // if addition info is null, it also means we have not received any token,
-            throw new RuntimeException("Credentials is not ready.");
+            throw new RuntimeException(
+                    "COS credentials have not been received yet. "
+                            + "Ensure onNewTokensObtained() has been called with valid tokens "
+                            + "before invoking COSSecurityTokenReceiver.updateHadoopConfig().");
         } else {
             for (Map.Entry<String, String> entry : additionInfos.entrySet()) {
                 hadoopConfig.set(entry.getKey(), entry.getValue());
@@ -89,14 +93,23 @@ public class COSSecurityTokenReceiver implements SecurityTokenReceiver {
         org.apache.fluss.fs.token.Credentials flussCredentials =
                 CredentialsJsonSerde.fromJson(tokenBytes);
 
-        // Create Credential from fluss credentials
-        credentials =
-                new BasicSessionCredentials(
-                        flussCredentials.getAccessKeyId(),
-                        flussCredentials.getSecretAccessKey(),
-                        flussCredentials.getSecurityToken());
+        // Create COSCredentials from fluss credentials, distinguishing between
+        // static credentials (no session token) and temporary session credentials
+        if (flussCredentials.getSecurityToken() != null) {
+            credentials =
+                    new BasicSessionCredentials(
+                            flussCredentials.getAccessKeyId(),
+                            flussCredentials.getSecretAccessKey(),
+                            flussCredentials.getSecurityToken());
+        } else {
+            credentials =
+                    new BasicCOSCredentials(
+                            flussCredentials.getAccessKeyId(),
+                            flussCredentials.getSecretAccessKey());
+        }
         additionInfos = token.getAdditionInfos();
 
+        // Consistent with S3DelegationTokenReceiver, logging access key at INFO level
         LOG.info(
                 "Session credentials updated successfully with access key: {}.",
                 credentials.getCOSAccessKeyId());
