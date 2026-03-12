@@ -133,8 +133,8 @@ public class RemoteLogManager implements Closeable {
         return remoteLogStorage.getRemoteLogDir();
     }
 
-    /** Restore the remote log manifest and start the log tiering task for the given replica. */
-    public void startLogTiering(Replica replica) throws Exception {
+    /** Register the replica to the remote log manager. */
+    public void registerReplica(Replica replica) throws Exception {
         if (remoteDisabled()) {
             return;
         }
@@ -159,6 +159,15 @@ public class RemoteLogManager implements Closeable {
         // leader needs to register the remote log metrics
         remoteLog.registerMetrics(replica.bucketMetrics());
         remoteLogs.put(tableBucket, remoteLog);
+    }
+
+    /** Start the log tiering task for the given replica. */
+    public void startLogTiering(Replica replica) {
+        TableBucket tableBucket = replica.getTableBucket();
+        RemoteLogTablet remoteLog = remoteLogs.get(tableBucket);
+        if (remoteLog == null) {
+            return;
+        }
 
         doHandleLeaderReplica(replica, remoteLog, tableBucket);
         LOG.debug("Added the remote log tiering task for replica {}", tableBucket);
