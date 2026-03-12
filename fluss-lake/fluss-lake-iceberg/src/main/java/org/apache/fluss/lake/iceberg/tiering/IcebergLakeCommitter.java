@@ -59,18 +59,6 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
 
     private static final String COMMITTER_USER = "commit-user";
 
-    /**
-     * Iceberg snapshot summary key for the total size (in bytes) of all live data files. This is a
-     * cumulative total written by Iceberg into every snapshot's summary map.
-     */
-    private static final String SNAPSHOT_TOTAL_FILE_SIZE = "total-files-size";
-
-    /**
-     * Iceberg snapshot summary key for the total number of records across all live data files. This
-     * is a cumulative total written by Iceberg into every snapshot's summary map.
-     */
-    private static final String SNAPSHOT_TOTAL_RECORDS = "total-records";
-
     private final Catalog icebergCatalog;
     private final Table icebergTable;
     private static final ThreadLocal<Long> currentCommitSnapshotId = new ThreadLocal<>();
