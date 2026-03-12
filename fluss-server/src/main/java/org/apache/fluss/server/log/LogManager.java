@@ -183,7 +183,7 @@ public final class LogManager extends TabletManagerBase {
             } else if (isCleanShutdown) {
                 LOG.info("Skipping some recovery log process since clean shutdown file was found");
             } else {
-                LOG.info("Recovering all local logs since no clean shutdown file was not found");
+                LOG.info("Recovering all local logs since no clean shutdown file was found");
             }
 
             final Map<TableBucket, Long> finalRecoveryPoints = recoveryPoints;
@@ -200,7 +200,7 @@ public final class LogManager extends TabletManagerBase {
 
             loadLogsCompletedFlag = true;
             LOG.info(
-                    "log loader complete. Total success loaded log count is {}, Take {} ms",
+                    "Log loader complete. Total success loaded log count is {}, Take {} ms",
                     successLoadCount,
                     System.currentTimeMillis() - startTime);
         } catch (Throwable e) {
