@@ -34,18 +34,7 @@ suite: metrics-enabled-configmap
 templates:
   - templates/configmap.yaml
 tests:
-  - it: adds default prometheus reporter settings when prometheus is selected
-    set:
-      metrics.reporters: prometheus
-      metrics.prometheus: {}
-    asserts:
-      - matchRegex:
-          path: data["server.yaml"]
-          pattern: 'metrics\.reporters:\s*prometheus'
-      - matchRegex:
-          path: data["server.yaml"]
-          pattern: 'metrics\.reporter\.prometheus\.port:\s*9249'
-  - it: renders selected reporter options from values
+  - it: renders prometheus reporter port from values
     set:
       metrics.reporters: prometheus
       metrics.prometheus:
@@ -63,14 +52,11 @@ suite: metrics-enabled-configmap-custom-reporters
 templates:
   - templates/configmap.yaml
 tests:
-  - it: renders multiple selected reporter options from structured metrics values
+  - it: renders multiple reporter ports from structured metrics values
     set:
       metrics.reporters: grph,prometheus
       metrics.grph:
         port: 9020
-        host: example-localhost
-        protocol: TCP
-        interval: "60 SECONDS"
       metrics.prometheus:
         port: 9249
     asserts:
@@ -82,36 +68,35 @@ tests:
           pattern: 'metrics\.reporter\.grph\.port:\s*9020'
       - matchRegex:
           path: data["server.yaml"]
-          pattern: 'metrics\.reporter\.grph\.host:\s*example-localhost'
-      - matchRegex:
-          path: data["server.yaml"]
-          pattern: 'metrics\.reporter\.grph\.protocol:\s*TCP'
-      - matchRegex:
-          path: data["server.yaml"]
-          pattern: 'metrics\.reporter\.grph\.interval:\s*60 SECONDS'
-      - matchRegex:
-          path: data["server.yaml"]
           pattern: 'metrics\.reporter\.prometheus\.port:\s*9249'
 ---
 
-suite: metrics-invalid-selector
+suite: metrics-invalid-config
 templates:
   - templates/configmap.yaml
 tests:
-  - it: fails when selected reporter block is missing
+  - it: fails when selected reporter port is missing
     set:
       metrics.reporters: prometheus
       metrics.prometheus: null
     asserts:
       - failedTemplate:
-          errorMessage: metrics.prometheus must be configured when metrics.reporters includes prometheus
+          errorMessage: metrics.prometheus.port must be set when metrics.reporters includes prometheus
+  - it: fails when selected reporter port is empty
+    set:
+      metrics.reporters: prometheus
+      metrics.prometheus:
+        port: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: metrics.prometheus.port must be set when metrics.reporters includes prometheus
 ---
 
 suite: metrics-config-overrides-precedence
 templates:
   - templates/configmap.yaml
 tests:
-  - it: prefers configurationOverrides for reporter keys when both are set
+  - it: fails when reporter port is set via configurationOverrides
     set:
       metrics.reporters: prometheus
       metrics.prometheus:
@@ -119,12 +104,8 @@ tests:
       configurationOverrides:
         metrics.reporter.prometheus.port: 9300
     asserts:
-      - matchRegex:
-          path: data["server.yaml"]
-          pattern: 'metrics\.reporter\.prometheus\.port:\s*9300'
-      - notMatchRegex:
-          path: data["server.yaml"]
-          pattern: 'metrics\.reporter\.prometheus\.port:\s*9249'
+      - failedTemplate:
+          errorMessage: metrics.reporter.prometheus.port must be set via metrics.prometheus.port in values.yaml, not via configurationOverrides
   - it: prefers configurationOverrides for metrics.reporters when both are set
     set:
       metrics.reporters: grph,prometheus
@@ -226,6 +207,18 @@ tests:
       - equal:
           path: metadata.labels["app.kubernetes.io/component"]
           value: metrics
+  - it: uses port from values on service
+    set:
+      metrics.reporters: prometheus
+      metrics.prometheus:
+        port: 9249
+    asserts:
+      - equal:
+          path: spec.ports[0].port
+          value: 9249
+      - equal:
+          path: spec.ports[0].targetPort
+          value: 9249
 ---
 
 suite: pod-service-separation

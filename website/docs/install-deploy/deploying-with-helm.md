@@ -272,9 +272,9 @@ listeners:
 When `metrics.reporters` is set, the chart adds the following `server.yaml` config entries:
 
 - `metrics.reporters`: comma-separated reporter names from `metrics.reporters`
-- `metrics.reporter.<name>.<option>`: one entry per reporter option in `metrics.<name>`
+- `metrics.reporter.<name>.port`: port value from `metrics.<name>.port`
 
-If a metrics key is already provided in `configurationOverrides` (for example, `metrics.reporters` or `metrics.reporter.prometheus.port`), the chart keeps the value from `configurationOverrides`.
+Only the `port` is rendered from values file. All other metrics reporter options (refer to the [Fluss configuration](https://fluss.apache.org/docs/maintenance/configuration/#metrics)) should be specified via `configurationOverrides`.
 
 #### Prometheus Annotation Based Scraping
 

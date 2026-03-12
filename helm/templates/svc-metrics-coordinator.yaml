@@ -39,8 +39,8 @@ spec:
   ports:
     - name: {{ default "metrics" $promSvc.portName }}
       protocol: TCP
-      port: {{ default 9249 $prometheus.port }}
-      targetPort: {{ default 9249 $prometheus.port }}
+      port: {{ $prometheus.port }}
+      targetPort: {{ $prometheus.port }}
   selector:
     {{- include "fluss.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: coordinator

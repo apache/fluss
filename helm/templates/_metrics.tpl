@@ -60,7 +60,9 @@ Renders:
   metrics.reporters: prometheus
   metrics.reporter.prometheus.port: 9249
 
-Keys already present in configurationOverrides are not rendered.
+Only the port is rendered from values. All other reporter options
+should be specified via configurationOverrides.
+The port must be set via metrics.<name>.port, not via configurationOverrides.
 */}}
 {{- define "fluss.metrics.config" -}}
 {{- $config := .Values.configurationOverrides | default dict -}}
@@ -71,18 +73,16 @@ Keys already present in configurationOverrides are not rendered.
 metrics.reporters: {{ join "," $reporterNames }}
 {{- end -}}
 {{- range $name := $reporterNames -}}
-{{- if not (hasKey $metrics $name) -}}
-{{- fail (printf "metrics.%s must be configured when metrics.reporters includes %s" $name $name) -}}
+{{- $portKey := printf "metrics.reporter.%s.port" $name -}}
+{{- if hasKey $config $portKey -}}
+{{- fail (printf "metrics.reporter.%s.port must be set via metrics.%s.port in values.yaml, not via configurationOverrides" $name $name) -}}
 {{- end -}}
-{{- $reporterConfig := index $metrics $name -}}
-{{- range $option, $value := $reporterConfig -}}
-{{- if ne $option "service" -}}
-{{- $fullKey := printf "metrics.reporter.%s.%s" $name $option -}}
-{{- if not (hasKey $config $fullKey) }}
-{{ $fullKey }}: {{ tpl (printf "%v" $value) $ }}
-{{- end -}}
-{{- end -}}
-{{- end -}}
+{{- $reporterConfig := index $metrics $name | default dict -}}
+{{- $port := $reporterConfig.port -}}
+{{- if not $port -}}
+{{- fail (printf "metrics.%s.port must be set when metrics.reporters includes %s" $name $name) -}}
+{{- end }}
+{{ $portKey }}: {{ $port }}
 {{- end -}}
 {{- end -}}
 {{- end -}}
