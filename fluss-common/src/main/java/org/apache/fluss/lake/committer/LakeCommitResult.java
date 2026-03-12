@@ -62,22 +62,22 @@ public class LakeCommitResult {
     @Nullable private final ReadableSnapshot readableSnapshot;
 
     // Total file size (bytes) of all live data files in the lake table after this commit.
-    // -1 means the value is not reported by the lake implementation.
-    private final long totalLakeFileSize;
+    // {@code null} means the value is not reported by the lake implementation.
+    @Nullable private final Long totalLakeFileSize;
 
     // Total physical row count of all live data files in the lake table after this commit.
     // For append-only tables this equals the logical record count; for primary-key tables it is
     // the physical row count which may include un-compacted delete rows and duplicates.
-    // -1 means the value is not reported by the lake implementation.
-    private final long totalLakeRecordCount;
+    // {@code null} means the value is not reported by the lake implementation.
+    @Nullable private final Long totalLakeRecordCount;
 
     private LakeCommitResult(
             long committedSnapshotId,
             boolean committedIsReadable,
             @Nullable ReadableSnapshot readableSnapshot,
             @Nullable Long earliestSnapshotIDToKeep,
-            long totalLakeFileSize,
-            long totalLakeRecordCount) {
+            @Nullable Long totalLakeFileSize,
+            @Nullable Long totalLakeRecordCount) {
         this.committedSnapshotId = committedSnapshotId;
         this.committedIsReadable = committedIsReadable;
         this.readableSnapshot = readableSnapshot;
@@ -87,33 +87,33 @@ public class LakeCommitResult {
     }
 
     public static LakeCommitResult committedIsReadable(long committedSnapshotId) {
-        return committedIsReadable(committedSnapshotId, -1L, -1L);
+        return committedIsReadable(committedSnapshotId, TieringStats.UNKNOWN);
     }
 
     public static LakeCommitResult committedIsReadable(
-            long committedSnapshotId, long totalLakeFileSize, long totalLakeRecordCount) {
+            long committedSnapshotId, TieringStats tieringStats) {
         return new LakeCommitResult(
                 committedSnapshotId,
                 true,
                 null,
                 KEEP_LATEST,
-                totalLakeFileSize,
-                totalLakeRecordCount);
+                tieringStats.getFileSize(),
+                tieringStats.getRecordCount());
     }
 
     public static LakeCommitResult unknownReadableSnapshot(long committedSnapshotId) {
-        return unknownReadableSnapshot(committedSnapshotId, -1L, -1L);
+        return unknownReadableSnapshot(committedSnapshotId, TieringStats.UNKNOWN);
     }
 
     public static LakeCommitResult unknownReadableSnapshot(
-            long committedSnapshotId, long totalLakeFileSize, long totalLakeRecordCount) {
+            long committedSnapshotId, TieringStats tieringStats) {
         return new LakeCommitResult(
                 committedSnapshotId,
                 false,
                 null,
                 KEEP_ALL_PREVIOUS,
-                totalLakeFileSize,
-                totalLakeRecordCount);
+                tieringStats.getFileSize(),
+                tieringStats.getRecordCount());
     }
 
     public static LakeCommitResult withReadableSnapshot(
@@ -131,8 +131,7 @@ public class LakeCommitResult {
                 tieredLogEndOffsets,
                 readableLogEndOffsets,
                 earliestSnapshotIDToKeep,
-                -1L,
-                -1L);
+                TieringStats.UNKNOWN);
     }
 
     public static LakeCommitResult withReadableSnapshot(
@@ -141,16 +140,15 @@ public class LakeCommitResult {
             Map<TableBucket, Long> tieredLogEndOffsets,
             Map<TableBucket, Long> readableLogEndOffsets,
             @Nullable Long earliestSnapshotIDToKeep,
-            long totalLakeFileSize,
-            long totalLakeRecordCount) {
+            TieringStats tieringStats) {
         return new LakeCommitResult(
                 committedSnapshotId,
                 false,
                 new ReadableSnapshot(
                         readableSnapshotId, tieredLogEndOffsets, readableLogEndOffsets),
                 earliestSnapshotIDToKeep,
-                totalLakeFileSize,
-                totalLakeRecordCount);
+                tieringStats.getFileSize(),
+                tieringStats.getRecordCount());
     }
 
     public long getCommittedSnapshotId() {
@@ -170,9 +168,10 @@ public class LakeCommitResult {
      * Returns the total file size (bytes) of all live data files in the lake table after this
      * commit.
      *
-     * @return total file size in bytes, or -1 if not reported by the lake implementation
+     * @return total file size in bytes, or {@code null} if not reported by the lake implementation
      */
-    public long getTotalLakeFileSize() {
+    @Nullable
+    public Long getTotalLakeFileSize() {
         return totalLakeFileSize;
     }
 
@@ -181,9 +180,10 @@ public class LakeCommitResult {
      * commit. For append-only tables this equals the logical record count; for primary-key tables
      * this is the physical row count which may include un-compacted delete rows and duplicates.
      *
-     * @return total physical row count, or -1 if not reported by the lake implementation
+     * @return total physical row count, or {@code null} if not reported by the lake implementation
      */
-    public long getTotalLakeRecordCount() {
+    @Nullable
+    public Long getTotalLakeRecordCount() {
         return totalLakeRecordCount;
     }
 

@@ -308,18 +308,22 @@ class LakeTableTieringManagerTest {
         assertThat(tableTieringManager.getTableState(tableId1))
                 .isEqualTo(LakeTableTieringManager.TieringState.Tiering);
 
-        // Simulate tiering duration
+        // Simulate tiering duration — finish with UNKNOWN stats (empty commit).
+        // Duration should NOT be updated because no data was written.
         manualClock.advanceTime(Duration.ofSeconds(5));
         tableTieringManager.finishTableTiering(tableId1, 1, false, TieringStats.UNKNOWN);
-        assertThat(tableTieringManager.getTableLastDuration(tableId1)).isEqualTo(5000L);
+        assertThat(tableTieringManager.getLastTieringResultField(tableId1, r -> r.tierDuration))
+                .isEqualTo(5000L);
 
         // lastSuccessTime should be just now
         assertThat(tableTieringManager.getTableLastSuccessTime(tableId1))
                 .isEqualTo(manualClock.milliseconds());
 
-        // fileSize and recordCount should be -1 when not reported
-        assertThat(tableTieringManager.getTableLastFileSize(tableId1)).isEqualTo(-1L);
-        assertThat(tableTieringManager.getTableLastRecordCount(tableId1)).isEqualTo(-1L);
+        // fileSize and recordCount should be null (mapped to -1) when not reported
+        assertThat(tableTieringManager.getLastTieringResultField(tableId1, r -> r.fileSize))
+                .isEqualTo(-1L);
+        assertThat(tableTieringManager.getLastTieringResultField(tableId1, r -> r.recordCount))
+                .isEqualTo(-1L);
 
         // State should be Scheduled (2) after finish
         assertThat(tableTieringManager.getTableState(tableId1))
@@ -341,11 +345,13 @@ class LakeTableTieringManagerTest {
                 tableId1, 2, false, new TieringStats(expectedFileSize, expectedRecordCount));
 
         // fileSize and recordCount should reflect the reported stats
-        assertThat(tableTieringManager.getTableLastFileSize(tableId1)).isEqualTo(expectedFileSize);
-        assertThat(tableTieringManager.getTableLastRecordCount(tableId1))
+        assertThat(tableTieringManager.getLastTieringResultField(tableId1, r -> r.fileSize))
+                .isEqualTo(expectedFileSize);
+        assertThat(tableTieringManager.getLastTieringResultField(tableId1, r -> r.recordCount))
                 .isEqualTo(expectedRecordCount);
         // duration of the second round should be 4s
-        assertThat(tableTieringManager.getTableLastDuration(tableId1)).isEqualTo(4000L);
+        assertThat(tableTieringManager.getLastTieringResultField(tableId1, r -> r.tierDuration))
+                .isEqualTo(4000L);
 
         // Request again and report failure — stats should remain from last successful tiering
         manualClock.advanceTime(Duration.ofSeconds(10));
@@ -356,8 +362,9 @@ class LakeTableTieringManagerTest {
         assertThat(tableTieringManager.getTableFailureCount(tableId1)).isEqualTo(1L);
 
         // fileSize and recordCount should remain unchanged after failure
-        assertThat(tableTieringManager.getTableLastFileSize(tableId1)).isEqualTo(expectedFileSize);
-        assertThat(tableTieringManager.getTableLastRecordCount(tableId1))
+        assertThat(tableTieringManager.getLastTieringResultField(tableId1, r -> r.fileSize))
+                .isEqualTo(expectedFileSize);
+        assertThat(tableTieringManager.getLastTieringResultField(tableId1, r -> r.recordCount))
                 .isEqualTo(expectedRecordCount);
 
         // State should be Pending (3) after failure

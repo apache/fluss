@@ -24,6 +24,7 @@ import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.committer.TieringStats;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.server.entity.LakeTieringTableInfo;
@@ -134,8 +135,8 @@ public class LakeTableTieringManager implements AutoCloseable {
     // table_id -> result snapshot of the last completed tiering round
     private final Map<Long, LastTieringResult> lastTieringResult;
 
-    // table_id -> the tiering failure count
-    private final Map<Long, Long> tableTieringFailureCount;
+    // table_id -> the tiering failure counter
+    private final Map<Long, Counter> tableFailureCounters;
 
     // table_id -> start time (ms) of the currently in-progress tiering round
     private final Map<Long, Long> currentTieringStartTime;
@@ -181,7 +182,7 @@ public class LakeTableTieringManager implements AutoCloseable {
         this.tableTierEpoch = new HashMap<>();
         this.lastTieringResult = new HashMap<>();
         this.delayedTieringByTableId = new HashMap<>();
-        this.tableTieringFailureCount = new HashMap<>();
+        this.tableFailureCounters = new HashMap<>();
         this.currentTieringStartTime = new HashMap<>();
         this.tieringMetricGroup = lakeTieringMetricGroup;
         registerMetrics();
@@ -231,7 +232,6 @@ public class LakeTableTieringManager implements AutoCloseable {
                 tableId, tableInfo.getTableConfig().getDataLakeFreshness().toMillis());
         lastTieringResult.put(tableId, LastTieringResult.initial(lastTieredTime));
         tableTierEpoch.put(tableId, 0L);
-        tableTieringFailureCount.put(tableId, 0L);
 
         // register table-level metrics
         registerTableMetrics(tableId, tableInfo.getTablePath());
@@ -280,9 +280,9 @@ public class LakeTableTieringManager implements AutoCloseable {
                 () -> inReadLock(lock, () -> getLastResultField(tableId, r -> r.tierDuration)));
 
         // failuresTotal: total failure count for this table
-        tableMetricGroup.gauge(
-                MetricNames.LAKE_TIERING_TABLE_FAILURES_TOTAL,
-                () -> inReadLock(lock, () -> tableTieringFailureCount.getOrDefault(tableId, 0L)));
+        Counter failuresCounter =
+                tableMetricGroup.counter(MetricNames.LAKE_TIERING_TABLE_FAILURES_TOTAL);
+        tableFailureCounters.put(tableId, failuresCounter);
 
         // fileSize: cumulative total file size of the lake table after the last tiering
         tableMetricGroup.gauge(
@@ -303,8 +303,7 @@ public class LakeTableTieringManager implements AutoCloseable {
      * <p>Must be called under {@link #lock} (read or write).
      */
     @GuardedBy("lock")
-    private long getLastResultField(
-            long tableId, ToLongFunction<LastTieringResult> fieldExtractor) {
+    long getLastResultField(long tableId, ToLongFunction<LastTieringResult> fieldExtractor) {
         LastTieringResult r = lastTieringResult.get(tableId);
         return r != null ? fieldExtractor.applyAsLong(r) : -1L;
     }
@@ -317,7 +316,7 @@ public class LakeTableTieringManager implements AutoCloseable {
                     tableLakeFreshness.remove(tableId);
                     lastTieringResult.remove(tableId);
                     currentTieringStartTime.remove(tableId);
-                    tableTieringFailureCount.remove(tableId);
+                    tableFailureCounters.remove(tableId);
                     // close and remove the metric group to unregister metrics
                     tieringMetricGroup.removeTableLakeTieringMetricGroup(tableId);
                     tieringStates.remove(tableId);
@@ -427,15 +426,7 @@ public class LakeTableTieringManager implements AutoCloseable {
                 lock,
                 () -> {
                     validateTieringServiceRequest(tableId, tieredEpoch);
-                    Long startTime = currentTieringStartTime.get(tableId);
-                    long now = clock.milliseconds();
-                    lastTieringResult.put(
-                            tableId,
-                            new LastTieringResult(
-                                    now,
-                                    startTime != null ? now - startTime : -1L,
-                                    stats.getFileSize(),
-                                    stats.getRecordCount()));
+                    updateTableTieringResult(tableId, stats);
                     // to tiered state firstly
                     doHandleStateChange(tableId, TieringState.Tiered);
                     if (isForceFinished) {
@@ -446,6 +437,34 @@ public class LakeTableTieringManager implements AutoCloseable {
                         doHandleStateChange(tableId, TieringState.Scheduled);
                     }
                 });
+    }
+
+    @GuardedBy("lock")
+    private void updateTableTieringResult(long tableId, TieringStats stats) {
+        Long startTime = currentTieringStartTime.get(tableId);
+        long now = clock.milliseconds();
+        long duration = startTime != null ? now - startTime : -1L;
+        if (stats.isAvailableStats()) {
+            lastTieringResult.put(
+                    tableId,
+                    new LastTieringResult(
+                            now,
+                            duration,
+                            stats.getFileSize() != null ? stats.getFileSize() : -1L,
+                            stats.getRecordCount() != null ? stats.getRecordCount() : -1L));
+        } else {
+            lastTieringResult.compute(
+                    tableId,
+                    (k, prev) -> {
+                        if (prev == null) {
+                            throw new IllegalStateException(
+                                    "Last tiering result not found for table " + tableId);
+                        } else {
+                            return new LastTieringResult(
+                                    now, duration, prev.fileSize, prev.recordCount);
+                        }
+                    });
+        }
     }
 
     public void reportTieringFail(long tableId, long tieringEpoch) {
@@ -570,8 +589,10 @@ public class LakeTableTieringManager implements AutoCloseable {
                 currentTieringStartTime.remove(tableId);
                 break;
             case Failed:
-                // increment failure counters
-                tableTieringFailureCount.computeIfPresent(tableId, (t, v) -> v + 1);
+                Counter counter = tableFailureCounters.get(tableId);
+                if (counter != null) {
+                    counter.inc();
+                }
                 liveTieringTableIds.remove(tableId);
                 currentTieringStartTime.remove(tableId);
                 // do nothing
@@ -725,7 +746,8 @@ public class LakeTableTieringManager implements AutoCloseable {
      * Immutable snapshot of the statistics collected at the end of one completed tiering round.
      * Written atomically when a table transitions to {@link TieringState#Tiered}.
      */
-    private static class LastTieringResult {
+    @VisibleForTesting
+    static class LastTieringResult {
 
         /** Timestamp (ms) when this tiering round completed. */
         final long tieredTime;
@@ -734,21 +756,24 @@ public class LakeTableTieringManager implements AutoCloseable {
         final long tierDuration;
 
         /**
-         * Cumulative total file size (bytes) of the lake table after this round; {@code -1} if
-         * unknown.
+         * Cumulative total file size (bytes) of the lake table after this round; {@code -1} if not
+         * reported by the lake implementation (converted from {@code null} in {@link
+         * TieringStats}).
          */
         final long fileSize;
 
         /**
-         * Cumulative total record count of the lake table after this round; {@code -1} if unknown.
+         * Cumulative total record count of the lake table after this round; {@code -1} if not
+         * reported by the lake implementation (converted from {@code null} in {@link
+         * TieringStats}).
          */
         final long recordCount;
 
         LastTieringResult(long tieredTime, long tierDuration, long fileSize, long recordCount) {
             this.tieredTime = tieredTime;
             this.tierDuration = tierDuration;
-            this.fileSize = fileSize >= 0 ? fileSize : -1L;
-            this.recordCount = recordCount >= 0 ? recordCount : -1L;
+            this.fileSize = fileSize;
+            this.recordCount = recordCount;
         }
 
         /**
@@ -762,17 +787,17 @@ public class LakeTableTieringManager implements AutoCloseable {
     }
 
     @VisibleForTesting
-    protected int getPendingTablesCount() {
+    int getPendingTablesCount() {
         return inReadLock(lock, pendingTieringTables::size);
     }
 
     @VisibleForTesting
-    protected int getRunningTablesCount() {
+    int getRunningTablesCount() {
         return inReadLock(lock, liveTieringTableIds::size);
     }
 
     @VisibleForTesting
-    protected Long getTableLastSuccessTime(long tableId) {
+    Long getTableLastSuccessTime(long tableId) {
         return inReadLock(
                 lock,
                 () -> {
@@ -782,27 +807,22 @@ public class LakeTableTieringManager implements AutoCloseable {
     }
 
     @VisibleForTesting
-    protected Long getTableLastDuration(long tableId) {
-        return inReadLock(lock, () -> getLastResultField(tableId, r -> r.tierDuration));
+    Long getTableFailureCount(long tableId) {
+        return inReadLock(
+                lock,
+                () -> {
+                    Counter c = tableFailureCounters.get(tableId);
+                    return c != null ? c.getCount() : 0L;
+                });
     }
 
     @VisibleForTesting
-    protected Long getTableLastFileSize(long tableId) {
-        return inReadLock(lock, () -> getLastResultField(tableId, r -> r.fileSize));
-    }
-
-    @VisibleForTesting
-    protected Long getTableLastRecordCount(long tableId) {
-        return inReadLock(lock, () -> getLastResultField(tableId, r -> r.recordCount));
-    }
-
-    @VisibleForTesting
-    protected Long getTableFailureCount(long tableId) {
-        return inReadLock(lock, () -> tableTieringFailureCount.get(tableId));
-    }
-
-    @VisibleForTesting
-    protected TieringState getTableState(long tableId) {
+    TieringState getTableState(long tableId) {
         return inReadLock(lock, () -> tieringStates.get(tableId));
+    }
+
+    @VisibleForTesting
+    long getLastTieringResultField(long tableId, ToLongFunction<LastTieringResult> fieldExtractor) {
+        return inReadLock(lock, () -> getLastResultField(tableId, fieldExtractor));
     }
 }

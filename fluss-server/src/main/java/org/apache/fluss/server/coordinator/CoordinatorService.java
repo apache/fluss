@@ -855,14 +855,14 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     heartbeatResponse.addFinishedTableResp().setTableId(finishTable.getTableId());
             try {
                 validateHeartbeatRequest(finishTable, currentCoordinatorEpoch);
-                PbLakeTieringStats pbStats =
-                        finishTable.hasLakeTieringStats()
-                                ? finishTable.getLakeTieringStats()
-                                : null;
-                TieringStats stats =
-                        pbStats != null
-                                ? new TieringStats(pbStats.getFileSize(), pbStats.getRecordCount())
-                                : TieringStats.UNKNOWN;
+                TieringStats stats = TieringStats.UNKNOWN;
+                if (finishTable.hasLakeTieringStats()) {
+                    PbLakeTieringStats pbStats = finishTable.getLakeTieringStats();
+                    stats =
+                            new TieringStats(
+                                    pbStats.hasFileSize() ? pbStats.getFileSize() : null,
+                                    pbStats.hasRecordCount() ? pbStats.getRecordCount() : null);
+                }
                 lakeTableTieringManager.finishTableTiering(
                         finishTable.getTableId(),
                         finishTable.getTieringEpoch(),

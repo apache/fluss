@@ -1070,9 +1070,9 @@ message PbHeartbeatReqForTable {
 // Stats reported by the tiering service when a table finishes a tiering round.
 message PbLakeTieringStats {
   // cumulative total file size (bytes) of the lake table after tiering; -1 means unknown
-  required int64 file_size = 1;
+  optional int64 file_size = 1;
   // cumulative total record count of the lake table after tiering; -1 means unknown
-  required int64 record_count = 2;
+  optional int64 record_count = 2;
 }
 
 message PbHeartbeatRespForTable {

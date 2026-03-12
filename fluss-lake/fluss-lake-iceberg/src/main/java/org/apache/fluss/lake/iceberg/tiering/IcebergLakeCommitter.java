@@ -153,45 +153,11 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
                     snapshotId = rewriteCommitSnapshotId;
                 }
             }
-
-            // collect cumulative table stats from the committed snapshot's summary.
-            // Use the specific committed snapshotId rather than currentSnapshot() to avoid
-            // reading a different snapshot in case of concurrent commits.
-            Snapshot committedSnapshot = icebergTable.snapshot(snapshotId);
-            long[] stats = extractSnapshotStats(committedSnapshot);
-            return LakeCommitResult.committedIsReadable(snapshotId, stats[0], stats[1]);
+            // Iceberg does not provide cumulative table stats API yet; leave stats as -1 (unknown).
+            return LakeCommitResult.committedIsReadable(snapshotId);
         } catch (Exception e) {
             throw new IOException("Failed to commit to Iceberg table.", e);
         }
-    }
-
-    /**
-     * Extracts cumulative file size and record count from an Iceberg snapshot's summary map.
-     *
-     * <p>Stats collection is best-effort: if the snapshot is null, the summary is missing, or a
-     * value cannot be parsed as a long, the corresponding stat is left as {@code -1} and a warning
-     * is logged instead of propagating an exception.
-     *
-     * @param snapshot the committed Iceberg snapshot, may be {@code null}
-     * @return a two-element array {@code [totalFileSize, totalRecordCount]}, with {@code -1}
-     *     indicating an unknown value
-     */
-    private long[] extractSnapshotStats(@Nullable Snapshot snapshot) {
-        long totalFileSize = -1L;
-        long totalRecordCount = -1L;
-        if (snapshot == null || snapshot.summary() == null) {
-            return new long[] {totalFileSize, totalRecordCount};
-        }
-        Map<String, String> summary = snapshot.summary();
-        try {
-            totalFileSize = Long.parseLong(summary.get(SNAPSHOT_TOTAL_FILE_SIZE));
-            totalRecordCount = Long.parseLong(summary.get(SNAPSHOT_TOTAL_RECORDS));
-        } catch (Exception e) {
-            LOG.warn(
-                    "Failed to parse snapshot summary for snapshotId {}; treating as unknown.",
-                    snapshot.snapshotId());
-        }
-        return new long[] {totalFileSize, totalRecordCount};
     }
 
     private Long commitRewrite(

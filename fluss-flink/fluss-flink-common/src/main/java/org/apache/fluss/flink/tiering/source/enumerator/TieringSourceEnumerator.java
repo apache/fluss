@@ -274,12 +274,10 @@ public class TieringSourceEnumerator
                         finishedTableId);
             } else {
                 boolean isForceFinished = tieringReachMaxDurationsTables.remove(finishedTableId);
-                LOG.info("Before finishedTables table {}.", finishedTables);
                 finishedTables.put(
                         finishedTableId,
                         TieringFinishInfo.from(
                                 tieringEpoch, isForceFinished, finishedTieringEvent.getStats()));
-                LOG.info("After finishedTables table {}.", finishedTables);
             }
         }
 
@@ -589,19 +587,23 @@ public class TieringSourceEnumerator
                             if (tieringFinishInfo.isForceFinished) {
                                 forceFinishedTables.add(tableId);
                             }
-                            finishedTableReqs.add(
+                            PbHeartbeatReqForTable pbHeartbeatReqForTable =
                                     new PbHeartbeatReqForTable()
                                             .setTableId(tableId)
                                             .setCoordinatorEpoch(coordinatorEpoch)
-                                            .setTieringEpoch(tieringFinishInfo.tieringEpoch)
-                                            .setLakeTieringStats(
-                                                    new PbLakeTieringStats()
-                                                            .setFileSize(
-                                                                    tieringFinishInfo.stats
-                                                                            .getFileSize())
-                                                            .setRecordCount(
-                                                                    tieringFinishInfo.stats
-                                                                            .getRecordCount())));
+                                            .setTieringEpoch(tieringFinishInfo.tieringEpoch);
+                            TieringStats stats = tieringFinishInfo.stats;
+                            if (stats.isAvailableStats()) {
+                                PbLakeTieringStats pbLakeTieringStats = new PbLakeTieringStats();
+                                if (stats.getFileSize() != null) {
+                                    pbLakeTieringStats.setFileSize(stats.getFileSize());
+                                }
+                                if (stats.getRecordCount() != null) {
+                                    pbLakeTieringStats.setRecordCount(stats.getRecordCount());
+                                }
+                                pbHeartbeatReqForTable.setLakeTieringStats(pbLakeTieringStats);
+                            }
+                            finishedTableReqs.add(pbHeartbeatReqForTable);
                         });
                 heartbeatRequest.addAllFinishedTables(finishedTableReqs);
                 for (long forceFinishedTableId : forceFinishedTables) {

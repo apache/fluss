@@ -23,8 +23,8 @@ import org.apache.fluss.metrics.CharacterFilter;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
-import org.apache.fluss.utils.MapUtils;
 
+import java.util.HashMap;
 import java.util.Map;
 
 import static org.apache.fluss.metrics.utils.MetricGroupUtils.makeScope;
@@ -34,7 +34,7 @@ public class LakeTieringMetricGroup extends AbstractMetricGroup {
 
     private static final String NAME = "lakeTiering";
 
-    private final Map<Long, TableMetricGroup> metricGroupByTable = MapUtils.newConcurrentHashMap();
+    private final Map<Long, TableMetricGroup> metricGroupByTable = new HashMap<>();
 
     public LakeTieringMetricGroup(MetricRegistry registry, CoordinatorMetricGroup parent) {
         super(registry, makeScope(parent, NAME), parent);

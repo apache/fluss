@@ -18,44 +18,56 @@
 
 package org.apache.fluss.lake.committer;
 
+import javax.annotation.Nullable;
+
 import java.io.Serializable;
 
 /**
  * Immutable statistics for a single completed tiering round of a lake table.
  *
- * <p>All long fields use {@code -1} as the sentinel value meaning "unknown / not supported".
+ * <p>Fields use {@code null} to represent "unknown / not supported".
  */
 public final class TieringStats implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
     /**
-     * A {@code TieringStats} instance where every field is {@code -1} (unknown/unsupported). Use
+     * A {@code TieringStats} instance where every field is {@code null} (unknown/unsupported). Use
      * this as the default when no stats are available.
      */
-    public static final TieringStats UNKNOWN = new TieringStats(-1L, -1L);
+    public static final TieringStats UNKNOWN = new TieringStats(null, null);
 
     // -----------------------------------------------------------------------------------------
     // Lake data stats (reported by the lake committer)
     // -----------------------------------------------------------------------------------------
 
     /** Cumulative total file size (bytes) of the lake table after this tiering round. */
-    private final long fileSize;
+    @Nullable private final Long fileSize;
 
     /** Cumulative total record count of the lake table after this tiering round. */
-    private final long recordCount;
+    @Nullable private final Long recordCount;
 
-    public TieringStats(long fileSize, long recordCount) {
+    public TieringStats(@Nullable Long fileSize, @Nullable Long recordCount) {
         this.fileSize = fileSize;
         this.recordCount = recordCount;
     }
 
-    public long getFileSize() {
+    @Nullable
+    public Long getFileSize() {
         return fileSize;
     }
 
-    public long getRecordCount() {
+    @Nullable
+    public Long getRecordCount() {
         return recordCount;
+    }
+
+    /**
+     * Returns {@code true} when at least one stat field is non-{@code null}, meaning actual data
+     * was written during this tiering round.
+     */
+    public boolean isAvailableStats() {
+        return fileSize != null || recordCount != null;
     }
 
     @Override

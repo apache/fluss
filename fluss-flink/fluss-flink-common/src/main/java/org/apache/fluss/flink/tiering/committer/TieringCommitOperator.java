@@ -103,9 +103,9 @@ public class TieringCommitOperator<WriteResult, Committable>
         /** The lake committable, or {@code null} if nothing was written in this round. */
         @Nullable final Committable committable;
         /** Per-table tiering statistics collected during this round. */
-        final TieringStats stats;
+        @Nullable final TieringStats stats;
 
-        CommitResult(@Nullable Committable committable, TieringStats stats) {
+        CommitResult(@Nullable Committable committable, @Nullable TieringStats stats) {
             this.committable = committable;
             this.stats = stats;
         }
@@ -162,8 +162,7 @@ public class TieringCommitOperator<WriteResult, Committable>
                     output.collect(
                             new StreamRecord<>(new CommittableMessage<>(commitResult.committable)));
                 }
-                // always notify the coordinator that this table's tiering round is done,
-                // even for empty commits — otherwise the coordinator will keep waiting
+                // notify that the table id has been finished tier
                 operatorEventGateway.sendEventToCoordinator(
                         new SourceEventWrapper(
                                 new FinishedTieringEvent(tableId, commitResult.stats)));
@@ -206,7 +205,7 @@ public class TieringCommitOperator<WriteResult, Committable>
                     "Commit tiering write results is empty for table {}, table path {}",
                     tableId,
                     tablePath);
-            return new CommitResult(null, TieringStats.UNKNOWN);
+            return new CommitResult(null, null);
         }
 
         // Check if the table was dropped and recreated during tiering.
