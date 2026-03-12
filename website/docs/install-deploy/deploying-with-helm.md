@@ -190,10 +190,17 @@ The following table lists the configurable parameters of the Fluss chart, and th
 | `security.client.sasl.mechanism` | Client listener SASL mechanism (`""`, `plain`) | `""` |
 | `security.internal.sasl.mechanism` | Internal listener SASL mechanism (`""`, `plain`) | `""` |
 | `security.client.sasl.plain.users` | Client listener username and password pairs for PLAIN | `[]` |
-| `security.internal.sasl.plain.username` | Internal listener PLAIN username | `"fluss-internal-user"` |
-| `security.internal.sasl.plain.password` | Internal listener PLAIN password | `"fluss-internal-password"` |
+| `security.internal.sasl.plain.username` | Internal listener PLAIN username | `""` |
+| `security.internal.sasl.plain.password` | Internal listener PLAIN password | `""` |
 
 Only `plain` mechanism is supported for now. An empty string disables the SASL authentication, and maps to the `PLAINTEXT` protocol.
+
+If the internal SASL username or password is left empty, the chart automatically generates credentials based on the Helm release name:
+
+- Username is set to the `"fluss-internal-user-<release-name>"`
+- Password is set to the SHA-256 hash of `"fluss-internal-password-<release-name>"`
+
+It is recommended to set these explicitly in production.
 
 ### Fluss Configuration Overrides
 

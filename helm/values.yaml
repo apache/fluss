@@ -72,8 +72,8 @@ security:
       # "" | plain
       mechanism: ""
       plain:
-        username: "fluss-internal-user"
-        password: "fluss-internal-password"
+        username: ""
+        password: ""
 
 resources: {}
   # We usually recommend not to specify default resources and to leave this as a conscious

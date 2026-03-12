@@ -118,7 +118,43 @@ Usage:
 {{- end -}}
 
 {{/*
-Returns a warning if the internal SASL user is using default credentials.
+Returns the default internal SASL username based on the release name.
+Usage:
+  include "fluss.security.sasl.plain.internal.defaultUsername" .
+*/}}
+{{- define "fluss.security.sasl.plain.internal.defaultUsername" -}}
+{{- printf "fluss-internal-user-%s" .Release.Name -}}
+{{- end -}}
+
+{{/*
+Returns the default internal SASL password based on the release name (sha256 hashed).
+Usage:
+  include "fluss.security.sasl.plain.internal.defaultPassword" .
+*/}}
+{{- define "fluss.security.sasl.plain.internal.defaultPassword" -}}
+{{- printf "fluss-internal-password-%s" .Release.Name | sha256sum -}}
+{{- end -}}
+
+{{/*
+Returns the resolved internal SASL username (user-provided or auto-generated default).
+Usage:
+  include "fluss.security.sasl.plain.internal.username" .
+*/}}
+{{- define "fluss.security.sasl.plain.internal.username" -}}
+{{- .Values.security.internal.sasl.plain.username | default (include "fluss.security.sasl.plain.internal.defaultUsername" .) -}}
+{{- end -}}
+
+{{/*
+Returns the resolved internal SASL password (user-provided or auto-generated default).
+Usage:
+  include "fluss.security.sasl.plain.internal.password" .
+*/}}
+{{- define "fluss.security.sasl.plain.internal.password" -}}
+{{- .Values.security.internal.sasl.plain.password | default (include "fluss.security.sasl.plain.internal.defaultPassword" .) -}}
+{{- end -}}
+
+{{/*
+Returns a warning if the internal SASL user is using auto-generated credentials.
 Usage:
   include "fluss.security.sasl.warnInternalUser" .
 */}}
@@ -126,8 +162,8 @@ Usage:
 {{- if (include "fluss.security.sasl.enabled" .) -}}
   {{- $internalMechanism := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "internal") -}}
   {{- if eq $internalMechanism "plain" -}}
-    {{- if and (eq .Values.security.internal.sasl.plain.username "fluss-internal-user") (eq .Values.security.internal.sasl.plain.password "fluss-internal-password") -}}
-      {{- print "You are using the DEFAULT SASL credentials for internal communication.\n  It is strongly recommended to override the following values in production:\n    - security.internal.sasl.plain.username\n    - security.internal.sasl.plain.password" -}}
+    {{- if and (not .Values.security.internal.sasl.plain.username) (not .Values.security.internal.sasl.plain.password) -}}
+      {{- print "You are using AUTO-GENERATED SASL credentials for internal communication.\n  It is strongly recommended to set the following values in production:\n    - security.internal.sasl.plain.username\n    - security.internal.sasl.plain.password" -}}
     {{- end -}}
   {{- end -}}
 {{- end -}}

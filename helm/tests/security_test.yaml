@@ -78,7 +78,7 @@ suite: plain-internal-defaults
 templates:
   - templates/secret-jaas-config.yaml
 tests:
-  - it: uses default internal credentials when user does not override them
+  - it: uses auto-generated internal credentials when user does not override them
     set:
       security.internal.sasl.mechanism: plain
     asserts:
@@ -86,13 +86,13 @@ tests:
           count: 1
       - matchRegex:
           path: stringData["jaas.conf"]
-          pattern: 'user_fluss-internal-user="fluss-internal-password"'
+          pattern: 'user_fluss-internal-user-RELEASE-NAME="[a-f0-9]{64}"'
       - matchRegex:
           path: stringData["jaas.conf"]
-          pattern: 'username="fluss-internal-user"'
+          pattern: 'username="fluss-internal-user-RELEASE-NAME"'
       - matchRegex:
           path: stringData["jaas.conf"]
-          pattern: 'password="fluss-internal-password"'
+          pattern: 'password="[a-f0-9]{64}"'
 
 ---
 
@@ -244,7 +244,7 @@ tests:
       security.client.sasl.mechanism: bogus
     asserts:
       - failedTemplate:
-          errorMessage: "VALUES VALIDATION:\nsecurity.client.sasl.mechanism must be one of: empty, plain"
+          errorMessage: "VALUES VALIDATION:\nsecurity.client.sasl.mechanism must be empty or: plain"
   - it: accepts empty mechanism as default
     asserts:
       - notFailedTemplate: {}
