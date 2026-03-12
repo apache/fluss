@@ -26,9 +26,12 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Support dynamic session credentials for authenticating with Tencent Cloud COS. It'll get
- * credentials from {@link COSSecurityTokenReceiver}. It implements COS native {@link
- * COSCredentialsProvider} to work with CosNFileSystem.
+ * Support dynamic credentials for authenticating with Tencent Cloud COS. It'll get credentials from
+ * {@link COSSecurityTokenReceiver}. It implements COS native {@link COSCredentialsProvider} to work
+ * with CosNFileSystem.
+ *
+ * <p>This provider supports both static credentials (secretId/secretKey) and temporary session
+ * credentials (secretId/secretKey/sessionToken).
  */
 @Internal
 public class DynamicTemporaryCOSCredentialsProvider implements COSCredentialsProvider {
@@ -42,13 +45,21 @@ public class DynamicTemporaryCOSCredentialsProvider implements COSCredentialsPro
     public COSCredentials getCredentials() {
         COSCredentials credentials = COSSecurityTokenReceiver.getCredentials();
         if (credentials == null) {
-            throw new RuntimeException("Credentials is not ready.");
+            throw new RuntimeException(
+                    "COS credentials have not been received yet. "
+                            + "Ensure COSSecurityTokenReceiver has received valid tokens.");
         }
-        LOG.debug("Providing session credentials");
-        return new BasicSessionCredentials(
-                credentials.getCOSAccessKeyId(),
-                credentials.getCOSSecretKey(),
-                ((BasicSessionCredentials) credentials).getSessionToken());
+        if (credentials instanceof BasicSessionCredentials) {
+            BasicSessionCredentials sessionCredentials = (BasicSessionCredentials) credentials;
+            LOG.debug("Providing session credentials");
+            return new BasicSessionCredentials(
+                    sessionCredentials.getCOSAccessKeyId(),
+                    sessionCredentials.getCOSSecretKey(),
+                    sessionCredentials.getSessionToken());
+        } else {
+            LOG.debug("Providing non-session COS credentials");
+            return credentials;
+        }
     }
 
     @Override
