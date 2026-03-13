@@ -44,7 +44,9 @@ import org.apache.flink.streaming.api.graph.StreamGraphHasherV2;
 
 import java.nio.charset.StandardCharsets;
 
+import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
+import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.getClientScannerIoTmpDir;
 
 /**
  * The flink source implementation for tiering data from Fluss to downstream lake.
@@ -110,6 +112,9 @@ public class TieringSource<WriteResult>
             SourceReaderContext sourceReaderContext) {
         FutureCompletingBlockingQueue<RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>>
                 elementsQueue = new FutureCompletingBlockingQueue<>();
+        flussConf.set(
+                CLIENT_SCANNER_IO_TMP_DIR,
+                getClientScannerIoTmpDir(flussConf, sourceReaderContext.getConfiguration()));
         Connection connection = ConnectionFactory.createConnection(flussConf);
         return new TieringSourceReader<>(
                 elementsQueue, sourceReaderContext, connection, lakeTieringFactory);
