@@ -265,9 +265,21 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
             dynamicOptions.put(
                     CoreOptions.COMMIT_CALLBACKS.key(),
                     PaimonLakeCommitter.PaimonCommitCallback.class.getName());
-            dynamicOptions.put(
-                    CoreOptions.WRITE_ONLY.key(),
-                    isAutoSnapshotExpiration ? Boolean.FALSE.toString() : Boolean.TRUE.toString());
+
+            boolean writeOnly = !isAutoSnapshotExpiration;
+            dynamicOptions.put(CoreOptions.WRITE_ONLY.key(), Boolean.toString(writeOnly));
+
+            // For non-write-only modes, we enable 'end-input.check-partition-expire' to ensure
+            // Paimon triggers partition expiration on every commit.
+            // Note: This is necessary even if 'paimon.partition.expiration-check-interval' is
+            // already configured. Because the Fluss tiering service creates a fresh TableCommit
+            // instance for each commit, the interval-based expiration check will not be triggered
+            // correctly otherwise.
+            if (!writeOnly) {
+                dynamicOptions.put(
+                        CoreOptions.END_INPUT_CHECK_PARTITION_EXPIRE.key(),
+                        Boolean.TRUE.toString());
+            }
 
             return table.copy(dynamicOptions);
         } catch (Exception e) {
