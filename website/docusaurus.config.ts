@@ -190,6 +190,7 @@ const config: Config = {
         {to: '/community/welcome', label: 'Community', position: 'left'},
         {to: '/roadmap', label: 'Roadmap', position: 'left'},
         {to: '/downloads', label: 'Downloads', position: 'left'},
+        {to: '/javadoc', label: 'Javadocs', position: 'left',  target: '_blank'},
         {
             label: 'ASF', position: 'right', items: [
                 {to: 'https://www.apache.org/', label: 'Foundation'},
