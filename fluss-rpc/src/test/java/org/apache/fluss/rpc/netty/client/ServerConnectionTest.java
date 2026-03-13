@@ -47,6 +47,7 @@ import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.security.auth.AuthenticationFactory;
 import org.apache.fluss.security.auth.ClientAuthenticator;
 import org.apache.fluss.shaded.netty4.io.netty.bootstrap.Bootstrap;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
 import org.apache.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
 import org.apache.fluss.utils.NetUtils;
@@ -102,7 +103,8 @@ public class ServerConnectionTest {
                 new Bootstrap()
                         .group(eventLoopGroup)
                         .channel(getClientSocketChannelClass(eventLoopGroup))
-                        .handler(new ClientChannelInitializer(5000));
+                        .handler(
+                                new ClientChannelInitializer(5000, PooledByteBufAllocator.DEFAULT));
         clientAuthenticator =
                 AuthenticationFactory.loadClientAuthenticatorSupplier(new Configuration()).get();
     }

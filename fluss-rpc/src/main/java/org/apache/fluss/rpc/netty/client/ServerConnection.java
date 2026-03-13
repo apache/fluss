@@ -77,7 +77,6 @@ final class ServerConnection {
     private final ConnectionMetrics connectionMetrics;
     private final ClientAuthenticator authenticator;
     private final ExponentialBackoff backoff;
-
     private final Object lock = new Object();
 
     @GuardedBy("lock")
