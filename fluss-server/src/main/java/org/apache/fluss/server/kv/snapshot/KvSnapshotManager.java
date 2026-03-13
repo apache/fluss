@@ -300,14 +300,17 @@ public class KvSnapshotManager implements Closeable {
         // Use atomic download: download to temp dir first, then atomically move to final location
         atomicDownloadSnapshot(incrementalSnapshot, sstFilesToDelete);
 
+        // Update cached file sets with absolute paths (resolved against the db directory)
+        // to stay consistent with loadKvLocalFiles() which returns absolute paths.
+        Path kvDbPath = tabletDir.toPath().resolve(RocksDBKvBuilder.DB_INSTANCE_DIR_STRING);
         KvSnapshotHandle kvSnapshotHandle = completedSnapshot.getKvSnapshotHandle();
         downloadedSstFiles =
                 kvSnapshotHandle.getSharedKvFileHandles().stream()
-                        .map(handler -> Paths.get(handler.getLocalPath()))
+                        .map(handler -> kvDbPath.resolve(handler.getLocalPath()))
                         .collect(Collectors.toSet());
         downloadedMiscFiles =
                 kvSnapshotHandle.getPrivateFileHandles().stream()
-                        .map(handler -> Paths.get(handler.getLocalPath()))
+                        .map(handler -> kvDbPath.resolve(handler.getLocalPath()))
                         .collect(Collectors.toSet());
     }
 
