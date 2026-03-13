@@ -543,8 +543,38 @@ public class KvSnapshotManager implements Closeable {
         List<KvFileHandleAndLocalPath> incrementalSstFileHandles = new ArrayList<>();
         Set<String> downloadedSstFileNames = downloadedSstFilesMap.keySet();
         for (KvFileHandleAndLocalPath sstFileHandle : sstFileHandles) {
-            if (!downloadedSstFileNames.contains(sstFileHandle.getLocalPath())) {
+            String remoteName = sstFileHandle.getLocalPath();
+            if (!downloadedSstFileNames.contains(remoteName)) {
+                // File doesn't exist locally, needs download.
                 incrementalSstFileHandles.add(sstFileHandle);
+            } else {
+                // File exists locally with the same name. Verify the size matches to detect
+                // files from different RocksDB instances that happen to share the same file
+                // number (e.g., after leader re-election to a different server).
+                Path localPath = downloadedSstFilesMap.get(remoteName);
+                long remoteSize = sstFileHandle.getKvFileHandle().getSize();
+                try {
+                    long localSize = Files.size(localPath);
+                    if (localSize != remoteSize) {
+                        LOG.info(
+                                "Local SST file {} has size {} but remote expects size {}, "
+                                        + "will re-download for bucket {}",
+                                remoteName,
+                                localSize,
+                                remoteSize,
+                                tableBucket);
+                        incrementalSstFileHandles.add(sstFileHandle);
+                        sstFilesToDelete.add(localPath);
+                    }
+                } catch (IOException e) {
+                    LOG.warn(
+                            "Failed to read size of local SST file {}, will re-download for bucket {}",
+                            localPath,
+                            tableBucket,
+                            e);
+                    incrementalSstFileHandles.add(sstFileHandle);
+                    sstFilesToDelete.add(localPath);
+                }
             }
         }
 
