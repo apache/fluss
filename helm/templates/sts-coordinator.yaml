@@ -24,7 +24,7 @@ metadata:
   {{- include "fluss.labels" . | nindent 4 }}
 spec:
   serviceName: coordinator-server-hs
-  replicas: {{ .Values.coordinatorServer.replicas }}
+  replicas: {{ .Values.coordinator.numberOfReplicas }}
   selector:
     matchLabels:
       {{- include "fluss.selectorLabels" . | nindent 6 }}
@@ -81,17 +81,17 @@ spec:
 
               bin/coordinator-server.sh start-foreground
           livenessProbe:
-            failureThreshold: {{ .Values.coordinatorServer.livenessProbe.failureThreshold }}
-            timeoutSeconds: {{ .Values.coordinatorServer.livenessProbe.timeoutSeconds }}
-            initialDelaySeconds: {{ .Values.coordinatorServer.livenessProbe.initialDelaySeconds }}
-            periodSeconds: {{ .Values.coordinatorServer.livenessProbe.periodSeconds }}
+            failureThreshold: 100
+            timeoutSeconds: 1
+            initialDelaySeconds: 10
+            periodSeconds: 3
             tcpSocket:
               port: {{ .Values.listeners.client.port }}
           readinessProbe:
-            failureThreshold: {{ .Values.coordinatorServer.readinessProbe.failureThreshold }}
-            timeoutSeconds: {{ .Values.coordinatorServer.readinessProbe.timeoutSeconds }}
-            initialDelaySeconds: {{ .Values.coordinatorServer.readinessProbe.initialDelaySeconds }}
-            periodSeconds: {{ .Values.coordinatorServer.readinessProbe.periodSeconds }}
+            failureThreshold: 100
+            timeoutSeconds: 1
+            initialDelaySeconds: 10
+            periodSeconds: 3
             tcpSocket:
               port: {{ .Values.listeners.client.port }}
           resources:
