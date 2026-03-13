@@ -18,9 +18,14 @@
 
 package org.apache.fluss.server.metrics.group;
 
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.CharacterFilter;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
+import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
+
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.apache.fluss.metrics.utils.MetricGroupUtils.makeScope;
 
@@ -29,6 +34,8 @@ public class LakeTieringMetricGroup extends AbstractMetricGroup {
 
     private static final String NAME = "lakeTiering";
 
+    private final Map<Long, TableMetricGroup> metricGroupByTable = new HashMap<>();
+
     public LakeTieringMetricGroup(MetricRegistry registry, CoordinatorMetricGroup parent) {
         super(registry, makeScope(parent, NAME), parent);
     }
@@ -36,5 +43,54 @@ public class LakeTieringMetricGroup extends AbstractMetricGroup {
     @Override
     protected String getGroupName(CharacterFilter filter) {
         return NAME;
+    }
+
+    // ------------------------------------------------------------------------
+    //  table lake tiering groups
+    // ------------------------------------------------------------------------
+    public MetricGroup addTableLakeTieringMetricGroup(long tableId, TablePath tablePath) {
+        return metricGroupByTable.computeIfAbsent(
+                tableId, table -> new TableMetricGroup(registry, this, tablePath, tableId));
+    }
+
+    public void removeTableLakeTieringMetricGroup(long tableId) {
+        // get the metric group of the table
+        TableMetricGroup tableMetricGroup = metricGroupByTable.get(tableId);
+        // if get the table metric group
+        if (tableMetricGroup != null) {
+            tableMetricGroup.close();
+            metricGroupByTable.remove(tableId);
+        }
+    }
+
+    /** The metric group for table. */
+    public static class TableMetricGroup extends AbstractMetricGroup {
+
+        private static final String NAME = "table";
+
+        private final TablePath tablePath;
+        private final long tableId;
+
+        public TableMetricGroup(
+                MetricRegistry registry,
+                LakeTieringMetricGroup parent,
+                TablePath tablePath,
+                long tableId) {
+            super(registry, makeScope(parent, NAME), parent);
+            this.tablePath = tablePath;
+            this.tableId = tableId;
+        }
+
+        @Override
+        protected void putVariables(Map<String, String> variables) {
+            variables.put("database", tablePath.getDatabaseName());
+            variables.put("table", tablePath.getTableName());
+            variables.put("tableId", String.valueOf(tableId));
+        }
+
+        @Override
+        protected String getGroupName(CharacterFilter filter) {
+            return NAME;
+        }
     }
 }
