@@ -137,6 +137,16 @@ public class FlinkConnectorOptions {
                                     + "The format is 'timestamp' or 'yyyy-MM-dd HH:mm:ss'. "
                                     + "Like '1678883047356' or '2023-12-09 23:09:12'.");
 
+    public static final ConfigOption<Boolean> SCAN_BACKLOG_REPORT_ENABLE =
+            ConfigOptions.key("scan.backlog.report.enable")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to enable backlog reporting for the source. When enabled, the source "
+                                    + "tracks backlog boundary offsets and reports backlog processing status to Flink. "
+                                    + "This is automatically disabled for log tables (without primary key) and batch mode. "
+                                    + "Set to false to explicitly disable backlog reporting.");
+
     public static final ConfigOption<Duration> SCAN_PARTITION_DISCOVERY_INTERVAL =
             ConfigOptions.key("scan.partition.discovery.interval")
                     .durationType()

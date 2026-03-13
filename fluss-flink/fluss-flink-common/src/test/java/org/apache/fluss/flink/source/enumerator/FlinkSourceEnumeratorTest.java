@@ -25,6 +25,8 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
+import org.apache.fluss.flink.source.event.FinishedBacklogEvent;
+import org.apache.fluss.flink.source.event.MarkedBacklogOffsetEvent;
 import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
 import org.apache.fluss.flink.source.event.PartitionsRemovedEvent;
 import org.apache.fluss.flink.source.reader.LeaseContext;
@@ -32,6 +34,7 @@ import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
 import org.apache.fluss.flink.source.split.LogSplit;
 import org.apache.fluss.flink.source.split.SnapshotSplit;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
+import org.apache.fluss.flink.source.state.SourceEnumeratorState;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
@@ -101,8 +104,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
         int numSubtasks = 3;
         // test get snapshot split & log split and the assignment
-        try (MockSplitEnumeratorContext<SourceSplitBase> context =
-                new MockSplitEnumeratorContext<>(numSubtasks)) {
+        try (MockBacklogSplitEnumeratorContext context =
+                new MockBacklogSplitEnumeratorContext(numSubtasks)) {
             FlinkSourceEnumerator enumerator =
                     new FlinkSourceEnumerator(
                             DEFAULT_TABLE_PATH,
@@ -116,6 +119,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             null,
                             null,
                             LeaseContext.DEFAULT,
+                            false,
                             false);
 
             enumerator.start();
@@ -166,6 +170,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             null,
                             null,
                             LeaseContext.DEFAULT,
+                            false,
                             false);
             enumerator.start();
             // register all read
@@ -240,6 +245,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             null,
                             null,
                             LeaseContext.DEFAULT,
+                            false,
                             false);
 
             enumerator.start();
@@ -289,6 +295,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             null,
                             null,
                             LeaseContext.DEFAULT,
+                            false,
                             false);
 
             enumerator.start();
@@ -328,6 +335,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             null,
                             null,
                             LeaseContext.DEFAULT,
+                            false,
                             false);
 
             enumerator.start();
@@ -391,7 +399,9 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             null,
                             null,
                             LeaseContext.DEFAULT,
-                            true);
+                            true,
+                            false,
+                            false);
 
             enumerator.start();
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
@@ -442,6 +452,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 null,
                                 workExecutor,
                                 LeaseContext.DEFAULT,
+                                false,
+                                false,
                                 false)) {
 
             Map<Long, String> partitionNameByIds =
@@ -561,6 +573,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 null,
                                 null,
                                 LeaseContext.DEFAULT,
+                                false,
                                 false)) {
 
             // test splits for same non-partitioned bucket, should assign to same task
@@ -676,6 +689,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 lakeSource,
                                 workExecutor,
                                 LeaseContext.DEFAULT,
+                                false,
+                                false,
                                 false)) {
             enumerator.start();
 
@@ -776,6 +791,224 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
             }
             Map<Integer, List<SourceEvent>> actualSentSourceEvent = context.getSentSourceEvent();
             assertThat(actualSentSourceEvent).isEqualTo(expectedSentSourceEvent);
+        }
+    }
+
+    @Test
+    void testBacklogStatusTransitionOnEventCompletion() throws Throwable {
+        long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numSubtasks = 3;
+
+        Map<Integer, Integer> bucketIdToNumRecords = putRows(DEFAULT_TABLE_PATH, 30);
+        try (MockBacklogSplitEnumeratorContext context =
+                new MockBacklogSplitEnumeratorContext(numSubtasks)) {
+            FlinkSourceEnumerator enumerator =
+                    new FlinkSourceEnumerator(
+                            DEFAULT_TABLE_PATH,
+                            flussConf,
+                            true,
+                            false,
+                            context,
+                            OffsetsInitializer.full(),
+                            DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                            streaming,
+                            null,
+                            null,
+                            LeaseContext.DEFAULT,
+                            false,
+                            true);
+            enumerator.start();
+            assertThat(context.getIsProcessingBacklog()).isTrue();
+
+            for (int bucketId : bucketIdToNumRecords.keySet()) {
+                registerReader(context, enumerator, bucketId);
+            }
+
+            context.runNextOneTimeCallable();
+
+            // Simulate BacklogFinishEvent from reader
+            TableBucket bucket0 = new TableBucket(tableId, 0);
+            TableBucket bucket1 = new TableBucket(tableId, 1);
+            TableBucket bucket2 = new TableBucket(tableId, 2);
+
+            FinishedBacklogEvent event0 = new FinishedBacklogEvent(bucket0);
+            FinishedBacklogEvent event1 = new FinishedBacklogEvent(bucket1);
+            FinishedBacklogEvent event2 = new FinishedBacklogEvent(bucket2);
+
+            enumerator.handleSourceEvent(0, event0);
+            enumerator.handleSourceEvent(1, event1);
+            enumerator.handleSourceEvent(2, event2);
+
+            assertThat(context.getIsProcessingBacklog()).isFalse();
+        }
+    }
+
+    @Test
+    void testMarkedBacklogOffsetEventSentOnSplitAssignment() throws Throwable {
+        createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numSubtasks = 3;
+        Map<Integer, Integer> bucketIdToNumRecords = putRows(DEFAULT_TABLE_PATH, 30);
+        try (MockBacklogSplitEnumeratorContext context =
+                new MockBacklogSplitEnumeratorContext(numSubtasks)) {
+            FlinkSourceEnumerator enumerator =
+                    new FlinkSourceEnumerator(
+                            DEFAULT_TABLE_PATH,
+                            flussConf,
+                            true,
+                            false,
+                            context,
+                            OffsetsInitializer.full(),
+                            DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                            streaming,
+                            null,
+                            null,
+                            LeaseContext.DEFAULT,
+                            false,
+                            true);
+            enumerator.start();
+            assertThat(context.getIsProcessingBacklog()).isTrue();
+
+            for (int bucketId : bucketIdToNumRecords.keySet()) {
+                registerReader(context, enumerator, bucketId);
+            }
+
+            context.runNextOneTimeCallable();
+
+            Map<Integer, List<SourceEvent>> sentEvents = context.getSentSourceEvent();
+            assertThat(sentEvents).isNotEmpty();
+
+            for (Map.Entry<Integer, List<SourceEvent>> entry : sentEvents.entrySet()) {
+                List<SourceEvent> readerEvents = entry.getValue();
+                List<SourceEvent> markedBacklogEvents =
+                        readerEvents.stream()
+                                .filter(e -> e instanceof MarkedBacklogOffsetEvent)
+                                .collect(Collectors.toList());
+                assertThat(markedBacklogEvents).hasSize(1);
+
+                MarkedBacklogOffsetEvent backlogEvent =
+                        (MarkedBacklogOffsetEvent) markedBacklogEvents.get(0);
+                // marked backlog offsets in the event should be positive
+                for (Long offset : backlogEvent.getMarkedBacklogOffsets().values()) {
+                    assertThat(offset).isGreaterThan(0);
+                }
+            }
+        }
+    }
+
+    @Test
+    void testBacklogTransitionWithEventInteraction() throws Throwable {
+        long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numSubtasks = 3;
+
+        Map<Integer, Integer> bucketIdToNumRecords = putRows(DEFAULT_TABLE_PATH, 30);
+        try (MockBacklogSplitEnumeratorContext context =
+                new MockBacklogSplitEnumeratorContext(numSubtasks)) {
+            FlinkSourceEnumerator enumerator =
+                    new FlinkSourceEnumerator(
+                            DEFAULT_TABLE_PATH,
+                            flussConf,
+                            true,
+                            false,
+                            context,
+                            OffsetsInitializer.full(),
+                            DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                            streaming,
+                            null,
+                            null,
+                            LeaseContext.DEFAULT,
+                            false,
+                            true);
+            enumerator.start();
+            assertThat(context.getIsProcessingBacklog()).isTrue();
+
+            for (int bucketId : bucketIdToNumRecords.keySet()) {
+                registerReader(context, enumerator, bucketId);
+            }
+
+            context.runNextOneTimeCallable();
+
+            Map<Integer, List<SourceEvent>> sentEvents = context.getSentSourceEvent();
+            assertThat(sentEvents).isNotEmpty();
+
+            Map<TableBucket, Long> allBacklogOffsets = new HashMap<>();
+            for (List<SourceEvent> events : sentEvents.values()) {
+                for (SourceEvent event : events) {
+                    if (event instanceof MarkedBacklogOffsetEvent) {
+                        allBacklogOffsets.putAll(
+                                ((MarkedBacklogOffsetEvent) event).getMarkedBacklogOffsets());
+                    }
+                }
+            }
+            assertThat(allBacklogOffsets).isNotEmpty();
+
+            // Simulate readers finishing backlog by sending FinishedBacklogEvent for each bucket
+            // After sending all events, backlog should be marked as finished
+            TableBucket bucket0 = new TableBucket(tableId, 0);
+            TableBucket bucket1 = new TableBucket(tableId, 1);
+            TableBucket bucket2 = new TableBucket(tableId, 2);
+
+            enumerator.handleSourceEvent(0, new FinishedBacklogEvent(bucket0));
+            enumerator.handleSourceEvent(1, new FinishedBacklogEvent(bucket1));
+            enumerator.handleSourceEvent(2, new FinishedBacklogEvent(bucket2));
+
+            assertThat(context.getIsProcessingBacklog()).isFalse();
+        }
+    }
+
+    @Test
+    void testRestoreWithBacklog() throws Throwable {
+        long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numSubtasks = 3;
+        putRows(DEFAULT_TABLE_PATH, 30);
+
+        try (MockBacklogSplitEnumeratorContext context =
+                new MockBacklogSplitEnumeratorContext(numSubtasks)) {
+
+            TableBucket bucket0 = new TableBucket(tableId, 0);
+            TableBucket bucket1 = new TableBucket(tableId, 1);
+            Set<TableBucket> assignedBuckets = new HashSet<>(Arrays.asList(bucket0, bucket1));
+
+            FlinkSourceEnumerator enumerator =
+                    new FlinkSourceEnumerator(
+                            DEFAULT_TABLE_PATH,
+                            flussConf,
+                            true,
+                            false,
+                            context,
+                            assignedBuckets,
+                            Collections.emptyMap(),
+                            Collections.emptyList(),
+                            OffsetsInitializer.full(),
+                            DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                            streaming,
+                            null,
+                            null,
+                            LeaseContext.DEFAULT,
+                            true,
+                            true,
+                            true); // isBacklogProcessed=true restored from state
+
+            enumerator.start();
+
+            assertThat(context.getIsProcessingBacklog()).isFalse();
+
+            for (int i = 0; i < numSubtasks; i++) {
+                registerReader(context, enumerator, i);
+            }
+            context.runNextOneTimeCallable();
+
+            // no MarkedBacklogOffsetEvent is sent
+            Map<Integer, List<SourceEvent>> sentEvents = context.getSentSourceEvent();
+            long markedBacklogEventCount =
+                    sentEvents.values().stream()
+                            .flatMap(List::stream)
+                            .filter(e -> e instanceof MarkedBacklogOffsetEvent)
+                            .count();
+            assertThat(markedBacklogEventCount).isZero();
+
+            // state traces the state
+            SourceEnumeratorState state = enumerator.snapshotState(1L);
+            assertThat(state.isBacklogProcessed()).isTrue();
         }
     }
 
@@ -981,5 +1214,24 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
             upsertWriter.flush();
         }
         return bucketRows;
+    }
+
+    private static class MockBacklogSplitEnumeratorContext
+            extends MockSplitEnumeratorContext<SourceSplitBase> {
+
+        private volatile boolean processingBacklogState;
+
+        public MockBacklogSplitEnumeratorContext(int parallelism) {
+            super(parallelism);
+        }
+
+        @Override
+        public void setIsProcessingBacklog(boolean isProcessingBacklog) {
+            this.processingBacklogState = isProcessingBacklog;
+        }
+
+        public boolean getIsProcessingBacklog() {
+            return processingBacklogState;
+        }
     }
 }
