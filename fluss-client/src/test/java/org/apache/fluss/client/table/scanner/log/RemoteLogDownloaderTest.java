@@ -48,6 +48,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
@@ -232,6 +234,51 @@ class RemoteLogDownloaderTest {
         } finally {
             IOUtils.closeQuietly(fileDownloader);
             IOUtils.closeQuietly(remoteLogDownloader);
+        }
+    }
+
+    @Test
+    void testNoPendingDownloadAfterClose() throws Exception {
+        CountDownLatch downloadStartedLatch = new CountDownLatch(1);
+
+        RemoteFileDownloader blockingDownloader =
+                new RemoteFileDownloader(1) {
+                    @Override
+                    protected long downloadFile(Path targetFilePath, FsPath remoteFilePath)
+                            throws IOException {
+                        downloadStartedLatch.countDown();
+                        // block until interrupted by close()
+                        try {
+                            Thread.sleep(Long.MAX_VALUE);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            throw new IOException("Download interrupted", e);
+                        }
+                        return 0;
+                    }
+                };
+
+        RemoteLogDownloader remoteLogDownloader =
+                new RemoteLogDownloader(
+                        DATA1_TABLE_PATH, conf, blockingDownloader, scannerMetricGroup, 10L);
+        try {
+            remoteLogDownloader.start();
+
+            TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+            List<RemoteLogSegment> segments =
+                    buildRemoteLogSegmentList(tb, DATA1_PHYSICAL_TABLE_PATH, 5, conf, 10);
+            FsPath tabletDir = remoteLogTabletDir(remoteLogDir, DATA1_PHYSICAL_TABLE_PATH, tb);
+            requestRemoteLogs(remoteLogDownloader, tabletDir, segments);
+
+            // wait until the first download has started
+            assertThat(downloadStartedLatch.await(30, TimeUnit.SECONDS)).isTrue();
+
+            // close the downloader while a download is in-flight
+            remoteLogDownloader.close();
+            assertThat(blockingDownloader.getDownloadThreadPool().getQueue()).isEmpty();
+        } finally {
+            IOUtils.closeQuietly(remoteLogDownloader);
+            IOUtils.closeQuietly(blockingDownloader);
         }
     }
 
