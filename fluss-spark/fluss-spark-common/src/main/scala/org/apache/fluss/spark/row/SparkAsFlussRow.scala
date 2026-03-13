@@ -20,7 +20,7 @@ package org.apache.fluss.spark.row
 import org.apache.fluss.row.{BinaryString, Decimal, InternalMap, InternalRow => FlussInternalRow, TimestampLtz, TimestampNtz}
 
 import org.apache.spark.sql.catalyst.{InternalRow => SparkInternalRow}
-import org.apache.spark.sql.types.StructType
+import org.apache.spark.sql.types.{MapType => SparkMapType, StructType}
 
 /** Wraps a Spark [[SparkInternalRow]] as a Fluss [[FlussInternalRow]]. */
 class SparkAsFlussRow(schema: StructType) extends FlussInternalRow with Serializable {
@@ -127,6 +127,8 @@ class SparkAsFlussRow(schema: StructType) extends FlussInternalRow with Serializ
 
   /** Returns the map value at the given position. */
   override def getMap(pos: Int): InternalMap = {
-    throw new UnsupportedOperationException()
+    val sparkMapData = row.getMap(pos)
+    val mapType = schema.fields(pos).dataType.asInstanceOf[SparkMapType]
+    SparkAsFlussMap(sparkMapData, mapType)
   }
 }
