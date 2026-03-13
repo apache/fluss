@@ -212,9 +212,9 @@ class FlussAsSparkArrayTest extends AnyFunSuite {
     val flussArray = new GenericArray(decimals)
     val sparkArray = new FlussAsSparkArray(elementType).replace(flussArray)
 
-    assertThat(sparkArray.getDecimal(0, 10, 2).toBigDecimal.doubleValue()).isEqualTo(10.50)
-    assertThat(sparkArray.getDecimal(1, 10, 2).toBigDecimal.doubleValue()).isEqualTo(20.75)
-    assertThat(sparkArray.getDecimal(2, 10, 2).toBigDecimal.doubleValue()).isEqualTo(30.99)
+    assertThat(sparkArray.getDecimal(0, 10, 2).toBigDecimal.doubleValue).isEqualTo(10.50)
+    assertThat(sparkArray.getDecimal(1, 10, 2).toBigDecimal.doubleValue).isEqualTo(20.75)
+    assertThat(sparkArray.getDecimal(2, 10, 2).toBigDecimal.doubleValue).isEqualTo(30.99)
   }
 
   test("getUTF8String: read string array") {
