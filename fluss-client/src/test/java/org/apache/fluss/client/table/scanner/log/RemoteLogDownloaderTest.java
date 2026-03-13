@@ -48,6 +48,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
@@ -280,6 +283,93 @@ class RemoteLogDownloaderTest {
                         "(bucket=3, offset=0, ts=15)",
                         "(bucket=3, offset=0, ts=25)");
         assertThat(results).isEqualTo(expected);
+    }
+
+    /**
+     * Tests that close() properly cleans up the local directory even when there are simultaneously:
+     * (1) already-downloaded files on disk, (2) in-flight downloads still running on the shared
+     * pool, and (3) pending requests in the queue. After close() the local directory must not exist
+     * — including after in-flight downloads finish and potentially recreate it via
+     * Files.createDirectories.
+     */
+    @Test
+    void testCloseWithInFlightAndPendingDownloads() throws Exception {
+        // Latch to block in-flight downloads until explicitly released after close().
+        CountDownLatch blockLatch = new CountDownLatch(1);
+        // Latch to know when 2 in-flight downloads have entered the blocked state.
+        CountDownLatch inFlightStarted = new CountDownLatch(2);
+        // Latch to know when 2 in-flight downloads are finished.
+        CountDownLatch inFlightFinished = new CountDownLatch(2);
+
+        class BlockingFileDownloader extends RemoteFileDownloader {
+            private final AtomicInteger enteredCount = new AtomicInteger(0);
+
+            BlockingFileDownloader(int threadNum) {
+                super(threadNum);
+            }
+
+            @Override
+            protected long downloadFile(Path targetFilePath, FsPath remoteFilePath)
+                    throws IOException {
+                int count = enteredCount.incrementAndGet();
+                if (count > 1) {
+                    // Block the 2nd and 3rd downloads to simulate in-flight state.
+                    inFlightStarted.countDown();
+                    try {
+                        blockLatch.await();
+                    } catch (InterruptedException e) {
+                        throw new IOException("Interrupted while blocking", e);
+                    }
+                }
+                long downloadBytes = super.downloadFile(targetFilePath, remoteFilePath);
+                inFlightFinished.countDown();
+                return downloadBytes;
+            }
+        }
+
+        // prefetch=3: downloads 0,1,2 start; downloads 3,4 remain in the queue.
+        conf.set(ConfigOptions.CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM, 3);
+        BlockingFileDownloader fileDownloader = new BlockingFileDownloader(4);
+        RemoteLogDownloader downloader =
+                new RemoteLogDownloader(
+                        DATA1_TABLE_PATH, conf, fileDownloader, scannerMetricGroup, 10L);
+
+        try {
+            TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+            List<RemoteLogSegment> segments =
+                    buildRemoteLogSegmentList(tb, DATA1_PHYSICAL_TABLE_PATH, 5, conf, 10);
+            FsPath tabletDir = remoteLogTabletDir(remoteLogDir, DATA1_PHYSICAL_TABLE_PATH, tb);
+            List<RemoteLogDownloadFuture> futures =
+                    requestRemoteLogs(downloader, tabletDir, segments);
+
+            downloader.start();
+
+            // Wait for the first download to complete (already-downloaded file on disk) and 2
+            // in-flight downloads to enter the blocked state.
+            // At this point: 1 file downloaded, 2 blocked in-flight, 2 pending.
+            retry(Duration.ofMinutes(1), () -> assertThat(futures.get(0).isDone()).isTrue());
+            assertThat(inFlightStarted.await(30, TimeUnit.SECONDS)).isTrue();
+            Path localLogDir = downloader.getLocalLogDir();
+            assertThat(localLogDir.toFile().exists()).isTrue();
+
+            // Close the downloader.
+            downloader.close();
+
+            // Pending futures (segments 3, 4) should be cancelled immediately.
+            assertThat(futures.get(3).isDone()).isTrue();
+            assertThat(futures.get(4).isDone()).isTrue();
+
+            // Wait for 2 in-flight downloads finished.
+            blockLatch.countDown();
+            assertThat(inFlightFinished.await(30, TimeUnit.SECONDS)).isTrue();
+
+            // Verify that ultimately the local directory does not exist.
+            retry(Duration.ofMinutes(1), () -> assertThat(localLogDir.toFile().exists()).isFalse());
+        } finally {
+            blockLatch.countDown(); // ensure latch is released even on test failure
+            IOUtils.closeQuietly(downloader);
+            IOUtils.closeQuietly(fileDownloader);
+        }
     }
 
     private RemoteLogDownloadRequest createDownloadRequest(
