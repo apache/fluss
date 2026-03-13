@@ -102,4 +102,10 @@ public class ProtobufBytesField extends ProtobufField<Field.Bytes> {
     protected String typeTag() {
         return "ProtoCodecUtils.WIRETYPE_LENGTH_DELIMITED";
     }
+
+    @Override
+    public void stringify(PrintWriter w, String sep) {
+        w.format("                + \"%s%s=\"\n", sep, ccName);
+        w.format("                + \"<byte[\" + %s.length + \"]>\"\n", ccName);
+    }
 }
