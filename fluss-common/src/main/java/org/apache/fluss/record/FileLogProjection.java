@@ -231,7 +231,9 @@ public class FileLogProjection {
                             currentProjection.bodyCompression);
             checkState(
                     headerMetadata.length == currentProjection.arrowMetadataLength,
-                    "Invalid metadata length");
+                    "Invalid Arrow metadata length: actual=%s, expected=%s",
+                    headerMetadata.length,
+                    currentProjection.arrowMetadataLength);
 
             // 4. update and copy log batch header
             logHeaderBuffer.position(LENGTH_OFFSET);

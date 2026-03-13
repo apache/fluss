@@ -70,7 +70,6 @@ import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.expressions.AggregateExpression;
 import org.apache.flink.table.expressions.ResolvedExpression;
 import org.apache.flink.table.functions.AsyncLookupFunction;
-import org.apache.flink.table.functions.FunctionDefinition;
 import org.apache.flink.table.functions.LookupFunction;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.LogicalType;
@@ -602,19 +601,33 @@ public class FlinkTableSource
             return false;
         }
 
-        FunctionDefinition functionDefinition = aggregateExpressions.get(0).getFunctionDefinition();
-        if (!(functionDefinition
-                        .getClass()
-                        .getCanonicalName()
-                        .equals(
-                                "org.apache.flink.table.planner.functions.aggfunctions.CountAggFunction")
-                || functionDefinition
-                        .getClass()
-                        .getCanonicalName()
-                        .equals(
-                                "org.apache.flink.table.planner.functions.aggfunctions.Count1AggFunction"))) {
+        AggregateExpression aggExpr = aggregateExpressions.get(0);
+        String functionName = aggExpr.getFunctionDefinition().getClass().getCanonicalName();
+
+        // Verify that the aggregate function is COUNT(*) or COUNT(1)
+        // CountAggFunction: COUNT(*) or COUNT(column)
+        // Count1AggFunction: COUNT(1) with constant argument
+        boolean isCountAgg =
+                "org.apache.flink.table.planner.functions.aggfunctions.CountAggFunction"
+                        .equals(functionName);
+        boolean isCount1Agg =
+                "org.apache.flink.table.planner.functions.aggfunctions.Count1AggFunction"
+                        .equals(functionName);
+        if (!isCountAgg && !isCount1Agg) {
             return false;
         }
+
+        // For COUNT(column), reject if column is nullable (cannot handle NULL filtering)
+        if (isCountAgg) {
+            List<org.apache.flink.table.expressions.Expression> args = aggExpr.getChildren();
+            if (!args.isEmpty() && args.get(0) instanceof ResolvedExpression) {
+                ResolvedExpression arg = (ResolvedExpression) args.get(0);
+                if (arg.getOutputDataType().getLogicalType().isNullable()) {
+                    return false;
+                }
+            }
+        }
+
         selectRowCount = true;
         this.producedDataType = dataType.getLogicalType();
         return true;
