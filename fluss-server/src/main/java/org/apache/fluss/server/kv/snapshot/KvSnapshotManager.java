@@ -240,6 +240,13 @@ public class KvSnapshotManager implements Closeable {
         }
         CompletedSnapshot completedSnapshot =
                 snapshotContext.getCompletedSnapshotProvider(tableBucket, snapshotId);
+        if (completedSnapshot == null) {
+            LOG.warn(
+                    "Snapshot {} not found for bucket {}, skip downloading.",
+                    snapshotId,
+                    tableBucket);
+            return;
+        }
         incrementalDownloadSnapshot(completedSnapshot);
         standbySnapshotSize = completedSnapshot.getSnapshotSize();
     }
@@ -253,23 +260,26 @@ public class KvSnapshotManager implements Closeable {
      * @return the latest snapshot
      */
     public Optional<CompletedSnapshot> downloadLatestSnapshot() throws Exception {
-        // standbyInitializing is used to prevent concurrent download.
+        // standbyInitializing is used to prevent concurrent download via
+        // downloadSnapshot(snapshotId).
         standbyInitializing = true;
+        try {
+            // Note: no isStandby check here. This method is called from both:
+            // 1. initKvTablet() during leader initialization - isStandby is already false
+            // 2. becomeStandbyAsync() during standby initialization - isStandby is true
+            // The isStandby guard is only needed in downloadSnapshot(snapshotId) which is
+            // called from the notification path exclusively for standby replicas.
+            Optional<CompletedSnapshot> latestSnapshot = getLatestSnapshot();
+            if (latestSnapshot.isPresent()) {
+                CompletedSnapshot completedSnapshot = latestSnapshot.get();
+                incrementalDownloadSnapshot(completedSnapshot);
+                standbySnapshotSize = completedSnapshot.getSnapshotSize();
+            }
 
-        // Note: no isStandby check here. This method is called from both:
-        // 1. initKvTablet() during leader initialization - isStandby is already false
-        // 2. becomeStandbyAsync() during standby initialization - isStandby is true
-        // The isStandby guard is only needed in downloadSnapshot(snapshotId) which is
-        // called from the notification path exclusively for standby replicas.
-        Optional<CompletedSnapshot> latestSnapshot = getLatestSnapshot();
-        if (latestSnapshot.isPresent()) {
-            CompletedSnapshot completedSnapshot = latestSnapshot.get();
-            incrementalDownloadSnapshot(completedSnapshot);
-            standbySnapshotSize = completedSnapshot.getSnapshotSize();
+            return latestSnapshot;
+        } finally {
+            standbyInitializing = false;
         }
-
-        standbyInitializing = false;
-        return latestSnapshot;
     }
 
     private void incrementalDownloadSnapshot(CompletedSnapshot completedSnapshot) throws Exception {
