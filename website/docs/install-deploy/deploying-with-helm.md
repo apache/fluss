@@ -139,7 +139,7 @@ The Fluss Helm chart deploys the following Kubernetes resources:
 - **CoordinatorServer**: 1x StatefulSet with Headless Service for cluster coordination
 - **TabletServer**: 3x StatefulSet with Headless Service for data storage and processing
 - **ConfigMap**: Configuration management for `server.yaml` settings
-- **Services**: Headless services providing stable pod DNS names
+- **Services**: Headless services providing stable pod DNS names, plus optional dedicated headless services when metrics are enabled
 
 ### Step 3: Verify Installation
 
@@ -182,6 +182,18 @@ The following table lists the configurable parameters of the Fluss chart and the
 |-----------|-------------|---------|
 | `listeners.internal.port` | Internal communication port | `9123` |
 | `listeners.client.port` | Client port (intra-cluster) | `9124` |
+
+### Metrics Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `metrics.reporters` | Comma-separated reporter selector; use `""` to disable metrics | `""` |
+| `metrics.jmx.port` | JMX reporter port range | `9250` |
+| `metrics.prometheus.port` | Prometheus reporter port | `9249` |
+| `metrics.prometheus.service.portName` | Named port exposed on metrics services | `metrics` |
+| `metrics.prometheus.service.labels` | Additional labels added to metrics services | `{}` |
+| `metrics.prometheus.service.annotations` | Optional annotations added to metrics services | `{}` |
+| `metrics.reporter.<reporter>.<option>` | Configure `<option>` for `<reporter>` (refer to the [Fluss configuration](https://fluss.apache.org/docs/maintenance/configuration/#metrics) | NA |
 
 ### Fluss Configuration Overrides
 
@@ -253,6 +265,62 @@ listeners:
     port: 9123
   client:
     port: 9124
+```
+
+### Metrics and Monitoring
+
+When `metrics.reporters` is set, the chart adds the following `server.yaml` config entries:
+
+- `metrics.reporters`: comma-separated reporter names from `metrics.reporters`
+- `metrics.reporter.<name>.port`: port value from `metrics.<name>.port`
+
+Only the `port` is rendered from values file. All other metrics reporter options (refer to the [Fluss configuration](https://fluss.apache.org/docs/maintenance/configuration/#metrics)) should be specified via `configurationOverrides`.
+
+#### Prometheus Annotation Based Scraping
+
+The example values below show how to add annotations to the metrics services so that a Prometheus server can discover and scrape them automatically based on the annotations:
+
+```yaml
+metrics:
+  reporters: prometheus
+  prometheus:
+    port: 9249
+    service:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "9249"
+```
+
+#### Prometheus ServiceMonitor Based Scraping
+
+Similarly, if using the [Prometheus Operator](https://prometheus-operator.dev/), use the values below to add labels to the metrics services:
+
+```yaml
+metrics:
+  reporters: prometheus
+  prometheus:
+    port: 9249
+    service:
+      portName: metrics
+      labels:
+        monitoring: enabled
+```
+
+Then create a [`ServiceMonitor`](https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.ServiceMonitor) that selects them matching the labels:
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: fluss-metrics
+spec:
+  selector:
+    matchLabels:
+      monitoring: enabled
+  endpoints:
+    # Matches `metrics.prometheus.service.portName`
+    - port: metrics
 ```
 
 ### Storage Configuration

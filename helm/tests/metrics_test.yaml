@@ -1,0 +1,273 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+suite: metrics-disabled-configmap
+templates:
+  - templates/configmap.yaml
+tests:
+  - it: does not add metrics reporter settings when reporters are empty
+    asserts:
+      - notMatchRegex:
+          path: data["server.yaml"]
+          pattern: 'metrics\.reporters:'
+      - notMatchRegex:
+          path: data["server.yaml"]
+          pattern: 'metrics\.reporter\.prometheus\.port:'
+---
+
+suite: metrics-enabled-configmap
+templates:
+  - templates/configmap.yaml
+tests:
+  - it: renders prometheus reporter port from values
+    set:
+      metrics.reporters: prometheus
+      metrics.prometheus:
+        port: 9249
+    asserts:
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: 'metrics\.reporters:\s*prometheus'
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: 'metrics\.reporter\.prometheus\.port:\s*9249'
+---
+
+suite: metrics-enabled-configmap-custom-reporters
+templates:
+  - templates/configmap.yaml
+tests:
+  - it: renders multiple reporter ports from structured metrics values
+    set:
+      metrics.reporters: grph,prometheus
+      metrics.grph:
+        port: 9020
+      metrics.prometheus:
+        port: 9249
+    asserts:
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: 'metrics\.reporters:\s*grph,prometheus'
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: 'metrics\.reporter\.grph\.port:\s*9020'
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: 'metrics\.reporter\.prometheus\.port:\s*9249'
+---
+
+suite: metrics-invalid-config
+templates:
+  - templates/configmap.yaml
+tests:
+  - it: fails when selected reporter port is missing
+    set:
+      metrics.reporters: prometheus
+      metrics.prometheus: null
+    asserts:
+      - failedTemplate:
+          errorMessage: metrics.prometheus.port must be set when metrics.reporters includes prometheus
+  - it: fails when selected reporter port is empty
+    set:
+      metrics.reporters: prometheus
+      metrics.prometheus:
+        port: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: metrics.prometheus.port must be set when metrics.reporters includes prometheus
+---
+
+suite: metrics-config-overrides-precedence
+templates:
+  - templates/configmap.yaml
+tests:
+  - it: fails when reporter port is set via configurationOverrides
+    set:
+      metrics.reporters: prometheus
+      metrics.prometheus:
+        port: 9249
+      configurationOverrides:
+        metrics.reporter.prometheus.port: 9300
+    asserts:
+      - failedTemplate:
+          errorMessage: metrics.reporter.prometheus.port must be set via metrics.prometheus.port in values.yaml, not via configurationOverrides
+  - it: prefers configurationOverrides for metrics.reporters when both are set
+    set:
+      metrics.reporters: grph,prometheus
+      metrics.grph:
+        port: 9020
+      metrics.prometheus:
+        port: 9249
+      configurationOverrides:
+        metrics.reporters: grph
+    asserts:
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: 'metrics\.reporters:\s*grph'
+      - notMatchRegex:
+          path: data["server.yaml"]
+          pattern: 'metrics\.reporters:\s*grph,prometheus'
+---
+
+suite: metrics-service-disabled
+templates:
+  - templates/svc-metrics-coordinator.yaml
+tests:
+  - it: does not render coordinator metrics service when reporters are empty
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: does not render coordinator metrics service when prometheus reporter is absent
+    set:
+      metrics.reporters: jmx
+      metrics.jmx:
+        port: 9250
+    asserts:
+      - hasDocuments:
+          count: 0
+---
+
+suite: metrics-service-enabled
+templates:
+  - templates/svc-metrics-coordinator.yaml
+tests:
+  - it: renders coordinator metrics service with named metrics port
+    set:
+      metrics.reporters: prometheus
+      metrics.prometheus:
+        port: 9249
+    asserts:
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-coordinator-server-metrics-hs
+      - equal:
+          path: spec.ports[0].name
+          value: metrics
+      - equal:
+          path: spec.ports[0].port
+          value: 9249
+      - equal:
+          path: spec.clusterIP
+          value: None
+  - it: renders custom port name and service labels for ServiceMonitor selectors
+    set:
+      metrics.reporters: prometheus
+      metrics.prometheus.service.portName: fluss-metrics
+      metrics.prometheus.service.labels:
+        monitoring: enabled
+    asserts:
+      - equal:
+          path: spec.ports[0].name
+          value: fluss-metrics
+      - equal:
+          path: metadata.labels.monitoring
+          value: enabled
+  - it: renders value-driven annotations on metrics service when provided
+    set:
+      metrics.reporters: prometheus
+      metrics.prometheus.service.annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "9249"
+    asserts:
+      - equal:
+          path: metadata.annotations["prometheus.io/scrape"]
+          value: "true"
+      - equal:
+          path: metadata.annotations["prometheus.io/path"]
+          value: "/metrics"
+      - equal:
+          path: metadata.annotations["prometheus.io/port"]
+          value: "9249"
+  - it: renders no annotations when not configured
+    set:
+      metrics.reporters: prometheus
+    asserts:
+      - isNull:
+          path: metadata.annotations
+  - it: uses metrics component label
+    set:
+      metrics.reporters: prometheus
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: metrics
+  - it: uses port from values on service
+    set:
+      metrics.reporters: prometheus
+      metrics.prometheus:
+        port: 9249
+    asserts:
+      - equal:
+          path: spec.ports[0].port
+          value: 9249
+      - equal:
+          path: spec.ports[0].targetPort
+          value: 9249
+---
+
+suite: pod-service-separation
+templates:
+  - templates/svc-coordinator.yaml
+  - templates/svc-tablet.yaml
+tests:
+  - it: keeps coordinator pod service without metrics annotations
+    set:
+      metrics.reporters: prometheus
+      metrics.prometheus.service.annotations:
+        prometheus.io/scrape: "true"
+    template: templates/svc-coordinator.yaml
+    asserts:
+      - notExists:
+          path: metadata.annotations
+  - it: keeps tablet pod service without metrics annotations
+    set:
+      metrics.reporters: prometheus
+      metrics.prometheus.service.annotations:
+        prometheus.io/scrape: "true"
+    template: templates/svc-tablet.yaml
+    asserts:
+      - notExists:
+          path: metadata.annotations
+---
+
+suite: metrics-enabled-statefulset
+templates:
+  - templates/sts-coordinator.yaml
+  - templates/sts-tablet.yaml
+tests:
+  - it: does not expose metrics container port for coordinator
+    set:
+      metrics.reporters: prometheus
+    template: templates/sts-coordinator.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: metrics
+            containerPort: 9249
+  - it: does not expose metrics container port for tablet
+    set:
+      metrics.reporters: prometheus
+    template: templates/sts-tablet.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: metrics
+            containerPort: 9249

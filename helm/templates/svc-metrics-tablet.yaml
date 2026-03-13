@@ -16,15 +16,32 @@
 # limitations under the License.
 #
 
+{{- if include "fluss.metrics.prometheusEnabled" . }}
+{{- $prometheus := .Values.metrics.prometheus | default dict }}
+{{- $promSvc := $prometheus.service | default dict }}
 apiVersion: v1
-kind: ConfigMap
+kind: Service
 metadata:
-  name: fluss-conf-file
+  name: {{ .Release.Name }}-tablet-server-metrics-hs
   labels:
-  {{- include "fluss.labels" . | nindent 4 }}
-data:
-  server.yaml: |
-    {{- range $key, $val := .Values.configurationOverrides }}
-    {{ $key }}: {{ tpl (printf "%v" $val) $ }}
+    {{- include "fluss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+    {{- with $promSvc.labels }}
+    {{- toYaml . | nindent 4 }}
     {{- end }}
-    {{- include "fluss.metrics.config" . | nindent 4 }}
+  {{- with $promSvc.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  clusterIP: None
+  type: ClusterIP
+  ports:
+    - name: {{ default "metrics" $promSvc.portName }}
+      protocol: TCP
+      port: {{ $prometheus.port }}
+      targetPort: {{ $prometheus.port }}
+  selector:
+    {{- include "fluss.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: tablet
+{{- end }}

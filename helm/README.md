@@ -22,7 +22,7 @@ This chart deploys an Apache Fluss cluster on Kubernetes, following Helm best pr
 It requires a Zookeeper ensemble to be running in the same Kubernetes cluster. In future releases, we may add support for an embedded Zookeeper cluster.
 
 
-## Development environment 
+## Development environment
 
 | component                                                                      | version |
 | ------------------------------------------------------------------------------ | ------- |
@@ -33,7 +33,7 @@ It requires a Zookeeper ensemble to be running in the same Kubernetes cluster. I
 | [Apache Fluss](https://fluss.apache.org/docs/)                                 | v0.10.0-incubating  |
 
 
-## Image requirements 
+## Image requirements
 
 A container image for Fluss is available on DockerHub as `fluss/fluss`. You can use it directly or build your own from this repo. To use your own image you need to build the project with [Maven](https://fluss.apache.org/community/dev/building/) and build it with Docker.
 
@@ -93,6 +93,78 @@ Important Fluss options surfaced by the chart:
 - internal.listener.name: Which listener is used for internal communication (defaults to INTERNAL).
 - tablet-server.id: Required to be unique per TabletServer. The chart auto‑derives this from the StatefulSet pod ordinal at runtime.
 
+### Metrics and Prometheus Scraping
+
+The chart can enable Fluss metrics reporters and create dedicated metrics services for `coordinator` and `tablet` components.
+
+Example:
+
+```bash
+helm install fluss ./fluss-helm \
+  --set metrics.reporters=prometheus
+```
+
+When `metrics.reporters` is set, the chart will:
+
+- configure `metrics.reporters` from reporter names in values
+- configure `metrics.reporter.<name>.<option>` entries from values
+
+Values:
+
+| Key | Description |
+| --- | --- |
+| `metrics.reporters` | Comma-separated reporter selector. Leave empty to disable metrics. |
+| `metrics.jmx.port` | JMX reporter port range (e.g. `9250`). |
+| `metrics.prometheus.port` | Prometheus reporter port (default `9249`). |
+| `metrics.prometheus.service.portName` | Named port exposed by metrics services (default `metrics`). |
+| `metrics.prometheus.service.labels` | Optional labels on metrics services (useful for [ServiceMonitor](https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.ServiceMonitor) selectors). |
+| `metrics.prometheus.service.annotations` | Optional annotations on metrics services (useful for annotation-based scraping). |
+
+#### Prometheus Annotation Based Scraping
+
+The values below enable annotation based scraping:
+
+```yaml
+metrics:
+  reporters: prometheus
+  prometheus:
+    port: 9249
+    service:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "9249"
+```
+
+#### Prometheus ServiceMonitor Based Scraping
+
+When using the [Prometheus Operator](https://prometheus-operator.dev/), use the values below to add labels to the metrics services and then create a `ServiceMonitor` that selects them:
+
+```yaml
+metrics:
+  reporters: prometheus
+  prometheus:
+    port: 9249
+    service:
+      portName: metrics
+      labels:
+        monitoring: enabled
+```
+
+Apply the following to create a `ServiceMonitor` resource that matches the label:
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: fluss-metrics
+spec:
+  selector:
+    matchLabels:
+      monitoring: enabled
+  endpoints:
+    - port: metrics
+```
 
 ### Zookeeper and storage
 - zookeeper.address must point to a reachable ensemble.
