@@ -21,12 +21,18 @@ import org.apache.fluss.client.table.scanner.ScanRecord
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.metadata.{TableBucket, TablePath}
 
+import org.apache.spark.util.LongAccumulator
+
 /** Partition reader that reads log data from a single Fluss table bucket. */
 class FlussAppendPartitionReader(
     tablePath: TablePath,
     projection: Array[Int],
     flussPartition: FlussAppendInputPartition,
-    flussConfig: Configuration)
+    flussConfig: Configuration,
+    fetchRequestsAccum: LongAccumulator = null,
+    fetchTimeMsAccum: LongAccumulator = null,
+    maxFetchTimeMsAccum: MaxLongAccumulator = null,
+    fetchErrorsAccum: LongAccumulator = null)
   extends FlussPartitionReader(tablePath, flussConfig) {
 
   private val tableBucket: TableBucket = flussPartition.tableBucket
@@ -44,7 +50,20 @@ class FlussAppendPartitionReader(
   initialize()
 
   private def pollMoreRecords(): Unit = {
-    val scanRecords = logScanner.poll(POLL_TIMEOUT)
+    val pollStartMs = System.currentTimeMillis()
+    val scanRecords =
+      try {
+        logScanner.poll(POLL_TIMEOUT)
+      } catch {
+        case e: Exception =>
+          if (fetchErrorsAccum != null) fetchErrorsAccum.add(1L)
+          throw e
+      } finally {
+        val pollTimeMs = System.currentTimeMillis() - pollStartMs
+        if (fetchRequestsAccum != null) fetchRequestsAccum.add(1L)
+        if (fetchTimeMsAccum != null) fetchTimeMsAccum.add(pollTimeMs)
+        if (maxFetchTimeMsAccum != null) maxFetchTimeMsAccum.add(pollTimeMs)
+      }
     if ((scanRecords == null || scanRecords.isEmpty) && currentOffset < flussPartition.stopOffset) {
       throw new IllegalStateException(s"No more data from fluss server," +
         s" but current offset $currentOffset not reach the stop offset ${flussPartition.stopOffset}")
