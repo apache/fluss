@@ -270,11 +270,7 @@ public class TieringCommitOperator<WriteResult, Committable>
                     lakeBucketTieredOffsetsFile,
                     logEndOffsets,
                     logMaxTieredTimestamps);
-            return new CommitResult(
-                    committable,
-                    new TieringStats(
-                            lakeCommitResult.getTotalLakeFileSize(),
-                            lakeCommitResult.getTotalLakeRecordCount()));
+            return new CommitResult(committable, lakeCommitResult.getTieringStats());
         }
     }
 

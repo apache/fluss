@@ -409,7 +409,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     <tr>
       <td>failuresTotal</td>
       <td>The total number of tiering failures for this table.</td>
-      <td>Gauge</td>
+      <td>Counter</td>
     </tr>
     <tr>
       <td>fileSize</td>

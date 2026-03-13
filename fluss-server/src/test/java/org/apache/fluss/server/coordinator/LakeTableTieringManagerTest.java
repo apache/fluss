@@ -309,7 +309,7 @@ class LakeTableTieringManagerTest {
                 .isEqualTo(LakeTableTieringManager.TieringState.Tiering);
 
         // Simulate tiering duration — finish with UNKNOWN stats (empty commit).
-        // Duration should NOT be updated because no data was written.
+        // Duration should still be updated even when no stats/data are reported.
         manualClock.advanceTime(Duration.ofSeconds(5));
         tableTieringManager.finishTableTiering(tableId1, 1, false, TieringStats.UNKNOWN);
         assertThat(tableTieringManager.getLastTieringResultField(tableId1, r -> r.tierDuration))

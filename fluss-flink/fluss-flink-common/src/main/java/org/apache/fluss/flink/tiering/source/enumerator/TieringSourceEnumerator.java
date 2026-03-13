@@ -668,15 +668,16 @@ public class TieringSourceEnumerator
         final TieringStats stats;
 
         public static TieringFinishInfo from(long tieringEpoch) {
-            return new TieringFinishInfo(tieringEpoch, false, TieringStats.UNKNOWN);
+            return new TieringFinishInfo(tieringEpoch, false, null);
         }
 
         public static TieringFinishInfo from(
-                long tieringEpoch, boolean isForceFinished, TieringStats stats) {
+                long tieringEpoch, boolean isForceFinished, @Nullable TieringStats stats) {
             return new TieringFinishInfo(tieringEpoch, isForceFinished, stats);
         }
 
-        private TieringFinishInfo(long tieringEpoch, boolean isForceFinished, TieringStats stats) {
+        private TieringFinishInfo(
+                long tieringEpoch, boolean isForceFinished, @Nullable TieringStats stats) {
             this.tieringEpoch = tieringEpoch;
             this.isForceFinished = isForceFinished;
             this.stats = stats != null ? stats : TieringStats.UNKNOWN;

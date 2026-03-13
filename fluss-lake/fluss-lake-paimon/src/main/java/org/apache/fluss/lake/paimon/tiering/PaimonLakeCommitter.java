@@ -162,6 +162,7 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
     }
 
     /** Computes cumulative table stats from the latest snapshot by REST API. */
+    @Nullable
     private TieringStats computeTableStats() {
         Identifier identifier =
                 new Identifier(tablePath.getDatabaseName(), tablePath.getTableName());
@@ -172,17 +173,17 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
                         "No snapshot found for table {}, "
                                 + "fileSize and recordCount will be reported as -1.",
                         tablePath);
-                return TieringStats.UNKNOWN;
+                return null;
             }
             TableSnapshot tableSnapshot = snapshot.get();
             return new TieringStats(tableSnapshot.fileSizeInBytes(), tableSnapshot.recordCount());
         } catch (Exception e) {
-            LOG.warn(
+            LOG.debug(
                     "Failed to load snapshot for table {}, "
                             + "fileSize and recordCount will be reported as -1.",
                     tablePath,
                     e);
-            return TieringStats.UNKNOWN;
+            return null;
         }
     }
 
