@@ -539,17 +539,31 @@ public final class FlussClusterExtension
         }
     }
 
-    /** Wait until all the table assignments buckets are ready for table. */
-    public void waitUntilTableReady(long tableId) {
+    /**
+     * Wait until all replicas in table are ready with configurable timeout.
+     *
+     * @param tableId the table id to wait for
+     * @param timeout the maximum time to wait
+     */
+    public void waitUntilTableReady(long tableId, Duration timeout) {
         ZooKeeperClient zkClient = getZooKeeperClient();
         retry(
-                Duration.ofMinutes(1),
+                timeout,
                 () -> {
                     Optional<TableAssignment> tableAssignmentOpt =
                             zkClient.getTableAssignment(tableId);
                     assertThat(tableAssignmentOpt).isPresent();
                     waitReplicaInAssignmentReady(zkClient, tableAssignmentOpt.get(), tableId, null);
                 });
+    }
+
+    /**
+     * Wait until all replicas in table are ready with default 1 minute timeout.
+     *
+     * @param tableId the table id to wait for
+     */
+    public void waitUntilTableReady(long tableId) {
+        waitUntilTableReady(tableId, Duration.ofMinutes(1));
     }
 
     /**
@@ -586,10 +600,17 @@ public final class FlussClusterExtension
                 });
     }
 
-    public void waitUntilTablePartitionReady(long tableId, long partitionId) {
+    /**
+     * Wait until all replicas in partition are ready with configurable timeout.
+     *
+     * @param tableId the table id
+     * @param partitionId the partition id
+     * @param timeout the maximum time to wait
+     */
+    public void waitUntilTablePartitionReady(long tableId, long partitionId, Duration timeout) {
         ZooKeeperClient zkClient = getZooKeeperClient();
         retry(
-                Duration.ofMinutes(1),
+                timeout,
                 () -> {
                     Optional<PartitionAssignment> partitionAssignmentOpt =
                             zkClient.getPartitionAssignment(partitionId);
@@ -597,6 +618,16 @@ public final class FlussClusterExtension
                     waitReplicaInAssignmentReady(
                             zkClient, partitionAssignmentOpt.get(), tableId, partitionId);
                 });
+    }
+
+    /**
+     * Wait until all replicas in partition are ready with default 1 minute timeout.
+     *
+     * @param tableId the table id
+     * @param partitionId the partition id
+     */
+    public void waitUntilTablePartitionReady(long tableId, long partitionId) {
+        waitUntilTablePartitionReady(tableId, partitionId, Duration.ofMinutes(1));
     }
 
     private void waitReplicaInAssignmentReady(
