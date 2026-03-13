@@ -703,11 +703,13 @@ class ZooKeeperClientTest {
 
     @Test
     void testGetDatabaseSummary() throws Exception {
-        TablePath tablePath = TablePath.of("db", "tb1");
+        TablePath tablePath1 = TablePath.of("db", "tb1");
+        TablePath tablePath2 = TablePath.of("db", "tb2");
+        TablePath tablePath3 = TablePath.of("db2", "tb1");
 
         assertThat(
                         zookeeperClient.listDatabaseSummaries(
-                                Collections.singletonList(tablePath.getDatabaseName())))
+                                Collections.singletonList(tablePath1.getDatabaseName())))
                 .isEmpty();
 
         // register table.
@@ -722,18 +724,46 @@ class ZooKeeperClientTest {
                         Collections.emptyMap(),
                         beforeCreateTime,
                         beforeCreateTime);
-        zookeeperClient.registerTable(tablePath, tableReg1);
-
+        zookeeperClient.registerTable(tablePath1, tableReg1);
         long afterCreateTime = System.currentTimeMillis();
+
+        TableRegistration tableReg2 =
+                new TableRegistration(
+                        12,
+                        "second table",
+                        Arrays.asList("a", "b"),
+                        new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        beforeCreateTime,
+                        beforeCreateTime);
+        zookeeperClient.registerTable(tablePath2, tableReg2);
+
+        TableRegistration tableReg3 =
+                new TableRegistration(
+                        13,
+                        "third table",
+                        Arrays.asList("a", "b"),
+                        new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
+                        Collections.emptyMap(),
+                        Collections.emptyMap(),
+                        beforeCreateTime,
+                        beforeCreateTime);
+        zookeeperClient.registerTable(tablePath3, tableReg3);
+
         List<DatabaseSummary> databaseSummaries =
                 zookeeperClient.listDatabaseSummaries(
-                        Collections.singletonList(tablePath.getDatabaseName()));
-        assertThat(databaseSummaries).hasSize(1);
+                        Arrays.asList(tablePath1.getDatabaseName(), tablePath3.getDatabaseName()));
+        assertThat(databaseSummaries).hasSize(2);
         DatabaseSummary databaseSummary = databaseSummaries.get(0);
         assertThat(databaseSummary.getDatabaseName()).isEqualTo("db");
-        assertThat(databaseSummary.getTableCount()).isEqualTo(1);
+        assertThat(databaseSummary.getTableCount()).isEqualTo(2);
         assertThat(databaseSummary.getCreatedTime())
                 .isGreaterThanOrEqualTo(beforeCreateTime)
                 .isLessThanOrEqualTo(afterCreateTime);
+        databaseSummary = databaseSummaries.get(1);
+        assertThat(databaseSummary.getDatabaseName()).isEqualTo("db2");
+        assertThat(databaseSummary.getTableCount()).isEqualTo(1);
+        assertThat(databaseSummary.getCreatedTime()).isGreaterThan(afterCreateTime);
     }
 }
