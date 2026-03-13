@@ -34,7 +34,9 @@ import org.apache.flink.types.RowKind;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * A converter that transforms Fluss's {@link LogRecord} to Flink's {@link RowData} with nested
@@ -46,10 +48,13 @@ public class BinlogRowConverter implements RecordToFlinkRowConverter {
     private final org.apache.flink.table.types.logical.RowType producedType;
 
     /**
-     * Buffer for the UPDATE_BEFORE (-U) record pending merge with the next UPDATE_AFTER (+U)
-     * record. Null when no update is in progress.
+     * Per-split buffer for UPDATE_BEFORE (-U) records pending merge with the next UPDATE_AFTER (+U)
+     * record. Keyed by split ID to prevent cross-split state corruption when multiple bucket splits
+     * are processed by the same source reader.
      */
-    @Nullable private LogRecord pendingUpdateBefore;
+    private final Map<String, LogRecord> pendingUpdateBeforeMap = new HashMap<>();
+
+    private static final String DEFAULT_SPLIT_ID = "__default__";
 
     /** Creates a new BinlogRowConverter. */
     public BinlogRowConverter(RowType rowType) {
@@ -60,6 +65,15 @@ public class BinlogRowConverter implements RecordToFlinkRowConverter {
     /** Converts a LogRecord to a binlog RowData with nested before/after structure. */
     @Nullable
     public RowData toBinlogRowData(LogRecord record) {
+        return toBinlogRowData(record, DEFAULT_SPLIT_ID);
+    }
+
+    /**
+     * Converts a LogRecord to a binlog RowData with nested before/after structure, using a
+     * split-specific buffer for UPDATE_BEFORE/UPDATE_AFTER pairing.
+     */
+    @Nullable
+    public RowData toBinlogRowData(LogRecord record, String splitId) {
         ChangeType changeType = record.getChangeType();
 
         switch (changeType) {
@@ -72,13 +86,14 @@ public class BinlogRowConverter implements RecordToFlinkRowConverter {
                         baseConverter.toFlinkRowData(record.getRow()));
 
             case UPDATE_BEFORE:
-                // Buffer the -U record and return null.
+                // Buffer the -U record per split and return null.
                 // FlinkRecordEmitter.processAndEmitRecord() skips null results.
-                this.pendingUpdateBefore = record;
+                pendingUpdateBeforeMap.put(splitId, record);
                 return null;
 
             case UPDATE_AFTER:
-                // Merge with the buffered -U record
+                // Merge with the buffered -U record for this split
+                LogRecord pendingUpdateBefore = pendingUpdateBeforeMap.remove(splitId);
                 if (pendingUpdateBefore == null) {
                     throw new IllegalStateException(
                             "Received UPDATE_AFTER (+U) without a preceding UPDATE_BEFORE (-U) record. "
@@ -89,7 +104,6 @@ public class BinlogRowConverter implements RecordToFlinkRowConverter {
                 // Use offset and timestamp from the -U record (first entry of update pair)
                 long offset = pendingUpdateBefore.logOffset();
                 long timestamp = pendingUpdateBefore.timestamp();
-                pendingUpdateBefore = null;
                 return buildBinlogRow("update", offset, timestamp, beforeRow, afterRow);
 
             case DELETE:

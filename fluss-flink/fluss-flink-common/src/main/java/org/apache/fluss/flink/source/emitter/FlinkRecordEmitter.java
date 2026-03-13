@@ -19,6 +19,7 @@ package org.apache.fluss.flink.source.emitter;
 
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.flink.lake.LakeRecordRecordEmitter;
+import org.apache.fluss.flink.source.deserializer.BinlogDeserializationSchema;
 import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
 import org.apache.fluss.flink.source.reader.FlinkSourceReader;
 import org.apache.fluss.flink.source.reader.RecordAndPos;
@@ -73,6 +74,13 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
             }
             processAndEmitRecord(scanRecord, sourceOutput);
         } else if (splitState.isLogSplitState()) {
+            // Set split context for BinlogDeserializationSchema to ensure per-split
+            // UPDATE_BEFORE/UPDATE_AFTER pairing when multiple bucket splits are
+            // processed by the same source reader.
+            if (deserializationSchema instanceof BinlogDeserializationSchema) {
+                ((BinlogDeserializationSchema) deserializationSchema)
+                        .setCurrentSplitId(splitState.splitId());
+            }
             // Attempt to process and emit the record.
             // For $binlog, this returns true only when a complete row (or the final part of
             // a split) is emitted.

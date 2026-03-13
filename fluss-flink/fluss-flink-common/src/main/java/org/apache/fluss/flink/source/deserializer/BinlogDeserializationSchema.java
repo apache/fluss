@@ -46,6 +46,9 @@ public class BinlogDeserializationSchema implements FlussDeserializationSchema<R
      */
     private transient BinlogRowConverter converter;
 
+    /** The current split ID used for per-split UPDATE_BEFORE/UPDATE_AFTER pairing. */
+    private transient String currentSplitId;
+
     /** Creates a new BinlogDeserializationSchema. */
     public BinlogDeserializationSchema() {}
 
@@ -55,6 +58,15 @@ public class BinlogDeserializationSchema implements FlussDeserializationSchema<R
         if (converter == null) {
             this.converter = new BinlogRowConverter(context.getRowSchema());
         }
+    }
+
+    /**
+     * Sets the current split ID for per-split UPDATE_BEFORE/UPDATE_AFTER pairing. Must be called
+     * before {@link #deserialize(LogRecord)} when records from multiple splits are interleaved
+     * through the same deserializer instance.
+     */
+    public void setCurrentSplitId(String splitId) {
+        this.currentSplitId = splitId;
     }
 
     /**
@@ -68,7 +80,7 @@ public class BinlogDeserializationSchema implements FlussDeserializationSchema<R
             throw new IllegalStateException(
                     "Converter not initialized. The open() method must be called before deserializing records.");
         }
-        return converter.toBinlogRowData(record);
+        return converter.toBinlogRowData(record, currentSplitId);
     }
 
     /**

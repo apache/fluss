@@ -46,6 +46,11 @@ public abstract class SourceSplitState {
         return (LogSplitState) this;
     }
 
+    /** Returns the split ID without creating a new split object. */
+    public String splitId() {
+        return split.splitId();
+    }
+
     public abstract SourceSplitBase toSourceSplit();
 
     public boolean isLakeSplit() {
