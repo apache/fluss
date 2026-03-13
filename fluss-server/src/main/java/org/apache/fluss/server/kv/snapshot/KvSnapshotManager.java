@@ -247,8 +247,15 @@ public class KvSnapshotManager implements Closeable {
                     tableBucket);
             return;
         }
+        long startTime = clock.milliseconds();
         incrementalDownloadSnapshot(completedSnapshot);
         standbySnapshotSize = completedSnapshot.getSnapshotSize();
+        LOG.info(
+                "Standby download snapshot {} for bucket {} completed in {} ms, snapshot size: {}.",
+                snapshotId,
+                tableBucket,
+                clock.milliseconds() - startTime,
+                standbySnapshotSize);
     }
 
     /**
@@ -272,8 +279,20 @@ public class KvSnapshotManager implements Closeable {
             Optional<CompletedSnapshot> latestSnapshot = getLatestSnapshot();
             if (latestSnapshot.isPresent()) {
                 CompletedSnapshot completedSnapshot = latestSnapshot.get();
+                long startTime = clock.milliseconds();
                 incrementalDownloadSnapshot(completedSnapshot);
                 standbySnapshotSize = completedSnapshot.getSnapshotSize();
+                LOG.info(
+                        "Downloaded latest snapshot {} for bucket {} in {} ms, "
+                                + "snapshot log offset: {}, snapshot size: {}.",
+                        completedSnapshot.getSnapshotID(),
+                        tableBucket,
+                        clock.milliseconds() - startTime,
+                        completedSnapshot.getLogOffset(),
+                        standbySnapshotSize);
+            } else {
+                LOG.info(
+                        "No snapshot found for bucket {}, will init kv from scratch.", tableBucket);
             }
 
             return latestSnapshot;
@@ -524,6 +543,14 @@ public class KvSnapshotManager implements Closeable {
                     downloadedMiscFiles.add(filePath);
                 }
             }
+            LOG.info(
+                    "Loaded {} local sst files and {} misc files from {} for bucket {}.",
+                    downloadedSstFiles.size(),
+                    downloadedMiscFiles.size(),
+                    kvDbPath,
+                    tableBucket);
+        } else {
+            LOG.info("No local tablet directory found for bucket {}, starting fresh.", tableBucket);
         }
     }
 
@@ -591,6 +618,11 @@ public class KvSnapshotManager implements Closeable {
             }
         }
 
+        long totalSnapshotSize =
+                sstFileHandles.stream().mapToLong(f -> f.getKvFileHandle().getSize()).sum()
+                        + privateFileHandles.stream()
+                                .mapToLong(f -> f.getKvFileHandle().getSize())
+                                .sum();
         long incrementalSnapshotSize =
                 incrementalSstFileHandles.stream()
                                 .mapToLong(f -> f.getKvFileHandle().getSize())
@@ -598,11 +630,15 @@ public class KvSnapshotManager implements Closeable {
                         + privateFileHandles.stream()
                                 .mapToLong(f -> f.getKvFileHandle().getSize())
                                 .sum();
-        LOG.debug(
-                "Build incremental snapshot handler for table-bucket {}: {} sst files in remote, "
-                        + "{} sst files to download, and {} sst files to delete, incremental download size: {}",
+        int reusedSstFiles = sstFileHandles.size() - incrementalSstFileHandles.size();
+        LOG.info(
+                "Incremental snapshot for bucket {}: remote has {} sst files (total size: {}), "
+                        + "{} reused locally, {} to download, {} to delete, "
+                        + "incremental download size: {}",
                 tableBucket,
                 sstFileHandles.size(),
+                totalSnapshotSize,
+                reusedSstFiles,
                 incrementalSstFileHandles.size(),
                 sstFilesToDelete.size(),
                 incrementalSnapshotSize);
@@ -677,11 +713,11 @@ public class KvSnapshotManager implements Closeable {
             }
 
             long downloadTime = clock.milliseconds() - start;
-            LOG.debug(
-                    "Downloaded kv snapshot {} to temporary directory {} in {} ms.",
-                    incrementalSnapshot,
-                    tempDownloadDir,
-                    downloadTime);
+            LOG.info(
+                    "Downloaded incremental kv snapshot {} to temp directory in {} ms for bucket {}.",
+                    incrementalSnapshot.getSnapshotID(),
+                    downloadTime,
+                    tableBucket);
 
             // Step 3: Verify download completeness
             verifySnapshotCompleteness(incrementalSnapshot, tempDownloadDir);
@@ -732,10 +768,10 @@ public class KvSnapshotManager implements Closeable {
             moveSnapshotFilesToFinalDirectory(tempDownloadDir, kvDbPath);
 
             long totalTime = clock.milliseconds() - start;
-            LOG.debug(
-                    "Atomically applied kv snapshot {} to directory {} in {} ms (download: {} ms, move: {} ms).",
-                    incrementalSnapshot,
-                    kvDbPath,
+            LOG.info(
+                    "Applied kv snapshot {} for bucket {} in {} ms (download: {} ms, verify+move: {} ms).",
+                    incrementalSnapshot.getSnapshotID(),
+                    tableBucket,
                     totalTime,
                     downloadTime,
                     totalTime - downloadTime);

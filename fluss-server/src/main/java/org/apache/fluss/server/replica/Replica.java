@@ -560,6 +560,10 @@ public final class Replica {
         }
 
         if (isKvTable()) {
+            // Record previous role for logging before resetting flags.
+            String previousRole =
+                    isStandbyReplica ? "standby" : (kvTablet != null ? "leader" : "follower");
+
             // Reset standby flag first - the replica is now a leader, not a standby.
             // This must be done before becomeLeader() to ensure consistent state.
             isStandbyReplica = false;
@@ -574,6 +578,11 @@ public final class Replica {
                 kvManager.closeOrDropKv(tableBucket, false);
                 kvTablet = null;
             }
+
+            LOG.info(
+                    "Bucket {} transitioning from {} to leader, starting kv initialization.",
+                    tableBucket,
+                    previousRole);
 
             // 1. If there is no sst files in local, download the latest kv snapshot and apply log.
             // 2. If there is already sst files in local, check the diff with the latest snapshot
@@ -605,6 +614,11 @@ public final class Replica {
             boolean isNowStandby = (standbyReplica == localTabletServerId);
             boolean wasLeader = isLeader();
             boolean wasStandby = this.isStandbyReplica;
+            String previousRole = wasLeader ? "leader" : (wasStandby ? "standby" : "follower");
+            String newRole = isNowStandby ? "standby" : "follower";
+
+            LOG.info("Bucket {} transitioning from {} to {}.", tableBucket, previousRole, newRole);
+
             checkNotNull(kvSnapshotManager);
             if (isNowStandby) {
                 kvSnapshotManager.becomeStandby();
