@@ -233,9 +233,7 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
                     PaimonLakeCommitter.PaimonCommitCallback.class.getName());
 
             boolean writeOnly = !isAutoSnapshotExpiration;
-            dynamicOptions.put(
-                    CoreOptions.WRITE_ONLY.key(),
-                    writeOnly ? Boolean.TRUE.toString() : Boolean.FALSE.toString());
+            dynamicOptions.put(CoreOptions.WRITE_ONLY.key(), Boolean.toString(writeOnly));
 
             // For non-write-only modes, we enable 'end-input.check-partition-expire' to ensure
             // Paimon triggers partition expiration on every commit.
