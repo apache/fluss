@@ -1052,7 +1052,6 @@ public class ReplicaManager implements ServerReconfigurable {
                     () -> {
                         try {
                             replica.downloadSnapshot(snapshotId);
-                            updateMinRetainOffset(replica, minRetainOffset);
                             LOG.debug(
                                     "Successfully downloaded snapshot {} for standby replica {}.",
                                     snapshotId,
@@ -1063,6 +1062,11 @@ public class ReplicaManager implements ServerReconfigurable {
                                     snapshotId,
                                     tb,
                                     e);
+                        } finally {
+                            // Always update minRetainOffset regardless of download success/failure.
+                            // If we skip this, log segments may never be cleaned up when download
+                            // keeps failing.
+                            updateMinRetainOffset(replica, minRetainOffset);
                         }
                     });
         } else {
