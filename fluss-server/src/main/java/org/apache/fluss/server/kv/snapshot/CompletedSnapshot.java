@@ -114,6 +114,17 @@ public class CompletedSnapshot {
         this(tableBucket, snapshotID, snapshotLocation, kvSnapshotHandle, 0, null, null);
     }
 
+    public CompletedSnapshot getIncrementalSnapshot(KvSnapshotHandle newKvSnapshotHandle) {
+        return new CompletedSnapshot(
+                tableBucket,
+                snapshotID,
+                snapshotLocation,
+                newKvSnapshotHandle,
+                logOffset,
+                rowCount,
+                autoIncIDRanges);
+    }
+
     public long getSnapshotID() {
         return snapshotID;
     }
@@ -182,6 +193,10 @@ public class CompletedSnapshot {
             FileSystem fileSystem = snapshotLocation.getFileSystem();
             fileSystem.delete(snapshotLocation, false);
         }
+    }
+
+    public CompletedSnapshotHandle getCompletedSnapshotHandle() {
+        return new CompletedSnapshotHandle(snapshotID, getMetadataFilePath(), logOffset);
     }
 
     /**
