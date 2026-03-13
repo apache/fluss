@@ -1618,6 +1618,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                             // TODO: reject the request if there is a replica in ISR is not online,
                             //  see KIP-841.
                             tryAdjustLeaderAndIsr.isr(),
+                            tryAdjustLeaderAndIsr.standbyReplicas(),
                             coordinatorContext.getCoordinatorEpoch(),
                             currentLeaderAndIsr.bucketEpoch() + 1);
             newLeaderAndIsrList.put(tableBucket, newLeaderAndIsr);

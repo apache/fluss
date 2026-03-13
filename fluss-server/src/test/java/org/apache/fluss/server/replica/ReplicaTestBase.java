@@ -388,6 +388,7 @@ public class ReplicaTestBase {
                                         TABLET_SERVER_ID,
                                         INITIAL_LEADER_EPOCH,
                                         isr,
+                                        Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))));
     }
@@ -429,6 +430,7 @@ public class ReplicaTestBase {
                                         TABLET_SERVER_ID,
                                         leaderEpoch,
                                         isr,
+                                        Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         // use leader epoch as bucket epoch
                                         leaderEpoch))));

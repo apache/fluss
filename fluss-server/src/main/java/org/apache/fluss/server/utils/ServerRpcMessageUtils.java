@@ -632,7 +632,8 @@ public class ServerRpcMessageUtils {
                 new PbNotifyLeaderAndIsrReqForBucket()
                         .setLeader(notifyLeaderAndIsrData.getLeader())
                         .setLeaderEpoch(notifyLeaderAndIsrData.getLeaderEpoch())
-                        .setBucketEpoch(notifyLeaderAndIsrData.getBucketEpoch());
+                        .setBucketEpoch(notifyLeaderAndIsrData.getBucketEpoch())
+                        .setStandbyReplicas(notifyLeaderAndIsrData.getStandbyReplicasArray());
 
         TableBucket tb = notifyLeaderAndIsrData.getTableBucket();
         PbTableBucket pbTableBucket =
@@ -668,6 +669,11 @@ public class ServerRpcMessageUtils {
                 isr.add(reqForBucket.getIsrAt(i));
             }
 
+            List<Integer> standbyReplicas = new ArrayList<>();
+            for (int i = 0; i < reqForBucket.getStandbyReplicasCount(); i++) {
+                standbyReplicas.add(reqForBucket.getStandbyReplicaAt(i));
+            }
+
             PbTableBucket pbTableBucket = reqForBucket.getTableBucket();
             notifyLeaderAndIsrDataList.add(
                     new NotifyLeaderAndIsrData(
@@ -678,6 +684,7 @@ public class ServerRpcMessageUtils {
                                     reqForBucket.getLeader(),
                                     reqForBucket.getLeaderEpoch(),
                                     isr,
+                                    standbyReplicas,
                                     request.getCoordinatorEpoch(),
                                     reqForBucket.getBucketEpoch())));
         }
@@ -1212,6 +1219,7 @@ public class ServerRpcMessageUtils {
                         reqForBucket.setPartitionId(tb.getPartitionId());
                     }
                     leaderAndIsr.isr().forEach(reqForBucket::addNewIsr);
+                    leaderAndIsr.standbyReplicas().forEach(reqForBucket::addStandbyReplica);
                     if (reqForBucketByTableId.containsKey(tb.getTableId())) {
                         reqForBucketByTableId.get(tb.getTableId()).add(reqForBucket);
                     } else {
@@ -1253,12 +1261,18 @@ public class ServerRpcMessageUtils {
                 for (int i = 0; i < reqForBucket.getNewIsrsCount(); i++) {
                     newIsr.add(reqForBucket.getNewIsrAt(i));
                 }
+                List<Integer> standbyReplica = new ArrayList<>();
+                for (int i = 0; i < reqForBucket.getStandbyReplicasCount(); i++) {
+                    standbyReplica.add(reqForBucket.getStandbyReplicaAt(i));
+                }
+
                 leaderAndIsrMap.put(
                         tb,
                         new LeaderAndIsr(
                                 leaderId,
                                 reqForBucket.getLeaderEpoch(),
                                 newIsr,
+                                standbyReplica,
                                 reqForBucket.getCoordinatorEpoch(),
                                 reqForBucket.getBucketEpoch()));
             }
@@ -1285,7 +1299,8 @@ public class ServerRpcMessageUtils {
                         .setLeaderEpoch(leaderAndIsr.leaderEpoch())
                         .setCoordinatorEpoch(leaderAndIsr.coordinatorEpoch())
                         .setBucketEpoch(leaderAndIsr.bucketEpoch())
-                        .setIsrs(leaderAndIsr.isrArray());
+                        .setIsrs(leaderAndIsr.isrArray())
+                        .setStandbyReplicas(leaderAndIsr.standbyReplicasArray());
             }
 
             if (respMap.containsKey(tb.getTableId())) {
@@ -1334,6 +1349,10 @@ public class ServerRpcMessageUtils {
                 for (int i = 0; i < respForBucket.getIsrsCount(); i++) {
                     isr.add(respForBucket.getIsrAt(i));
                 }
+                List<Integer> standbyReplica = new ArrayList<>();
+                for (int i = 0; i < respForBucket.getStandbyReplicasCount(); i++) {
+                    standbyReplica.add(respForBucket.getStandbyReplicaAt(i));
+                }
                 adjustIsrResult.put(
                         tb,
                         new AdjustIsrResultForBucket(
@@ -1342,6 +1361,7 @@ public class ServerRpcMessageUtils {
                                         respForBucket.getLeaderId(),
                                         respForBucket.getLeaderEpoch(),
                                         isr,
+                                        standbyReplica,
                                         respForBucket.getCoordinatorEpoch(),
                                         respForBucket.getBucketEpoch())));
             }
