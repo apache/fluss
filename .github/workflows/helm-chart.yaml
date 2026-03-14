@@ -50,7 +50,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install jsonschema==4.26.0
+        run: pip install jsonschema==4.26.0 PyYAML==6.0.3
 
       - name: Run unstable test reporter
         run: python tools/ci/helm_ci/validate_helm.py

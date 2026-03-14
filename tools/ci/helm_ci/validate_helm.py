@@ -26,6 +26,7 @@
 # requires-python = ">=3.10"
 # dependencies = [
 #   "jsonschema==4.26.0",
+#   "PyYAML==6.0.3",
 # ]
 # ///
 
