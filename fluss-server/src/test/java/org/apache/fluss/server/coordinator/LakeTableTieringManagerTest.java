@@ -52,12 +52,14 @@ class LakeTableTieringManagerTest {
     private LakeTableTieringManager tableTieringManager;
     private ManualClock manualClock;
     private ManuallyTriggeredScheduledExecutorService lakeTieringServiceTimeoutChecker;
+    private String remoteDataDir;
 
     @BeforeEach
     void beforeEach() {
         manualClock = new ManualClock();
         lakeTieringServiceTimeoutChecker = new ManuallyTriggeredScheduledExecutorService();
         tableTieringManager = createLakeTableTieringManager();
+        remoteDataDir = "/tmp/fluss/remote-data";
     }
 
     private LakeTableTieringManager createLakeTableTieringManager() {
@@ -409,6 +411,7 @@ class LakeTableTieringManagerTest {
                 tableId,
                 1,
                 tableDescriptor,
+                remoteDataDir,
                 System.currentTimeMillis(),
                 System.currentTimeMillis());
     }

@@ -237,6 +237,7 @@ public class FlinkTestBase extends AbstractTestBase {
                     partition,
                     new PartitionAssignment(
                             tableInfo.getTableId(), assignment.getBucketAssignments()),
+                    zkClient.getDefaultRemoteDataDir(),
                     tablePath,
                     tableInfo.getTableId());
         }

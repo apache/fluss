@@ -157,6 +157,7 @@ class CoordinatorEventProcessorTest {
     private CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private CoordinatorMetadataCache serverMetadataCache;
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
+    private String remoteDataDir;
 
     @BeforeAll
     static void baseBeforeAll() throws Exception {
@@ -197,7 +198,7 @@ class CoordinatorEventProcessorTest {
         lakeTableTieringManager =
                 new LakeTableTieringManager(TestingMetricGroups.LAKE_TIERING_METRICS);
         Configuration conf = new Configuration();
-        String remoteDataDir = "/tmp/fluss/remote-data";
+        remoteDataDir = zookeeperClient.getDefaultRemoteDataDir();
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
         kvSnapshotLeaseManager =
                 new KvSnapshotLeaseManager(
@@ -1108,9 +1109,19 @@ class CoordinatorEventProcessorTest {
         String partition1Name = "2024";
         String partition2Name = "2025";
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                partition1Id, partition1Name, partitionAssignment, tablePath, tableId);
+                partition1Id,
+                partition1Name,
+                partitionAssignment,
+                remoteDataDir,
+                tablePath,
+                tableId);
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                partition2Id, partition2Name, partitionAssignment, tablePath, tableId);
+                partition2Id,
+                partition2Name,
+                partitionAssignment,
+                remoteDataDir,
+                tablePath,
+                tableId);
 
         return Tuple2.of(
                 new PartitionIdName(partition1Id, partition1Name),
