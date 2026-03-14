@@ -1040,8 +1040,12 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                             try {
                                 dynamicConfigManager.alterConfigs(serverConfigChanges);
                                 future.complete(new AlterClusterConfigsResponse());
-                            } catch (Exception e) {
+                            } catch (ApiException e) {
                                 future.completeExceptionally(e);
+                            } catch (Exception e) {
+                                future.completeExceptionally(
+                                        new UnknownServerException(
+                                                "Failed to alter cluster configs", e));
                             }
                             return null;
                         });
