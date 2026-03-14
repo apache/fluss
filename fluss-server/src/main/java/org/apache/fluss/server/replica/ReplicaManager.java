@@ -396,6 +396,8 @@ public class ReplicaManager implements ServerReconfigurable {
         physicalStorage.gauge(
                 MetricNames.SERVER_PHYSICAL_STORAGE_REMOTE_LOG_SIZE,
                 this::physicalStorageRemoteLogSize);
+        physicalStorage.gauge(
+                MetricNames.SERVER_PHYSICAL_STORAGE_STANDBY_SIZE, this::physicalStorageStandbySize);
     }
 
     @VisibleForTesting
@@ -448,11 +450,19 @@ public class ReplicaManager implements ServerReconfigurable {
                         replica -> {
                             long size = replica.getLogTablet().logSize();
                             if (replica.isKvTable()) {
-                                size += replica.getLatestKvSnapshotSize();
+                                if (replica.isLeader()) {
+                                    size += replica.getLatestKvSnapshotSize();
+                                } else if (replica.isStandby()) {
+                                    size += replica.getStandbySnapshotSize();
+                                }
                             }
                             return size;
                         })
                 .reduce(0L, Long::sum);
+    }
+
+    private long physicalStorageStandbySize() {
+        return onlineReplicas().map(Replica::getStandbySnapshotSize).reduce(0L, Long::sum);
     }
 
     private long physicalStorageRemoteLogSize() {
@@ -1016,20 +1026,57 @@ public class ReplicaManager implements ServerReconfigurable {
     public void notifyKvSnapshotOffset(
             NotifyKvSnapshotOffsetData notifyKvSnapshotOffsetData,
             Consumer<NotifyKvSnapshotOffsetResponse> responseCallback) {
-        inLock(
-                replicaStateChangeLock,
-                () -> {
-                    // check or apply coordinator epoch.
-                    validateAndApplyCoordinatorEpoch(
-                            notifyKvSnapshotOffsetData.getCoordinatorEpoch(),
-                            "notifyKvSnapshotOffset");
-                    // update the snapshot offset.
-                    TableBucket tb = notifyKvSnapshotOffsetData.getTableBucket();
-                    LogTablet logTablet = getReplicaOrException(tb).getLogTablet();
-                    logTablet.updateMinRetainOffset(
-                            notifyKvSnapshotOffsetData.getMinRetainOffset());
-                    responseCallback.accept(new NotifyKvSnapshotOffsetResponse());
-                });
+        TableBucket tb = notifyKvSnapshotOffsetData.getTableBucket();
+        Long snapshotId = notifyKvSnapshotOffsetData.getSnapshotId();
+        long minRetainOffset = notifyKvSnapshotOffsetData.getMinRetainOffset();
+
+        // Validate and get replica under lock
+        Replica replica =
+                inLock(
+                        replicaStateChangeLock,
+                        () -> {
+                            // check or apply coordinator epoch.
+                            validateAndApplyCoordinatorEpoch(
+                                    notifyKvSnapshotOffsetData.getCoordinatorEpoch(),
+                                    "notifyKvSnapshotOffset");
+                            return getReplicaOrException(tb);
+                        });
+
+        // Respond immediately to avoid blocking coordinator
+        responseCallback.accept(new NotifyKvSnapshotOffsetResponse());
+
+        // Download snapshot asynchronously outside the lock to avoid blocking
+        // leader/follower transitions and other state changes
+        if (snapshotId != null) {
+            ioExecutor.execute(
+                    () -> {
+                        try {
+                            replica.downloadSnapshot(snapshotId);
+                            LOG.debug(
+                                    "Successfully downloaded snapshot {} for standby replica {}.",
+                                    snapshotId,
+                                    tb);
+                        } catch (Exception e) {
+                            LOG.error(
+                                    "Error downloading snapshot id {} for standby replica {}.",
+                                    snapshotId,
+                                    tb,
+                                    e);
+                        } finally {
+                            // Always update minRetainOffset regardless of download success/failure.
+                            // If we skip this, log segments may never be cleaned up when download
+                            // keeps failing.
+                            updateMinRetainOffset(replica, minRetainOffset);
+                        }
+                    });
+        } else {
+            updateMinRetainOffset(replica, minRetainOffset);
+        }
+    }
+
+    private void updateMinRetainOffset(Replica replica, long minRetainOffset) {
+        LogTablet logTablet = replica.getLogTablet();
+        logTablet.updateMinRetainOffset(minRetainOffset);
     }
 
     public void notifyLakeTableOffset(
@@ -1092,10 +1139,14 @@ public class ReplicaManager implements ServerReconfigurable {
             TableBucket tb = data.getTableBucket();
             try {
                 Replica replica = getReplicaOrException(tb);
+                // register replica to remote log manager first.
+                remoteLogManager.registerReplica(replica);
+
                 replica.makeLeader(data);
                 if (replica.isDataLakeEnabled()) {
                     updateWithLakeTableSnapshot(replica);
                 }
+
                 // start the remote log tiering tasks for leaders
                 remoteLogManager.startLogTiering(replica);
                 result.put(tb, new NotifyLeaderAndIsrResultForBucket(tb));
@@ -1921,7 +1972,8 @@ public class ReplicaManager implements ServerReconfigurable {
                                 fatalErrorHandler,
                                 bucketMetricGroup,
                                 tableInfo,
-                                clock);
+                                clock,
+                                remoteLogManager);
                 allReplicas.put(tb, new OnlineReplica(replica));
                 replicaOpt = Optional.of(replica);
             } else if (hostedReplica instanceof OnlineReplica) {
