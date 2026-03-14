@@ -29,11 +29,11 @@ spec:
   ports:
     - name: internal
       protocol: TCP
-      port: {{ .Values.listeners.internal.port }}
+      port: {{ .Values.ports.internal }}
       targetPort: internal
     - name: client
       protocol: TCP
-      port: {{ .Values.listeners.client.port }}
+      port: {{ .Values.ports.client }}
       targetPort: client
   selector:
     {{- include "fluss.selectorLabels" . | nindent 4 }}
