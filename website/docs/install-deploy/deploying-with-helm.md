@@ -23,14 +23,14 @@ the installation documentation provides instructions for deploying one using Bit
 
 ## Supported Versions
 
-| Component | Minimum Version | Recommended Version |
-|-----------|----------------|-------------------|
-| [Kubernetes](https://kubernetes.io) | v1.19+ | v1.25+ |
-| [Helm](https://helm.sh) | v3.8.0+ | v3.18.6+ |
-| [ZooKeeper](https://zookeeper.apache.org) | v3.6+ | v3.8+ |
-| [Apache Fluss](https://fluss.apache.org/docs/) (Container Image) | $FLUSS_VERSION$ | $FLUSS_VERSION$ |
-| [Minikube](https://minikube.sigs.k8s.io) (Local Development) | v1.25+ | v1.32+ |
-| [Docker](https://docs.docker.com/) (Local Development) | v20.10+ | v24.0+ |
+| Component                                                        | Minimum Version | Recommended Version |
+|------------------------------------------------------------------|-----------------|---------------------|
+| [Kubernetes](https://kubernetes.io)                              | v1.19+          | v1.25+              |
+| [Helm](https://helm.sh)                                          | v3.8.0+         | v3.18.6+            |
+| [ZooKeeper](https://zookeeper.apache.org)                        | v3.6+           | v3.8+               |
+| [Apache Fluss](https://fluss.apache.org/docs/) (Container Image) | $FLUSS_VERSION$ | $FLUSS_VERSION$     |
+| [Minikube](https://minikube.sigs.k8s.io) (Local Development)     | v1.25+          | v1.32+              |
+| [Docker](https://docs.docker.com/) (Local Development)           | v20.10+         | v24.0+              |
 
 ## Installation
 
@@ -136,8 +136,8 @@ minikube delete
 The Fluss Helm chart deploys the following Kubernetes resources:
 
 ### Core Components
-- **CoordinatorServer**: 1x StatefulSet with Headless Service for cluster coordination
-- **TabletServer**: 3x StatefulSet with Headless Service for data storage and processing
+- **CoordinatorServer**: StatefulSet (default: 1 replica) with Headless Service for cluster coordination
+- **TabletServer**: StatefulSet (default: 3 replicas) with Headless Service for data storage and processing
 - **ConfigMap**: Configuration management for `server.yaml` settings
 - **Services**: Headless services providing stable pod DNS names
 
@@ -161,69 +161,75 @@ The following table lists the configurable parameters of the Fluss chart and the
 
 ### Global Parameters
 
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `nameOverride` | Override the name of the chart | `""` |
-| `fullnameOverride` | Override the full name of the resources | `""` |
+| Parameter          | Description                             | Default |
+|--------------------|-----------------------------------------|---------|
+| `nameOverride`     | Override the name of the chart          | `""`    |
+| `fullnameOverride` | Override the full name of the resources | `""`    |
 
 ### Image Parameters
 
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `image.registry` | Container image registry | `""` |
-| `image.repository` | Container image repository | `fluss` |
-| `image.tag` | Container image tag | `$FLUSS_VERSION$` |
-| `image.pullPolicy` | Container image pull policy | `IfNotPresent` |
-| `image.pullSecrets` | Container image pull secrets | `[]` |
+| Parameter           | Description                  | Default           |
+|---------------------|------------------------------|-------------------|
+| `image.registry`    | Container image registry     | `""`              |
+| `image.repository`  | Container image repository   | `fluss`           |
+| `image.tag`         | Container image tag          | `$FLUSS_VERSION$` |
+| `image.pullPolicy`  | Container image pull policy  | `IfNotPresent`    |
+| `image.pullSecrets` | Container image pull secrets | `[]`              |
 
 ### Application Configuration
 
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `listeners.internal.port` | Internal communication port | `9123` |
-| `listeners.client.port` | Client port (intra-cluster) | `9124` |
+| Parameter                 | Description                 | Default |
+|---------------------------|-----------------------------|---------|
+| `listeners.internal.port` | Internal communication port | `9123`  |
+| `listeners.client.port`   | Client port (intra-cluster) | `9124`  |
 
 ### Fluss Configuration Overrides
 
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `configurationOverrides.default.bucket.number` | Default number of buckets for tables | `3` |
-| `configurationOverrides.default.replication.factor` | Default replication factor | `3` |
-| `configurationOverrides.zookeeper.path.root` | ZooKeeper root path for Fluss | `/fluss` |
-| `configurationOverrides.zookeeper.address` | ZooKeeper ensemble address | `zk-zookeeper.{{ .Release.Namespace }}.svc.cluster.local:2181` |
-| `configurationOverrides.remote.data.dir` | Remote data directory for snapshots | `/tmp/fluss/remote-data` |
-| `configurationOverrides.data.dir` | Local data directory | `/tmp/fluss/data` |
-| `configurationOverrides.internal.listener.name` | Internal listener name | `INTERNAL` |
+| Parameter                                           | Description                          | Default                                                        |
+|-----------------------------------------------------|--------------------------------------|----------------------------------------------------------------|
+| `configurationOverrides.default.bucket.number`      | Default number of buckets for tables | `3`                                                            |
+| `configurationOverrides.default.replication.factor` | Default replication factor           | `3`                                                            |
+| `configurationOverrides.zookeeper.path.root`        | ZooKeeper root path for Fluss        | `/fluss`                                                       |
+| `configurationOverrides.zookeeper.address`          | ZooKeeper ensemble address           | `zk-zookeeper.{{ .Release.Namespace }}.svc.cluster.local:2181` |
+| `configurationOverrides.remote.data.dir`            | Remote data directory for snapshots  | `/tmp/fluss/remote-data`                                       |
+| `configurationOverrides.data.dir`                   | Local data directory                 | `/tmp/fluss/data`                                              |
+| `configurationOverrides.internal.listener.name`     | Internal listener name               | `INTERNAL`                                                     |
+
+### Coordinator Server Parameters
+
+| Parameter                                        | Description                                             | Default              |
+|--------------------------------------------------|---------------------------------------------------------|----------------------|
+| `coordinator.replicas`                           | Number of CoordinatorServer replicas to deploy          | `1`                  |
+| `coordinator.livenessProbe.failureThreshold`     | Liveness probe failure threshold                        | `100`                |
+| `coordinator.livenessProbe.timeoutSeconds`       | Liveness probe timeout                                  | `1`                  |
+| `coordinator.livenessProbe.initialDelaySeconds`  | Liveness probe initial delay                            | `10`                 |
+| `coordinator.livenessProbe.periodSeconds`        | Liveness probe period                                   | `3`                  |
+| `coordinator.readinessProbe.failureThreshold`    | Readiness probe failure threshold                       | `100`                |
+| `coordinator.readinessProbe.timeoutSeconds`      | Readiness probe timeout                                 | `1`                  |
+| `coordinator.readinessProbe.initialDelaySeconds` | Readiness probe initial delay                           | `10`                 |
+| `coordinator.readinessProbe.periodSeconds`       | Readiness probe period                                  | `3`                  |
+| `coordinator.resources`                          | CPU/memory resource requests and limits for coordinator | `{}`                 |
+| `coordinator.storage.enabled`                    | Enable persistent volume claims for CoordinatorServer   | `false`              |
+| `coordinator.storage.size`                       | Coordinator persistent volume size                      | `1Gi`                |
+| `coordinator.storage.storageClass`               | Coordinator storage class name                          | `nil` (uses default) |
 
 ### Tablet Server Parameters
 
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `tablet.numberOfReplicas` | Number of TabletServer replicas to deploy | `3` |
-
-### Storage Parameters
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `coordinator.storage.enabled` | Enable persistent volume claims for CoordinatorServer | `false` |
-| `coordinator.storage.size` | Coordinator persistent volume size | `1Gi` |
-| `coordinator.storage.storageClass` | Coordinator storage class name | `nil` (uses default) |
-| `tablet.storage.enabled` | Enable persistent volume claims for TabletServer | `false` |
-| `tablet.storage.size` | Tablet persistent volume size | `1Gi` |
-| `tablet.storage.storageClass` | Tablet storage class name | `nil` (uses default) |
-
-### Resource Parameters
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `resources.coordinatorServer.requests.cpu` | CPU requests for coordinator | Not set |
-| `resources.coordinatorServer.requests.memory` | Memory requests for coordinator | Not set |
-| `resources.coordinatorServer.limits.cpu` | CPU limits for coordinator | Not set |
-| `resources.coordinatorServer.limits.memory` | Memory limits for coordinator | Not set |
-| `resources.tabletServer.requests.cpu` | CPU requests for tablet servers | Not set |
-| `resources.tabletServer.requests.memory` | Memory requests for tablet servers | Not set |
-| `resources.tabletServer.limits.cpu` | CPU limits for tablet servers | Not set |
-| `resources.tabletServer.limits.memory` | Memory limits for tablet servers | Not set |
+| Parameter                                   | Description                                                | Default              |
+|---------------------------------------------|------------------------------------------------------------|----------------------|
+| `tablet.replicas`                           | Number of TabletServer replicas to deploy                  | `3`                  |
+| `tablet.livenessProbe.failureThreshold`     | Liveness probe failure threshold                           | `100`                |
+| `tablet.livenessProbe.timeoutSeconds`       | Liveness probe timeout                                     | `1`                  |
+| `tablet.livenessProbe.initialDelaySeconds`  | Liveness probe initial delay                               | `10`                 |
+| `tablet.livenessProbe.periodSeconds`        | Liveness probe period                                      | `3`                  |
+| `tablet.readinessProbe.failureThreshold`    | Readiness probe failure threshold                          | `100`                |
+| `tablet.readinessProbe.timeoutSeconds`      | Readiness probe timeout                                    | `1`                  |
+| `tablet.readinessProbe.initialDelaySeconds` | Readiness probe initial delay                              | `10`                 |
+| `tablet.readinessProbe.periodSeconds`       | Readiness probe period                                     | `3`                  |
+| `tablet.resources`                          | CPU/memory resource requests and limits for tablet servers | `{}`                 |
+| `tablet.storage.enabled`                    | Enable persistent volume claims for TabletServer           | `false`              |
+| `tablet.storage.size`                       | Tablet persistent volume size                              | `1Gi`                |
+| `tablet.storage.storageClass`               | Tablet storage class name                                  | `nil` (uses default) |
 
 
 ## Advanced Configuration
@@ -255,18 +261,34 @@ listeners:
     port: 9124
 ```
 
-### Storage Configuration
+### Component Configuration
 
-Configure different storage volumes for coordinator or tablet pods:
+Each component (coordinator and tablet) supports independent configuration for replicas, resource requests/limits, health check probes, and storage:
 
 ```yaml
 coordinator:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
   storage:
     enabled: true
     size: 5Gi
     storageClass: fast-ssd
 
 tablet:
+  replicas: 5
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
   storage:
     enabled: true
     size: 20Gi
@@ -331,22 +353,32 @@ image:
 
 ### Health Checks
 
-The chart includes liveness and readiness probes:
+The chart includes configurable liveness and readiness probes for each component. The probes use TCP socket checks on the client port. You can customize them per component:
 
 ```yaml
-livenessProbe:
-  tcpSocket:
-    port: 9124
-  initialDelaySeconds: 10
-  periodSeconds: 3
-  failureThreshold: 100
+coordinator:
+  livenessProbe:
+    failureThreshold: 100
+    timeoutSeconds: 1
+    initialDelaySeconds: 10
+    periodSeconds: 3
+  readinessProbe:
+    failureThreshold: 100
+    timeoutSeconds: 1
+    initialDelaySeconds: 10
+    periodSeconds: 3
 
-readinessProbe:
-  tcpSocket:
-    port: 9124
-  initialDelaySeconds: 10
-  periodSeconds: 3
-  failureThreshold: 100
+tablet:
+  livenessProbe:
+    failureThreshold: 100
+    timeoutSeconds: 1
+    initialDelaySeconds: 10
+    periodSeconds: 3
+  readinessProbe:
+    failureThreshold: 100
+    timeoutSeconds: 1
+    initialDelaySeconds: 10
+    periodSeconds: 3
 ```
 
 ### Logs

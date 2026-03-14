@@ -24,7 +24,7 @@ metadata:
   {{- include "fluss.labels" . | nindent 4 }}
 spec:
   serviceName: tablet-server-hs
-  replicas: {{ .Values.tablet.numberOfReplicas }}
+  replicas: {{ .Values.tablet.replicas }}
   selector:
     matchLabels:
       {{- include "fluss.selectorLabels" . | nindent 6 }}
@@ -78,21 +78,21 @@ spec:
 
               bin/tablet-server.sh start-foreground
           livenessProbe:
-            failureThreshold: 100
-            timeoutSeconds: 1
-            initialDelaySeconds: 10
-            periodSeconds: 3
+            failureThreshold: {{ .Values.tablet.livenessProbe.failureThreshold }}
+            timeoutSeconds: {{ .Values.tablet.livenessProbe.timeoutSeconds }}
+            initialDelaySeconds: {{ .Values.tablet.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.tablet.livenessProbe.periodSeconds }}
             tcpSocket:
               port: {{ .Values.listeners.client.port }}
           readinessProbe:
-            failureThreshold: 100
-            timeoutSeconds: 1
-            initialDelaySeconds: 10
-            periodSeconds: 3
+            failureThreshold: {{ .Values.tablet.readinessProbe.failureThreshold }}
+            timeoutSeconds: {{ .Values.tablet.readinessProbe.timeoutSeconds }}
+            initialDelaySeconds: {{ .Values.tablet.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.tablet.readinessProbe.periodSeconds }}
             tcpSocket:
               port: {{ .Values.listeners.client.port }}
           resources:
-            {{- toYaml .Values.resources.tabletServer | nindent 12 }}
+            {{- toYaml .Values.tablet.resources | nindent 12 }}
           volumeMounts:
             - name: fluss-conf
               mountPath: /opt/conf
