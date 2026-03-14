@@ -24,7 +24,7 @@ metadata:
   {{- include "fluss.labels" . | nindent 4 }}
 spec:
   serviceName: coordinator-server-hs
-  replicas: {{ .Values.coordinatorServer.replicas }}
+  replicas: {{ .Values.coordinator.replicas }}
   selector:
     matchLabels:
       {{- include "fluss.selectorLabels" . | nindent 6 }}
@@ -81,21 +81,21 @@ spec:
 
               bin/coordinator-server.sh start-foreground
           livenessProbe:
-            failureThreshold: {{ .Values.coordinatorServer.livenessProbe.failureThreshold }}
-            timeoutSeconds: {{ .Values.coordinatorServer.livenessProbe.timeoutSeconds }}
-            initialDelaySeconds: {{ .Values.coordinatorServer.livenessProbe.initialDelaySeconds }}
-            periodSeconds: {{ .Values.coordinatorServer.livenessProbe.periodSeconds }}
+            failureThreshold: {{ .Values.coordinator.livenessProbe.failureThreshold }}
+            timeoutSeconds: {{ .Values.coordinator.livenessProbe.timeoutSeconds }}
+            initialDelaySeconds: {{ .Values.coordinator.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.coordinator.livenessProbe.periodSeconds }}
             tcpSocket:
               port: {{ .Values.listeners.client.port }}
           readinessProbe:
-            failureThreshold: {{ .Values.coordinatorServer.readinessProbe.failureThreshold }}
-            timeoutSeconds: {{ .Values.coordinatorServer.readinessProbe.timeoutSeconds }}
-            initialDelaySeconds: {{ .Values.coordinatorServer.readinessProbe.initialDelaySeconds }}
-            periodSeconds: {{ .Values.coordinatorServer.readinessProbe.periodSeconds }}
+            failureThreshold: {{ .Values.coordinator.readinessProbe.failureThreshold }}
+            timeoutSeconds: {{ .Values.coordinator.readinessProbe.timeoutSeconds }}
+            initialDelaySeconds: {{ .Values.coordinator.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.coordinator.readinessProbe.periodSeconds }}
             tcpSocket:
               port: {{ .Values.listeners.client.port }}
           resources:
-            {{- toYaml .Values.resources.coordinatorServer | nindent 12 }}
+            {{- toYaml .Values.coordinator.resources | nindent 12 }}
           volumeMounts:
             - name: fluss-conf
               mountPath: /opt/conf

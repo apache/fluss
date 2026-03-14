@@ -24,7 +24,7 @@ metadata:
   {{- include "fluss.labels" . | nindent 4 }}
 spec:
   serviceName: tablet-server-hs
-  replicas: {{ .Values.tabletServer.replicas }}
+  replicas: {{ .Values.tablet.replicas }}
   selector:
     matchLabels:
       {{- include "fluss.selectorLabels" . | nindent 6 }}
@@ -78,21 +78,21 @@ spec:
 
               bin/tablet-server.sh start-foreground
           livenessProbe:
-            failureThreshold: {{ .Values.tabletServer.livenessProbe.failureThreshold }}
-            timeoutSeconds: {{ .Values.tabletServer.livenessProbe.timeoutSeconds }}
-            initialDelaySeconds: {{ .Values.tabletServer.livenessProbe.initialDelaySeconds }}
-            periodSeconds: {{ .Values.tabletServer.livenessProbe.periodSeconds }}
+            failureThreshold: {{ .Values.tablet.livenessProbe.failureThreshold }}
+            timeoutSeconds: {{ .Values.tablet.livenessProbe.timeoutSeconds }}
+            initialDelaySeconds: {{ .Values.tablet.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.tablet.livenessProbe.periodSeconds }}
             tcpSocket:
               port: {{ .Values.listeners.client.port }}
           readinessProbe:
-            failureThreshold: {{ .Values.tabletServer.readinessProbe.failureThreshold }}
-            timeoutSeconds: {{ .Values.tabletServer.readinessProbe.timeoutSeconds }}
-            initialDelaySeconds: {{ .Values.tabletServer.readinessProbe.initialDelaySeconds }}
-            periodSeconds: {{ .Values.tabletServer.readinessProbe.periodSeconds }}
+            failureThreshold: {{ .Values.tablet.readinessProbe.failureThreshold }}
+            timeoutSeconds: {{ .Values.tablet.readinessProbe.timeoutSeconds }}
+            initialDelaySeconds: {{ .Values.tablet.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.tablet.readinessProbe.periodSeconds }}
             tcpSocket:
               port: {{ .Values.listeners.client.port }}
           resources:
-            {{- toYaml .Values.resources.tabletServer | nindent 12 }}
+            {{- toYaml .Values.tablet.resources | nindent 12 }}
           volumeMounts:
             - name: fluss-conf
               mountPath: /opt/conf
