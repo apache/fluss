@@ -31,6 +31,7 @@ import org.apache.iceberg.data.Record;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -187,13 +188,20 @@ class IcebergRewriteITCase extends FlinkIcebergTieringTestBase {
             checkFileStatusInIcebergTable(t1, 3, false);
 
             // Write should trigger compaction now since the current data file count is greater or
-            // equal MIN_FILES_TO_COMPACT
+            // equal MIN_FILES_TO_COMPACT. Use a longer timeout because complete() blocks until
+            // compaction finishes.
             flussRows.addAll(
                     writeIcebergTableRecords(
-                            t1, t1Bucket, ++i, true, Collections.singletonList(row(1, "v1"))));
-            // Should only have two files now, one file it for newly written, one file is for target
-            // compacted file
-            checkFileStatusInIcebergTable(t1, 2, false);
+                            t1,
+                            t1Bucket,
+                            ++i,
+                            true,
+                            Collections.singletonList(row(1, "v1")),
+                            Duration.ofMinutes(2)));
+            // Should only have two files now, one file for newly written, one file for target
+            // compacted file. Use retry since compaction commit is part of the same pipeline
+            // round and may not be immediately visible.
+            waitForFileStatusInIcebergTable(t1, 2, false);
 
             // check data in iceberg to make sure compaction won't lose data or duplicate data
             checkRecords(getIcebergRecords(t1), flussRows);
@@ -211,6 +219,19 @@ class IcebergRewriteITCase extends FlinkIcebergTieringTestBase {
             throws Exception {
         writeRows(tablePath, rows, append);
         assertReplicaStatus(tableBucket, expectedLogEndOffset);
+        return rows;
+    }
+
+    private List<InternalRow> writeIcebergTableRecords(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            long expectedLogEndOffset,
+            boolean append,
+            List<InternalRow> rows,
+            Duration assertTimeout)
+            throws Exception {
+        writeRows(tablePath, rows, append);
+        assertReplicaStatus(tableBucket, expectedLogEndOffset, assertTimeout);
         return rows;
     }
 }
