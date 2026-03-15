@@ -31,6 +31,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.NullAwareGetters;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.Variant;
 import org.apache.fluss.row.array.IndexedArray;
 import org.apache.fluss.row.map.IndexedMap;
 import org.apache.fluss.types.ArrayType;
@@ -384,6 +385,11 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
     }
 
     @Override
+    public Variant getVariant(int pos) {
+        return Variant.bytesToVariant(getBytes(pos));
+    }
+
+    @Override
     public InternalArray getArray(int pos) {
         assertIndexIsValid(pos);
         int offset = getFieldOffset(pos);
@@ -513,6 +519,7 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
                 return true;
             case STRING:
             case BYTES:
+            case VARIANT:
             case ARRAY:
             case MAP:
             case ROW:

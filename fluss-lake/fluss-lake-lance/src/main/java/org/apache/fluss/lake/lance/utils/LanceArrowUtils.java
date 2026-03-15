@@ -36,6 +36,7 @@ import org.apache.fluss.types.StringType;
 import org.apache.fluss.types.TimeType;
 import org.apache.fluss.types.TimestampType;
 import org.apache.fluss.types.TinyIntType;
+import org.apache.fluss.types.VariantType;
 
 import org.apache.arrow.vector.types.DateUnit;
 import org.apache.arrow.vector.types.FloatingPointPrecision;
@@ -118,7 +119,15 @@ public class LanceArrowUtils {
         }
         FieldType fieldType = new FieldType(logicalType.isNullable(), arrowType, null);
         List<Field> children = null;
-        if (logicalType instanceof ArrayType) {
+        if (logicalType instanceof VariantType) {
+            // VARIANT is stored as a STRUCT with two VARBINARY children: "value" and "metadata"
+            FieldType varBinaryFieldType = new FieldType(false, ArrowType.Binary.INSTANCE, null);
+            Field valueField = new Field("value", varBinaryFieldType, null);
+            Field metadataField = new Field("metadata", varBinaryFieldType, null);
+            children = new java.util.ArrayList<>();
+            children.add(valueField);
+            children.add(metadataField);
+        } else if (logicalType instanceof ArrayType) {
             children =
                     Collections.singletonList(
                             toArrowField(
@@ -151,6 +160,8 @@ public class LanceArrowUtils {
             return new ArrowType.FixedSizeBinary(binaryType.getLength());
         } else if (dataType instanceof BytesType) {
             return ArrowType.Binary.INSTANCE;
+        } else if (dataType instanceof VariantType) {
+            return ArrowType.Struct.INSTANCE;
         } else if (dataType instanceof DecimalType) {
             DecimalType decimalType = (DecimalType) dataType;
             return ArrowType.Decimal.createDecimal(

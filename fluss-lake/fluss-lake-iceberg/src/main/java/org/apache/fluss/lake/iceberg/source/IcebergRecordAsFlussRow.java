@@ -25,6 +25,7 @@ import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.Variant;
 import org.apache.fluss.utils.BytesUtils;
 
 import org.apache.iceberg.data.Record;
@@ -164,6 +165,15 @@ public class IcebergRecordAsFlussRow implements InternalRow {
         Object value = icebergRecord.get(pos);
         ByteBuffer byteBuffer = (ByteBuffer) value;
         return BytesUtils.toArray(byteBuffer);
+    }
+
+    @Override
+    public Variant getVariant(int pos) {
+        // TODO: Iceberg does not have native Variant support yet; deserializing from byte[]
+        //  as workaround. When Iceberg adds native VariantType, read value/metadata directly.
+        Object value = icebergRecord.get(pos);
+        ByteBuffer byteBuffer = (ByteBuffer) value;
+        return Variant.bytesToVariant(BytesUtils.toArray(byteBuffer));
     }
 
     @Override

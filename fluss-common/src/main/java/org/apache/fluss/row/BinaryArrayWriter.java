@@ -213,6 +213,7 @@ public final class BinaryArrayWriter extends AbstractBinaryWriter {
             case STRING:
             case BINARY:
             case BYTES:
+            case VARIANT:
             case DECIMAL:
             case BIGINT:
             case TIMESTAMP_WITHOUT_TIME_ZONE:

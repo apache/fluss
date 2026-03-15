@@ -25,6 +25,7 @@ import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.Variant;
 import org.apache.fluss.types.DataType;
 
 import java.io.Serializable;
@@ -379,6 +380,11 @@ class PaimonBinaryRowWriter {
             case BINARY:
             case BYTES:
                 fieldWriter = (writer, pos, value) -> writer.writeBytes(pos, (byte[]) value);
+                break;
+            case VARIANT:
+                fieldWriter =
+                        (writer, pos, value) ->
+                                writer.writeBytes(pos, Variant.variantToBytes((Variant) value));
                 break;
             case DECIMAL:
                 final int decimalPrecision = getPrecision(fieldType);

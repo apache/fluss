@@ -46,7 +46,8 @@ public class DataTypeVisitorTest {
                     DataTypes.BYTES(),
                     DataTypes.ARRAY(DataTypes.INT()),
                     DataTypes.MAP(DataTypes.INT(), DataTypes.INT()),
-                    DataTypes.ROW(DataTypes.FIELD("a", DataTypes.INT()))
+                    DataTypes.ROW(DataTypes.FIELD("a", DataTypes.INT())),
+                    DataTypes.VARIANT()
                 };
 
         String[] typeStrings = {
@@ -68,7 +69,8 @@ public class DataTypeVisitorTest {
             "BYTES",
             "ARRAY<INT>",
             "MAP<INT NOT NULL, INT>",
-            "ROW<`a` INT>"
+            "ROW<`a` INT>",
+            "VARIANT"
         };
 
         for (int i = 0; i < allTypes.length; i++) {

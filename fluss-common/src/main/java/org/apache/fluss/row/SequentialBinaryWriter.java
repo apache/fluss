@@ -73,6 +73,8 @@ public interface SequentialBinaryWriter extends BinaryWriter {
 
     void writeRow(InternalRow value, RowSerializer serializer);
 
+    void writeVariant(Variant value);
+
     /** Finally, complete write to set real size to binary. */
     void complete();
 
@@ -167,5 +169,10 @@ public interface SequentialBinaryWriter extends BinaryWriter {
     @Override
     default void writeRow(int pos, InternalRow value, RowSerializer serializer) {
         writeRow(value, serializer);
+    }
+
+    @Override
+    default void writeVariant(int pos, Variant value) {
+        writeVariant(value);
     }
 }

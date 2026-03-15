@@ -26,6 +26,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.Variant;
 import org.apache.fluss.types.DataTypeRoot;
 
 import java.time.ZonedDateTime;
@@ -176,6 +177,11 @@ public class PartitionUtils {
             case BYTES:
                 byte[] bytesValue = (byte[]) value;
                 stringPartitionKey = PartitionNameConverters.hexString(bytesValue);
+                break;
+            case VARIANT:
+                Variant variantValue = (Variant) value;
+                stringPartitionKey =
+                        PartitionNameConverters.hexString(Variant.variantToBytes(variantValue));
                 break;
             case TINYINT:
                 Byte tinyIntValue = (Byte) value;

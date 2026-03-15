@@ -34,6 +34,7 @@ import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.Variant;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
@@ -183,6 +184,12 @@ public class InternalRowUtils {
             case BINARY:
             case BYTES:
                 ret = byteArrayCompare((byte[]) x, (byte[]) y);
+                break;
+            case VARIANT:
+                ret =
+                        byteArrayCompare(
+                                Variant.variantToBytes((Variant) x),
+                                Variant.variantToBytes((Variant) y));
                 break;
             case STRING:
             case CHAR:

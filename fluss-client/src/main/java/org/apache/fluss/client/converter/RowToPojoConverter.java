@@ -19,6 +19,7 @@ package org.apache.fluss.client.converter;
 
 import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.Variant;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeChecks;
@@ -140,6 +141,8 @@ public final class RowToPojoConverter<T> {
             case BINARY:
             case BYTES:
                 return InternalRow::getBytes;
+            case VARIANT:
+                return (row, pos) -> Variant.variantToBytes(row.getVariant(pos));
             case DECIMAL:
                 DecimalType decimalType = (DecimalType) fieldType;
                 return (row, pos) ->

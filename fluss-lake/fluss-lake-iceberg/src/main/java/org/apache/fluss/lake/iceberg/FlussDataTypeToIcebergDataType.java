@@ -208,4 +208,9 @@ public class FlussDataTypeToIcebergDataType implements DataTypeVisitor<Type> {
 
         return Types.StructType.of(fields);
     }
+
+    @Override
+    public Type visit(org.apache.fluss.types.VariantType variantType) {
+        return Types.BinaryType.get();
+    }
 }

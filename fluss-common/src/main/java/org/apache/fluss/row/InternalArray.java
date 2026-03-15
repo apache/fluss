@@ -99,6 +99,9 @@ public interface InternalArray extends DataGetters {
             case BYTES:
                 elementGetter = InternalArray::getBytes;
                 break;
+            case VARIANT:
+                elementGetter = InternalArray::getVariant;
+                break;
             case DECIMAL:
                 final int decimalPrecision = getPrecision(fieldType);
                 final int decimalScale = getScale(fieldType);

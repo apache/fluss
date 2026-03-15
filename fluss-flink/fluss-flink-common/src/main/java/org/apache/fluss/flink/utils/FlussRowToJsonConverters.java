@@ -21,6 +21,7 @@ import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.Variant;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.ObjectNode;
@@ -81,6 +82,14 @@ public class FlussRowToJsonConverters {
             case BYTES:
                 return ((mapper, reuse, value) ->
                         mapper.getNodeFactory().binaryNode((byte[]) value));
+            case VARIANT:
+                // TODO: Serializes Variant as opaque binary JSON node. Consider producing
+                //  structured JSON (e.g., {"value": ..., "metadata": ...}) or leveraging
+                //  Variant's binary encoding to output the actual JSON representation
+                //  once a Variant-to-JSON decoder is available.
+                return ((mapper, reuse, value) ->
+                        mapper.getNodeFactory()
+                                .binaryNode(Variant.variantToBytes((Variant) value)));
             case DECIMAL:
                 return createDecimalConverter();
             case TINYINT:

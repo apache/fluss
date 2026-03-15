@@ -375,4 +375,14 @@ public class DataTypes {
     public static RowType ROW(DataType... fieldTypes) {
         return RowType.builder().fields(fieldTypes).build();
     }
+
+    /**
+     * Data type of a semi-structured variant value. A variant can represent any JSON-like value
+     * with an efficient binary encoding (value + metadata byte arrays).
+     *
+     * @see VariantType
+     */
+    public static VariantType VARIANT() {
+        return new VariantType();
+    }
 }

@@ -38,6 +38,7 @@ import org.apache.fluss.types.StringType;
 import org.apache.fluss.types.TimeType;
 import org.apache.fluss.types.TimestampType;
 import org.apache.fluss.types.TinyIntType;
+import org.apache.fluss.types.VariantType;
 
 import org.apache.paimon.types.DataType;
 import org.apache.paimon.types.DataTypes;
@@ -158,6 +159,11 @@ public class FlussDataTypeToPaimonDataType implements DataTypeVisitor<DataType> 
                     field.getDescription().orElse(null));
         }
         return withNullability(rowTypeBuilder.build(), rowType.isNullable());
+    }
+
+    @Override
+    public DataType visit(VariantType variantType) {
+        return withNullability(new org.apache.paimon.types.VariantType(), variantType.isNullable());
     }
 
     private DataType withNullability(DataType paimon, boolean nullable) {

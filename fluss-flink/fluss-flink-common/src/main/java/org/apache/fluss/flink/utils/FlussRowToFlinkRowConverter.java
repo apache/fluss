@@ -25,6 +25,7 @@ import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.Variant;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.MapType;
@@ -129,6 +130,11 @@ public class FlussRowToFlinkRowConverter {
             case BYTES:
             case BINARY:
                 return (flussField) -> flussField;
+            case VARIANT:
+                // TODO: Converts Variant to byte[] via variantToBytes() because Flink lacks
+                //  native Variant support. When Flink adds VariantType, pass Variant's
+                //  value/metadata directly instead of serializing to a single byte[].
+                return (flussField) -> Variant.variantToBytes((Variant) flussField);
             case DECIMAL:
                 return (flussField) -> {
                     Decimal decimal = (Decimal) flussField;

@@ -19,6 +19,7 @@ package org.apache.fluss.utils;
 
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.Variant;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.LocalZonedTimestampType;
@@ -41,6 +42,8 @@ public class TypeUtils {
             case BINARY:
             case BYTES:
                 return s.getBytes(StandardCharsets.UTF_8);
+            case VARIANT:
+                return Variant.bytesToVariant(s.getBytes(StandardCharsets.UTF_8));
             case DECIMAL:
                 DecimalType decimalType = (DecimalType) type;
                 return Decimal.fromBigDecimal(

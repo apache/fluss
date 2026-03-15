@@ -33,6 +33,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.SequentialBinaryWriter;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.Variant;
 import org.apache.fluss.row.serializer.ArraySerializer;
 import org.apache.fluss.row.serializer.MapSerializer;
 import org.apache.fluss.row.serializer.RowSerializer;
@@ -218,6 +219,11 @@ public class CompactedRowWriter implements SequentialBinaryWriter {
     public void writeBytes(byte[] value) {
         writeInt(value.length);
         write(value, 0, value.length);
+    }
+
+    @Override
+    public void writeVariant(Variant variant) {
+        writeBytes(Variant.variantToBytes(variant));
     }
 
     @Override

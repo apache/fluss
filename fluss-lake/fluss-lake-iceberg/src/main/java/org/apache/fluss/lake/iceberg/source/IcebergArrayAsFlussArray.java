@@ -25,6 +25,7 @@ import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.Variant;
 import org.apache.fluss.utils.BytesUtils;
 
 import java.math.BigDecimal;
@@ -139,6 +140,14 @@ public class IcebergArrayAsFlussArray implements InternalArray {
     public byte[] getBytes(int pos) {
         ByteBuffer byteBuffer = (ByteBuffer) icebergList.get(pos);
         return BytesUtils.toArray(byteBuffer);
+    }
+
+    @Override
+    public Variant getVariant(int pos) {
+        // TODO: Iceberg does not have native Variant support yet; deserializing from byte[]
+        //  as workaround. When Iceberg adds native VariantType, read value/metadata directly.
+        ByteBuffer byteBuffer = (ByteBuffer) icebergList.get(pos);
+        return Variant.bytesToVariant(BytesUtils.toArray(byteBuffer));
     }
 
     @Override

@@ -41,6 +41,7 @@ import org.apache.fluss.row.arrow.vectors.ArrowTimestampNtzColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowTinyIntColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowVarBinaryColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowVarCharColumnVector;
+import org.apache.fluss.row.arrow.vectors.ArrowVariantColumnVector;
 import org.apache.fluss.row.arrow.writers.ArrowArrayWriter;
 import org.apache.fluss.row.arrow.writers.ArrowBigIntWriter;
 import org.apache.fluss.row.arrow.writers.ArrowBinaryWriter;
@@ -60,6 +61,7 @@ import org.apache.fluss.row.arrow.writers.ArrowTimestampNtzWriter;
 import org.apache.fluss.row.arrow.writers.ArrowTinyIntWriter;
 import org.apache.fluss.row.arrow.writers.ArrowVarBinaryWriter;
 import org.apache.fluss.row.arrow.writers.ArrowVarCharWriter;
+import org.apache.fluss.row.arrow.writers.ArrowVariantWriter;
 import org.apache.fluss.row.columnar.ColumnVector;
 import org.apache.fluss.row.columnar.VectorizedColumnBatch;
 import org.apache.fluss.shaded.arrow.com.google.flatbuffers.FlatBufferBuilder;
@@ -132,6 +134,7 @@ import org.apache.fluss.types.StringType;
 import org.apache.fluss.types.TimeType;
 import org.apache.fluss.types.TimestampType;
 import org.apache.fluss.types.TinyIntType;
+import org.apache.fluss.types.VariantType;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -352,6 +355,8 @@ public class ArrowUtils {
                     vector,
                     ArrowUtils.createArrowFieldWriter(keyVector, mapType.getKeyType()),
                     ArrowUtils.createArrowFieldWriter(valueVector, mapType.getValueType()));
+        } else if (vector instanceof StructVector && dataType instanceof VariantType) {
+            return new ArrowVariantWriter((StructVector) vector);
         } else if (vector instanceof StructVector && dataType instanceof RowType) {
             RowType rowType = (RowType) dataType;
             StructVector structVector = (StructVector) vector;
@@ -416,6 +421,8 @@ public class ArrowUtils {
             MapType mapType = (MapType) dataType;
             return new ArrowMapColumnVector(
                     (FieldVector) vector, mapType.getKeyType(), mapType.getValueType());
+        } else if (vector instanceof StructVector && dataType instanceof VariantType) {
+            return new ArrowVariantColumnVector((StructVector) vector);
         } else if (vector instanceof StructVector && dataType instanceof RowType) {
             RowType rowType = (RowType) dataType;
             StructVector structVector = (StructVector) vector;
@@ -462,6 +469,14 @@ public class ArrowUtils {
             Field structField =
                     new Field(MapVector.DATA_VECTOR_NAME, structFieldType, structChildren);
             children = Collections.singletonList(structField);
+        } else if (logicalType instanceof VariantType) {
+            // VARIANT is stored as a STRUCT with two VARBINARY children: "value" and "metadata"
+            FieldType varBinaryFieldType = new FieldType(false, ArrowType.Binary.INSTANCE, null);
+            Field valueField = new Field("value", varBinaryFieldType, null);
+            Field metadataField = new Field("metadata", varBinaryFieldType, null);
+            children = new ArrayList<>();
+            children.add(valueField);
+            children.add(metadataField);
         }
         return new Field(fieldName, fieldType, children);
     }
@@ -589,6 +604,11 @@ public class ArrowUtils {
 
         @Override
         public ArrowType visit(RowType rowType) {
+            return ArrowType.Struct.INSTANCE;
+        }
+
+        @Override
+        public ArrowType visit(VariantType variantType) {
             return ArrowType.Struct.INSTANCE;
         }
 

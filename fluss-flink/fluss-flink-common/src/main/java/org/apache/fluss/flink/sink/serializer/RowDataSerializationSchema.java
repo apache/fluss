@@ -294,6 +294,7 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
                         break;
                     case STRING:
                     case BYTES:
+                    case VARIANT:
                         variableSizeFields.add(i);
                         break;
                 }

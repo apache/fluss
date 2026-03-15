@@ -18,6 +18,7 @@
 package org.apache.fluss.client.converter;
 
 import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.Variant;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DecimalType;
@@ -119,6 +120,8 @@ public final class PojoToRowConverter<T> {
             case BINARY:
             case BYTES:
                 return prop::read;
+            case VARIANT:
+                return (obj) -> convertVariantValue(prop, prop.read(obj));
             case CHAR:
             case STRING:
                 return (obj) ->
@@ -163,6 +166,28 @@ public final class PojoToRowConverter<T> {
                                 "Unsupported field type %s for field %s.",
                                 fieldType.getTypeRoot(), prop.name));
         }
+    }
+
+    /**
+     * Converts a byte array value from a POJO property to a Variant. If the value is already a
+     * Variant, it is returned directly. If it is a byte[], it is interpreted as the combined format
+     * [4-byte value length (big-endian)][value][metadata] and converted to a Variant.
+     */
+    private static @Nullable Variant convertVariantValue(
+            PojoType.Property prop, @Nullable Object v) {
+        if (v == null) {
+            return null;
+        }
+        if (v instanceof Variant) {
+            return (Variant) v;
+        }
+        if (v instanceof byte[]) {
+            return Variant.bytesToVariant((byte[]) v);
+        }
+        throw new IllegalArgumentException(
+                String.format(
+                        "Field %s is not a byte[] or Variant. Cannot convert to Variant.",
+                        prop.name));
     }
 
     private interface FieldToRow {

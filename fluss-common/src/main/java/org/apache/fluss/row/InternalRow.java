@@ -129,6 +129,8 @@ public interface InternalRow extends DataGetters {
                 return TimestampNtz.class;
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 return TimestampLtz.class;
+            case VARIANT:
+                return Variant.class;
             case ARRAY:
                 return InternalArray.class;
             case MAP:
@@ -180,6 +182,9 @@ public interface InternalRow extends DataGetters {
                 break;
             case BYTES:
                 fieldGetter = row -> row.getBytes(fieldPos);
+                break;
+            case VARIANT:
+                fieldGetter = row -> row.getVariant(fieldPos);
                 break;
             case DECIMAL:
                 final int decimalPrecision = getPrecision(fieldType);

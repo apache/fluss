@@ -113,4 +113,13 @@ object FlussToSparkTypeVisitor extends DataTypeVisitor[SparkDataType] {
     }
     SparkDataTypes.createStructType(sparkFields.toArray)
   }
+
+  // TODO: Currently maps Fluss VARIANT to Spark BinaryType as a temporary workaround.
+  //  Once Spark 4 introduces native VariantType support, we should adopt a shim mechanism
+  //  (similar to Paimon's SparkShim) to map VARIANT to Spark's native VariantType on Spark 4+,
+  //  while keeping the BinaryType fallback for Spark 3.x.
+  //  See: Paimon's SparkShimLoader / Spark4Shim for reference implementation.
+  override def visit(variantType: VariantType): SparkDataType = {
+    SparkDataTypes.BinaryType
+  }
 }

@@ -17,7 +17,7 @@
 
 package org.apache.fluss.spark.row
 
-import org.apache.fluss.row.{BinaryString, Decimal, InternalMap, InternalRow => FlussInternalRow, TimestampLtz, TimestampNtz}
+import org.apache.fluss.row.{BinaryString, Decimal, InternalMap, InternalRow => FlussInternalRow, TimestampLtz, TimestampNtz, Variant}
 
 import org.apache.spark.sql.catalyst.{InternalRow => SparkInternalRow}
 import org.apache.spark.sql.types.StructType
@@ -115,6 +115,11 @@ class SparkAsFlussRow(schema: StructType) extends FlussInternalRow with Serializ
 
   /** Returns the binary value at the given position. */
   override def getBytes(pos: Int): Array[Byte] = row.getBinary(pos)
+
+  // TODO: Spark InternalRow has no native getVariant() in Spark 3.x; deserializing from byte[]
+  //  as workaround. When adopting Spark 4 with native VariantType, use row.getVariant() directly.
+  /** Returns the variant value at the given position. */
+  override def getVariant(pos: Int): Variant = Variant.bytesToVariant(row.getBinary(pos))
 
   /** Returns the array value at the given position. */
   override def getArray(pos: Int) =

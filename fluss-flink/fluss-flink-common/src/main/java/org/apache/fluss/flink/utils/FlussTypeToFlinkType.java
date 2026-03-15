@@ -38,6 +38,7 @@ import org.apache.fluss.types.StringType;
 import org.apache.fluss.types.TimeType;
 import org.apache.fluss.types.TimestampType;
 import org.apache.fluss.types.TinyIntType;
+import org.apache.fluss.types.VariantType;
 
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.types.DataType;
@@ -166,6 +167,15 @@ class FlussTypeToFlinkType implements DataTypeVisitor<DataType> {
             dataFields.add(dataTypeField);
         }
         return withNullability(DataTypes.ROW(dataFields), rowType.isNullable());
+    }
+
+    // TODO: Currently maps Fluss VARIANT to Flink BYTES as a workaround because Flink's type
+    //  system does not have a native VARIANT type yet. Once Flink introduces native VariantType
+    //  support, we should map VARIANT directly to Flink's native VariantType for structured
+    //  value/metadata access instead of opaque byte[] serialization.
+    @Override
+    public DataType visit(VariantType variantType) {
+        return withNullability(DataTypes.BYTES(), variantType.isNullable());
     }
 
     private DataType withNullability(DataType flinkType, boolean nullable) {
