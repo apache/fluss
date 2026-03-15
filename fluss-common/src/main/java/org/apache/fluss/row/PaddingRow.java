@@ -127,6 +127,11 @@ public class PaddingRow implements InternalRow {
     }
 
     @Override
+    public Variant getVariant(int pos) {
+        return row.getVariant(pos);
+    }
+
+    @Override
     public InternalArray getArray(int pos) {
         return row.getArray(pos);
     }

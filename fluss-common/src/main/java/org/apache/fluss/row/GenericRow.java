@@ -167,6 +167,11 @@ public final class GenericRow implements InternalRow, Serializable {
     }
 
     @Override
+    public Variant getVariant(int pos) {
+        return (Variant) this.fields[pos];
+    }
+
+    @Override
     public InternalArray getArray(int pos) {
         return (InternalArray) this.fields[pos];
     }

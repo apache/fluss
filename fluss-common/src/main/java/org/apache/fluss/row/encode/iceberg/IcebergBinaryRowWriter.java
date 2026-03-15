@@ -21,6 +21,7 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.Variant;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.utils.UnsafeUtils;
 
@@ -221,6 +222,10 @@ class IcebergBinaryRowWriter {
             case BINARY:
             case BYTES:
                 return (writer, value) -> writer.writeBytes((byte[]) value, true);
+
+            case VARIANT:
+                return (writer, value) ->
+                        writer.writeBytes(Variant.variantToBytes((Variant) value), true);
 
             case ARRAY:
                 throw new IllegalArgumentException(

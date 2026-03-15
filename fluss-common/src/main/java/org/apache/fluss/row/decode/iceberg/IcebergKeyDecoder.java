@@ -23,6 +23,7 @@ import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.Variant;
 import org.apache.fluss.row.decode.KeyDecoder;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
@@ -128,6 +129,15 @@ public class IcebergKeyDecoder implements KeyDecoder {
                     byte[] bytes = new byte[length];
                     segment.get(offset, bytes, 0, length);
                     return bytes;
+                };
+
+            case VARIANT:
+                return (segment, offset) -> {
+                    // Variant bytes are written directly without length prefix
+                    int length = segment.size() - offset;
+                    byte[] bytes = new byte[length];
+                    segment.get(offset, bytes, 0, length);
+                    return Variant.bytesToVariant(bytes);
                 };
 
             default:

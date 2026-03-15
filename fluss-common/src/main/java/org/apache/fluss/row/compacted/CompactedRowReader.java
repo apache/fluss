@@ -26,6 +26,7 @@ import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.Variant;
 import org.apache.fluss.row.array.CompactedArray;
 import org.apache.fluss.row.map.CompactedMap;
 import org.apache.fluss.types.ArrayType;
@@ -245,6 +246,11 @@ public class CompactedRowReader {
         return readBytesInternal(length);
     }
 
+    public Variant readVariant() {
+        byte[] bytes = readBytes();
+        return Variant.bytesToVariant(bytes);
+    }
+
     public byte[] readBinary(int length) {
         return readBytesInternal(length);
     }
@@ -290,6 +296,9 @@ public class CompactedRowReader {
                 // TODO: use readBinary(length) in the future, but need to keep compatibility
             case BYTES:
                 fieldReader = (reader, pos) -> reader.readBytes();
+                break;
+            case VARIANT:
+                fieldReader = (reader, pos) -> reader.readVariant();
                 break;
             case DECIMAL:
                 final int decimalPrecision = getPrecision(fieldType);

@@ -23,6 +23,7 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.Variant;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.DecimalType;
@@ -89,6 +90,7 @@ public class PojoToRowConverter<T> {
                 DataTypeRoot.STRING, orderedSet(String.class, Character.class, char.class));
         SUPPORTED_TYPES.put(DataTypeRoot.BINARY, orderedSet(byte[].class));
         SUPPORTED_TYPES.put(DataTypeRoot.BYTES, orderedSet(byte[].class));
+        SUPPORTED_TYPES.put(DataTypeRoot.VARIANT, orderedSet(Variant.class, byte[].class));
         SUPPORTED_TYPES.put(DataTypeRoot.DECIMAL, orderedSet(BigDecimal.class));
         SUPPORTED_TYPES.put(DataTypeRoot.DATE, orderedSet(LocalDate.class));
         SUPPORTED_TYPES.put(DataTypeRoot.TIME_WITHOUT_TIME_ZONE, orderedSet(LocalTime.class));
@@ -207,6 +209,23 @@ public class PojoToRowConverter<T> {
             case BINARY:
             case BYTES:
                 return field::get;
+            case VARIANT:
+                return obj -> {
+                    Object value = field.get(obj);
+                    if (value == null) {
+                        return null;
+                    }
+                    if (value instanceof Variant) {
+                        return value;
+                    }
+                    if (value instanceof byte[]) {
+                        return Variant.bytesToVariant((byte[]) value);
+                    }
+                    LOG.warn(
+                            "Field {} is not a byte[] or Variant. Cannot convert to Variant.",
+                            field.getName());
+                    return null;
+                };
             case CHAR:
             case STRING:
                 return obj -> {

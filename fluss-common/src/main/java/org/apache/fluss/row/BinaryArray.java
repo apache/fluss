@@ -25,6 +25,7 @@ import org.apache.fluss.types.DataType;
 import java.lang.reflect.Array;
 
 import static org.apache.fluss.memory.MemoryUtils.UNSAFE;
+import static org.apache.fluss.row.Variant.bytesToVariant;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
@@ -82,6 +83,7 @@ public abstract class BinaryArray extends BinarySection
             case STRING:
             case BINARY:
             case BYTES:
+            case VARIANT:
             case DECIMAL:
             case BIGINT:
             case DOUBLE:
@@ -231,6 +233,12 @@ public abstract class BinaryArray extends BinarySection
         int fieldOffset = getElementOffset(pos, 8);
         final long offsetAndSize = BinarySegmentUtils.getLong(segments, fieldOffset);
         return BinarySegmentUtils.readBinary(segments, offset, fieldOffset, offsetAndSize);
+    }
+
+    @Override
+    public Variant getVariant(int pos) {
+        byte[] bytes = getBytes(pos);
+        return bytesToVariant(bytes);
     }
 
     @Override

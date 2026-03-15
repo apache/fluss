@@ -84,6 +84,8 @@ public interface BinaryWriter {
 
     void writeRow(int pos, InternalRow value, RowSerializer serializer);
 
+    void writeVariant(int pos, Variant value);
+
     /** Finally, complete write to set real size to binary. */
     void complete();
 
@@ -135,6 +137,8 @@ public interface BinaryWriter {
                         writer.writeBinary(pos, (byte[]) value, binaryLength);
             case BYTES:
                 return (writer, pos, value) -> writer.writeBytes(pos, (byte[]) value);
+            case VARIANT:
+                return (writer, pos, value) -> writer.writeVariant(pos, (Variant) value);
             case DECIMAL:
                 final int decimalPrecision = getPrecision(elementType);
                 return (writer, pos, value) ->

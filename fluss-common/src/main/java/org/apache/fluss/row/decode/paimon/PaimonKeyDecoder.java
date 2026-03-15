@@ -26,6 +26,7 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.Variant;
 import org.apache.fluss.row.decode.KeyDecoder;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
@@ -133,6 +134,9 @@ public class PaimonKeyDecoder implements KeyDecoder {
             case BINARY:
             case BYTES:
                 return (segment, baseOffset) -> readBinary(segment, baseOffset, fieldOffset);
+            case VARIANT:
+                return (segment, baseOffset) ->
+                        Variant.bytesToVariant(readBinary(segment, baseOffset, fieldOffset));
             case DECIMAL:
                 final int decimalPrecision = getPrecision(fieldType);
                 final int decimalScale = getScale(fieldType);

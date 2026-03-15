@@ -29,6 +29,7 @@ import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.Variant;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.utils.MurmurHashUtils;
@@ -249,6 +250,11 @@ public class CompactedRow implements BinaryRow {
     @Override
     public byte[] getBytes(int pos) {
         return decodedRow().getBytes(pos);
+    }
+
+    @Override
+    public Variant getVariant(int pos) {
+        return decodedRow().getVariant(pos);
     }
 
     @Override

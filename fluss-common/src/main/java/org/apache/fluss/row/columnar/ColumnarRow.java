@@ -25,6 +25,7 @@ import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.Variant;
 
 /**
  * Columnar row to support access to vector column data. It is a row view in {@link
@@ -131,6 +132,11 @@ public class ColumnarRow implements InternalRow {
     @Override
     public byte[] getBytes(int pos) {
         return vectorizedColumnBatch.getBytes(rowId, pos);
+    }
+
+    @Override
+    public Variant getVariant(int pos) {
+        return Variant.bytesToVariant(getBytes(pos));
     }
 
     @Override

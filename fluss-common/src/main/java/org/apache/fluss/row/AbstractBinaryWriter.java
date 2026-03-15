@@ -105,6 +105,22 @@ public abstract class AbstractBinaryWriter implements BinaryWriter {
     }
 
     @Override
+    public void writeVariant(int pos, Variant variant) {
+        byte[] value = variant.value();
+        byte[] metadata = variant.metadata();
+        int totalSize = 4 + value.length + metadata.length;
+        byte[] combined = new byte[totalSize];
+        // Write value length as big-endian 4-byte integer
+        combined[0] = (byte) ((value.length >> 24) & 0xFF);
+        combined[1] = (byte) ((value.length >> 16) & 0xFF);
+        combined[2] = (byte) ((value.length >> 8) & 0xFF);
+        combined[3] = (byte) (value.length & 0xFF);
+        System.arraycopy(value, 0, combined, 4, value.length);
+        System.arraycopy(metadata, 0, combined, 4 + value.length, metadata.length);
+        writeBytes(pos, combined);
+    }
+
+    @Override
     public void writeChar(int pos, BinaryString value, int length) {
         // TODO: currently, we encoding CHAR(length) as the same with STRING, the length info can
         //  be omitted and the bytes length should be enforced in the future.

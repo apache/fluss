@@ -25,6 +25,7 @@ import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.Variant;
 
 import java.io.Serializable;
 import java.util.Arrays;
@@ -131,6 +132,11 @@ public final class ColumnarArray implements InternalArray, Serializable {
             return Arrays.copyOfRange(
                     byteArray.data, byteArray.offset, byteArray.offset + byteArray.len);
         }
+    }
+
+    @Override
+    public Variant getVariant(int pos) {
+        return Variant.bytesToVariant(getBytes(pos));
     }
 
     @Override

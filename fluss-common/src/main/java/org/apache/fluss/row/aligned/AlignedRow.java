@@ -31,6 +31,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.NullAwareGetters;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.Variant;
 import org.apache.fluss.row.array.AlignedArray;
 import org.apache.fluss.row.map.AlignedMap;
 import org.apache.fluss.types.DataType;
@@ -386,6 +387,11 @@ public final class AlignedRow extends BinarySection
         int fieldOffset = getFieldOffset(pos);
         final long offsetAndLen = segments[0].getLong(fieldOffset);
         return BinarySegmentUtils.readBinary(segments, offset, fieldOffset, offsetAndLen);
+    }
+
+    @Override
+    public Variant getVariant(int pos) {
+        return Variant.bytesToVariant(getBytes(pos));
     }
 
     @Override

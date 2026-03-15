@@ -141,6 +141,11 @@ public class ProjectedRow implements InternalRow {
     }
 
     @Override
+    public Variant getVariant(int pos) {
+        return row.getVariant(indexMapping[pos]);
+    }
+
+    @Override
     public InternalArray getArray(int pos) {
         return row.getArray(indexMapping[pos]);
     }

@@ -17,7 +17,7 @@
 
 package org.apache.fluss.spark.row
 
-import org.apache.fluss.row.{BinaryString, Decimal, InternalArray => FlussInternalArray, InternalMap, InternalRow => FlussInternalRow, TimestampLtz, TimestampNtz}
+import org.apache.fluss.row.{BinaryString, Decimal, InternalArray => FlussInternalArray, InternalMap, InternalRow => FlussInternalRow, TimestampLtz, TimestampNtz, Variant}
 
 import org.apache.spark.sql.catalyst.util.{ArrayData => SparkArrayData}
 import org.apache.spark.sql.types.{ArrayType => SparkArrayType, DataType => SparkDataType, StructType}
@@ -119,6 +119,11 @@ class SparkAsFlussArray(arrayData: SparkArrayData, elementType: SparkDataType)
 
   /** Returns the binary value at the given position. */
   override def getBytes(pos: Int): Array[Byte] = arrayData.getBinary(pos)
+
+  // TODO: Spark ArrayData has no native getVariant() in Spark 3.x; deserializing from byte[]
+  //  as workaround. When adopting Spark 4 with native VariantType, use arrayData.getVariant() directly.
+  /** Returns the variant value at the given position. */
+  override def getVariant(pos: Int): Variant = Variant.bytesToVariant(arrayData.getBinary(pos))
 
   /** Returns the array value at the given position. */
   override def getArray(pos: Int) = new SparkAsFlussArray(

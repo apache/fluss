@@ -24,6 +24,7 @@ import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.Variant;
 
 import org.apache.paimon.data.Timestamp;
 
@@ -132,6 +133,14 @@ public class PaimonArrayAsFlussArray implements InternalArray {
     @Override
     public byte[] getBytes(int pos) {
         return paimonArray.getBinary(pos);
+    }
+
+    @Override
+    public Variant getVariant(int pos) {
+        // TODO: Paimon has native Variant support (paimonArray.getVariant(pos)), but the current
+        //  Paimon dependency may not include it yet. Once upgraded, convert Paimon's Variant
+        //  (value/metadata) directly to Fluss Variant instead of round-tripping through byte[].
+        return Variant.bytesToVariant(paimonArray.getBinary(pos));
     }
 
     @Override

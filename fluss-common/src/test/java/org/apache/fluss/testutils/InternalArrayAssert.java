@@ -108,6 +108,15 @@ public class InternalArrayAssert extends AbstractAssert<InternalArrayAssert, Int
                     }
                 }
                 break;
+            case VARIANT:
+                for (int i = 0; i < actual.size(); i++) {
+                    if (expected.isNullAt(i)) {
+                        assertThat(actual.isNullAt(i)).isTrue();
+                    } else {
+                        assertThat(actual.getVariant(i)).isEqualTo(expected.getVariant(i));
+                    }
+                }
+                break;
             case TINYINT:
                 for (int i = 0; i < actual.size(); i++) {
                     if (expected.isNullAt(i)) {
@@ -245,6 +254,8 @@ public class InternalArrayAssert extends AbstractAssert<InternalArrayAssert, Int
                 return array.getBinary(pos, getLength(elementType));
             case BYTES:
                 return array.getBytes(pos);
+            case VARIANT:
+                return array.getVariant(pos);
             case TINYINT:
                 return array.getByte(pos);
             case DECIMAL:

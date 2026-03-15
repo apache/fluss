@@ -107,6 +107,7 @@ public class DataTypeJsonSerde implements JsonSerializer<DataType>, JsonDeserial
             case DATE:
             case BYTES:
             case STRING:
+            case VARIANT:
                 // do nothing.
                 break;
             case CHAR:

@@ -27,6 +27,7 @@ import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.Variant;
 import org.apache.fluss.row.array.IndexedArray;
 import org.apache.fluss.row.map.IndexedMap;
 import org.apache.fluss.types.ArrayType;
@@ -174,6 +175,11 @@ public class IndexedRowReader {
         return readBytesInternal(length);
     }
 
+    public Variant readVariant() {
+        byte[] bytes = readBytes();
+        return Variant.bytesToVariant(bytes);
+    }
+
     private int readVarLengthFromVarLengthList() {
         if (variableLengthPosition - nullBitsSizeInBytes + 4 > variableColumnLengthListInBytes) {
             throw new IllegalArgumentException();
@@ -261,6 +267,9 @@ public class IndexedRowReader {
                 break;
             case BYTES:
                 fieldReader = (reader, pos) -> reader.readBytes();
+                break;
+            case VARIANT:
+                fieldReader = (reader, pos) -> reader.readVariant();
                 break;
             case DECIMAL:
                 final int decimalPrecision = getPrecision(fieldType);

@@ -24,6 +24,7 @@ import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.Variant;
 import org.apache.fluss.types.DataType;
 
 import org.apache.flink.table.data.ArrayData;
@@ -159,6 +160,14 @@ public class FlinkAsFlussArray implements InternalArray {
     @Override
     public byte[] getBytes(int pos) {
         return flinkArray.getBinary(pos);
+    }
+
+    @Override
+    public Variant getVariant(int pos) {
+        // TODO: Flink ArrayData has no native getVariant(); deserializing from byte[] as
+        // workaround.
+        //  When Flink adds native VariantType, read value/metadata directly.
+        return Variant.bytesToVariant(flinkArray.getBinary(pos));
     }
 
     @Override

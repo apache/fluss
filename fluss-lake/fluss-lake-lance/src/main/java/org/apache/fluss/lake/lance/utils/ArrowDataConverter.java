@@ -23,6 +23,7 @@ import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.complex.FixedSizeListVector;
 import org.apache.arrow.vector.complex.ListVector;
+import org.apache.arrow.vector.complex.StructVector;
 import org.apache.arrow.vector.types.pojo.Schema;
 
 import java.nio.ByteBuffer;
@@ -78,6 +79,18 @@ public class ArrowDataConverter {
 
         if (shadedVector
                 instanceof
+                org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.StructVector) {
+            if (nonShadedVector instanceof StructVector) {
+                copyStructVectorData(
+                        (org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.StructVector)
+                                shadedVector,
+                        (StructVector) nonShadedVector);
+                return;
+            }
+        }
+
+        if (shadedVector
+                instanceof
                 org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector) {
             if (nonShadedVector instanceof FixedSizeListVector) {
                 copyListToFixedSizeListVectorData(
@@ -115,6 +128,43 @@ public class ArrowDataConverter {
                 nonShadedBuf.setBytes(0, srcBuffer);
             }
         }
+    }
+
+    private static void copyStructVectorData(
+            org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.StructVector
+                    shadedStructVector,
+            StructVector nonShadedStructVector) {
+
+        int valueCount = shadedStructVector.getValueCount();
+
+        // Recursively copy each child vector
+        List<org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector> shadedChildren =
+                shadedStructVector.getChildrenFromFields();
+        List<FieldVector> nonShadedChildren = nonShadedStructVector.getChildrenFromFields();
+        for (int i = 0; i < Math.min(shadedChildren.size(), nonShadedChildren.size()); i++) {
+            copyVectorData(shadedChildren.get(i), nonShadedChildren.get(i));
+        }
+
+        // Copy the StructVector's own validity buffer
+        List<org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf> shadedBuffers =
+                shadedStructVector.getFieldBuffers();
+        List<ArrowBuf> nonShadedBuffers = nonShadedStructVector.getFieldBuffers();
+
+        for (int i = 0; i < Math.min(shadedBuffers.size(), nonShadedBuffers.size()); i++) {
+            org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf shadedBuf =
+                    shadedBuffers.get(i);
+            ArrowBuf nonShadedBuf = nonShadedBuffers.get(i);
+
+            long size = Math.min(shadedBuf.capacity(), nonShadedBuf.capacity());
+            if (size > 0) {
+                ByteBuffer srcBuffer = shadedBuf.nioBuffer(0, (int) size);
+                srcBuffer.position(0);
+                srcBuffer.limit((int) Math.min(size, Integer.MAX_VALUE));
+                nonShadedBuf.setBytes(0, srcBuffer);
+            }
+        }
+
+        nonShadedStructVector.setValueCount(valueCount);
     }
 
     private static void copyListVectorData(
