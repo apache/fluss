@@ -43,9 +43,17 @@ public class AppendSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
             TablePath tablePath,
             Configuration flussConfig,
             RowType tableRowType,
+            RowType consumedRowType,
             MailboxExecutor mailboxExecutor,
             FlussSerializationSchema<InputT> serializationSchema) {
-        super(tablePath, flussConfig, tableRowType, mailboxExecutor, serializationSchema);
+        super(
+                tablePath,
+                flussConfig,
+                tableRowType,
+                consumedRowType,
+                null,
+                mailboxExecutor,
+                serializationSchema);
     }
 
     @Override

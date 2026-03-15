@@ -229,6 +229,7 @@ public class FlussSinkBuilder<InputT> {
                             tablePath,
                             flussConfig,
                             tableRowType,
+                            tableRowType,
                             targetColumnIndexes,
                             numBucket,
                             bucketKeys,
@@ -244,6 +245,7 @@ public class FlussSinkBuilder<InputT> {
                     new FlinkSink.AppendSinkWriterBuilder<>(
                             tablePath,
                             flussConfig,
+                            tableRowType,
                             tableRowType,
                             numBucket,
                             bucketKeys,

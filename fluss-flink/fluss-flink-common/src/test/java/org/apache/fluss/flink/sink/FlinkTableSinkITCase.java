@@ -1671,6 +1671,40 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @Test
+    void testUpdateToReproduceBug2397() throws Exception {
+        String tableName = "fluss_order";
+        tEnv.executeSql(
+                "CREATE TABLE "
+                        + tableName
+                        + " ("
+                        + "    order_key BIGINT,"
+                        + "    cust_key BIGINT,"
+                        + "    order_status VARCHAR,"
+                        + "    total_price DOUBLE,"
+                        + "    order_date DATE,"
+                        + "    order_priority VARCHAR,"
+                        + "    ptime AS PROCTIME(),"
+                        + "    PRIMARY KEY (order_key) NOT ENFORCED"
+                        + ") WITH ("
+                        + "    'table.changelog.image' = 'wal'"
+                        + ")");
+
+        tEnv.executeSql(
+                        "INSERT INTO "
+                                + tableName
+                                + " VALUES "
+                                + "(14404096, 1, 'o', 10.0, DATE '2026-01-01', 'low')")
+                .await();
+
+        tBatchEnv
+                .executeSql(
+                        "UPDATE "
+                                + tableName
+                                + " SET order_priority = 'high' WHERE order_key = 14404096")
+                .await();
+    }
+
+    @Test
     void testAutoIncrementWithTargetColumns() throws Exception {
         // use single parallelism to make result ordering stable
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
