@@ -114,13 +114,15 @@ public class FlinkRecordEmitterTest {
         // Interleave -U/+U across two hybrid splits and verify pairing stays split-scoped.
         emitter.emitRecord(
                 new RecordAndPos(
-                        new ScanRecord(100L, 1000L, ChangeType.UPDATE_BEFORE, row(1, "A-old", 100L)),
+                        new ScanRecord(
+                            100L, 1000L, ChangeType.UPDATE_BEFORE, row(1, "A-old", 100L)),
                         1L),
                 sourceOutput,
                 splitStateA);
         emitter.emitRecord(
                 new RecordAndPos(
-                        new ScanRecord(200L, 2000L, ChangeType.UPDATE_BEFORE, row(2, "B-old", 200L)),
+                        new ScanRecord(
+                            200L, 2000L, ChangeType.UPDATE_BEFORE, row(2, "B-old", 200L)),
                         1L),
                 sourceOutput,
                 splitStateB);
