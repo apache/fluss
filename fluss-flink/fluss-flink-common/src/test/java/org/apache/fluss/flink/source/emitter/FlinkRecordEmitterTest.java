@@ -92,7 +92,7 @@ public class FlinkRecordEmitterTest {
     }
 
     @Test
-    void testEmitBinlogRecordWithHybridSplitInIncrementalPhase() throws Exception {
+    void testHybridIncrementalBinlogUpdatesDoNotCorruptAcrossSplits() throws Exception {
         RowType sourceOutputType =
                 RowType.of(
                         new DataType[] {DataTypes.INT(), DataTypes.STRING(), DataTypes.BIGINT()},
