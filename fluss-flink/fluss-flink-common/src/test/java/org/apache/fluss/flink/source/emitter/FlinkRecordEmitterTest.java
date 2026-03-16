@@ -111,6 +111,7 @@ public class FlinkRecordEmitterTest {
 
         TestSourceOutput<RowData> sourceOutput = new TestSourceOutput<>();
 
+        // Interleave -U/+U across two hybrid splits and verify pairing stays split-scoped.
         emitter.emitRecord(
                 new RecordAndPos(
                         new ScanRecord(100L, 1000L, ChangeType.UPDATE_BEFORE, row(1, "A-old", 100L)),
@@ -139,6 +140,7 @@ public class FlinkRecordEmitterTest {
         List<RowData> results = sourceOutput.getRecords();
         assertThat(results).hasSize(2);
 
+        // Each emitted update should keep its own split's before/after rows and offsets.
         RowData resultB = results.get(0);
         assertThat(resultB.getString(0)).isEqualTo(StringData.fromString("update"));
         assertThat(resultB.getLong(1)).isEqualTo(200L);
