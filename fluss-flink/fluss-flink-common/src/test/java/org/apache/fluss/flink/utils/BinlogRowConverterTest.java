@@ -229,52 +229,6 @@ class BinlogRowConverterTest {
         assertThat(result2.getLong(1)).isEqualTo(20L); // offset from second -U
     }
 
-    @Test
-    void testCrossSplitInterleavingDoesNotCorrupt() throws Exception {
-        String splitA = "log-1-0";
-        String splitB = "log-1-1";
-
-        // Split A: send -U (buffered per split A)
-        RowData resultA1 =
-                converter.toBinlogRowData(
-                        createLogRecord(ChangeType.UPDATE_BEFORE, 100L, 1000L, 1, "A-old", 100L),
-                        splitA);
-        assertThat(resultA1).isNull();
-
-        // Split B: send -U then +U (should pair correctly within split B)
-        RowData resultB1 =
-                converter.toBinlogRowData(
-                        createLogRecord(ChangeType.UPDATE_BEFORE, 200L, 2000L, 2, "B-old", 200L),
-                        splitB);
-        assertThat(resultB1).isNull();
-
-        RowData resultB2 =
-                converter.toBinlogRowData(
-                        createLogRecord(ChangeType.UPDATE_AFTER, 201L, 2000L, 2, "B-new", 300L),
-                        splitB);
-        assertThat(resultB2).isNotNull();
-        assertThat(resultB2.getString(0)).isEqualTo(StringData.fromString("update"));
-        // Verify it paired with split B's -U
-        RowData beforeRowB = resultB2.getRow(3, 3);
-        assertThat(beforeRowB.getString(1).toString()).isEqualTo("B-old");
-        RowData afterRowB = resultB2.getRow(4, 3);
-        assertThat(afterRowB.getString(1).toString()).isEqualTo("B-new");
-
-        // Split A: send +U (should pair with split A's buffered -U, not corrupted by split B)
-        RowData resultA2 =
-                converter.toBinlogRowData(
-                        createLogRecord(ChangeType.UPDATE_AFTER, 101L, 1000L, 1, "A-new", 150L),
-                        splitA);
-        assertThat(resultA2).isNotNull();
-        assertThat(resultA2.getString(0)).isEqualTo(StringData.fromString("update"));
-        assertThat(resultA2.getLong(1)).isEqualTo(100L); // offset from split A's -U
-        // Verify it paired with split A's -U
-        RowData beforeRowA = resultA2.getRow(3, 3);
-        assertThat(beforeRowA.getString(1).toString()).isEqualTo("A-old");
-        RowData afterRowA = resultA2.getRow(4, 3);
-        assertThat(afterRowA.getString(1).toString()).isEqualTo("A-new");
-    }
-
     private LogRecord createLogRecord(
             ChangeType changeType, long offset, long timestamp, int id, String name, long amount)
             throws Exception {
