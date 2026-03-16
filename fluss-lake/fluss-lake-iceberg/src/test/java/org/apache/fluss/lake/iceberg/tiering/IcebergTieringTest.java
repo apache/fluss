@@ -39,6 +39,7 @@ import org.apache.fluss.utils.types.Tuple2;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.Table;
+import org.apache.iceberg.TableProperties;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.SupportsNamespaces;
@@ -104,6 +105,15 @@ class IcebergTieringTest {
     private static Stream<Arguments> tieringWriteArgs() {
         return Stream.of(
                 // isPrimaryKeyTable, isPartitionedTable
+                Arguments.of(true, true),
+                Arguments.of(true, false),
+                Arguments.of(false, true),
+                Arguments.of(false, false));
+    }
+
+    private static Stream<Arguments> snapshotExpireArgs() {
+        return Stream.of(
+                // isTableAutoExpireSnapshot, isLakeTieringExpireSnapshot
                 Arguments.of(true, true),
                 Arguments.of(true, false),
                 Arguments.of(false, true),
@@ -186,7 +196,7 @@ class IcebergTieringTest {
 
         // second, commit data
         try (LakeCommitter<IcebergWriteResult, IcebergCommittable> lakeCommitter =
-                createLakeCommitter(tablePath, tableInfo)) {
+                createLakeCommitter(tablePath, tableInfo, new Configuration())) {
             // serialize/deserialize committable
             IcebergCommittable icebergCommittable =
                     lakeCommitter.toCommittable(icebergWriteResults);
@@ -249,7 +259,8 @@ class IcebergTieringTest {
     }
 
     private LakeCommitter<IcebergWriteResult, IcebergCommittable> createLakeCommitter(
-            TablePath tablePath, TableInfo tableInfo) throws IOException {
+            TablePath tablePath, TableInfo tableInfo, Configuration lakeTieringConfig)
+            throws IOException {
         return icebergLakeTieringFactory.createLakeCommitter(
                 new CommitterInitContext() {
                     @Override
@@ -264,7 +275,7 @@ class IcebergTieringTest {
 
                     @Override
                     public Configuration lakeTieringConfig() {
-                        return new Configuration();
+                        return lakeTieringConfig;
                     }
 
                     @Override
@@ -272,6 +283,108 @@ class IcebergTieringTest {
                         return new Configuration();
                     }
                 });
+    }
+
+    @ParameterizedTest
+    @MethodSource("snapshotExpireArgs")
+    void testSnapshotExpiration(
+            boolean isTableAutoExpireSnapshot, boolean isLakeTieringExpireSnapshot)
+            throws Exception {
+        int bucketNum = 3;
+        TablePath tablePath =
+                TablePath.of(
+                        "iceberg",
+                        String.format(
+                                "test_snapshot_expire_%s_%s",
+                                isTableAutoExpireSnapshot, isLakeTieringExpireSnapshot));
+
+        // Create Iceberg table with snapshot retention properties
+        Map<String, String> tableProperties = new HashMap<>();
+        tableProperties.put(TableProperties.MIN_SNAPSHOTS_TO_KEEP, "1");
+        tableProperties.put(TableProperties.MAX_SNAPSHOT_AGE_MS, "1");
+        createTable(tablePath, false, false, tableProperties);
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                org.apache.fluss.metadata.Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .column("c3", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(bucketNum)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT,
+                                isTableAutoExpireSnapshot)
+                        .build();
+        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
+
+        Configuration lakeTieringConfig = new Configuration();
+        lakeTieringConfig.set(
+                ConfigOptions.LAKE_TIERING_AUTO_EXPIRE_SNAPSHOT, isLakeTieringExpireSnapshot);
+
+        // Write data multiple times to generate snapshots
+        for (int round = 0; round < 5; round++) {
+            writeData(tablePath, tableInfo, lakeTieringConfig, bucketNum);
+            // Small delay to ensure snapshots are older than MAX_SNAPSHOT_AGE_MS=1ms
+            Thread.sleep(10);
+        }
+
+        // Verify snapshot count
+        Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
+        int snapshotCount = 0;
+        for (Snapshot ignored : icebergTable.snapshots()) {
+            snapshotCount++;
+        }
+
+        if (isTableAutoExpireSnapshot || isLakeTieringExpireSnapshot) {
+            // if auto snapshot expiration is enabled, old snapshots should be expired
+            // With MIN_SNAPSHOTS_TO_KEEP=1, only 1 snapshot should be retained
+            assertThat(snapshotCount).isEqualTo(1);
+        } else {
+            // if auto snapshot expiration is disabled, all snapshots should be retained
+            assertThat(snapshotCount).isEqualTo(5);
+        }
+    }
+
+    private void writeData(
+            TablePath tablePath,
+            TableInfo tableInfo,
+            Configuration lakeTieringConfig,
+            int bucketNum)
+            throws Exception {
+        List<IcebergWriteResult> icebergWriteResults = new ArrayList<>();
+        SimpleVersionedSerializer<IcebergWriteResult> writeResultSerializer =
+                icebergLakeTieringFactory.getWriteResultSerializer();
+        SimpleVersionedSerializer<IcebergCommittable> committableSerializer =
+                icebergLakeTieringFactory.getCommittableSerializer();
+
+        for (int bucket = 0; bucket < bucketNum; bucket++) {
+            try (LakeWriter<IcebergWriteResult> writer =
+                    createLakeWriter(tablePath, bucket, null, null, tableInfo)) {
+                Tuple2<List<LogRecord>, List<LogRecord>> writeAndExpectRecords =
+                        genLogTableRecords(null, bucket, 3);
+                for (LogRecord record : writeAndExpectRecords.f0) {
+                    writer.write(record);
+                }
+                IcebergWriteResult result = writer.complete();
+                byte[] serialized = writeResultSerializer.serialize(result);
+                icebergWriteResults.add(
+                        writeResultSerializer.deserialize(
+                                writeResultSerializer.getVersion(), serialized));
+            }
+        }
+
+        try (LakeCommitter<IcebergWriteResult, IcebergCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo, lakeTieringConfig)) {
+            IcebergCommittable committable = lakeCommitter.toCommittable(icebergWriteResults);
+            byte[] serialized = committableSerializer.serialize(committable);
+            committable =
+                    committableSerializer.deserialize(
+                            committableSerializer.getVersion(), serialized);
+            lakeCommitter.commit(committable, Collections.emptyMap());
+        }
     }
 
     private Tuple2<List<LogRecord>, List<LogRecord>> genLogTableRecords(
@@ -359,6 +472,14 @@ class IcebergTieringTest {
 
     private void createTable(
             TablePath tablePath, boolean isPrimaryTable, boolean isPartitionedTable) {
+        createTable(tablePath, isPrimaryTable, isPartitionedTable, Collections.emptyMap());
+    }
+
+    private void createTable(
+            TablePath tablePath,
+            boolean isPrimaryTable,
+            boolean isPartitionedTable,
+            Map<String, String> tableProperties) {
         Namespace namespace = Namespace.of(tablePath.getDatabaseName());
         if (icebergCatalog instanceof SupportsNamespaces) {
             SupportsNamespaces ns = (SupportsNamespaces) icebergCatalog;
@@ -404,7 +525,7 @@ class IcebergTieringTest {
 
         TableIdentifier tableId =
                 TableIdentifier.of(tablePath.getDatabaseName(), tablePath.getTableName());
-        icebergCatalog.createTable(tableId, schema, partitionSpec);
+        icebergCatalog.createTable(tableId, schema, partitionSpec, tableProperties);
     }
 
     private CloseableIterator<Record> getIcebergRows(

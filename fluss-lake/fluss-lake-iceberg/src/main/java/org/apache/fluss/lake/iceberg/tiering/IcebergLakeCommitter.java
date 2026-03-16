@@ -17,7 +17,9 @@
 
 package org.apache.fluss.lake.iceberg.tiering;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
+import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
@@ -28,6 +30,7 @@ import org.apache.iceberg.CatalogUtil;
 import org.apache.iceberg.ContentFile;
 import org.apache.iceberg.DataFile;
 import org.apache.iceberg.DeleteFile;
+import org.apache.iceberg.ExpireSnapshots;
 import org.apache.iceberg.RewriteFiles;
 import org.apache.iceberg.RowDelta;
 import org.apache.iceberg.Snapshot;
@@ -61,12 +64,23 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
 
     private final Catalog icebergCatalog;
     private final Table icebergTable;
+    private final boolean isAutoSnapshotExpiration;
     private static final ThreadLocal<Long> currentCommitSnapshotId = new ThreadLocal<>();
 
-    public IcebergLakeCommitter(IcebergCatalogProvider icebergCatalogProvider, TablePath tablePath)
+    public IcebergLakeCommitter(
+            IcebergCatalogProvider icebergCatalogProvider,
+            CommitterInitContext committerInitContext)
             throws IOException {
         this.icebergCatalog = icebergCatalogProvider.get();
-        this.icebergTable = getTable(tablePath);
+        this.icebergTable = getTable(committerInitContext.tablePath());
+        this.isAutoSnapshotExpiration =
+                committerInitContext
+                                .tableInfo()
+                                .getTableConfig()
+                                .isDataLakeAutoExpireSnapshot()
+                        || committerInitContext
+                                .lakeTieringConfig()
+                                .get(ConfigOptions.LAKE_TIERING_AUTO_EXPIRE_SNAPSHOT);
         // register iceberg listener
         Listeners.register(new IcebergSnapshotCreateListener(), CreateSnapshotEvent.class);
     }
@@ -141,6 +155,12 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
                     snapshotId = rewriteCommitSnapshotId;
                 }
             }
+
+            // Expire old snapshots if auto-expire-snapshot is enabled
+            if (isAutoSnapshotExpiration) {
+                expireSnapshots();
+            }
+
             // Iceberg does not provide cumulative table stats API yet; leave stats as -1 (unknown).
             return LakeCommitResult.committedIsReadable(snapshotId);
         } catch (Exception e) {
@@ -259,6 +279,22 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
             }
         } catch (Exception e) {
             throw new IOException("Failed to close IcebergLakeCommitter.", e);
+        }
+    }
+
+    /**
+     * Expires old snapshots from the Iceberg table. Uses Iceberg's built-in snapshot expiration
+     * which respects table properties like {@code history.expire.max-snapshot-age-ms} and {@code
+     * history.expire.min-snapshots-to-keep}.
+     */
+    private void expireSnapshots() {
+        try {
+            ExpireSnapshots expireSnapshots =
+                    icebergTable.expireSnapshots().cleanExpiredFiles(true);
+            expireSnapshots.commit();
+            LOG.debug("Successfully expired old snapshots for Iceberg table.");
+        } catch (Exception e) {
+            LOG.warn("Failed to expire snapshots for Iceberg table, will retry on next commit.", e);
         }
     }
 
