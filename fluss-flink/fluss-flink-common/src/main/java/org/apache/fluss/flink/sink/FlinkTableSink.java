@@ -153,22 +153,6 @@ public class FlinkTableSink
     @Override
     public SinkRuntimeProvider getSinkRuntimeProvider(Context context) {
         int[] targetColumnIndexes = null;
-        // When appliedUpdates is true (UPDATE command), the Flink planner may pass
-        // RowData that includes computed columns (e.g., PROCTIME()). We need to
-        // detect that and set the consumedRowType accordingly so that the serializer
-        // can project out the extra columns.
-        if (appliedUpdates && context.getTargetColumns().isPresent()) {
-            int[][] targetColumns = context.getTargetColumns().get();
-            if (targetColumns.length > 0 && targetColumns.length != tableRowType.getFieldCount()) {
-                // Build the consumed row type from the target columns, which may include
-                // computed columns that Flink sends during UPDATE.
-                List<RowType.RowField> consumedFields = new ArrayList<>();
-                for (int[] column : targetColumns) {
-                    consumedFields.add(tableRowType.getFields().get(column[0]));
-                }
-                this.consumedRowType = new RowType(consumedFields);
-            }
-        }
         // skip applying partial-updates for UPDATE command as the Context#targetColumns
         // is not correct, see FLINK-36736
         if (!appliedUpdates
