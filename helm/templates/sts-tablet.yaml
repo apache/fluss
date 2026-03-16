@@ -82,17 +82,17 @@ spec:
 
               bin/tablet-server.sh start-foreground
           livenessProbe:
-            failureThreshold: 100
-            timeoutSeconds: 1
-            initialDelaySeconds: 10
-            periodSeconds: 3
+            failureThreshold: {{ .Values.tabletServer.livenessProbe.failureThreshold }}
+            timeoutSeconds: {{ .Values.tabletServer.livenessProbe.timeoutSeconds }}
+            initialDelaySeconds: {{ .Values.tabletServer.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.tabletServer.livenessProbe.periodSeconds }}
             tcpSocket:
               port: {{ .Values.ports.client }}
           readinessProbe:
-            failureThreshold: 100
-            timeoutSeconds: 1
-            initialDelaySeconds: 10
-            periodSeconds: 3
+            failureThreshold: {{ .Values.tabletServer.readinessProbe.failureThreshold }}
+            timeoutSeconds: {{ .Values.tabletServer.readinessProbe.timeoutSeconds }}
+            initialDelaySeconds: {{ .Values.tabletServer.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.tabletServer.readinessProbe.periodSeconds }}
             tcpSocket:
               port: {{ .Values.ports.client }}
           resources:
