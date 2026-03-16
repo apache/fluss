@@ -42,6 +42,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
@@ -411,5 +412,77 @@ public class DynamicConfigChangeTest {
 
         // Verify the reconfigurable was notified with the new value
         assertThat(reconfiguredInterval.get()).isEqualTo(Duration.ofMinutes(5));
+    }
+
+    @Test
+    void testPreventInvalidMinInSyncReplicas() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.setInt(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER, 1);
+
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+        dynamicConfigManager.startup();
+
+        // Try to set min-in-sync-replicas to an invalid value - should be rejected by type
+        // validation
+        assertThatThrownBy(
+                        () ->
+                                dynamicConfigManager.alterConfigs(
+                                        Collections.singletonList(
+                                                new AlterConfig(
+                                                        ConfigOptions
+                                                                .LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER
+                                                                .key(),
+                                                        "invalid_value",
+                                                        AlterConfigOpType.SET))))
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining(
+                        "Cannot parse 'invalid_value' as Integer for config"
+                                + " 'log.replica.min-in-sync-replicas-number'");
+    }
+
+    @Test
+    void testDynamicMinInSyncReplicasChange() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.setInt(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER, 1);
+
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+
+        AtomicInteger reconfiguredValue = new AtomicInteger();
+        dynamicConfigManager.register(
+                new ServerReconfigurable() {
+                    @Override
+                    public void validate(Configuration newConfig) throws ConfigException {}
+
+                    @Override
+                    public void reconfigure(Configuration newConfig) {
+                        reconfiguredValue.set(
+                                newConfig.get(
+                                        ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER));
+                    }
+                });
+        dynamicConfigManager.startup();
+
+        // Change min-in-sync-replicas to 2 - should succeed
+        assertThatCode(
+                        () ->
+                                dynamicConfigManager.alterConfigs(
+                                        Collections.singletonList(
+                                                new AlterConfig(
+                                                        ConfigOptions
+                                                                .LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER
+                                                                .key(),
+                                                        "2",
+                                                        AlterConfigOpType.SET))))
+                .doesNotThrowAnyException();
+
+        // Verify config was persisted to ZK
+        Map<String, String> zkConfig = zookeeperClient.fetchEntityConfig();
+        assertThat(zkConfig.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER.key()))
+                .isEqualTo("2");
+
+        // Verify the reconfigurable was notified with the new value
+        assertThat(reconfiguredValue.get()).isEqualTo(2);
     }
 }
