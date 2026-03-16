@@ -75,6 +75,15 @@ security:
         username: ""
         password: ""
 
+  zookeeper:
+    sasl:
+      # "" | plain
+      mechanism: ""
+      plain:
+        username: ""
+        password: ""
+        loginModuleClass: "org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.server.auth.DigestLoginModule"
+
 metrics:
   reporters: ""
   prometheus:

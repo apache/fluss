@@ -202,6 +202,15 @@ If the internal SASL username or password is left empty, the chart automatically
 
 It is recommended to set these explicitly in production.
 
+#### ZooKeeper SASL Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `security.zookeeper.sasl.mechanism` | ZooKeeper SASL mechanism (`""`, `plain`) | `""` |
+| `security.zookeeper.sasl.plain.username` | ZooKeeper SASL username | `""` |
+| `security.zookeeper.sasl.plain.password` | ZooKeeper SASL password | `""` |
+| `security.zookeeper.sasl.plain.loginModuleClass` | JAAS login module class for ZooKeeper | `org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.server.auth.DigestLoginModule` |
+
 ### Metrics Parameters
 
 | Parameter | Description | Default |
@@ -324,6 +333,24 @@ security:
         username: internal-user
         password: internal-password
 ```
+
+### Enabling ZooKeeper SASL Authentication
+
+You can enable ZooKeeper ensemble SASL authentication, with the following values in the Fluss Helm chart:
+
+```yaml
+security:
+  zookeeper:
+    sasl:
+      mechanism: plain
+      plain:
+        username: fluss-zk-user
+        password: fluss-zk-password
+```
+
+The `security.zookeeper.sasl.plain.username` and `security.zookeeper.sasl.plain.password` fields are required when `security.zookeeper.sasl.mechanism` is set to `plain`.
+
+ZooKeeper SASL can be enabled independently or together with the listeners SASL authentication.
 
 ### Metrics and Monitoring
 

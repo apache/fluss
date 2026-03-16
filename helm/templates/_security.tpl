@@ -30,6 +30,28 @@ Usage:
 {{- end -}}
 
 {{/*
+Returns the ZooKeeper SASL authentication mechanism value.
+Allowed mechanism values: '', 'plain'
+Usage:
+  include "fluss.security.zookeeper.sasl.mechanism" .
+*/}}
+{{- define "fluss.security.zookeeper.sasl.mechanism" -}}
+{{- $sasl := .Values.security.zookeeper.sasl | default (dict) -}}
+{{- $mechanism := lower (default "" $sasl.mechanism) -}}
+{{- $mechanism -}}
+{{- end -}}
+
+{{/*
+Returns true if ZooKeeper SASL authentication is enabled (mechanism is non-empty).
+Usage:
+  include "fluss.security.zookeeper.sasl.enabled" .
+*/}}
+{{- define "fluss.security.zookeeper.sasl.enabled" -}}
+{{- $mechanism := include "fluss.security.zookeeper.sasl.mechanism" . -}}
+{{- if ne $mechanism "" -}}true{{- end -}}
+{{- end -}}
+
+{{/*
 Returns true if any of the listeners uses SASL based authentication mechanism ('plain' for now).
 Usage:
   include "fluss.security.sasl.enabled" .
@@ -118,6 +140,56 @@ Usage:
 {{- end -}}
 
 {{/*
+Validates that ZooKeeper SASL mechanism is valid.
+Returns an error message if invalid, empty string otherwise.
+Usage:
+  include "fluss.security.zookeeper.sasl.validateMechanism" .
+*/}}
+{{- define "fluss.security.zookeeper.sasl.validateMechanism" -}}
+{{- $allowedMechanisms := list "" "plain" -}}
+{{- $mechanism := include "fluss.security.zookeeper.sasl.mechanism" . -}}
+{{- if not (has $mechanism $allowedMechanisms) -}}
+  {{- print "security.zookeeper.sasl.mechanism must be empty or: plain" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Validates that ZooKeeper SASL loginModuleClass is not empty when ZK SASL is enabled.
+Returns an error message if invalid, empty string otherwise.
+Usage:
+  include "fluss.security.zookeeper.sasl.validateLoginModuleClass" .
+*/}}
+{{- define "fluss.security.zookeeper.sasl.validateLoginModuleClass" -}}
+{{- if and (include "fluss.security.zookeeper.sasl.enabled" .) (not .Values.security.zookeeper.sasl.plain.loginModuleClass) -}}
+  {{- print "security.zookeeper.sasl.plain.loginModuleClass must not be empty when security.zookeeper.sasl.mechanism is plain" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Validates that ZooKeeper SASL username is not empty when ZK SASL is enabled.
+Returns an error message if invalid, empty string otherwise.
+Usage:
+  include "fluss.security.zookeeper.sasl.validateUsername" .
+*/}}
+{{- define "fluss.security.zookeeper.sasl.validateUsername" -}}
+{{- if and (include "fluss.security.zookeeper.sasl.enabled" .) (not .Values.security.zookeeper.sasl.plain.username) -}}
+  {{- print "security.zookeeper.sasl.plain.username must not be empty when security.zookeeper.sasl.mechanism is plain" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Validates that ZooKeeper SASL password is not empty when ZK SASL is enabled.
+Returns an error message if invalid, empty string otherwise.
+Usage:
+  include "fluss.security.zookeeper.sasl.validatePassword" .
+*/}}
+{{- define "fluss.security.zookeeper.sasl.validatePassword" -}}
+{{- if and (include "fluss.security.zookeeper.sasl.enabled" .) (not .Values.security.zookeeper.sasl.plain.password) -}}
+  {{- print "security.zookeeper.sasl.plain.password must not be empty when security.zookeeper.sasl.mechanism is plain" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Returns the default internal SASL username based on the release name.
 Usage:
   include "fluss.security.sasl.plain.internal.defaultUsername" .
@@ -154,6 +226,17 @@ Usage:
 {{- end -}}
 
 {{/*
+Returns true if JAAS configuration is required, either by listeners using SASL protocol or ZooKeeper SASL enablement.
+Usage:
+  include "fluss.security.jaas.required" .
+*/}}
+{{- define "fluss.security.jaas.required" -}}
+{{- if or (include "fluss.security.sasl.enabled" .) (include "fluss.security.zookeeper.sasl.enabled" .) -}}
+{{- true -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Returns a warning if the internal SASL user is using auto-generated credentials.
 Usage:
   include "fluss.security.sasl.warnInternalUser" .
@@ -179,6 +262,10 @@ Usage:
 {{- $errMessages := list -}}
 {{- $errMessages = append $errMessages (include "fluss.security.sasl.validateMechanisms" .) -}}
 {{- $errMessages = append $errMessages (include "fluss.security.sasl.validateClientPlainUsers" .) -}}
+{{- $errMessages = append $errMessages (include "fluss.security.zookeeper.sasl.validateMechanism" .) -}}
+{{- $errMessages = append $errMessages (include "fluss.security.zookeeper.sasl.validateLoginModuleClass" .) -}}
+{{- $errMessages = append $errMessages (include "fluss.security.zookeeper.sasl.validateUsername" .) -}}
+{{- $errMessages = append $errMessages (include "fluss.security.zookeeper.sasl.validatePassword" .) -}}
 
 {{- $errMessages = without $errMessages "" -}}
 {{- $errMessage := join "\n" $errMessages -}}
@@ -202,8 +289,8 @@ Usage:
 {{/*
 Returns the SASL JAAS config name.
 Usage:
-  include "fluss.security.sasl.configName" .
+  include "fluss.security.jaas.configName" .
 */}}
-{{- define "fluss.security.sasl.configName" -}}
+{{- define "fluss.security.jaas.configName" -}}
 {{ include "fluss.fullname" . }}-sasl-jaas-config
 {{- end -}}
