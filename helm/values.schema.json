@@ -8,8 +8,10 @@
         "Tablet Server",
         "Configuration Overrides",
         "Ports",
+        "Security",
         "Service Account"
     ],
+    "additionalProperties": false,
     "properties": {
         "image": {
             "description": "Fluss image configuration",
@@ -289,6 +291,78 @@
                     "description": "Client port for Fluss",
                     "type": "integer",
                     "default": 9124
+                }
+            }
+        },
+        "security": {
+            "description": "Fluss security configuration",
+            "type": "object",
+            "x-docsSection": "Security",
+            "additionalProperties": false,
+            "properties": {
+                "client": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "sasl": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "mechanism": {
+                                    "description": "SASL mechanism for client authentication",
+                                    "type": "string",
+                                    "default": ""
+                                },
+                                "plain": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                        "users": {
+                                            "description": "List of SASL PLAIN users",
+                                            "type": "array",
+                                            "default": [],
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "internal": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "sasl": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "mechanism": {
+                                    "description": "SASL mechanism for internal communication",
+                                    "type": "string",
+                                    "default": ""
+                                },
+                                "plain": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                        "username": {
+                                            "description": "Username for SASL PLAIN authentication",
+                                            "type": "string",
+                                            "default": ""
+                                        },
+                                        "password": {
+                                            "description": "Password for SASL PLAIN authentication",
+                                            "type": "string",
+                                            "default": ""
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         },
