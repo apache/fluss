@@ -54,7 +54,6 @@ public class BinlogRowConverter implements RecordToFlinkRowConverter {
      */
     private final Map<String, LogRecord> pendingUpdateBeforeMap = new HashMap<>();
 
-    private static final String DEFAULT_SPLIT_ID = "__default__";
 
     /** Creates a new BinlogRowConverter. */
     public BinlogRowConverter(RowType rowType) {
@@ -65,7 +64,7 @@ public class BinlogRowConverter implements RecordToFlinkRowConverter {
     /** Converts a LogRecord to a binlog RowData with nested before/after structure. */
     @Nullable
     public RowData toBinlogRowData(LogRecord record) {
-        return toBinlogRowData(record, DEFAULT_SPLIT_ID);
+        return toBinlogRowData(record, null);
     }
 
     /**
@@ -73,7 +72,7 @@ public class BinlogRowConverter implements RecordToFlinkRowConverter {
      * split-specific buffer for UPDATE_BEFORE/UPDATE_AFTER pairing.
      */
     @Nullable
-    public RowData toBinlogRowData(LogRecord record, String splitId) {
+    public RowData toBinlogRowData(LogRecord record, @Nullable String splitId) {
         ChangeType changeType = record.getChangeType();
 
         switch (changeType) {
