@@ -54,7 +54,6 @@ public class BinlogRowConverter implements RecordToFlinkRowConverter {
      */
     private final Map<String, LogRecord> pendingUpdateBeforeMap = new HashMap<>();
 
-
     /** Creates a new BinlogRowConverter. */
     public BinlogRowConverter(RowType rowType) {
         this.baseConverter = new FlussRowToFlinkRowConverter(rowType);
