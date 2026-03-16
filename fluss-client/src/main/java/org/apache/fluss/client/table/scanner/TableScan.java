@@ -21,6 +21,7 @@ import org.apache.fluss.client.FlussConnection;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
+import org.apache.fluss.client.table.scanner.batch.CompositeBatchScanner;
 import org.apache.fluss.client.table.scanner.batch.KvSnapshotBatchScanner;
 import org.apache.fluss.client.table.scanner.batch.LimitBatchScanner;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
@@ -29,6 +30,7 @@ import org.apache.fluss.client.table.scanner.log.TypedLogScanner;
 import org.apache.fluss.client.table.scanner.log.TypedLogScannerImpl;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -36,11 +38,13 @@ import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
+import java.io.IOException;
 import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 /** API for configuring and creating {@link LogScanner} and {@link BatchScanner}. */
 public class TableScan implements Scan {
-
     private final FlussConnection conn;
     private final TableInfo tableInfo;
     private final SchemaGetter schemaGetter;
@@ -170,5 +174,42 @@ public class TableScan implements Scan {
                 scannerTmpDir,
                 tableInfo.getTableConfig().getKvFormat(),
                 conn.getOrCreateRemoteFileDownloader());
+    }
+
+    @Override
+    public BatchScanner createBatchScanner() throws IOException {
+        int bucketCount = tableInfo.getNumBuckets();
+        List<TableBucket> tableBuckets;
+        if (tableInfo.isPartitioned()) {
+            List<PartitionInfo> partitionInfos;
+            try {
+                partitionInfos = conn.getAdmin().listPartitionInfos(tableInfo.getTablePath()).get();
+            } catch (Exception e) {
+                throw new IOException(
+                        "Failed to list partition infos for table" + tableInfo.getTablePath(), e);
+            }
+            tableBuckets =
+                    partitionInfos.stream()
+                            .flatMap(
+                                    partitionInfo ->
+                                            IntStream.range(0, bucketCount)
+                                                    .mapToObj(
+                                                            bucketId ->
+                                                                    new TableBucket(
+                                                                            tableInfo.getTableId(),
+                                                                            partitionInfo
+                                                                                    .getPartitionId(),
+                                                                            bucketId)))
+                            .collect(Collectors.toList());
+        } else {
+            tableBuckets =
+                    IntStream.range(0, bucketCount)
+                            .mapToObj(bucketId -> new TableBucket(tableInfo.getTableId(), bucketId))
+                            .collect(Collectors.toList());
+        }
+
+        List<BatchScanner> scanners =
+                tableBuckets.stream().map(this::createBatchScanner).collect(Collectors.toList());
+        return new CompositeBatchScanner(scanners, limit);
     }
 }

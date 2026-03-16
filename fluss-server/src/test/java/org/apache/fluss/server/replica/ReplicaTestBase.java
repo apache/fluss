@@ -476,7 +476,7 @@ public class ReplicaTestBase {
                 logManager,
                 isPkTable ? kvManager : null,
                 conf.get(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME).toMillis(),
-                conf.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER),
+                () -> conf.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER),
                 TABLET_SERVER_ID,
                 new OffsetCheckpointFile.LazyOffsetCheckpoints(
                         new OffsetCheckpointFile(

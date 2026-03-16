@@ -1063,6 +1063,16 @@ message PbHeartbeatReqForTable {
   required int32 coordinator_epoch = 2;
   // the tiering epoch when the table is assigned to be tiering service
   required int64 tiering_epoch = 3;
+  // stats for the last tiering round; only set for finished_tables in LakeTieringHeartbeatRequest
+  optional PbLakeTieringStats lake_tiering_stats = 4;
+}
+
+// Stats reported by the tiering service when a table finishes a tiering round.
+message PbLakeTieringStats {
+  // cumulative total file size (bytes) of the lake table after tiering
+  optional int64 file_size = 1;
+  // cumulative total record count of the lake table after tiering
+  optional int64 record_count = 2;
 }
 
 message PbHeartbeatRespForTable {
@@ -1230,4 +1240,70 @@ message PbTableStatsRespForBucket {
   // Per-column statistics, keyed by column index.
   // Only populated when target_columns is specified in the request.
   // repeated PbColumnStats column_stats = 10;
+}
+
+/**
+* Definition of predicate system related message
+*/
+
+// PbPredicateType constants (using int32 instead of enum for proto3 compatibility)
+// LEAF = 0, COMPOUND = 1
+
+// Represents a predicate that can be serialized and transmitted across
+// languages
+message PbPredicate {
+  // See PbPredicateType constants: LEAF = 0, COMPOUND = 1
+  required int32 type = 1;
+  optional PbLeafPredicate leaf = 2;
+  optional PbCompoundPredicate compound = 3;
+}
+
+// Represents a leaf predicate that compares a field with literals
+message PbLeafPredicate {
+  // The function to apply (see PbLeafFunction constants: EQUAL=0 ... NOT_IN=12)
+  required int32 function = 1;
+  // The schema field id of the referenced top-level field
+  required int32 field_id = 2;
+  // The literals to compare with
+  repeated PbLiteralValue literals = 3;
+}
+
+// Represents a compound predicate that combines multiple predicates
+message PbCompoundPredicate {
+  // The function to apply (see PbCompoundFunction constants: AND=0, OR=1)
+  required int32 function = 1;
+  // The child predicates
+  repeated PbPredicate children = 2;
+}
+
+// PbLeafFunction constants (using int32 instead of enum for proto3 compatibility)
+// EQUAL=0, NOT_EQUAL=1, LESS_THAN=2, LESS_OR_EQUAL=3, GREATER_THAN=4,
+// GREATER_OR_EQUAL=5, IS_NULL=6, IS_NOT_NULL=7, STARTS_WITH=8, CONTAINS=9,
+// END_WITH=10, IN=11, NOT_IN=12
+
+// PbCompoundFunction constants (using int32 instead of enum for proto3 compatibility)
+// AND=0, OR=1
+
+// PbDataTypeRoot constants (using int32 instead of enum for proto3 compatibility)
+// BOOLEAN=0, TINYINT=1, SMALLINT=2, INT=3, BIGINT=4, FLOAT=5, DOUBLE=6,
+// CHAR=7, VARCHAR=8, DECIMAL=9, DATE=10, TIME_WITHOUT_TIME_ZONE=11,
+// TIMESTAMP_WITHOUT_TIME_ZONE=12, TIMESTAMP_WITH_LOCAL_TIME_ZONE=13,
+// BINARY=14, BYTES=15
+
+// Represents a literal value
+message PbLiteralValue {
+  // See PbDataTypeRoot constants: indicates which value field is populated
+  required int32 literal_type = 1;
+  required bool is_null = 2;
+  optional bool boolean_value = 3;
+  optional int32 int_value = 4;
+  optional int64 bigint_value = 5;
+  optional float float_value = 6;
+  optional double double_value = 7;
+  optional string string_value = 8;
+  optional bytes binary_value = 9;
+  optional int64 decimal_value = 10;   // Serialized decimal (compact mode)
+  optional int64 timestamp_millis_value = 11;      // Epoch millis
+  optional int32 timestamp_nano_of_millis_value = 12; // Nano of millis
+  optional bytes decimal_bytes = 13;   // Serialized decimal (non-compact mode)
 }

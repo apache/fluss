@@ -96,8 +96,59 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The directory used for storing the kv snapshot data files and remote log for log tiered storage "
-                                    + " in a Fluss supported filesystem.");
+                            "The directory used for storing the kv snapshot data files and remote log for log tiered storage"
+                                    + " in a Fluss supported filesystem. "
+                                    + "When upgrading to `remote.data.dirs`, please ensure this value is placed as the first entry in the new configuration."
+                                    + "For new clusters, it is recommended to use `remote.data.dirs` instead. "
+                                    + "If `remote.data.dirs` is configured, this value will be ignored.");
+
+    public static final ConfigOption<List<String>> REMOTE_DATA_DIRS =
+            key("remote.data.dirs")
+                    .stringType()
+                    .asList()
+                    .defaultValues()
+                    .withDescription(
+                            "A comma-separated list of directories in Fluss supported filesystems "
+                                    + "for storing the kv snapshot data files and remote log files of tables/partitions. "
+                                    + "If configured, when a new table or a new partition is created, "
+                                    + "one of the directories from this list will be selected according to the strategy "
+                                    + "specified by `remote.data.dirs.strategy` (`ROUND_ROBIN` by default). "
+                                    + "If not configured, the system uses `"
+                                    + REMOTE_DATA_DIR.key()
+                                    + "` as the sole remote data directory for all data.");
+
+    public static final ConfigOption<RemoteDataDirStrategy> REMOTE_DATA_DIRS_STRATEGY =
+            key("remote.data.dirs.strategy")
+                    .enumType(RemoteDataDirStrategy.class)
+                    .defaultValue(RemoteDataDirStrategy.ROUND_ROBIN)
+                    .withDescription(
+                            String.format(
+                                    "The strategy for selecting the remote data directory from `%s`. "
+                                            + "The candidate strategies are: %s, the default strategy is %s.\n"
+                                            + "%s: this strategy employs a round-robin approach to select one from the available remote directories.\n"
+                                            + "%s: this strategy selects one of the available remote directories based on the weights configured in `remote.data.dirs.weights`.",
+                                    REMOTE_DATA_DIRS.key(),
+                                    Arrays.toString(RemoteDataDirStrategy.values()),
+                                    RemoteDataDirStrategy.ROUND_ROBIN,
+                                    RemoteDataDirStrategy.ROUND_ROBIN,
+                                    RemoteDataDirStrategy.WEIGHTED_ROUND_ROBIN));
+
+    public static final ConfigOption<List<Integer>> REMOTE_DATA_DIRS_WEIGHTS =
+            key("remote.data.dirs.weights")
+                    .intType()
+                    .asList()
+                    .defaultValues()
+                    .withDescription(
+                            "The weights of the remote data directories. "
+                                    + "This is a list of weights corresponding to the `"
+                                    + REMOTE_DATA_DIRS.key()
+                                    + "` in the same order. When `"
+                                    + REMOTE_DATA_DIRS_STRATEGY.key()
+                                    + "` is set to `"
+                                    + RemoteDataDirStrategy.WEIGHTED_ROUND_ROBIN
+                                    + "`, this must be configured, and its size must be equal to `"
+                                    + REMOTE_DATA_DIRS.key()
+                                    + "`; otherwise, it will be ignored.");
 
     public static final ConfigOption<MemorySize> REMOTE_FS_WRITE_BUFFER_SIZE =
             key("remote.fs.write-buffer-size")
@@ -2110,5 +2161,11 @@ public class ConfigOptions {
     @Internal
     public static ConfigOption<?> getConfigOption(String key) {
         return ConfigOptionsHolder.CONFIG_OPTIONS_BY_KEY.get(key);
+    }
+
+    /** Remote data dir select strategy for Fluss. */
+    public enum RemoteDataDirStrategy {
+        ROUND_ROBIN,
+        WEIGHTED_ROUND_ROBIN
     }
 }

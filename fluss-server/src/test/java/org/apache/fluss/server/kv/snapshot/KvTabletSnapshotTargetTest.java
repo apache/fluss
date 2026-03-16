@@ -26,7 +26,6 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.SequenceIDCounter;
 import org.apache.fluss.server.kv.rocksdb.RocksDBExtension;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
-import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.server.zk.CuratorFrameworkWithUnhandledErrorListener;
@@ -455,8 +454,7 @@ class KvTabletSnapshotTargetTest {
                 target,
                 periodicMaterializeDelay,
                 java.util.concurrent.Executors.newFixedThreadPool(1),
-                scheduledExecutorService,
-                TestingMetricGroups.BUCKET_METRICS);
+                scheduledExecutorService);
     }
 
     private KvTabletSnapshotTarget createSnapshotTarget(

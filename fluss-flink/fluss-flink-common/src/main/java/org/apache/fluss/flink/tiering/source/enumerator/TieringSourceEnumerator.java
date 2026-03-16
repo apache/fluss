@@ -30,6 +30,7 @@ import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
+import org.apache.fluss.lake.committer.TieringStats;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.GatewayClientProxy;
@@ -38,6 +39,7 @@ import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
+import org.apache.fluss.rpc.messages.PbLakeTieringStats;
 import org.apache.fluss.rpc.messages.PbLakeTieringTableInfo;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.utils.MapUtils;
@@ -272,10 +274,10 @@ public class TieringSourceEnumerator
                         finishedTableId);
             } else {
                 boolean isForceFinished = tieringReachMaxDurationsTables.remove(finishedTableId);
-                LOG.info("Before finishedTables table {}.", finishedTables);
                 finishedTables.put(
-                        finishedTableId, TieringFinishInfo.from(tieringEpoch, isForceFinished));
-                LOG.info("After finishedTables table {}.", finishedTables);
+                        finishedTableId,
+                        TieringFinishInfo.from(
+                                tieringEpoch, isForceFinished, finishedTieringEvent.getStats()));
             }
         }
 
@@ -578,17 +580,32 @@ public class TieringSourceEnumerator
                         toPbHeartbeatReqForTable(tieringTableEpochs, coordinatorEpoch));
             }
             if (!finishedTables.isEmpty()) {
-                Map<Long, Long> finishTieringEpochs = new HashMap<>();
                 Set<Long> forceFinishedTables = new HashSet<>();
+                List<PbHeartbeatReqForTable> finishedTableReqs = new ArrayList<>();
                 finishedTables.forEach(
                         (tableId, tieringFinishInfo) -> {
-                            finishTieringEpochs.put(tableId, tieringFinishInfo.tieringEpoch);
                             if (tieringFinishInfo.isForceFinished) {
                                 forceFinishedTables.add(tableId);
                             }
+                            PbHeartbeatReqForTable pbHeartbeatReqForTable =
+                                    new PbHeartbeatReqForTable()
+                                            .setTableId(tableId)
+                                            .setCoordinatorEpoch(coordinatorEpoch)
+                                            .setTieringEpoch(tieringFinishInfo.tieringEpoch);
+                            TieringStats stats = tieringFinishInfo.stats;
+                            if (stats.isAvailableStats()) {
+                                PbLakeTieringStats pbLakeTieringStats = new PbLakeTieringStats();
+                                if (stats.getFileSize() != null) {
+                                    pbLakeTieringStats.setFileSize(stats.getFileSize());
+                                }
+                                if (stats.getRecordCount() != null) {
+                                    pbLakeTieringStats.setRecordCount(stats.getRecordCount());
+                                }
+                                pbHeartbeatReqForTable.setLakeTieringStats(pbLakeTieringStats);
+                            }
+                            finishedTableReqs.add(pbHeartbeatReqForTable);
                         });
-                heartbeatRequest.addAllFinishedTables(
-                        toPbHeartbeatReqForTable(finishTieringEpochs, coordinatorEpoch));
+                heartbeatRequest.addAllFinishedTables(finishedTableReqs);
                 for (long forceFinishedTableId : forceFinishedTables) {
                     heartbeatRequest.addForceFinishedTable(forceFinishedTableId);
                 }
@@ -638,26 +655,32 @@ public class TieringSourceEnumerator
 
     private static class TieringFinishInfo {
         /** The epoch of the tiering operation for this table. */
-        long tieringEpoch;
+        final long tieringEpoch;
 
         /**
          * Whether this table was force finished due to reaching the maximum tiering duration. When
          * a table's tiering operation exceeds the max duration (data lake freshness), it will be
          * force finished to prevent it from blocking other tables' tiering operations.
          */
-        boolean isForceFinished;
+        final boolean isForceFinished;
+
+        /** Stats collected during this tiering round. */
+        final TieringStats stats;
 
         public static TieringFinishInfo from(long tieringEpoch) {
-            return new TieringFinishInfo(tieringEpoch, false);
+            return new TieringFinishInfo(tieringEpoch, false, null);
         }
 
-        public static TieringFinishInfo from(long tieringEpoch, boolean isForceFinished) {
-            return new TieringFinishInfo(tieringEpoch, isForceFinished);
+        public static TieringFinishInfo from(
+                long tieringEpoch, boolean isForceFinished, @Nullable TieringStats stats) {
+            return new TieringFinishInfo(tieringEpoch, isForceFinished, stats);
         }
 
-        private TieringFinishInfo(long tieringEpoch, boolean isForceFinished) {
+        private TieringFinishInfo(
+                long tieringEpoch, boolean isForceFinished, @Nullable TieringStats stats) {
             this.tieringEpoch = tieringEpoch;
             this.isForceFinished = isForceFinished;
+            this.stats = stats != null ? stats : TieringStats.UNKNOWN;
         }
     }
 }

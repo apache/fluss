@@ -23,17 +23,20 @@ import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.committer.TieringStats;
 import org.apache.fluss.lake.paimon.utils.DvTableReadableSnapshotRetriever;
 import org.apache.fluss.metadata.TablePath;
 
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.Snapshot;
 import org.apache.paimon.catalog.Catalog;
+import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.manifest.IndexManifestEntry;
 import org.apache.paimon.manifest.ManifestCommittable;
 import org.apache.paimon.manifest.ManifestEntry;
 import org.apache.paimon.manifest.SimpleFileEntry;
 import org.apache.paimon.table.FileStoreTable;
+import org.apache.paimon.table.TableSnapshot;
 import org.apache.paimon.table.sink.CommitCallback;
 import org.apache.paimon.table.sink.TableCommitImpl;
 import org.apache.paimon.utils.SnapshotManager;
@@ -46,6 +49,7 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.apache.fluss.lake.paimon.tiering.PaimonLakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
@@ -112,9 +116,12 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
                             "Paimon committed snapshot id must be non-null.");
             currentCommitSnapshotId.remove();
 
+            // Collect cumulative table stats from the exact snapshot that was just committed.
+            TieringStats stats = computeTableStats();
+
             // deletion vector is disabled, committed snapshot is readable
             if (!fileStoreTable.coreOptions().deletionVectorsEnabled()) {
-                return LakeCommitResult.committedIsReadable(committedSnapshotId);
+                return LakeCommitResult.committedIsReadable(committedSnapshotId, stats);
             } else {
                 // retrieve the readable snapshot during commit
                 try (DvTableReadableSnapshotRetriever retriever =
@@ -123,7 +130,7 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
                     DvTableReadableSnapshotRetriever.ReadableSnapshotResult readableSnapshotResult =
                             retriever.getReadableSnapshotAndOffsets(committedSnapshotId);
                     if (readableSnapshotResult == null) {
-                        return LakeCommitResult.unknownReadableSnapshot(committedSnapshotId);
+                        return LakeCommitResult.unknownReadableSnapshot(committedSnapshotId, stats);
                     } else {
                         long earliestSnapshotIdToKeep =
                                 readableSnapshotResult.getEarliestSnapshotIdToKeep();
@@ -139,7 +146,8 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
                                 readableSnapshotResult.getReadableSnapshotId(),
                                 readableSnapshotResult.getTieredOffsets(),
                                 readableSnapshotResult.getReadableOffsets(),
-                                earliestSnapshotIdToKeep);
+                                earliestSnapshotIdToKeep,
+                                stats);
                     }
                 }
             }
@@ -150,6 +158,32 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
                 tableCommit.abort(manifestCommittable.fileCommittables());
             }
             throw new IOException(t);
+        }
+    }
+
+    /** Computes cumulative table stats from the latest snapshot by REST API. */
+    @Nullable
+    private TieringStats computeTableStats() {
+        Identifier identifier =
+                new Identifier(tablePath.getDatabaseName(), tablePath.getTableName());
+        try {
+            Optional<TableSnapshot> snapshot = paimonCatalog.loadSnapshot(identifier);
+            if (!snapshot.isPresent()) {
+                LOG.warn(
+                        "No snapshot found for table {}, "
+                                + "fileSize and recordCount will be reported as -1.",
+                        tablePath);
+                return null;
+            }
+            TableSnapshot tableSnapshot = snapshot.get();
+            return new TieringStats(tableSnapshot.fileSizeInBytes(), tableSnapshot.recordCount());
+        } catch (Exception e) {
+            LOG.debug(
+                    "Failed to load snapshot for table {}, "
+                            + "fileSize and recordCount will be reported as -1.",
+                    tablePath,
+                    e);
+            return null;
         }
     }
 
@@ -231,9 +265,21 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
             dynamicOptions.put(
                     CoreOptions.COMMIT_CALLBACKS.key(),
                     PaimonLakeCommitter.PaimonCommitCallback.class.getName());
-            dynamicOptions.put(
-                    CoreOptions.WRITE_ONLY.key(),
-                    isAutoSnapshotExpiration ? Boolean.FALSE.toString() : Boolean.TRUE.toString());
+
+            boolean writeOnly = !isAutoSnapshotExpiration;
+            dynamicOptions.put(CoreOptions.WRITE_ONLY.key(), Boolean.toString(writeOnly));
+
+            // For non-write-only modes, we enable 'end-input.check-partition-expire' to ensure
+            // Paimon triggers partition expiration on every commit.
+            // Note: This is necessary even if 'paimon.partition.expiration-check-interval' is
+            // already configured. Because the Fluss tiering service creates a fresh TableCommit
+            // instance for each commit, the interval-based expiration check will not be triggered
+            // correctly otherwise.
+            if (!writeOnly) {
+                dynamicOptions.put(
+                        CoreOptions.END_INPUT_CHECK_PARTITION_EXPIRE.key(),
+                        Boolean.TRUE.toString());
+            }
 
             return table.copy(dynamicOptions);
         } catch (Exception e) {

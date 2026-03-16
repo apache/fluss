@@ -49,7 +49,7 @@ class TableRegistrationJsonSerdeTest extends JsonSerdeTestBase<TableRegistration
                                         Maps.newHashMap(),
                                         Collections.singletonMap("custom-3", "\"300\""),
                                         1735538268L,
-                                        1735538268L))
+                                        1735538270L))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Bucket count is required for table registration.");
 
@@ -78,7 +78,7 @@ class TableRegistrationJsonSerdeTest extends JsonSerdeTestBase<TableRegistration
                         Maps.newHashMap(),
                         Collections.singletonMap("custom-3", "\"300\""),
                         1735538268L,
-                        1735538268L);
+                        1735538270L);
 
         tableRegistrations[1] =
                 new TableRegistration(
@@ -98,7 +98,7 @@ class TableRegistrationJsonSerdeTest extends JsonSerdeTestBase<TableRegistration
     protected String[] expectedJsons() {
         return new String[] {
             "{\"version\":1,\"table_id\":1234,\"comment\":\"first-table\",\"partition_key\":[\"a\",\"b\"],"
-                    + "\"bucket_key\":[\"b\",\"c\"],\"bucket_count\":16,\"properties\":{},\"custom_properties\":{\"custom-3\":\"\\\"300\\\"\"},\"created_time\":1735538268,\"modified_time\":1735538268}",
+                    + "\"bucket_key\":[\"b\",\"c\"],\"bucket_count\":16,\"properties\":{},\"custom_properties\":{\"custom-3\":\"\\\"300\\\"\"},\"created_time\":1735538268,\"modified_time\":1735538270}",
             "{\"version\":1,\"table_id\":1234,\"comment\":\"second-table\",\"bucket_count\":32,\"properties\":{\"option-3\":\"300\"},\"custom_properties\":{},\"created_time\":-1,\"modified_time\":-1}",
         };
     }

@@ -43,6 +43,7 @@ import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.options.Options;
+import org.apache.paimon.partition.Partition;
 import org.apache.paimon.schema.Schema;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.source.DataSplit;
@@ -117,6 +118,14 @@ class PaimonTieringTest {
                 Arguments.of(false, true, false),
                 Arguments.of(false, false, true),
                 Arguments.of(false, false, false));
+    }
+
+    private static Stream<Arguments> partitionExpireArgs() {
+        return Stream.of(
+                Arguments.of(true, true),
+                Arguments.of(true, false),
+                Arguments.of(false, true),
+                Arguments.of(false, false));
     }
 
     @ParameterizedTest
@@ -418,6 +427,66 @@ class PaimonTieringTest {
                 // if auto snapshot expiration is disabled, snapshot should never be expired
                 assertThat(snapshotManager.snapshotCount()).isGreaterThan(2);
             }
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("partitionExpireArgs")
+    void testPartitionExpiration(
+            boolean isTableAutoExpireSnapshot, boolean isLakeTieringExpireSnapshot)
+            throws Exception {
+        TablePath tablePath = TablePath.of("paimon", "test_partition_expire");
+        // Use a fixed ancient date so the partition is always considered expired.
+        // "20200101" with expiration-time=1d is always past-due – no wall-clock dependency.
+        String expiredPartition = "20200101";
+
+        Map<String, String> tableOptions = new HashMap<>();
+        tableOptions.put(CoreOptions.PARTITION_EXPIRATION_TIME.key(), "1 d");
+        tableOptions.put(CoreOptions.PARTITION_EXPIRATION_CHECK_INTERVAL.key(), "10 min");
+        tableOptions.put(CoreOptions.PARTITION_TIMESTAMP_FORMATTER.key(), "yyyyMMdd");
+        createTable(tablePath, false, true, null, tableOptions);
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                org.apache.fluss.metadata.Schema.newBuilder()
+                                        .column("c1", org.apache.fluss.types.DataTypes.INT())
+                                        .column("c2", org.apache.fluss.types.DataTypes.STRING())
+                                        .column("c3", org.apache.fluss.types.DataTypes.STRING())
+                                        .build())
+                        .partitionedBy("c3")
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT,
+                                isTableAutoExpireSnapshot)
+                        .build();
+        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
+
+        Configuration lakeTieringConfig = new Configuration();
+        lakeTieringConfig.set(
+                ConfigOptions.LAKE_TIERING_AUTO_EXPIRE_SNAPSHOT, isLakeTieringExpireSnapshot);
+
+        Map<Long, String> partitionIdAndName =
+                new HashMap<Long, String>() {
+                    {
+                        put(1L, expiredPartition);
+                    }
+                };
+
+        // Simulate multiple tiering rounds – each round creates a new LakeCommitter (try-with-
+        // resources), exactly as TieringCommitOperator does in production.
+        for (int round = 0; round < 5; round++) {
+            writeData(tableInfo, lakeTieringConfig, new HashMap<>(), partitionIdAndName);
+        }
+
+        List<Partition> partitions = paimonCatalog.listPartitions(toPaimon(tablePath));
+        if (isTableAutoExpireSnapshot || isLakeTieringExpireSnapshot) {
+            // if auto snapshot expiration is enabled, partition should also be expired
+            assertThat(partitions).isEmpty();
+        } else {
+            // if auto snapshot expiration is disabled, partition should never be expired
+            assertThat(partitions).isNotEmpty();
         }
     }
 

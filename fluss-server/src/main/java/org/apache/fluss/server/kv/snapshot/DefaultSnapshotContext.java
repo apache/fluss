@@ -19,6 +19,8 @@ package org.apache.fluss.server.kv.snapshot;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
+import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.kv.KvSnapshotResource;
@@ -26,12 +28,17 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.function.FunctionWithException;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 
 /** A default implementation for {@link SnapshotContext}. */
-public class DefaultSnapshotContext implements SnapshotContext {
+public class DefaultSnapshotContext implements SnapshotContext, ServerReconfigurable {
+
+    private static final Logger LOG = LoggerFactory.getLogger(DefaultSnapshotContext.class);
 
     private final ZooKeeperClient zooKeeperClient;
     private final CompletedKvSnapshotCommitter completedKvSnapshotCommitter;
@@ -41,7 +48,7 @@ public class DefaultSnapshotContext implements SnapshotContext {
     private final KvSnapshotDataUploader kvSnapshotDataUploader;
     private final KvSnapshotDataDownloader kvSnapshotDataDownloader;
 
-    private final long kvSnapshotIntervalMs;
+    private volatile long kvSnapshotIntervalMs;
 
     /** The write buffer size for writing the kv snapshot file to remote filesystem. */
     private final int writeBufferSizeInBytes;
@@ -160,5 +167,32 @@ public class DefaultSnapshotContext implements SnapshotContext {
     public void handleSnapshotBroken(CompletedSnapshot snapshot) throws Exception {
         completedSnapshotHandleStore.remove(snapshot.getTableBucket(), snapshot.getSnapshotID());
         snapshot.discardAsync(asyncOperationsThreadPool);
+    }
+
+    // ============ ServerReconfigurable Implementation ============
+
+    @Override
+    public void validate(Configuration newConfig) throws ConfigException {
+        // Type validation is already handled by DynamicServerConfig.
+        // Here we only do basic sanity checks.
+        long newIntervalMs = newConfig.get(ConfigOptions.KV_SNAPSHOT_INTERVAL).toMillis();
+        if (newIntervalMs <= 0) {
+            throw new ConfigException(
+                    String.format(
+                            "Invalid kv.snapshot.interval can not be negative or zero: %d ms",
+                            newIntervalMs));
+        }
+    }
+
+    @Override
+    public void reconfigure(Configuration newConfig) {
+        long newIntervalMs = newConfig.get(ConfigOptions.KV_SNAPSHOT_INTERVAL).toMillis();
+        if (newIntervalMs == kvSnapshotIntervalMs) {
+            LOG.debug("kv.snapshot.interval unchanged: {} ms", newIntervalMs);
+            return;
+        }
+        long oldIntervalMs = kvSnapshotIntervalMs;
+        kvSnapshotIntervalMs = newIntervalMs;
+        LOG.info("kv.snapshot.interval reconfigured: {} ms -> {} ms", oldIntervalMs, newIntervalMs);
     }
 }

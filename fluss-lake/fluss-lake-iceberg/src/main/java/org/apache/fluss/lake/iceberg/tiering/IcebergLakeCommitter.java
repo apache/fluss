@@ -141,6 +141,7 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
                     snapshotId = rewriteCommitSnapshotId;
                 }
             }
+            // Iceberg does not provide cumulative table stats API yet; leave stats as -1 (unknown).
             return LakeCommitResult.committedIsReadable(snapshotId);
         } catch (Exception e) {
             throw new IOException("Failed to commit to Iceberg table.", e);

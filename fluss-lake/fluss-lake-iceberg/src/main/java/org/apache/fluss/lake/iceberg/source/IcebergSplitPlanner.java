@@ -68,9 +68,9 @@ public class IcebergSplitPlanner implements Planner<IcebergSplit> {
         Table table = catalog.loadTable(toIceberg(tablePath));
         Function<FileScanTask, List<String>> partitionExtract = createPartitionExtractor(table);
         Function<FileScanTask, Integer> bucketExtractor = createBucketExtractor(table);
-        TableScan tableScan = table.newScan().useSnapshot(snapshotId).includeColumnStats();
+        TableScan tableScan = table.newScan().useSnapshot(snapshotId);
         if (filter != null) {
-            tableScan = tableScan.filter(filter);
+            tableScan = tableScan.includeColumnStats().filter(filter);
         }
         try (CloseableIterable<FileScanTask> tasks = tableScan.planFiles()) {
             tasks.forEach(

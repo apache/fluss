@@ -36,6 +36,10 @@
   <a href="https://deepwiki.com/apache/fluss"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
 </p>
 
+<p align="center">
+  <a href="https://trendshift.io/repositories/14168" target="_blank"><img src="https://trendshift.io/api/badge/repositories/14168" alt="volcengine%2FOpenViking | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+</p>
+
 ## What is Apache Fluss (Incubating)?
 
 Apache Fluss (Incubating) is a streaming storage built for real-time analytics & AI which can serve as the real-time data layer for Lakehouse architectures.
