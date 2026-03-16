@@ -50,9 +50,9 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install jsonschema==4.26.0 PyYAML==6.0.3
+        run: pip install -r tools/ci/helm_ci/requirements.txt
 
-      - name: Run unstable test reporter
+      - name: Run validate values
         run: python tools/ci/helm_ci/validate_helm.py
 
       - name: "Lint Helm chart"
