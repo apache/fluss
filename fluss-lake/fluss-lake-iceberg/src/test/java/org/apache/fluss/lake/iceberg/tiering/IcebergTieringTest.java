@@ -301,7 +301,7 @@ class IcebergTieringTest {
         // Create Iceberg table with snapshot retention properties
         Map<String, String> tableProperties = new HashMap<>();
         tableProperties.put(TableProperties.MIN_SNAPSHOTS_TO_KEEP, "1");
-        tableProperties.put(TableProperties.MAX_SNAPSHOT_AGE_MS, "1");
+        tableProperties.put(TableProperties.MAX_SNAPSHOT_AGE_MS, "1000");
         createTable(tablePath, false, false, tableProperties);
 
         TableDescriptor descriptor =
@@ -327,8 +327,8 @@ class IcebergTieringTest {
         // Write data multiple times to generate snapshots
         for (int round = 0; round < 5; round++) {
             writeData(tablePath, tableInfo, lakeTieringConfig, bucketNum);
-            // Small delay to ensure snapshots are older than MAX_SNAPSHOT_AGE_MS=1ms
-            Thread.sleep(10);
+            // Delay to ensure snapshots are older than MAX_SNAPSHOT_AGE_MS=1000ms with margin
+            Thread.sleep(2000);
         }
 
         // Verify snapshot count
