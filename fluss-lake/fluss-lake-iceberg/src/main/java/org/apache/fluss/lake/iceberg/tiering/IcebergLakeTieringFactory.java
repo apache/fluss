@@ -53,7 +53,7 @@ public class IcebergLakeTieringFactory
     @Override
     public LakeCommitter<IcebergWriteResult, IcebergCommittable> createLakeCommitter(
             CommitterInitContext committerInitContext) throws IOException {
-        return new IcebergLakeCommitter(icebergCatalogProvider, committerInitContext.tablePath());
+        return new IcebergLakeCommitter(icebergCatalogProvider, committerInitContext);
     }
 
     @Override
