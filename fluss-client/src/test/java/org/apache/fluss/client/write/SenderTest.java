@@ -610,6 +610,100 @@ final class SenderTest {
         assertThat(future1.get()).isNull();
     }
 
+    /**
+     * Tests that when a batch's response is lost (e.g., due to request timeout) but the batch was
+     * successfully written on the server, and subsequent batches with higher sequence numbers are
+     * acknowledged, the client should treat the retried batch as already committed instead of
+     * entering an infinite retry loop with {@link
+     * org.apache.fluss.exception.OutOfOrderSequenceException}.
+     *
+     * <p>Detailed scenario:
+     *
+     * <ol>
+     *   <li>Send batch1(seq=0) ~ batch5(seq=4). All 5 batches are successfully written on the
+     *       server (server {@code lastBatchSeq=4}).
+     *   <li>batch2~5 (seq=1~4) responses return normally. Client {@code lastAckedBatchSequence=4}.
+     *   <li>Send batch6(seq=5) and ack successfully. Server {@code lastBatchSeq=5}.
+     *   <li>batch1(seq=0) response is lost due to {@code REQUEST_TIME_OUT}. batch1 is re-enqueued
+     *       for retry.
+     *   <li>Client retries batch1(seq=0). Since server {@code lastBatchSeq=5} and {@code 0 != 5+1},
+     *       server returns {@code OUT_OF_ORDER_SEQUENCE_EXCEPTION}.
+     *   <li>Client detects {@code batch1.seq(0) <= lastAckedBatchSequence(5)}: batch1 is already
+     *       committed. Client completes batch1 successfully without further retries.
+     * </ol>
+     */
+    @Test
+    void testCorrectHandlingOfOutOfOrderResponsesWhenResponseLostButSubsequentBatchesSucceeded()
+            throws Exception {
+        IdempotenceManager idempotenceManager = createIdempotenceManager(true);
+        Sender sender1 = setupWithIdempotenceState(idempotenceManager);
+        sender1.runOnce();
+        assertThat(idempotenceManager.isWriterIdValid()).isTrue();
+        assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(0);
+
+        // Send batch1 (seq=0): its response will be lost later.
+        CompletableFuture<Exception> future1 = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future1.complete(e));
+        sender1.runOnce();
+        assertThat(future1.isDone()).isFalse();
+        assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(1);
+        assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isNotPresent();
+
+        // Send batch2~5 (seq=1~4) and collect their futures.
+        int numFollowingBatches = 4;
+        List<CompletableFuture<Exception>> followingFutures = new ArrayList<>();
+        for (int i = 0; i < numFollowingBatches; i++) {
+            CompletableFuture<Exception> future = new CompletableFuture<>();
+            followingFutures.add(future);
+            appendToAccumulator(tb1, row(i + 2, "b"), (tb, leo, e) -> future.complete(e));
+            sender1.runOnce();
+            assertThat(future.isDone()).isFalse();
+        }
+        assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(5);
+
+        // batch2~5 (seq=1~4) responses return normally.
+        for (int seq = 1; seq <= numFollowingBatches; seq++) {
+            finishIdempotentProduceLogRequest(
+                    seq, tb1, 1, createProduceLogResponse(tb1, seq, seq + 1L));
+            assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(seq));
+            assertThat(followingFutures.get(seq - 1).isDone()).isTrue();
+            assertThat(followingFutures.get(seq - 1).get()).isNull();
+        }
+
+        // Send batch6 (seq=5) and ack successfully.
+        // Now server lastBatchSeq=5. batch1 (seq=0) is still waiting response.
+        CompletableFuture<Exception> future6 = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(6, "f"), (tb, leo, e) -> future6.complete(e));
+        sender1.runOnce(); // drain and send batch6 (seq=5)
+        finishIdempotentProduceLogRequest(5, tb1, 1, createProduceLogResponse(tb1, 5L, 6L));
+        assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(5));
+        assertThat(future6.isDone()).isTrue();
+        assertThat(future6.get()).isNull();
+
+        // All 6 batches are written successfully on the server (server lastBatchSeq=5).
+        // batch1 (seq=0) response is lost, simulated by REQUEST_TIME_OUT.
+        finishIdempotentProduceLogRequest(
+                0, tb1, 0, createProduceLogResponse(tb1, Errors.REQUEST_TIME_OUT));
+        assertThat(future1.isDone()).isFalse();
+
+        // Now retry batch1 (seq=0). Server lastBatchSeq=5, so 0 != 5+1,
+        // server returns OUT_OF_ORDER_SEQUENCE_EXCEPTION.
+        sender1.runOnce(); // send retried batch1
+        finishIdempotentProduceLogRequest(
+                0, tb1, 0, createProduceLogResponse(tb1, Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION));
+
+        // The client should detect that batch1.seq(0) <= lastAckedBatchSequence(5),
+        // meaning batch1 was already committed on the server (its response was just lost).
+        // It should complete batch1 successfully instead of entering an infinite retry loop.
+        assertThat(future1.isDone()).isTrue();
+        assertThat(future1.get()).isNull();
+        // lastAckedBatchSequence should remain at 5 (not changed by completing already-committed
+        // batch1)
+        assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(5));
+        // No more inflight batches
+        assertThat(sender1.numOfInFlightBatches(tb1)).isEqualTo(0);
+    }
+
     @Test
     void testCorrectHandlingOfDuplicateSequenceError() throws Exception {
         IdempotenceManager idempotenceManager = createIdempotenceManager(true);
