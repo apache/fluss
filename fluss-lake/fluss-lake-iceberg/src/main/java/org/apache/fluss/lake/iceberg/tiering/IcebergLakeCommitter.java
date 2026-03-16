@@ -74,10 +74,7 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
         this.icebergCatalog = icebergCatalogProvider.get();
         this.icebergTable = getTable(committerInitContext.tablePath());
         this.isAutoSnapshotExpiration =
-                committerInitContext
-                                .tableInfo()
-                                .getTableConfig()
-                                .isDataLakeAutoExpireSnapshot()
+                committerInitContext.tableInfo().getTableConfig().isDataLakeAutoExpireSnapshot()
                         || committerInitContext
                                 .lakeTieringConfig()
                                 .get(ConfigOptions.LAKE_TIERING_AUTO_EXPIRE_SNAPSHOT);
