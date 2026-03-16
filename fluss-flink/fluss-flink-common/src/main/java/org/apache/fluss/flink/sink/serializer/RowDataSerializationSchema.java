@@ -108,8 +108,8 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
 
     /**
      * Projection to handle input rows with extra fields (e.g., computed columns like PROCTIME()
-     * that Flink adds during UPDATE). Lazily initialized in {@link #serialize(RowData)} when
-     * the actual RowData arity exceeds the expected input field count.
+     * that Flink adds during UPDATE). Lazily initialized in {@link #serialize(RowData)} when the
+     * actual RowData arity exceeds the expected input field count.
      */
     @Nullable private transient ProjectedRow inputProjection;
 
