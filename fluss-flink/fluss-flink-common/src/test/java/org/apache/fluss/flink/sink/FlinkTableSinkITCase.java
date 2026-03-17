@@ -1688,9 +1688,9 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                                 + ") with ('auto-increment.fields'='auto_increment_id')",
                         tableName));
 
-        // Insert initial data one by one to ensure auto increment ID ordering.
-        // Auto increment IDs are assigned server-side in arrival order, so concurrent
-        // multi-value INSERTs may receive IDs out of SQL statement order.
+        // Insert rows one by one to preserve auto-increment ID ordering.
+        // Partial-column INSERT ... VALUES is rewritten into a UNION ALL of Value Sources
+        // by Flink, whose runtime does not guarantee UNION ALL input ordering.
         List<Tuple2<Integer, Integer>> inserts =
                 Arrays.asList(
                         Tuple2.of(1, 100), Tuple2.of(2, 200), Tuple2.of(3, 150), Tuple2.of(4, 250));
@@ -1784,9 +1784,9 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                                 + ") with ('table.changelog.image' = 'wal', 'auto-increment.fields'='auto_increment_id')",
                         tableName));
 
-        // Insert initial data one by one to ensure auto increment ID ordering.
-        // Auto increment IDs are assigned server-side in arrival order, so concurrent
-        // multi-value INSERTs may receive IDs out of SQL statement order.
+        // Insert rows one by one to preserve auto-increment ID ordering.
+        // Partial-column INSERT ... VALUES is rewritten into a UNION ALL of Value Sources
+        // by Flink, whose runtime does not guarantee UNION ALL input ordering.
         List<Tuple2<Integer, Integer>> inserts =
                 Arrays.asList(
                         Tuple2.of(1, 100), Tuple2.of(2, 200), Tuple2.of(3, 150), Tuple2.of(4, 250));
