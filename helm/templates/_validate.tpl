@@ -22,7 +22,12 @@ Usage:
   include "fluss.validateWarning" .
 */}}
 {{- define "fluss.validateWarning" -}}
-{{- include "fluss.security.validateWarning" . -}}
+{{- $messages := list -}}
+
+{{- $messages = append $messages (include "fluss.security.validateWarning" .) -}}
+
+{{- $messages = without $messages "" -}}
+{{- join "\n" $messages -}}
 {{- end -}}
 
 {{/*
@@ -31,7 +36,12 @@ Usage:
   include "fluss.validateError" .
 */}}
 {{- define "fluss.validateError" -}}
-{{- include "fluss.security.validateError" . -}}
+{{- $messages := list -}}
+
+{{- $messages = append $messages (include "fluss.security.validateError" .) -}}
+
+{{- $messages = without $messages "" -}}
+{{- join "\n" $messages -}}
 {{- end -}}
 
 {{/*
@@ -44,13 +54,11 @@ Usage:
 
 {{- $warnMessages := list -}}
 {{- $warnMessages = append $warnMessages (include "fluss.validateWarning" .) -}}
-
 {{- $warnMessages = without $warnMessages "" -}}
 {{- $warnMessage := join "\n" $warnMessages -}}
 
 {{- $errMessages := list -}}
 {{- $errMessages = append $errMessages (include "fluss.validateError" .) -}}
-
 {{- $errMessages = without $errMessages "" -}}
 {{- $errMessage := join "\n" $errMessages -}}
 

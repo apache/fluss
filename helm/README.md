@@ -51,11 +51,19 @@ For example, for the `security` checks, include and update these methods in the 
 
 ```
 {{- define "fluss.validateWarning" -}}
-{{- include "fluss.security.validateWarning" . -}}
+...
+
+{{- $messages = append $messages (include "fluss.security.validateWarning" .) -}}
+
+...
 {{- end -}}
 
 {{- define "fluss.validateError" -}}
-{{- include "fluss.security.validateError" . -}}
+...
+
+{{- $messages = append $messages (include "fluss.security.validateError" .) -}}
+
+...
 {{- end -}}
 ```
 
