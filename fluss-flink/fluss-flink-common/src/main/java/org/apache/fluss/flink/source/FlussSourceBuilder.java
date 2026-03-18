@@ -86,8 +86,8 @@ public class FlussSourceBuilder<OUT> {
     // whether to enable lake source for union read
     private boolean lakeEnabled = false;
 
-    // whether this is a streaming source (null means use default: true for backward compatibility)
-    private Boolean streaming = null;
+    // whether this is a streaming source (default: true for unbounded streaming mode)
+    private boolean streaming = true;
 
     /**
      * Sets the bootstrap servers for the Fluss source connection.
@@ -367,9 +367,6 @@ public class FlussSourceBuilder<OUT> {
 
         LOG.info("Creating Fluss Source with Configuration: {}", flussConf);
 
-        // Determine streaming mode: use explicit setting if provided, otherwise default to true
-        boolean isStreaming = streaming == null || streaming;
-
         return new FlussSource<>(
                 flussConf,
                 tablePath,
@@ -380,7 +377,7 @@ public class FlussSourceBuilder<OUT> {
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 deserializationSchema,
-                isStreaming,
+                streaming,
                 lakeSource,
                 LeaseContext.DEFAULT);
     }

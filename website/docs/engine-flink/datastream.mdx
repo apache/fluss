@@ -89,7 +89,9 @@ Union Read combines historical data from a data lake snapshot (e.g., Paimon) wit
 #### Prerequisites
 
 - The table must be created with `'table.datalake.enabled' = 'true'`
-- The corresponding lake connector JAR must be available (e.g., `fluss-lake-paimon-$FLUSS_VERSION$.jar`)
+- The corresponding lake connector JAR must be available, depending on your data lake type:
+  - Paimon: `fluss-lake-paimon-$FLUSS_VERSION$.jar`
+  - Iceberg: `fluss-lake-iceberg-$FLUSS_VERSION$.jar`
 - At least one lake snapshot must exist (the tiering job must have run at least once)
 
 #### Configuration
