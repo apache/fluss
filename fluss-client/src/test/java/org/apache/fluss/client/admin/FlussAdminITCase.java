@@ -225,11 +225,28 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         // Verify reset
         DatabaseInfo resetDatabaseInfo = admin.getDatabaseInfo(dbName).get();
         DatabaseDescriptor resetDescriptor = resetDatabaseInfo.getDatabaseDescriptor();
-        assertThat(alteredDescriptor.getComment().get()).isEqualTo("updated comment");
+        assertThat(resetDescriptor.getComment().get()).isEqualTo("updated comment");
         assertThat(resetDescriptor.getCustomProperties()).containsEntry("key1", "updated_value1");
         assertThat(resetDescriptor.getCustomProperties()).containsEntry("key3", "value3");
         assertThat(resetDescriptor.getCustomProperties()).doesNotContainKey("key2");
         assertThat(resetDescriptor.getCustomProperties()).hasSize(2);
+
+        // Alter database: reset comment
+        databaseChanges = new ArrayList<>();
+        // Empty string means reset comment
+        databaseChanges.add(DatabaseChange.updateComment(""));
+        admin.alterDatabase(dbName, databaseChanges, false).get();
+
+        // Verify reset
+        DatabaseInfo resetCommentDatabaseInfo = admin.getDatabaseInfo(dbName).get();
+        DatabaseDescriptor resetCommentDescriptor =
+                resetCommentDatabaseInfo.getDatabaseDescriptor();
+        assertThat(resetCommentDescriptor.getComment()).isEmpty();
+        assertThat(resetCommentDescriptor.getCustomProperties())
+                .containsEntry("key1", "updated_value1");
+        assertThat(resetCommentDescriptor.getCustomProperties()).containsEntry("key3", "value3");
+        assertThat(resetCommentDescriptor.getCustomProperties()).doesNotContainKey("key2");
+        assertThat(resetCommentDescriptor.getCustomProperties()).hasSize(2);
 
         // throw exception if database not exist
         List<DatabaseChange> finalDatabaseChanges = databaseChanges;

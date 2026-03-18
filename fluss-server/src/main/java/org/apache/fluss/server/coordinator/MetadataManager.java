@@ -181,6 +181,7 @@ public class MetadataManager {
         }
     }
 
+    @Nullable
     private DatabaseDescriptor getUpdatedDatabaseDescriptor(
             DatabaseDescriptor currentDescriptor, DatabasePropertyChanges changes) {
         Map<String, String> newCustomProperties =
@@ -195,10 +196,17 @@ public class MetadataManager {
             return null;
         }
 
-        String newComment =
-                changes.commentToSet != null
-                        ? changes.commentToSet
-                        : currentDescriptor.getComment().orElse(null);
+        String newComment;
+        if (changes.commentToSet != null) {
+            // If comment is set to empty string, it means to reset the comment
+            if (changes.commentToSet.isEmpty()) {
+                newComment = null;
+            } else {
+                newComment = changes.commentToSet;
+            }
+        } else {
+            newComment = currentDescriptor.getComment().orElse(null);
+        }
 
         return DatabaseDescriptor.builder()
                 .customProperties(newCustomProperties)

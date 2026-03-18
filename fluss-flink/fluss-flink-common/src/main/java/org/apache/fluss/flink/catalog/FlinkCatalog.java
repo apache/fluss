@@ -121,7 +121,6 @@ public class FlinkCatalog extends AbstractCatalog {
     public static final String LAKE_TABLE_SPLITTER = "$lake";
     public static final String CHANGELOG_TABLE_SUFFIX = "$changelog";
     public static final String BINLOG_TABLE_SUFFIX = "$binlog";
-    public static final String COMMENT_PROP = "comment";
 
     protected final ClassLoader classLoader;
 
@@ -303,11 +302,7 @@ public class FlinkCatalog extends AbstractCatalog {
 
             newProps.forEach(
                     (k, v) -> {
-                        // When execute `ALTER DATABASE db SET ('comment' = 'new comment');`,
-                        // the comment will be set in the properties of CatalogDatabase.
-                        if (k.equals(COMMENT_PROP)) {
-                            databaseChanges.add(DatabaseChange.updateComment(v));
-                        } else if (!oldProps.containsKey(k) || !oldProps.get(k).equals(v)) {
+                        if (!oldProps.containsKey(k) || !oldProps.get(k).equals(v)) {
                             databaseChanges.add(DatabaseChange.set(k, v));
                         }
                     });

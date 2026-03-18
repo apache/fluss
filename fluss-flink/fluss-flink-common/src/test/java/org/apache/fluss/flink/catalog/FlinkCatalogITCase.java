@@ -706,13 +706,14 @@ abstract class FlinkCatalogITCase {
         // Create database with initial properties
         tEnv.executeSql(
                 String.format(
-                        "create database %s with ('key1' = 'value1', 'key2' = 'value2')", dbName));
+                        "create database %s comment 'initial comment' with ('key1' = 'value1', 'key2' = 'value2')",
+                        dbName));
 
         // Verify initial state
         CatalogDatabase currentDb = catalog.getDatabase(dbName);
         assertThat(currentDb.getProperties()).containsEntry("key1", "value1");
         assertThat(currentDb.getProperties()).containsEntry("key2", "value2");
-        assertThat(currentDb.getComment()).isNull();
+        assertThat(currentDb.getComment()).isEqualTo("initial comment");
 
         // Alter database: add new property and update existing property
         String alterSql1 =
@@ -724,18 +725,7 @@ abstract class FlinkCatalogITCase {
         assertThat(alteredDb1.getProperties()).containsEntry("key1", "updated_value1");
         assertThat(alteredDb1.getProperties()).containsEntry("key2", "value2");
         assertThat(alteredDb1.getProperties()).containsEntry("key3", "value3");
-        assertThat(alteredDb1.getComment()).isNull();
-
-        // Alter database: add comment
-        String alterSql3 = "alter database " + dbName + " set ('comment' = 'test comment')";
-        tEnv.executeSql(alterSql3);
-
-        // Verify comment change
-        CatalogDatabase alteredDb3 = catalog.getDatabase(dbName);
-        assertThat(alteredDb3.getProperties()).containsEntry("key1", "updated_value1");
-        assertThat(alteredDb3.getProperties()).containsEntry("key2", "value2");
-        assertThat(alteredDb3.getProperties()).containsEntry("key3", "value3");
-        assertThat(alteredDb3.getComment()).isEqualTo("test comment");
+        assertThat(alteredDb1.getComment()).isEqualTo("initial comment");
 
         // Drop database for cleanup
         tEnv.executeSql("drop database " + dbName);
