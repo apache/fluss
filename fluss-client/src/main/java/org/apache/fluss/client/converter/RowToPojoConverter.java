@@ -196,6 +196,19 @@ public final class RowToPojoConverter<T> {
                 return (row, pos) ->
                         new FlussMapToPojoMap(row.getMap(pos), (MapType) fieldType, prop.name)
                                 .convertMap();
+            case ROW:
+                {
+                    RowType nestedRowType = (RowType) fieldType;
+                    int nestedFieldCount = nestedRowType.getFieldCount();
+                    @SuppressWarnings("unchecked")
+                    RowToPojoConverter<Object> nestedConverter =
+                            RowToPojoConverter.of(
+                                    (Class<Object>) prop.type, nestedRowType, nestedRowType);
+                    return (row, pos) -> {
+                        InternalRow nestedRow = row.getRow(pos, nestedFieldCount);
+                        return nestedRow == null ? null : nestedConverter.fromRow(nestedRow);
+                    };
+                }
             default:
                 throw new UnsupportedOperationException(
                         String.format(

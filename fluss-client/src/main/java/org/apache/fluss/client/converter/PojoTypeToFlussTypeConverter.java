@@ -26,6 +26,7 @@ import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.MapType;
+import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
@@ -260,6 +261,15 @@ public class PojoTypeToFlussTypeConverter {
             case MAP:
                 return new PojoMapToFlussMap((Map<?, ?>) obj, (MapType) elementType, fieldName)
                         .convertMap();
+            case ROW:
+                {
+                    RowType nestedRowType = (RowType) elementType;
+                    @SuppressWarnings("unchecked")
+                    PojoToRowConverter<Object> nestedConverter =
+                            PojoToRowConverter.of(
+                                    (Class<Object>) obj.getClass(), nestedRowType, nestedRowType);
+                    return nestedConverter.toRow(obj);
+                }
             default:
                 throw new UnsupportedOperationException(
                         String.format(

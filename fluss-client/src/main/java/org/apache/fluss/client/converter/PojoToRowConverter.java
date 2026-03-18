@@ -157,6 +157,18 @@ public final class PojoToRowConverter<T> {
                         new PojoMapToFlussMap(
                                         (Map<?, ?>) prop.read(obj), (MapType) fieldType, prop.name)
                                 .convertMap();
+            case ROW:
+                {
+                    RowType nestedRowType = (RowType) fieldType;
+                    @SuppressWarnings("unchecked")
+                    PojoToRowConverter<Object> nestedConverter =
+                            PojoToRowConverter.of(
+                                    (Class<Object>) prop.type, nestedRowType, nestedRowType);
+                    return (obj) -> {
+                        Object nested = prop.read(obj);
+                        return nested == null ? null : nestedConverter.toRow(nested);
+                    };
+                }
             default:
                 throw new UnsupportedOperationException(
                         String.format(

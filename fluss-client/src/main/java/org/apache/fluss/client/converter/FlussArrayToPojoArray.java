@@ -20,11 +20,13 @@ package org.apache.fluss.client.converter;
 
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.MapType;
+import org.apache.fluss.types.RowType;
 
 import java.lang.reflect.Array;
 import java.time.Instant;
@@ -169,6 +171,24 @@ public class FlussArrayToPojoArray {
                 return (arr, i) ->
                         new FlussMapToPojoMap(arr.getMap(i), (MapType) elementType, fieldName)
                                 .convertMap();
+            case ROW:
+                {
+                    RowType nestedRowType = (RowType) elementType;
+                    int nestedFieldCount = nestedRowType.getFieldCount();
+                    if (pojoType == Object.class) {
+                        // When the target type is unknown (e.g. ROW values in a Map),
+                        // return InternalRow directly
+                        return (arr, i) -> arr.getRow(i, nestedFieldCount);
+                    }
+                    @SuppressWarnings("unchecked")
+                    RowToPojoConverter<Object> nestedConverter =
+                            RowToPojoConverter.of(
+                                    (Class<Object>) pojoType, nestedRowType, nestedRowType);
+                    return (arr, i) -> {
+                        InternalRow nestedRow = arr.getRow(i, nestedFieldCount);
+                        return nestedRow == null ? null : nestedConverter.fromRow(nestedRow);
+                    };
+                }
             default:
                 throw new UnsupportedOperationException(
                         String.format(
