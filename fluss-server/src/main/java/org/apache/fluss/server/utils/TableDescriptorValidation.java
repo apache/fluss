@@ -123,22 +123,31 @@ public class TableDescriptorValidation {
     public static void validateAlterTableProperties(
             TableInfo currentTable, Set<String> tableKeysToChange) {
         TableConfig currentConfig = currentTable.getTableConfig();
-        tableKeysToChange.forEach(
-                k -> {
-                    if (isTableStorageConfig(k) && !isAlterableTableOption(k)) {
-                        throw new InvalidAlterTableException(
-                                "The option '" + k + "' is not supported to alter yet.");
-                    }
 
-                    if (!currentConfig.getDataLakeFormat().isPresent()
-                            && ConfigOptions.TABLE_DATALAKE_ENABLED.key().equals(k)) {
-                        throw new InvalidAlterTableException(
-                                String.format(
-                                        "The option '%s' cannot be altered for tables that were"
-                                                + " created before the Fluss cluster enabled datalake.",
-                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
-                    }
-                });
+        List<String> unsupportedKeys =
+                tableKeysToChange.stream()
+                        .filter(k -> isTableStorageConfig(k) && !isAlterableTableOption(k))
+                        .collect(Collectors.toList());
+        if (!unsupportedKeys.isEmpty()) {
+            throw new InvalidAlterTableException(
+                    String.format(
+                            "The following options are not supported to alter yet: %s.",
+                            String.join(", ", unsupportedKeys)));
+        }
+
+        if (!currentConfig.getDataLakeFormat().isPresent()) {
+            List<String> datalakeKeys =
+                    tableKeysToChange.stream()
+                            .filter(k -> k.startsWith("table.datalake."))
+                            .collect(Collectors.toList());
+            if (!datalakeKeys.isEmpty()) {
+                throw new InvalidAlterTableException(
+                        String.format(
+                                "The following options cannot be altered for tables that were"
+                                        + " created before the Fluss cluster enabled datalake: %s.",
+                                String.join(", ", datalakeKeys)));
+            }
+        }
     }
 
     private static void checkSystemColumns(RowType schema) {

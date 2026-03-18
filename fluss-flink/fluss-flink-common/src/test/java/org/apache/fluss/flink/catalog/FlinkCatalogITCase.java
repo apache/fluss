@@ -249,45 +249,39 @@ abstract class FlinkCatalogITCase {
 
         // alter table set an unsupported modification option should throw exception
         String unSupportedDml1 =
-                "alter table test_alter_table_append_only set ('table.auto-partition.enabled' = 'true')";
+                "alter table test_alter_table_append_only set ('table.auto-partition.enabled' = 'true', 'table.kv.format' = 'indexed')";
 
         assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml1))
                 .rootCause()
                 .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessage(
-                        "The option 'table.auto-partition.enabled' is not supported to alter yet.");
+                .hasMessageContaining("The following options are not supported to alter yet:")
+                .hasMessageContaining("table.kv.format")
+                .hasMessageContaining(" table.auto-partition.enabled");
 
         String unSupportedDml2 =
-                "alter table test_alter_table_append_only set ('k1' = 'v1', 'table.kv.format' = 'indexed')";
-        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml2))
-                .rootCause()
-                .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessage("The option 'table.kv.format' is not supported to alter yet.");
-
-        String unSupportedDml3 =
                 "alter table test_alter_table_append_only set ('bucket.num' = '1000')";
-        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml3))
+        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml2))
                 .rootCause()
                 .isInstanceOf(CatalogException.class)
                 .hasMessage("The option 'bucket.num' is not supported to alter yet.");
 
-        String unSupportedDml4 =
+        String unSupportedDml3 =
                 "alter table test_alter_table_append_only set ('bucket.key' = 'a')";
-        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml4))
+        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml3))
                 .rootCause()
                 .isInstanceOf(CatalogException.class)
                 .hasMessage("The option 'bucket.key' is not supported to alter yet.");
 
-        String unSupportedDml5 =
+        String unSupportedDml4 =
                 "alter table test_alter_table_append_only reset ('bootstrap.servers')";
-        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml5))
+        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml4))
                 .rootCause()
                 .isInstanceOf(CatalogException.class)
                 .hasMessage("The option 'bootstrap.servers' is not supported to alter yet.");
 
-        String unSupportedDml6 =
+        String unSupportedDml5 =
                 "alter table test_alter_table_append_only set ('auto-increment.fields' = 'b')";
-        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml6))
+        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml5))
                 .rootCause()
                 .isInstanceOf(CatalogException.class)
                 .hasMessage("The option 'auto-increment.fields' is not supported to alter yet.");
