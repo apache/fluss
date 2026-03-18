@@ -28,12 +28,35 @@ For how to build your local Fluss image and use it in Minikube refer to the
 Refer to the [official documentation](https://fluss.apache.org/docs/next/install-deploy/deploying-with-helm/#configuration-parameters)
 as well for configuration values.
 
-We use the [`helm-unittest`](https://github.com/helm-unittest/helm-unittest) plugin for testing Fluss Helm charts.  
+We use the [`helm-unittest`](https://github.com/helm-unittest/helm-unittest) plugin for testing Fluss Helm charts.
 You can run tests locally via:
 
 ```bash
 # From the /helm folder:
 docker run -ti --rm -v $(pwd):/apps helmunittest/helm-unittest .
+```
+
+### Validation Checks
+
+The chart runs the validation checks at install or upgrade time using templates in `_validate.tpl` file.
+
+The warnings are printed to the user, but errors abort the deployment.
+
+To add new validations, for example for a new feature:
+
+1. Define `fluss.<feature>.validateWarning` or `fluss.<feature>.validateError` templates in the feature `_<feature>.tpl` template file.
+2. Add the corresponding `include` calls to `fluss.validateWarning` or `fluss.validateError` in `_validate.tpl` template file.
+
+For example, for the `security` checks, include and update these methods in the `_validate.tpl` file:
+
+```
+{{- define "fluss.validateWarning" -}}
+{{- include "fluss.security.validateWarning" . -}}
+{{- end -}}
+
+{{- define "fluss.validateError" -}}
+{{- include "fluss.security.validateError" . -}}
+{{- end -}}
 ```
 
 ## Contributing
