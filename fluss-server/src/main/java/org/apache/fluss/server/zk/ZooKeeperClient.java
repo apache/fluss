@@ -501,42 +501,32 @@ public class ZooKeeperClient implements AutoCloseable {
         Map<String, String> tablesPathToDatabaseName =
                 databaseNames.stream()
                         .collect(toMap(TablesZNode::path, databaseName -> databaseName));
-        List<ZkCheckExistsResponse> dbStatResponses =
-                getStatInBackground(dbPathToDatabaseName.keySet());
-        List<ZkCheckExistsResponse> tablesStatResponses =
-                getStatInBackground(tablesPathToDatabaseName.keySet());
+        List<String> requestPaths = new ArrayList<>(dbPathToDatabaseName.keySet());
+        requestPaths.addAll(tablesPathToDatabaseName.keySet());
+        List<ZkCheckExistsResponse> statResponses = getStatInBackground(requestPaths);
 
         List<DatabaseSummary> databaseSummaries = new ArrayList<>();
 
         Map<String, Long> dbCreatedTimes = new HashMap<>();
-        for (ZkCheckExistsResponse response : dbStatResponses) {
+        Map<String, Integer> dbTableCounts = new HashMap<>();
+        for (ZkCheckExistsResponse response : statResponses) {
             Stat stat = response.getStat();
+            String path = response.getPath();
             if (!response.hasError() && stat != null) {
-                // Use zk node creation time as the database creation time to avoid reading
-                // node data.
-                dbCreatedTimes.put(
-                        dbPathToDatabaseName.get(response.getPath()),
-                        response.getStat().getCtime());
+                if (dbPathToDatabaseName.containsKey(path)) {
+                    // Use zk node creation time as the database creation time to avoid reading
+                    // node data.
+                    dbCreatedTimes.put(dbPathToDatabaseName.get(path), stat.getCtime());
+                } else {
+                    dbTableCounts.put(tablesPathToDatabaseName.get(path), stat.getNumChildren());
+                }
+            } else if (response.getResultCode().equals(KeeperException.Code.NONODE)
+                    && tablesPathToDatabaseName.containsKey(path)) {
+                dbTableCounts.put(tablesPathToDatabaseName.get(path), 0);
             } else {
                 LOG.warn(
                         "Failed to get database summary for database {}: {}",
-                        response.getPath(),
-                        response.getErrorMessage());
-            }
-        }
-
-        Map<String, Integer> dbTableCounts = new HashMap<>();
-        for (ZkCheckExistsResponse response : tablesStatResponses) {
-            if (!response.hasError()) {
-                dbTableCounts.put(
-                        tablesPathToDatabaseName.get(response.getPath()),
-                        response.getStat().getNumChildren());
-            } else if (response.getResultCode().equals(KeeperException.Code.NONODE)) {
-                dbTableCounts.put(tablesPathToDatabaseName.get(response.getPath()), 0);
-            } else {
-                LOG.warn(
-                        "Failed to get table names for path {}: {}",
-                        response.getPath(),
+                        path,
                         response.getErrorMessage());
             }
         }
