@@ -472,6 +472,13 @@ public class ZooKeeperClient implements AutoCloseable {
         LOG.info("Registered database {}", database);
     }
 
+    public void updateDatabase(String database, DatabaseRegistration databaseRegistration)
+            throws Exception {
+        String path = DatabaseZNode.path(database);
+        zkClient.setData().forPath(path, DatabaseZNode.encode(databaseRegistration));
+        LOG.info("Updated database {}", database);
+    }
+
     /** Get the database in ZK. */
     public Optional<DatabaseRegistration> getDatabase(String database) throws Exception {
         String path = DatabaseZNode.path(database);
@@ -495,29 +502,50 @@ public class ZooKeeperClient implements AutoCloseable {
 
     public List<DatabaseSummary> listDatabaseSummaries(Collection<String> databaseNames)
             throws Exception {
-        Map<String, String> path2DatabaseNamesMap =
+        Map<String, String> dbPathToDatabaseName =
                 databaseNames.stream()
                         .collect(toMap(DatabaseZNode::path, databaseName -> databaseName));
-        List<ZkCheckExistsResponse> statsInBackground =
-                getStatInBackground(path2DatabaseNamesMap.keySet());
+        Map<String, String> tablesPathToDatabaseName =
+                databaseNames.stream()
+                        .collect(toMap(TablesZNode::path, databaseName -> databaseName));
+        List<String> requestPaths = new ArrayList<>(dbPathToDatabaseName.keySet());
+        requestPaths.addAll(tablesPathToDatabaseName.keySet());
+        List<ZkCheckExistsResponse> statResponses = getStatInBackground(requestPaths);
+
         List<DatabaseSummary> databaseSummaries = new ArrayList<>();
-        for (ZkCheckExistsResponse response : statsInBackground) {
+
+        Map<String, Long> dbCreatedTimes = new HashMap<>();
+        Map<String, Integer> dbTableCounts = new HashMap<>();
+        for (ZkCheckExistsResponse response : statResponses) {
             Stat stat = response.getStat();
+            String path = response.getPath();
             if (!response.hasError() && stat != null) {
-                // To decrease the cost, use zk node creation time as the database creation
-                // time rather than create_time in node data.
+                if (dbPathToDatabaseName.containsKey(path)) {
+                    // Use zk node creation time as the database creation time to avoid reading
+                    // node data.
+                    dbCreatedTimes.put(dbPathToDatabaseName.get(path), stat.getCtime());
+                } else {
+                    dbTableCounts.put(tablesPathToDatabaseName.get(path), stat.getNumChildren());
+                }
+            } else if (response.getResultCode().equals(KeeperException.Code.NONODE)
+                    && tablesPathToDatabaseName.containsKey(path)) {
+                dbTableCounts.put(tablesPathToDatabaseName.get(path), 0);
+            } else {
+                LOG.warn(
+                        "Failed to get database summary for database {}: {}",
+                        path,
+                        response.getErrorMessage());
+            }
+        }
+
+        for (String databaseName : databaseNames) {
+            if (dbCreatedTimes.containsKey(databaseName)
+                    && dbTableCounts.containsKey(databaseName)) {
                 databaseSummaries.add(
                         new DatabaseSummary(
-                                path2DatabaseNamesMap.get(response.getPath()),
-                                response.getStat().getCtime(),
-                                response.getStat().getNumChildren()));
-            } else {
-                // silently ignore the database which does not exist anymore,
-                // because the database names are listed by server not user
-                LOG.warn(
-                        "Failed to get database summary for database {}. {}",
-                        path2DatabaseNamesMap.get(response.getPath()),
-                        response.getErrorMessage());
+                                databaseName,
+                                dbCreatedTimes.get(databaseName),
+                                dbTableCounts.get(databaseName)));
             }
         }
         return databaseSummaries;

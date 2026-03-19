@@ -60,6 +60,10 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.hostIP
+            {{- if (include "fluss.security.sasl.plain.enabled" .) }}
+            - name: FLUSS_ENV_JAVA_OPTS
+              value: "-Djava.security.auth.login.config=/etc/fluss/conf/jaas.conf"
+            {{- end }}
           ports:
             - name: internal
               containerPort: {{ .Values.listeners.internal.port }}
@@ -95,12 +99,17 @@ spec:
             tcpSocket:
               port: {{ .Values.listeners.client.port }}
           resources:
-            {{- toYaml .Values.resources.coordinatorServer | nindent 12 }}
+            {{- toYaml .Values.resources.tabletServer | nindent 12 }}
           volumeMounts:
             - name: fluss-conf
               mountPath: /opt/conf
             - name: data
               mountPath: /tmp/fluss/data
+            {{- if (include "fluss.security.sasl.plain.enabled" .) }}
+            - name: sasl-config
+              mountPath: /etc/fluss/conf
+              readOnly: true
+            {{- end }}
       volumes:
         - name: fluss-conf
           configMap:
@@ -108,6 +117,11 @@ spec:
         {{- if not .Values.coordinator.storage.enabled }}
         - name: data
           emptyDir: {}
+        {{- end }}
+        {{- if (include "fluss.security.sasl.plain.enabled" .) }}
+        - name: sasl-config
+          secret:
+            secretName: {{ include "fluss.security.sasl.configName" . }}
         {{- end }}
   {{- if .Values.coordinator.storage.enabled }}
   volumeClaimTemplates:

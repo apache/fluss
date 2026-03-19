@@ -32,6 +32,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ConfigEntry;
+import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
@@ -55,6 +56,7 @@ import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.metadata.AggFunctions;
+import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.DatabaseSummary;
@@ -70,9 +72,11 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ServerTags;
@@ -176,6 +180,92 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(databaseInfo.getDatabaseDescriptor().getCustomProperties()).hasSize(1);
         assertThat(databaseInfo.getCreatedTime())
                 .isBetween(timestampBeforeCreate, timestampAfterCreate);
+    }
+
+    @Test
+    void testAlterDatabase() throws Exception {
+        // create database
+        String dbName = "test_alter_db";
+        admin.createDatabase(
+                        dbName,
+                        DatabaseDescriptor.builder()
+                                .comment("original comment")
+                                .customProperty("key1", "value1")
+                                .customProperty("key2", "value2")
+                                .build(),
+                        false)
+                .get();
+
+        DatabaseInfo databaseInfo = admin.getDatabaseInfo(dbName).get();
+        DatabaseDescriptor existingDescriptor = databaseInfo.getDatabaseDescriptor();
+
+        // Verify initial state
+        assertThat(existingDescriptor.getComment().get()).isEqualTo("original comment");
+        assertThat(existingDescriptor.getCustomProperties()).containsEntry("key1", "value1");
+        assertThat(existingDescriptor.getCustomProperties()).containsEntry("key2", "value2");
+
+        // Alter database: add and modify custom properties
+        List<DatabaseChange> databaseChanges = new ArrayList<>();
+        databaseChanges.add(DatabaseChange.set("key3", "value3"));
+        databaseChanges.add(DatabaseChange.set("key1", "updated_value1"));
+        databaseChanges.add(DatabaseChange.updateComment("updated comment"));
+        admin.alterDatabase(dbName, databaseChanges, false).get();
+
+        // Verify alterations
+        DatabaseInfo alteredDatabaseInfo = admin.getDatabaseInfo(dbName).get();
+        DatabaseDescriptor alteredDescriptor = alteredDatabaseInfo.getDatabaseDescriptor();
+        assertThat(alteredDescriptor.getComment().get()).isEqualTo("updated comment");
+        assertThat(alteredDescriptor.getCustomProperties()).containsEntry("key1", "updated_value1");
+        assertThat(alteredDescriptor.getCustomProperties()).containsEntry("key2", "value2");
+        assertThat(alteredDescriptor.getCustomProperties()).containsEntry("key3", "value3");
+        assertThat(alteredDescriptor.getCustomProperties()).hasSize(3);
+
+        // Alter database: reset a property
+        databaseChanges = new ArrayList<>();
+        databaseChanges.add(DatabaseChange.reset("key2"));
+        admin.alterDatabase(dbName, databaseChanges, false).get();
+
+        // Verify reset
+        DatabaseInfo resetDatabaseInfo = admin.getDatabaseInfo(dbName).get();
+        DatabaseDescriptor resetDescriptor = resetDatabaseInfo.getDatabaseDescriptor();
+        assertThat(resetDescriptor.getComment().get()).isEqualTo("updated comment");
+        assertThat(resetDescriptor.getCustomProperties()).containsEntry("key1", "updated_value1");
+        assertThat(resetDescriptor.getCustomProperties()).containsEntry("key3", "value3");
+        assertThat(resetDescriptor.getCustomProperties()).doesNotContainKey("key2");
+        assertThat(resetDescriptor.getCustomProperties()).hasSize(2);
+
+        // Alter database: reset comment
+        databaseChanges = new ArrayList<>();
+        // Empty string means reset comment
+        databaseChanges.add(DatabaseChange.updateComment(""));
+        admin.alterDatabase(dbName, databaseChanges, false).get();
+
+        // Verify reset
+        DatabaseInfo resetCommentDatabaseInfo = admin.getDatabaseInfo(dbName).get();
+        DatabaseDescriptor resetCommentDescriptor =
+                resetCommentDatabaseInfo.getDatabaseDescriptor();
+        assertThat(resetCommentDescriptor.getComment()).isEmpty();
+        assertThat(resetCommentDescriptor.getCustomProperties())
+                .containsEntry("key1", "updated_value1");
+        assertThat(resetCommentDescriptor.getCustomProperties()).containsEntry("key3", "value3");
+        assertThat(resetCommentDescriptor.getCustomProperties()).doesNotContainKey("key2");
+        assertThat(resetCommentDescriptor.getCustomProperties()).hasSize(2);
+
+        // throw exception if database not exist
+        List<DatabaseChange> finalDatabaseChanges = databaseChanges;
+        assertThatThrownBy(
+                        () ->
+                                admin.alterDatabase(
+                                                "test_alter_db_not_exist",
+                                                finalDatabaseChanges,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(DatabaseNotExistException.class)
+                .hasMessage(String.format("Database %s not exists.", "test_alter_db_not_exist"));
+
+        // should success if ignore not exist
+        admin.alterDatabase("test_alter_db_not_exist", databaseChanges, true).get();
     }
 
     @Test
@@ -898,7 +988,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                 Collectors.toMap(
                                         DatabaseSummary::getDatabaseName,
                                         DatabaseSummary::getTableCount));
-        assertThat(databaseSummaries.get("db1")).isEqualTo(1);
+        assertThat(databaseSummaries.get("db1")).isEqualTo(2);
         assertThat(databaseSummaries.get("db2")).isEqualTo(0);
 
         assertThatThrownBy(() -> admin.listTables("unknown_db").get())
@@ -1366,6 +1456,20 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 },
                 Duration.ofMinutes(1),
                 "Get lakehouse info");
+
+        // Test alter invalid config
+        assertThatThrownBy(
+                        () ->
+                                admin.alterClusterConfigs(
+                                                Collections.singletonList(
+                                                        new AlterConfig(
+                                                                "not.exist.key",
+                                                                "value",
+                                                                AlterConfigOpType.SET)))
+                                        .get())
+                .cause()
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining("not.exist.key");
     }
 
     private void assertConfigEntry(
@@ -1611,19 +1715,24 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .containsEntry(1, ServerTag.PERMANENT_OFFLINE);
 
         // 4.remove server tag for server 100
-        assertThatThrownBy(
-                        () ->
-                                admin.removeServerTag(
-                                                Collections.singletonList(100),
-                                                ServerTag.PERMANENT_OFFLINE)
-                                        .get())
-                .cause()
-                .isInstanceOf(ServerNotExistException.class)
-                .hasMessageContaining("Server 100 not exists when trying to removing server tag.");
+        admin.removeServerTag(Collections.singletonList(100), ServerTag.PERMANENT_OFFLINE).get();
 
         // 5.remove server tag for server 0,1.
+
+        // should remove server tag successfully even we remove live tablet server from context
+        CoordinatorContext coordinatorContext =
+                FLUSS_CLUSTER_EXTENSION
+                        .getCoordinatorServer()
+                        .getCoordinatorEventProcessor()
+                        .getCoordinatorContext();
+        ServerInfo tmpServerInfo = coordinatorContext.getLiveTabletServers().get(0);
+        coordinatorContext.removeLiveTabletServer(0);
+
         admin.removeServerTag(Arrays.asList(0, 1), ServerTag.PERMANENT_OFFLINE).get();
         assertThat(zkClient.getServerTags()).isNotPresent();
+
+        // restore after test, or else will influence other tests
+        coordinatorContext.addLiveTabletServer(tmpServerInfo);
 
         // 6.remove server tag for server 2. error will be thrown and tag for 2 will not be removed
         // as the removed server tag is not equals with the exists one.

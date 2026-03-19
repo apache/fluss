@@ -104,7 +104,7 @@ public class TableRegistrationJsonSerde
         generator.writeNumberField(CREATED_TIME, tableReg.createdTime);
 
         // serialize modifiedTime
-        generator.writeNumberField(MODIFIED_TIME, tableReg.createdTime);
+        generator.writeNumberField(MODIFIED_TIME, tableReg.modifiedTime);
 
         generator.writeEndObject();
     }

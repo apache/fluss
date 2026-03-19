@@ -44,6 +44,7 @@ import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.lake.committer.TieringStats;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
@@ -63,6 +64,8 @@ import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsResponse;
+import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
+import org.apache.fluss.rpc.messages.AlterDatabaseResponse;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.AlterTableResponse;
 import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
@@ -152,6 +155,7 @@ import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.producer.ProducerOffsetsManager;
 import org.apache.fluss.server.coordinator.rebalance.goal.Goal;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
+import org.apache.fluss.server.entity.DatabasePropertyChanges;
 import org.apache.fluss.server.entity.LakeTieringTableInfo;
 import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -209,6 +213,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCreateAcls
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeDropAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableConfigChanges;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableSchemaChanges;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toDatabaseChanges;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucketOffsets;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
@@ -363,6 +368,48 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         metadataManager.createDatabase(
                 request.getDatabaseName(), databaseDescriptor, request.isIgnoreIfExists());
         return CompletableFuture.completedFuture(response);
+    }
+
+    @Override
+    public CompletableFuture<AlterDatabaseResponse> alterDatabase(AlterDatabaseRequest request) {
+        String databaseName = request.getDatabaseName();
+        if (authorizer != null) {
+            authorizer.authorize(
+                    currentSession(), OperationType.ALTER, Resource.database(databaseName));
+        }
+
+        List<DatabaseChange> databaseChanges = toDatabaseChanges(request);
+        DatabasePropertyChanges databasePropertyChanges =
+                toDatabasePropertyChanges(databaseChanges);
+
+        metadataManager.alterDatabaseProperties(
+                databaseName, databasePropertyChanges, request.isIgnoreIfNotExists());
+
+        return CompletableFuture.completedFuture(new AlterDatabaseResponse());
+    }
+
+    private DatabasePropertyChanges toDatabasePropertyChanges(
+            List<DatabaseChange> databaseChanges) {
+        DatabasePropertyChanges.Builder builder = DatabasePropertyChanges.builder();
+        if (databaseChanges.isEmpty()) {
+            return builder.build();
+        }
+
+        for (DatabaseChange databaseChange : databaseChanges) {
+            if (databaseChange instanceof DatabaseChange.SetOption) {
+                DatabaseChange.SetOption setOption = (DatabaseChange.SetOption) databaseChange;
+                builder.setCustomProperty(setOption.getKey(), setOption.getValue());
+            } else if (databaseChange instanceof DatabaseChange.ResetOption) {
+                DatabaseChange.ResetOption resetOption =
+                        (DatabaseChange.ResetOption) databaseChange;
+                builder.resetCustomProperty(resetOption.getKey());
+            } else if (databaseChange instanceof DatabaseChange.UpdateComment) {
+                DatabaseChange.UpdateComment updateComment =
+                        (DatabaseChange.UpdateComment) databaseChange;
+                builder.setComment(updateComment.getComment());
+            }
+        }
+        return builder.build();
     }
 
     @Override
@@ -1040,8 +1087,12 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                             try {
                                 dynamicConfigManager.alterConfigs(serverConfigChanges);
                                 future.complete(new AlterClusterConfigsResponse());
-                            } catch (Exception e) {
+                            } catch (ApiException e) {
                                 future.completeExceptionally(e);
+                            } catch (Exception e) {
+                                future.completeExceptionally(
+                                        new UnknownServerException(
+                                                "Failed to alter cluster configs", e));
                             }
                             return null;
                         });

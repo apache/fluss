@@ -1177,16 +1177,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
         List<Integer> serverIds = event.getServerIds();
         ServerTag serverTag = event.getServerTag();
 
-        // Verify that dose serverTag not exist for input serverIds. If the server tag does not
+        // Verify that does serverTag not exist for input serverIds. If the server tag does not
         // exist for any one of the tabletServers, throw an error and none of them will be removed
-        // form coordinatorContext and zk.
+        // from coordinatorContext and zk.
         Map<Integer, ServerInfo> liveTabletServers = coordinatorContext.getLiveTabletServers();
         for (Integer serverId : serverIds) {
             if (!liveTabletServers.containsKey(serverId)) {
-                throw new ServerNotExistException(
-                        String.format(
-                                "Server %s not exists when trying to removing server tag.",
-                                serverId));
+                // maybe tablet server not exists, still do remove server tag
+                LOG.info("Server {} not exists when trying to removing server tag.", serverId);
             }
 
             Optional<ServerTag> existServerTagOpt = coordinatorContext.getServerTag(serverId);
