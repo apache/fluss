@@ -230,10 +230,8 @@ public class FlinkLanceTieringTestBase {
                                         DataTypes.FIELD(
                                                 "address",
                                                 DataTypes.ROW(
-                                                        DataTypes.FIELD(
-                                                                "city", DataTypes.STRING()),
-                                                        DataTypes.FIELD(
-                                                                "zip", DataTypes.INT())))));
+                                                        DataTypes.FIELD("city", DataTypes.STRING()),
+                                                        DataTypes.FIELD("zip", DataTypes.INT())))));
 
         TableDescriptor.Builder tableBuilder =
                 TableDescriptor.builder()
