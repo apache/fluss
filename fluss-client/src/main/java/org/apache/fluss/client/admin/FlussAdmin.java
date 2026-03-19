@@ -143,6 +143,7 @@ import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeListOffset
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePbPartitionSpec;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeRegisterProducerOffsetsRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.toConfigEntries;
+import static org.apache.fluss.client.utils.MetadataUtils.sendDescribeClusterRequest;
 import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclBindingFilters;
@@ -200,17 +201,8 @@ public class FlussAdmin implements Admin {
         CompletableFuture.runAsync(
                 () -> {
                     try {
-                        List<ServerNode> serverNodeList = new ArrayList<>();
-                        Cluster cluster =
-                                sendMetadataRequestAndRebuildCluster(
-                                        readOnlyGateway,
-                                        false,
-                                        metadataUpdater.getCluster(),
-                                        null,
-                                        null,
-                                        null);
-                        serverNodeList.add(cluster.getCoordinatorServer());
-                        serverNodeList.addAll(cluster.getAliveTabletServerList());
+                        List<ServerNode> serverNodeList =
+                                sendDescribeClusterRequest(readOnlyGateway);
                         future.complete(serverNodeList);
                     } catch (Throwable t) {
                         future.completeExceptionally(t);

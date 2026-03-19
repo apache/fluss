@@ -313,6 +313,16 @@ pub struct UpdateMetadataRequest {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UpdateMetadataResponse {}
+/// describe cluster request and response
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DescribeClusterRequest {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DescribeClusterResponse {
+    #[prost(message, optional, tag = "1")]
+    pub coordinator_server: ::core::option::Option<PbServerNode>,
+    #[prost(message, repeated, tag = "2")]
+    pub tablet_servers: ::prost::alloc::vec::Vec<PbServerNode>,
+}
 /// produce log request and response
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProduceLogRequest {
@@ -1275,6 +1285,7 @@ pub struct PbPhysicalTablePath {
 ///    * versions <= 0.6: host and port are used.
 ///    * versions >= 0.7: listeners is used to replace host and port.
 /// For MetadataResponse and UpdateMetadataRequest: Fluss versions >= 0.7: we add rack for each tabletServer
+/// For DescribeClusterResponse: Fluss version >= 1.0: we add server_tag for each tabletServer
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PbServerNode {
     #[prost(int32, required, tag = "1")]
@@ -1287,6 +1298,8 @@ pub struct PbServerNode {
     pub listeners: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(string, optional, tag = "5")]
     pub rack: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(int32, optional, tag = "6")]
+    pub server_tag: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PbTableMetadata {
