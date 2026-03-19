@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.source.emitter;
 
 import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.flink.source.deserializer.BinlogDeserializationSchema;
 import org.apache.fluss.flink.source.deserializer.DeserializerInitContextImpl;
 import org.apache.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import org.apache.fluss.flink.source.reader.RecordAndPos;
@@ -36,6 +37,7 @@ import org.apache.fluss.types.RowType;
 import org.apache.flink.api.common.eventtime.Watermark;
 import org.apache.flink.api.connector.source.SourceOutput;
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.data.StringData;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -87,6 +89,71 @@ public class FlinkRecordEmitterTest {
         assertThat(splitState.isHybridSnapshotLogSplitState()).isTrue();
         assertThat(results).hasSize(1);
         assertThat(results).isEqualTo(expectedResult);
+    }
+
+    @Test
+    void testHybridIncrementalBinlogUpdatesDoNotCorruptAcrossSplits() throws Exception {
+        RowType sourceOutputType =
+                RowType.of(
+                        new DataType[] {DataTypes.INT(), DataTypes.STRING(), DataTypes.BIGINT()},
+                        new String[] {"id", "name", "amount"});
+
+        BinlogDeserializationSchema deserializationSchema = new BinlogDeserializationSchema();
+        deserializationSchema.open(new DeserializerInitContextImpl(null, null, sourceOutputType));
+        FlinkRecordEmitter<RowData> emitter = new FlinkRecordEmitter<>(deserializationSchema);
+
+        HybridSnapshotLogSplitState splitStateA =
+                new HybridSnapshotLogSplitState(
+                        new HybridSnapshotLogSplit(new TableBucket(1L, 0), null, 0L, 0L));
+        HybridSnapshotLogSplitState splitStateB =
+                new HybridSnapshotLogSplitState(
+                        new HybridSnapshotLogSplit(new TableBucket(1L, 1), null, 0L, 0L));
+
+        TestSourceOutput<RowData> sourceOutput = new TestSourceOutput<>();
+
+        // Interleave -U/+U across two hybrid splits and verify pairing stays split-scoped.
+        emitter.emitRecord(
+                new RecordAndPos(
+                        new ScanRecord(
+                            100L, 1000L, ChangeType.UPDATE_BEFORE, row(1, "A-old", 100L)),
+                        1L),
+                sourceOutput,
+                splitStateA);
+        emitter.emitRecord(
+                new RecordAndPos(
+                        new ScanRecord(
+                            200L, 2000L, ChangeType.UPDATE_BEFORE, row(2, "B-old", 200L)),
+                        1L),
+                sourceOutput,
+                splitStateB);
+        emitter.emitRecord(
+                new RecordAndPos(
+                        new ScanRecord(201L, 2000L, ChangeType.UPDATE_AFTER, row(2, "B-new", 300L)),
+                        1L),
+                sourceOutput,
+                splitStateB);
+        emitter.emitRecord(
+                new RecordAndPos(
+                        new ScanRecord(101L, 1000L, ChangeType.UPDATE_AFTER, row(1, "A-new", 150L)),
+                        1L),
+                sourceOutput,
+                splitStateA);
+
+        List<RowData> results = sourceOutput.getRecords();
+        assertThat(results).hasSize(2);
+
+        // Each emitted update should keep its own split's before/after rows and offsets.
+        RowData resultB = results.get(0);
+        assertThat(resultB.getString(0)).isEqualTo(StringData.fromString("update"));
+        assertThat(resultB.getLong(1)).isEqualTo(200L);
+        assertThat(resultB.getRow(3, 3).getString(1)).isEqualTo(StringData.fromString("B-old"));
+        assertThat(resultB.getRow(4, 3).getString(1)).isEqualTo(StringData.fromString("B-new"));
+
+        RowData resultA = results.get(1);
+        assertThat(resultA.getString(0)).isEqualTo(StringData.fromString("update"));
+        assertThat(resultA.getLong(1)).isEqualTo(100L);
+        assertThat(resultA.getRow(3, 3).getString(1)).isEqualTo(StringData.fromString("A-old"));
+        assertThat(resultA.getRow(4, 3).getString(1)).isEqualTo(StringData.fromString("A-new"));
     }
 
     @Test
