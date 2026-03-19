@@ -69,6 +69,7 @@ import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestRequest;
 import org.apache.fluss.rpc.messages.CreateAclsResponse;
+import org.apache.fluss.rpc.messages.DescribeClusterResponse;
 import org.apache.fluss.rpc.messages.DropAclsResponse;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
@@ -280,6 +281,38 @@ public class ServerRpcMessageUtils {
                 pbServerNode.getPort(),
                 serverType,
                 pbServerNode.hasRack() ? pbServerNode.getRack() : null);
+    }
+
+    public static DescribeClusterResponse buildDescribeClusterResponse(
+            @Nullable ServerNode coordinatorServer, Set<ServerNode> aliveTabletServers) {
+        DescribeClusterResponse describeClusterResponse = new DescribeClusterResponse();
+
+        if (coordinatorServer != null) {
+            describeClusterResponse
+                    .setCoordinatorServer()
+                    .setNodeId(coordinatorServer.id())
+                    .setHost(coordinatorServer.host())
+                    .setPort(coordinatorServer.port());
+        }
+
+        List<PbServerNode> pbServerNodeList = new ArrayList<>();
+        for (ServerNode serverNode : aliveTabletServers) {
+            PbServerNode pbServerNode =
+                    new PbServerNode()
+                            .setNodeId(serverNode.id())
+                            .setHost(serverNode.host())
+                            .setPort(serverNode.port());
+            if (serverNode.rack() != null) {
+                pbServerNode.setRack(serverNode.rack());
+            }
+            if (serverNode.serverTag() != null) {
+                pbServerNode.setServerTag(serverNode.serverTag().value);
+            }
+            pbServerNodeList.add(pbServerNode);
+        }
+
+        describeClusterResponse.addAllTabletServers(pbServerNodeList);
+        return describeClusterResponse;
     }
 
     public static TableChange toTableChange(PbAlterConfig pbAlterConfig) {

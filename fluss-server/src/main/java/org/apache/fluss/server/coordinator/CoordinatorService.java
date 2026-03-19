@@ -162,6 +162,7 @@ import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.CoordinatorMetadataProvider;
+import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
@@ -299,6 +300,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         if (authorizer != null) {
             authorizeTableWithSession(currentSession(), operationType, tableId);
         }
+    }
+
+    @Override
+    protected ServerMetadataCache getServerMetadataCache() {
+        return metadataCache;
     }
 
     /**
