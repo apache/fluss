@@ -92,18 +92,44 @@ public class ArrowDataConverter {
                                 shadedVector,
                         (ListVector) nonShadedVector);
                 return;
+            } else {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Shaded vector is ListVector but non-shaded vector is %s, expected ListVector or FixedSizeListVector.",
+                                nonShadedVector.getClass().getSimpleName()));
             }
         }
 
         if (shadedVector
-                        instanceof
-                        org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.StructVector
-                && nonShadedVector instanceof StructVector) {
+                instanceof
+                org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.StructVector) {
+            if (!(nonShadedVector instanceof StructVector)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Shaded vector is StructVector but non-shaded vector is %s, expected StructVector.",
+                                nonShadedVector.getClass().getSimpleName()));
+            }
             copyStructVectorData(
                     (org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.StructVector)
                             shadedVector,
                     (StructVector) nonShadedVector);
             return;
+        }
+
+        if (nonShadedVector instanceof StructVector) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Non-shaded vector is StructVector but shaded vector is %s, expected shaded StructVector.",
+                            shadedVector.getClass().getSimpleName()));
+        }
+
+        if (nonShadedVector instanceof ListVector
+                || nonShadedVector instanceof FixedSizeListVector) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Non-shaded vector is %s but shaded vector is %s, expected shaded ListVector.",
+                            nonShadedVector.getClass().getSimpleName(),
+                            shadedVector.getClass().getSimpleName()));
         }
 
         List<org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf> shadedBuffers =

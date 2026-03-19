@@ -194,6 +194,66 @@ class LanceTieringITCase extends FlinkLanceTieringTestBase {
     }
 
     @Test
+    void testTieringWithNestedRowOfRowType() throws Exception {
+        // Test: Log table with Row of Row (nested struct within struct)
+        TablePath t1 = TablePath.of(DEFAULT_DB, "logTableWithNestedRowOfRow");
+        long t1Id = createLogTableWithNestedRowOfRowType(t1);
+        TableBucket t1Bucket = new TableBucket(t1Id, 0);
+
+        // Create nested row of row data
+        for (int i = 0; i < 10; i++) {
+            GenericRow innerAddress1 = new GenericRow(2);
+            innerAddress1.setField(0, BinaryString.fromString("New York"));
+            innerAddress1.setField(1, 10001);
+            GenericRow contact1 = new GenericRow(2);
+            contact1.setField(0, BinaryString.fromString("111-1111"));
+            contact1.setField(1, innerAddress1);
+
+            GenericRow innerAddress2 = new GenericRow(2);
+            innerAddress2.setField(0, BinaryString.fromString("Los Angeles"));
+            innerAddress2.setField(1, 90001);
+            GenericRow contact2 = new GenericRow(2);
+            contact2.setField(0, BinaryString.fromString("222-2222"));
+            contact2.setField(1, innerAddress2);
+
+            GenericRow innerAddress3 = new GenericRow(2);
+            innerAddress3.setField(0, BinaryString.fromString("Chicago"));
+            innerAddress3.setField(1, 60601);
+            GenericRow contact3 = new GenericRow(2);
+            contact3.setField(0, BinaryString.fromString("333-3333"));
+            contact3.setField(1, innerAddress3);
+
+            writeRows(
+                    t1,
+                    Arrays.asList(
+                            row(1, "Alice", contact1),
+                            row(2, "Bob", contact2),
+                            row(3, "Charlie", contact3)),
+                    true);
+        }
+
+        // then start tiering job
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        // check the status of replica after synced
+        assertReplicaStatus(t1Bucket, 30);
+
+        LanceConfig config1 =
+                LanceConfig.from(
+                        lanceConf.toMap(),
+                        Collections.emptyMap(),
+                        t1.getDatabaseName(),
+                        t1.getTableName());
+
+        // check data in lance using TSV string comparison
+        String expectedTsv1 = buildExpectedTsvForNestedRowOfRowTable(30);
+        checkDataInLance(config1, expectedTsv1);
+        checkSnapshotPropertyInLance(config1, Collections.singletonMap(t1Bucket, 30L));
+
+        jobClient.cancel().get();
+    }
+
+    @Test
     void testTieringWithArrayOfRowType() throws Exception {
         // Test: Log table with array of Row type
         TablePath t1 = TablePath.of(DEFAULT_DB, "logTableWithArrayOfRow");
@@ -324,6 +384,20 @@ class LanceTieringITCase extends FlinkLanceTieringTestBase {
             sb.append("1\tAlice\t{\"city\":\"New York\",\"zip\":10001}\n");
             sb.append("2\tBob\t{\"city\":\"Los Angeles\",\"zip\":90001}\n");
             sb.append("3\tCharlie\t{\"city\":\"Chicago\",\"zip\":60601}\n");
+        }
+        return sb.toString();
+    }
+
+    private String buildExpectedTsvForNestedRowOfRowTable(int rowCount) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("id\tname\tcontact\n");
+        for (int i = 0; i < rowCount / 3; i++) {
+            sb.append(
+                    "1\tAlice\t{\"phone\":\"111-1111\",\"address\":{\"city\":\"New York\",\"zip\":10001}}\n");
+            sb.append(
+                    "2\tBob\t{\"phone\":\"222-2222\",\"address\":{\"city\":\"Los Angeles\",\"zip\":90001}}\n");
+            sb.append(
+                    "3\tCharlie\t{\"phone\":\"333-3333\",\"address\":{\"city\":\"Chicago\",\"zip\":60601}}\n");
         }
         return sb.toString();
     }
