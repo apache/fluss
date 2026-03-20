@@ -132,7 +132,9 @@ public class TableDescriptorValidation {
             throw new InvalidAlterTableException(
                     String.format(
                             "The following options are not supported to alter yet: %s.",
-                            String.join(", ", unsupportedKeys)));
+                            unsupportedKeys.stream()
+                                    .map(k -> "'" + k + "'")
+                                    .collect(Collectors.joining(", "))));
         }
 
         if (!currentConfig.getDataLakeFormat().isPresent()) {
@@ -145,7 +147,9 @@ public class TableDescriptorValidation {
                         String.format(
                                 "The following options cannot be altered for tables that were"
                                         + " created before the Fluss cluster enabled datalake: %s.",
-                                String.join(", ", datalakeKeys)));
+                                datalakeKeys.stream()
+                                        .map(k -> "'" + k + "'")
+                                        .collect(Collectors.joining(", "))));
             }
         }
     }

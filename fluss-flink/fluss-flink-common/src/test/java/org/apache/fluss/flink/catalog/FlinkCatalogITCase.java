@@ -256,7 +256,7 @@ abstract class FlinkCatalogITCase {
                 .isInstanceOf(InvalidAlterTableException.class)
                 .hasMessageContaining("The following options are not supported to alter yet:")
                 .hasMessageContaining("table.kv.format")
-                .hasMessageContaining(" table.auto-partition.enabled");
+                .hasMessageContaining("table.auto-partition.enabled");
 
         String unSupportedDml2 =
                 "alter table test_alter_table_append_only set ('bucket.num' = '1000')";
