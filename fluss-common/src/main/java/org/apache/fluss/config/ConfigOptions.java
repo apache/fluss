@@ -107,6 +107,7 @@ public class ConfigOptions {
                                     + "For new clusters, it is recommended to use `remote.data.dirs` instead. "
                                     + "If `remote.data.dirs` is configured, this value will be ignored.");
 
+    @Documentation.Section("Common")
     public static final ConfigOption<List<String>> REMOTE_DATA_DIRS =
             key("remote.data.dirs")
                     .stringType()
@@ -122,6 +123,7 @@ public class ConfigOptions {
                                     + REMOTE_DATA_DIR.key()
                                     + "` as the sole remote data directory for all data.");
 
+    @Documentation.Section("Common")
     public static final ConfigOption<RemoteDataDirStrategy> REMOTE_DATA_DIRS_STRATEGY =
             key("remote.data.dirs.strategy")
                     .enumType(RemoteDataDirStrategy.class)
@@ -138,6 +140,7 @@ public class ConfigOptions {
                                     RemoteDataDirStrategy.ROUND_ROBIN,
                                     RemoteDataDirStrategy.WEIGHTED_ROUND_ROBIN));
 
+    @Documentation.Section("Common")
     public static final ConfigOption<List<Integer>> REMOTE_DATA_DIRS_WEIGHTS =
             key("remote.data.dirs.weights")
                     .intType()
@@ -343,8 +346,16 @@ public class ConfigOptions {
 
     @Documentation.Section("Common")
     public static final ConfigOption<List<String>> SERVER_SASL_ENABLED_MECHANISMS_CONFIG =
-            key("security.sasl.enabled.mechanisms").stringType().asList().noDefaultValue();
+            key("security.sasl.enabled.mechanisms")
+                    .stringType()
+                    .asList()
+                    .noDefaultValue()
+                    .withDescription(
+                            "A comma-separated list of SASL mechanisms enabled for server-side authentication. "
+                                    + "Each mechanism must be supported by a corresponding login module. "
+                                    + "Currently, only `PLAIN` is supported.");
 
+    @Documentation.Section("Server")
     public static final ConfigOption<Integer> SERVER_IO_POOL_SIZE =
             key("server.io-pool.size")
                     .intType()
@@ -397,6 +408,7 @@ public class ConfigOptions {
      *     instead, which provides a more flexible configuration for multiple ports.
      */
     @Deprecated
+    @Documentation.Section("Coordinator")
     public static final ConfigOption<String> COORDINATOR_PORT =
             key("coordinator.port")
                     .stringType()
@@ -419,6 +431,7 @@ public class ConfigOptions {
      *     instead.
      */
     @Deprecated
+    @Documentation.Section("Coordinator")
     public static final ConfigOption<Integer> COORDINATOR_IO_POOL_SIZE =
             key("coordinator.io-pool.size")
                     .intType()
@@ -434,6 +447,8 @@ public class ConfigOptions {
      * The TTL (time-to-live) for producer offsets. Producer offsets older than this TTL will be
      * automatically cleaned up by the coordinator server.
      */
+    @Documentation.Section("Coordinator")
+    @Documentation.OverrideDefault("24 hours")
     public static final ConfigOption<Duration> COORDINATOR_PRODUCER_OFFSETS_TTL =
             key("coordinator.producer-offsets.ttl")
                     .durationType()
@@ -445,6 +460,7 @@ public class ConfigOptions {
                                     + "The default value is 24 hours.");
 
     /** The interval for cleaning up expired producer offsets and orphan files in remote storage. */
+    @Documentation.Section("Coordinator")
     public static final ConfigOption<Duration> COORDINATOR_PRODUCER_OFFSETS_CLEANUP_INTERVAL =
             key("coordinator.producer-offsets.cleanup-interval")
                     .durationType()
@@ -464,6 +480,7 @@ public class ConfigOptions {
      *     instead, which provides a more flexible configuration for multiple ports.
      */
     @Deprecated
+    @Documentation.Section("Server")
     public static final ConfigOption<String> TABLET_SERVER_HOST =
             key("tablet-server.host")
                     .stringType()
@@ -482,6 +499,7 @@ public class ConfigOptions {
      *     instead, which provides a more flexible configuration for multiple ports.
      */
     @Deprecated
+    @Documentation.Section("Server")
     public static final ConfigOption<String> TABLET_SERVER_PORT =
             key("tablet-server.port")
                     .stringType()
@@ -490,6 +508,7 @@ public class ConfigOptions {
                             "The external RPC port where the TabletServer is exposed."
                                     + "This option is deprecated. Please use bind.listeners instead, which provides a more flexible configuration for multiple ports");
 
+    @Documentation.Section("Security")
     public static final ConfigOption<Map<String, String>> SERVER_SECURITY_PROTOCOL_MAP =
             key("security.protocol.map")
                     .mapType()
@@ -500,12 +519,14 @@ public class ConfigOptions {
                                     + "Each listener can be associated with a specific authentication protocol. "
                                     + "Listeners not included in the map will use PLAINTEXT by default, which does not require authentication.");
 
+    @Documentation.Section("Server")
     public static final ConfigOption<Integer> TABLET_SERVER_ID =
             key("tablet-server.id")
                     .intType()
                     .noDefaultValue()
                     .withDescription("The id for the tablet server.");
 
+    @Documentation.Section("Server")
     public static final ConfigOption<String> TABLET_SERVER_RACK =
             key("tablet-server.rack")
                     .stringType()
@@ -524,6 +545,7 @@ public class ConfigOptions {
                             "This configuration controls the directory where Fluss will store its data. "
                                     + "The default value is /tmp/fluss-data");
 
+    @Documentation.Section("Server")
     public static final ConfigOption<Duration> WRITER_ID_EXPIRATION_TIME =
             key("server.writer-id.expiration-time")
                     .durationType()
@@ -532,6 +554,7 @@ public class ConfigOptions {
                             "The time that the tablet server will wait without receiving any write request from "
                                     + "a client before expiring the related status. The default value is 7 days.");
 
+    @Documentation.Section("Server")
     public static final ConfigOption<Duration> WRITER_ID_EXPIRATION_CHECK_INTERVAL =
             key("server.writer-id.expiration-check-interval")
                     .durationType()
@@ -541,6 +564,7 @@ public class ConfigOptions {
                                     + WRITER_ID_EXPIRATION_TIME.key()
                                     + " passing. The default value is 10 minutes.");
 
+    @Documentation.Section("Server")
     public static final ConfigOption<Integer> TABLET_SERVER_CONTROLLED_SHUTDOWN_MAX_RETRIES =
             key("tablet-server.controlled-shutdown.max-retries")
                     .intType()
@@ -548,6 +572,7 @@ public class ConfigOptions {
                     .withDescription(
                             "Maximum number of attempts to transfer leadership before proceeding with an unclean shutdown during a controlled shutdown procedure.");
 
+    @Documentation.Section("Server")
     public static final ConfigOption<Duration> TABLET_SERVER_CONTROLLED_SHUTDOWN_RETRY_INTERVAL =
             key("tablet-server.controlled-shutdown.retry-interval")
                     .durationType()
@@ -555,6 +580,7 @@ public class ConfigOptions {
                     .withDescription(
                             "Time interval between retry attempts when trying to transfer leadership during controlled shutdown.");
 
+    @Documentation.Section("Server")
     public static final ConfigOption<Integer> BACKGROUND_THREADS =
             key("server.background.threads")
                     .intType()
@@ -562,6 +588,7 @@ public class ConfigOptions {
                     .withDescription(
                             "The number of threads to use for various background processing tasks. The default value is 10.");
 
+    @Documentation.Section("Server")
     public static final ConfigOption<MemorySize> SERVER_BUFFER_MEMORY_SIZE =
             key("server.buffer.memory-size")
                     .memoryType()
@@ -569,6 +596,7 @@ public class ConfigOptions {
                     .withDescription(
                             "The total bytes of memory the server can use, e.g, buffer write-ahead-log rows.");
 
+    @Documentation.Section("Server")
     public static final ConfigOption<MemorySize> SERVER_BUFFER_PAGE_SIZE =
             key("server.buffer.page-size")
                     .memoryType()
@@ -578,6 +606,7 @@ public class ConfigOptions {
                                     + SERVER_BUFFER_MEMORY_SIZE.key()
                                     + "`).");
 
+    @Documentation.Section("Server")
     public static final ConfigOption<MemorySize> SERVER_BUFFER_PER_REQUEST_MEMORY_SIZE =
             key("server.buffer.per-request-memory-size")
                     .memoryType()
@@ -590,6 +619,8 @@ public class ConfigOptions {
                                     + ". "
                                     + "This option allows to allocate memory in batches to have better CPU-cached friendliness due to contiguous segments.");
 
+    @Documentation.Section("Server")
+    @Documentation.OverrideDefault("infinite")
     public static final ConfigOption<Duration> SERVER_BUFFER_POOL_WAIT_TIMEOUT =
             key("server.buffer.wait-timeout")
                     .durationType()
@@ -611,6 +642,7 @@ public class ConfigOptions {
                             "The ZooKeeper address to use, when running Fluss with ZooKeeper.");
 
     /** The root path under which Fluss stores its entries in ZooKeeper. */
+    @Documentation.Section("ZooKeeper")
     public static final ConfigOption<String> ZOOKEEPER_ROOT =
             key("zookeeper.path.root")
                     .stringType()
@@ -621,6 +653,7 @@ public class ConfigOptions {
     // ------------------------------------------------------------------------
     //  ZooKeeper Client Settings
     // ------------------------------------------------------------------------
+    @Documentation.Section("ZooKeeper")
     public static final ConfigOption<Integer> ZOOKEEPER_MAX_INFLIGHT_REQUESTS =
             key("zookeeper.client.max-inflight-requests")
                     .intType()
@@ -628,6 +661,7 @@ public class ConfigOptions {
                     .withDescription(
                             "The maximum number of unacknowledged requests the client will send to ZooKeeper before blocking.");
 
+    @Documentation.Section("ZooKeeper")
     public static final ConfigOption<Duration> ZOOKEEPER_SESSION_TIMEOUT =
             key("zookeeper.client.session-timeout")
                     .durationType()
@@ -636,6 +670,7 @@ public class ConfigOptions {
                     .withDescription(
                             "Defines the session timeout for the ZooKeeper session in ms.");
 
+    @Documentation.Section("ZooKeeper")
     public static final ConfigOption<Duration> ZOOKEEPER_CONNECTION_TIMEOUT =
             key("zookeeper.client.connection-timeout")
                     .durationType()
@@ -643,6 +678,7 @@ public class ConfigOptions {
                     .withDeprecatedKeys("recovery.zookeeper.client.connection-timeout")
                     .withDescription("Defines the connection timeout for ZooKeeper in ms.");
 
+    @Documentation.Section("ZooKeeper")
     public static final ConfigOption<Duration> ZOOKEEPER_RETRY_WAIT =
             key("zookeeper.client.retry-wait")
                     .durationType()
@@ -650,6 +686,7 @@ public class ConfigOptions {
                     .withDeprecatedKeys("recovery.zookeeper.client.retry-wait")
                     .withDescription("Defines the pause between consecutive retries in ms.");
 
+    @Documentation.Section("ZooKeeper")
     public static final ConfigOption<Integer> ZOOKEEPER_MAX_RETRY_ATTEMPTS =
             key("zookeeper.client.max-retry-attempts")
                     .intType()
@@ -658,17 +695,19 @@ public class ConfigOptions {
                     .withDescription(
                             "Defines the number of connection retries before the client gives up.");
 
+    @Documentation.Section("ZooKeeper")
     public static final ConfigOption<Boolean> ZOOKEEPER_TOLERATE_SUSPENDED_CONNECTIONS =
             key("zookeeper.client.tolerate-suspended-connections")
                     .booleanType()
                     .defaultValue(false)
                     .withDescription(
                             "Defines whether a suspended ZooKeeper connection will be treated as an error that causes the leader "
-                                    + "information to be invalidated or not. In case you set this option to %s, Fluss will wait until a "
+                                    + "information to be invalidated or not. In case you set this option to `true`, Fluss will wait until a "
                                     + "ZooKeeper connection is marked as lost before it revokes the leadership of components. This has the "
                                     + "effect that Fluss is more resilient against temporary connection instabilities at the cost of running "
                                     + "more likely into timing issues with ZooKeeper.");
 
+    @Documentation.Section("ZooKeeper")
     public static final ConfigOption<Boolean> ZOOKEEPER_ENSEMBLE_TRACKING =
             key("zookeeper.client.ensemble-tracker")
                     .booleanType()
@@ -681,6 +720,7 @@ public class ConfigOptions {
                                     + "Under certain configurations EnsembleTracking can lead to setting of ZooKeeper connection string "
                                     + "with unresolvable hostnames.");
 
+    @Documentation.Section("ZooKeeper")
     public static final ConfigOption<String> ZOOKEEPER_CONFIG_PATH =
             key("zookeeper.client.config-path")
                     .stringType()
@@ -691,6 +731,8 @@ public class ConfigOptions {
                                     + "instead of relying on shared JVM-level environment settings. "
                                     + "This enables fine-grained control over ZooKeeper client behavior.");
 
+    @Documentation.Section("ZooKeeper")
+    @Documentation.OverrideDefault("104857600 (100 MB)")
     public static final ConfigOption<Integer> ZOOKEEPER_MAX_BUFFER_SIZE =
             key("zookeeper.client.max-buffer-size")
                     .intType()
@@ -714,6 +756,7 @@ public class ConfigOptions {
                                     + "Retention and cleaning is always done a file at a time so a "
                                     + "larger segment size means fewer files but less granular control over retention.");
 
+    @Documentation.Section("Log")
     public static final ConfigOption<MemorySize> LOG_INDEX_FILE_SIZE =
             key("log.index.file-size")
                     .memoryType()
@@ -723,6 +766,7 @@ public class ConfigOptions {
                                     + "We preallocate this index file and shrink it only after log rolls. You generally "
                                     + "should not need to change this setting.");
 
+    @Documentation.Section("Log")
     public static final ConfigOption<MemorySize> LOG_INDEX_INTERVAL_SIZE =
             key("log.index.interval-size")
                     .memoryType()
@@ -733,6 +777,7 @@ public class ConfigOptions {
                                     + "More indexing allows reads to jump closer to the exact position in the log but "
                                     + "makes the index larger. You probably don't need to change this.");
 
+    @Documentation.Section("Log")
     public static final ConfigOption<Boolean> LOG_FILE_PREALLOCATE =
             key("log.file-preallocate")
                     .booleanType()
@@ -740,6 +785,8 @@ public class ConfigOptions {
                     .withDescription(
                             "True if we should preallocate the file on disk when creating a new log segment.");
 
+    @Documentation.Section("Log")
+    @Documentation.OverrideDefault("Long.MAX_VALUE (unlimited)")
     public static final ConfigOption<Long> LOG_FLUSH_INTERVAL_MESSAGES =
             key("log.flush.interval-messages")
                     .longType()
@@ -750,6 +797,7 @@ public class ConfigOptions {
                                     + "we would fsync after every message; if it were 5 we would fsync after every "
                                     + "five messages.");
 
+    @Documentation.Section("Log")
     public static final ConfigOption<Duration> LOG_REPLICA_HIGH_WATERMARK_CHECKPOINT_INTERVAL =
             key("log.replica.high-watermark.checkpoint-interval")
                     .durationType()
@@ -758,6 +806,7 @@ public class ConfigOptions {
                             "The frequency with which the high watermark is saved out to disk. "
                                     + "The default setting is 5 seconds.");
 
+    @Documentation.Section("Log")
     public static final ConfigOption<Duration> LOG_REPLICA_MAX_LAG_TIME =
             key("log.replica.max-lag-time")
                     .durationType()
@@ -767,6 +816,7 @@ public class ConfigOptions {
                                     + "consumed up the leaders log end offset for at least this time, "
                                     + "the leader will remove the follower replica from isr");
 
+    @Documentation.Section("Log")
     public static final ConfigOption<Integer> LOG_REPLICA_WRITE_OPERATION_PURGE_NUMBER =
             key("log.replica.write-operation-purge-number")
                     .intType()
@@ -775,6 +825,7 @@ public class ConfigOptions {
                             "The purge number (in number of requests) of the write operation manager, "
                                     + "the default value is 1000.");
 
+    @Documentation.Section("Log")
     public static final ConfigOption<Integer> LOG_REPLICA_FETCH_OPERATION_PURGE_NUMBER =
             key("log.replica.fetch-operation-purge-number")
                     .intType()
@@ -783,6 +834,7 @@ public class ConfigOptions {
                             "The purge number (in number of requests) of the fetch log operation manager, "
                                     + "the default value is 1000.");
 
+    @Documentation.Section("Log")
     public static final ConfigOption<Integer> LOG_REPLICA_FETCHER_NUMBER =
             key("log.replica.fetcher-number")
                     .intType()
@@ -794,6 +846,7 @@ public class ConfigOptions {
                                     + "value can increase the degree of I/O parallelism in the follower and leader "
                                     + "tablet server at the cost of higher CPU and memory utilization.");
 
+    @Documentation.Section("Log")
     public static final ConfigOption<Duration> LOG_REPLICA_FETCH_BACKOFF_INTERVAL =
             key("log.replica.fetch.backoff-interval")
                     .durationType()
@@ -801,6 +854,7 @@ public class ConfigOptions {
                     .withDescription("The amount of time to sleep when fetch bucket error occurs.")
                     .withFallbackKeys("log.replica.fetch-backoff-interval");
 
+    @Documentation.Section("Log")
     public static final ConfigOption<MemorySize> LOG_REPLICA_FETCH_MAX_BYTES =
             key("log.replica.fetch.max-bytes")
                     .memoryType()
@@ -814,6 +868,7 @@ public class ConfigOptions {
                                     + "in parallel.")
                     .withDeprecatedKeys("log.fetch.max-bytes");
 
+    @Documentation.Section("Log")
     public static final ConfigOption<MemorySize> LOG_REPLICA_FETCH_MAX_BYTES_FOR_BUCKET =
             key("log.replica.fetch.max-bytes-for-bucket")
                     .memoryType()
@@ -824,6 +879,7 @@ public class ConfigOptions {
                                     + "config by this option.")
                     .withDeprecatedKeys("log.fetch.max-bytes-for-bucket");
 
+    @Documentation.Section("Log")
     public static final ConfigOption<Duration> LOG_REPLICA_FETCH_WAIT_MAX_TIME =
             key("log.replica.fetch.wait-max-time")
                     .durationType()
@@ -834,6 +890,7 @@ public class ConfigOptions {
                                     + "`log.replica.max-lag-time` at all times to prevent frequent shrinking of ISR for "
                                     + "low throughput tables");
 
+    @Documentation.Section("Log")
     public static final ConfigOption<MemorySize> LOG_REPLICA_FETCH_MIN_BYTES =
             key("log.replica.fetch.min-bytes")
                     .memoryType()
@@ -844,6 +901,7 @@ public class ConfigOptions {
                                     + LOG_REPLICA_FETCH_WAIT_MAX_TIME.key()
                                     + " time to return.");
 
+    @Documentation.Section("Log")
     public static final ConfigOption<Integer> LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER =
             key("log.replica.min-in-sync-replicas-number")
                     .intType()
@@ -863,6 +921,7 @@ public class ConfigOptions {
     //  ConfigOptions for Log tiered storage
     // ------------------------------------------------------------------------
 
+    @Documentation.Section("Remote Log")
     public static final ConfigOption<Duration> REMOTE_LOG_TASK_INTERVAL_DURATION =
             key("remote.log.task-interval-duration")
                     .durationType()
@@ -872,6 +931,7 @@ public class ConfigOptions {
                                     + "copy segments, clean up remote log segments, delete local log segments etc. "
                                     + "If the value is set to 0s, it means that the remote log storage is disabled.");
 
+    @Documentation.Section("Remote Log")
     public static final ConfigOption<Integer> REMOTE_LOG_TASK_MAX_UPLOAD_SEGMENTS =
             key("remote.log.task-max-upload-segments")
                     .intType()
@@ -882,6 +942,7 @@ public class ConfigOptions {
                                     + "prevent overwhelming the remote storage when there is a large "
                                     + "backlog of segments to upload.");
 
+    @Documentation.Section("Remote Log")
     public static final ConfigOption<MemorySize> REMOTE_LOG_INDEX_FILE_CACHE_SIZE =
             key("remote.log.index-file-cache-size")
                     .memoryType()
@@ -890,6 +951,7 @@ public class ConfigOptions {
                             "The total size of the space allocated to store index files fetched "
                                     + "from remote storage in the local storage.");
 
+    @Documentation.Section("Remote Log")
     public static final ConfigOption<Integer> REMOTE_LOG_MANAGER_THREAD_POOL_SIZE =
             key("remote.log-manager.thread-pool-size")
                     .intType()
@@ -903,6 +965,7 @@ public class ConfigOptions {
      *     instead.
      */
     @Deprecated
+    @Documentation.Section("Remote Log")
     public static final ConfigOption<Integer> REMOTE_LOG_DATA_TRANSFER_THREAD_NUM =
             key("remote.log.data-transfer-thread-num")
                     .intType()
@@ -925,6 +988,7 @@ public class ConfigOptions {
                             "The number of threads that the server uses for receiving requests "
                                     + "from the network and sending responses to the network.");
 
+    @Documentation.Section("Netty")
     public static final ConfigOption<Integer> NETTY_SERVER_NUM_WORKER_THREADS =
             key("netty.server.num-worker-threads")
                     .intType()
@@ -933,6 +997,7 @@ public class ConfigOptions {
                             "The number of threads that the server uses for processing requests, "
                                     + "which may include disk and remote I/O.");
 
+    @Documentation.Section("Netty")
     public static final ConfigOption<Integer> NETTY_SERVER_MAX_QUEUED_REQUESTS =
             key("netty.server.max-queued-requests")
                     .intType()
@@ -940,6 +1005,7 @@ public class ConfigOptions {
                     .withDescription(
                             "The number of queued requests allowed for worker threads, before blocking the I/O threads.");
 
+    @Documentation.Section("Netty")
     public static final ConfigOption<Duration> NETTY_CONNECTION_MAX_IDLE_TIME =
             key("netty.connection.max-idle-time")
                     .durationType()
@@ -947,6 +1013,7 @@ public class ConfigOptions {
                     .withDescription(
                             "Close idle connections after the given time specified by this config.");
 
+    @Documentation.Section("Netty")
     public static final ConfigOption<Integer> NETTY_CLIENT_NUM_NETWORK_THREADS =
             key("netty.client.num-network-threads")
                     .intType()
@@ -959,6 +1026,7 @@ public class ConfigOptions {
     //  Client Settings
     // ------------------------------------------------------------------------
 
+    @Documentation.Section("Client")
     public static final ConfigOption<String> CLIENT_ID =
             key("client.id")
                     .stringType()
@@ -968,12 +1036,14 @@ public class ConfigOptions {
                                     + "to be able to track the source of requests beyond just ip/port by allowing "
                                     + "a logical application name to be included in server-side request logging.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<Duration> CLIENT_CONNECT_TIMEOUT =
             key("client.connect-timeout")
                     .durationType()
                     .defaultValue(Duration.ofSeconds(120))
                     .withDescription("The Netty client connect timeout.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<List<String>> BOOTSTRAP_SERVERS =
             key("bootstrap.servers")
                     .stringType()
@@ -985,6 +1055,7 @@ public class ConfigOptions {
                                     + "Since these servers are just used for the initial connection to discover the full cluster membership (which may change dynamically), "
                                     + "this list need not contain the full set of servers (you may want more than one, though, in case a server is down) ");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<MemorySize> CLIENT_WRITER_BUFFER_MEMORY_SIZE =
             key("client.writer.buffer.memory-size")
                     .memoryType()
@@ -992,6 +1063,7 @@ public class ConfigOptions {
                     .withDescription(
                             "The total bytes of memory the writer can use to buffer internal rows.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<MemorySize> CLIENT_WRITER_BUFFER_PAGE_SIZE =
             key("client.writer.buffer.page-size")
                     .memoryType()
@@ -1001,6 +1073,7 @@ public class ConfigOptions {
                                     + CLIENT_WRITER_BUFFER_MEMORY_SIZE.key()
                                     + "`).");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<MemorySize> CLIENT_WRITER_PER_REQUEST_MEMORY_SIZE =
             key("client.writer.buffer.per-request-memory-size")
                     .memoryType()
@@ -1013,6 +1086,8 @@ public class ConfigOptions {
                                     + ". "
                                     + "This option allows to allocate memory in batches to have better CPU-cached friendliness due to contiguous segments.");
 
+    @Documentation.Section("Client")
+    @Documentation.OverrideDefault("infinite")
     public static final ConfigOption<Duration> CLIENT_WRITER_BUFFER_WAIT_TIMEOUT =
             key("client.writer.buffer.wait-timeout")
                     .durationType()
@@ -1020,6 +1095,7 @@ public class ConfigOptions {
                     .withDescription(
                             "Defines how long the writer will block when waiting for segments to become available.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<MemorySize> CLIENT_WRITER_BATCH_SIZE =
             key("client.writer.batch-size")
                     .memoryType()
@@ -1028,6 +1104,7 @@ public class ConfigOptions {
                             "The writer or walBuilder will attempt to batch records together into one batch for"
                                     + " the same bucket. This helps performance on both the client and the server.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<Boolean> CLIENT_WRITER_DYNAMIC_BATCH_SIZE_ENABLED =
             key("client.writer.dynamic-batch-size.enabled")
                     .booleanType()
@@ -1043,6 +1120,7 @@ public class ConfigOptions {
                                     + CLIENT_WRITER_BATCH_SIZE.key()
                                     + "`) for all batches, this may lead to frequent memory waits and suboptimal write performance if the incoming data rate is inconsistent across partitions.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<Duration> CLIENT_WRITER_BATCH_TIMEOUT =
             key("client.writer.batch-timeout")
                     .durationType()
@@ -1062,6 +1140,7 @@ public class ConfigOptions {
                                     + "however if we have fewer than this many bytes accumulated for this bucket we will delay"
                                     + " for the specified time waiting for more records to show up.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<NoKeyAssigner> CLIENT_WRITER_BUCKET_NO_KEY_ASSIGNER =
             key("client.writer.bucket.no-key-assigner")
                     .enumType(NoKeyAssigner.class)
@@ -1081,6 +1160,7 @@ public class ConfigOptions {
                                     Arrays.toString(NoKeyAssigner.values()),
                                     STICKY.name()));
 
+    @Documentation.Section("Client")
     public static final ConfigOption<String> CLIENT_WRITER_ACKS =
             key("client.writer.acks")
                     .stringType()
@@ -1100,6 +1180,7 @@ public class ConfigOptions {
                                     + "lost as long as at least one in-sync replica remains alive, This is the strongest"
                                     + " available guarantee.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<MemorySize> CLIENT_WRITER_REQUEST_MAX_SIZE =
             key("client.writer.request-max-size")
                     .memoryType()
@@ -1110,6 +1191,8 @@ public class ConfigOptions {
                                     + "huge requests. Note that this retry is no different than if the writer resent "
                                     + "the row upon receiving the error.");
 
+    @Documentation.Section("Client")
+    @Documentation.OverrideDefault("Integer.MAX_VALUE (unlimited)")
     public static final ConfigOption<Integer> CLIENT_WRITER_RETRIES =
             key("client.writer.retries")
                     .intType()
@@ -1118,6 +1201,7 @@ public class ConfigOptions {
                             "Setting a value greater than zero will cause the client to resend any record whose "
                                     + "send fails with a potentially transient error.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<Boolean> CLIENT_WRITER_ENABLE_IDEMPOTENCE =
             key("client.writer.enable-idempotence")
                     .booleanType()
@@ -1137,6 +1221,7 @@ public class ConfigOptions {
                                     + "idempotence is disabled. If idempotence is explicitly enabled and conflicting "
                                     + "config are set, a ConfigException is thrown");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<Integer> CLIENT_WRITER_MAX_INFLIGHT_REQUESTS_PER_BUCKET =
             key("client.writer.max-inflight-requests-per-bucket")
                     .intType()
@@ -1148,6 +1233,7 @@ public class ConfigOptions {
                                     + "requests per bucket exceeds this setting, the writer will wait for the inflight "
                                     + "requests to complete before sending out new requests.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<Boolean> CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED =
             key("client.writer.dynamic-create-partition.enabled")
                     .booleanType()
@@ -1157,6 +1243,7 @@ public class ConfigOptions {
                                     + " Dynamic partition strategy refers to creating partitions based on the data "
                                     + "being written for partitioned table if the wrote partition don't exists.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<Duration> CLIENT_REQUEST_TIMEOUT =
             key("client.request-timeout")
                     .durationType()
@@ -1166,6 +1253,7 @@ public class ConfigOptions {
                                     + "this timeout is the max time that delayed write try to complete. "
                                     + "The default setting is 30 seconds.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<Boolean> CLIENT_SCANNER_LOG_CHECK_CRC =
             key("client.scanner.log.check-crc")
                     .booleanType()
@@ -1175,6 +1263,7 @@ public class ConfigOptions {
                                     + "or on-disk corruption to the messages occurred. This check "
                                     + "adds some overhead, so it may be disabled in cases seeking extreme performance.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<Integer> CLIENT_SCANNER_LOG_MAX_POLL_RECORDS =
             key("client.scanner.log.max-poll-records")
                     .intType()
@@ -1185,6 +1274,7 @@ public class ConfigOptions {
                                     + "The Scanner will cache the records from each fetch request and returns "
                                     + "them incrementally from each poll.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<String> CLIENT_SECURITY_PROTOCOL =
             key("client.security.protocol")
                     .stringType()
@@ -1192,6 +1282,7 @@ public class ConfigOptions {
                     .withDescription(
                             "The authentication protocol used to authenticate the client.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<MemorySize> CLIENT_SCANNER_LOG_FETCH_MAX_BYTES =
             key("client.scanner.log.fetch.max-bytes")
                     .memoryType()
@@ -1203,6 +1294,7 @@ public class ConfigOptions {
                                     + "will still be returned to ensure that the fetch can make progress. As such, "
                                     + "this is not a absolute maximum.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<MemorySize> CLIENT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET =
             key("client.scanner.log.fetch.max-bytes-for-bucket")
                     .memoryType()
@@ -1212,6 +1304,7 @@ public class ConfigOptions {
                                     + "from client. Records are fetched in batches, the max bytes size is config by "
                                     + "this option.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<Duration> CLIENT_SCANNER_LOG_FETCH_WAIT_MAX_TIME =
             key("client.scanner.log.fetch.wait-max-time")
                     .durationType()
@@ -1220,6 +1313,7 @@ public class ConfigOptions {
                             "The maximum time to wait for enough bytes to be available for a fetch log "
                                     + "request from client to response.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<MemorySize> CLIENT_SCANNER_LOG_FETCH_MIN_BYTES =
             key("client.scanner.log.fetch.min-bytes")
                     .memoryType()
@@ -1230,12 +1324,14 @@ public class ConfigOptions {
                                     + CLIENT_SCANNER_LOG_FETCH_WAIT_MAX_TIME.key()
                                     + " time to return.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<Integer> CLIENT_LOOKUP_QUEUE_SIZE =
             key("client.lookup.queue-size")
                     .intType()
                     .defaultValue(25600)
                     .withDescription("The maximum number of pending lookup operations.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<Integer> CLIENT_LOOKUP_MAX_BATCH_SIZE =
             key("client.lookup.max-batch-size")
                     .intType()
@@ -1243,6 +1339,7 @@ public class ConfigOptions {
                     .withDescription(
                             "The maximum batch size of merging lookup operations to one lookup request.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<Integer> CLIENT_LOOKUP_MAX_INFLIGHT_SIZE =
             key("client.lookup.max-inflight-requests")
                     .intType()
@@ -1250,6 +1347,7 @@ public class ConfigOptions {
                     .withDescription(
                             "The maximum number of unacknowledged lookup requests for lookup operations.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<Duration> CLIENT_LOOKUP_BATCH_TIMEOUT =
             key("client.lookup.batch-timeout")
                     .durationType()
@@ -1258,6 +1356,8 @@ public class ConfigOptions {
                             "The maximum time to wait for the lookup batch to full, if this timeout is reached, "
                                     + "the lookup batch will be closed to send.");
 
+    @Documentation.Section("Client")
+    @Documentation.OverrideDefault("Integer.MAX_VALUE (unlimited)")
     public static final ConfigOption<Integer> CLIENT_LOOKUP_MAX_RETRIES =
             key("client.lookup.max-retries")
                     .intType()
@@ -1266,6 +1366,7 @@ public class ConfigOptions {
                             "Setting a value greater than zero will cause the client to resend any lookup request "
                                     + "that fails with a potentially transient error.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<Integer> CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM =
             key("client.scanner.remote-log.prefetch-num")
                     .intType()
@@ -1284,6 +1385,7 @@ public class ConfigOptions {
                             "Local directory that is used by client for"
                                     + " storing the data files (like kv snapshot, log segment files) to read temporarily");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<Integer> REMOTE_FILE_DOWNLOAD_THREAD_NUM =
             key("client.remote-file.download-thread-num")
                     .intType()
@@ -1291,6 +1393,7 @@ public class ConfigOptions {
                     .withDescription(
                             "The number of threads the client uses to download remote files.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<Duration> FILESYSTEM_SECURITY_TOKEN_RENEWAL_RETRY_BACKOFF =
             key("client.filesystem.security.token.renewal.backoff")
                     .durationType()
@@ -1299,6 +1402,7 @@ public class ConfigOptions {
                             "The time period how long to wait before retrying to obtain new security tokens "
                                     + "for filesystem after a failure.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<Double> FILESYSTEM_SECURITY_TOKEN_RENEWAL_TIME_RATIO =
             key("client.filesystem.security.token.renewal.time-ratio")
                     .doubleType()
@@ -1306,6 +1410,7 @@ public class ConfigOptions {
                     .withDescription(
                             "Ratio of the token's expiration time when new credentials for access filesystem should be re-obtained.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<Boolean> CLIENT_METRICS_ENABLED =
             key("client.metrics.enabled")
                     .booleanType()
@@ -1314,6 +1419,7 @@ public class ConfigOptions {
                             "Enable metrics for client. When metrics is enabled, the client "
                                     + "will collect metrics and report by the JMX metrics reporter.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<String> CLIENT_SASL_MECHANISM =
             key("client.security.sasl.mechanism")
                     .stringType()
@@ -1321,6 +1427,7 @@ public class ConfigOptions {
                     .withDescription(
                             "SASL mechanism to use for authentication.Currently, we only support plain.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<String> CLIENT_SASL_JAAS_CONFIG =
             key("client.security.sasl.jaas.config")
                     .stringType()
@@ -1329,6 +1436,7 @@ public class ConfigOptions {
                             "JAAS configuration string for the client. If not provided, uses the JVM option -Djava.security.auth.login.config. \n"
                                     + "Example: org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required username=\"admin\" password=\"admin-secret\";");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<String> CLIENT_SASL_JAAS_USERNAME =
             key("client.security.sasl.username")
                     .stringType()
@@ -1338,6 +1446,7 @@ public class ConfigOptions {
                                     + "This is used when the client connects to the Fluss cluster with SASL authentication enabled. "
                                     + "If not provided, the username will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`.");
 
+    @Documentation.Section("Client")
     public static final ConfigOption<String> CLIENT_SASL_JAAS_PASSWORD =
             key("client.security.sasl.password")
                     .stringType()
@@ -1350,6 +1459,7 @@ public class ConfigOptions {
     // ------------------------------------------------------------------------
     //  ConfigOptions for Fluss Table
     // ------------------------------------------------------------------------
+    @Documentation.Section("Table")
     public static final ConfigOption<Integer> TABLE_REPLICATION_FACTOR =
             key("table.replication.factor")
                     .intType()
@@ -1362,6 +1472,7 @@ public class ConfigOptions {
                                     + "Fluss cluster. A value larger than the number of tablet servers in Fluss cluster "
                                     + "will result in an error when the new table is created.");
 
+    @Documentation.Section("Table")
     public static final ConfigOption<LogFormat> TABLE_LOG_FORMAT =
             key("table.log.format")
                     .enumType(LogFormat.class)
@@ -1370,6 +1481,7 @@ public class ConfigOptions {
                             "The format of the log records in log store. The default value is `arrow`. "
                                     + "The supported formats are `arrow`, `indexed` and `compacted`.");
 
+    @Documentation.Section("Table")
     public static final ConfigOption<ArrowCompressionType> TABLE_LOG_ARROW_COMPRESSION_TYPE =
             key("table.log.arrow.compression.type")
                     .enumType(ArrowCompressionType.class)
@@ -1379,6 +1491,7 @@ public class ConfigOptions {
                                     + "The candidate compression type is "
                                     + Arrays.toString(ArrowCompressionType.values()));
 
+    @Documentation.Section("Table")
     public static final ConfigOption<Integer> TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL =
             key("table.log.arrow.compression.zstd.level")
                     .intType()
@@ -1387,6 +1500,7 @@ public class ConfigOptions {
                             "The compression level of ZSTD for the log records if the log format is set to `ARROW` "
                                     + "and the compression type is set to `ZSTD`. The valid range is 1 to 22.");
 
+    @Documentation.Section("Table")
     public static final ConfigOption<KvFormat> TABLE_KV_FORMAT =
             key("table.kv.format")
                     .enumType(KvFormat.class)
@@ -1396,6 +1510,7 @@ public class ConfigOptions {
                                     + "The supported formats are `compacted` and `indexed`.");
 
     /** The version of the KV format. */
+    @Documentation.Section("Table")
     public static final ConfigOption<Integer> TABLE_KV_FORMAT_VERSION =
             key("table.kv.format-version")
                     .intType()
@@ -1416,6 +1531,7 @@ public class ConfigOptions {
                                     + "for optimization (encoded bytes can be reused for bucket calculation). "
                                     + "Bucket key encoding always uses datalake's encoder to align with datalake bucket calculation.");
 
+    @Documentation.Section("Table")
     public static final ConfigOption<Boolean> TABLE_AUTO_PARTITION_ENABLED =
             key("table.auto-partition.enabled")
                     .booleanType()
@@ -1424,6 +1540,7 @@ public class ConfigOptions {
                             "Whether enable auto partition for the table. Disable by default."
                                     + " When auto partition is enabled, the partitions of the table will be created automatically.");
 
+    @Documentation.Section("Table")
     public static final ConfigOption<String> TABLE_AUTO_PARTITION_KEY =
             key("table.auto-partition.key")
                     .stringType()
@@ -1436,6 +1553,7 @@ public class ConfigOptions {
                                     + "this feature determines which key should serve as the primary time dimension for making auto-partitioning decisions."
                                     + "And If the table has only one partition key, this config is not necessary. Otherwise, it must be specified.");
 
+    @Documentation.Section("Table")
     public static final ConfigOption<AutoPartitionTimeUnit> TABLE_AUTO_PARTITION_TIME_UNIT =
             key("table.auto-partition.time-unit")
                     .enumType(AutoPartitionTimeUnit.class)
@@ -1464,6 +1582,7 @@ public class ConfigOptions {
                     .withDescription(
                             "The time zone for auto partitions, which is by default the same as the system time zone.");
 
+    @Documentation.Section("Table")
     public static final ConfigOption<Integer> TABLE_AUTO_PARTITION_NUM_PRECREATE =
             key("table.auto-partition.num-precreate")
                     .intType()
@@ -1477,6 +1596,7 @@ public class ConfigOptions {
                                     + "If the `table.auto-partition.time-unit` is `DAY`(default), one precreated partition is for today and another one is for tomorrow."
                                     + "For a partition table with multiple partition keys, pre-create is unsupported and will be set to 0 automatically when creating table if it is not explicitly specified.");
 
+    @Documentation.Section("Table")
     public static final ConfigOption<Integer> TABLE_AUTO_PARTITION_NUM_RETENTION =
             key("table.auto-partition.num-retention")
                     .intType()
@@ -1488,6 +1608,7 @@ public class ConfigOptions {
                                     + "The partitions earlier than 20241108 will be deleted. "
                                     + "The default value is 7.");
 
+    @Documentation.Section("Table")
     public static final ConfigOption<Duration> TABLE_LOG_TTL =
             key("table.log.ttl")
                     .durationType()
@@ -1497,6 +1618,7 @@ public class ConfigOptions {
                                     + "we will retain a log before we will delete old segments to free up "
                                     + "space. If set to -1, the log will not be deleted.");
 
+    @Documentation.Section("Table")
     public static final ConfigOption<Integer> TABLE_TIERED_LOG_LOCAL_SEGMENTS =
             key("table.log.tiered.local-segments")
                     .intType()
@@ -1505,6 +1627,7 @@ public class ConfigOptions {
                             "The number of log segments to retain in local for each table when log tiered storage is enabled. "
                                     + "It must be greater that 0. The default is 2.");
 
+    @Documentation.Section("Table")
     public static final ConfigOption<Boolean> TABLE_DATALAKE_ENABLED =
             key("table.datalake.enabled")
                     .booleanType()
@@ -1514,6 +1637,7 @@ public class ConfigOptions {
                                     + "When this option is set to ture and the datalake tiering service is up,"
                                     + " the table will be tiered and compacted into datalake format stored on lakehouse storage.");
 
+    @Documentation.Section("Table")
     public static final ConfigOption<DataLakeFormat> TABLE_DATALAKE_FORMAT =
             key("table.datalake.format")
                     .enumType(DataLakeFormat.class)
@@ -1526,6 +1650,7 @@ public class ConfigOptions {
                                     + "The `table.datalake.format` can be pre-defined before enabling `table.datalake.enabled`. This allows the data lake feature to be dynamically enabled on the table without requiring table recreation. "
                                     + "If `table.datalake.format` is not explicitly set during table creation, the table will default to the format specified by the `datalake.format` configuration in the Fluss cluster.");
 
+    @Documentation.Section("Table")
     public static final ConfigOption<Duration> TABLE_DATALAKE_FRESHNESS =
             key("table.datalake.freshness")
                     .durationType()
@@ -1535,6 +1660,7 @@ public class ConfigOptions {
                                     + "Based on this target freshness, the Fluss service automatically moves data from the Fluss table and updates to the datalake table, so that the data in the datalake table is kept up to date within this target. "
                                     + "If the data does not need to be as fresh, you can specify a longer target freshness time to reduce costs.");
 
+    @Documentation.Section("Table")
     public static final ConfigOption<Boolean> TABLE_DATALAKE_AUTO_COMPACTION =
             key("table.datalake.auto-compaction")
                     .booleanType()
@@ -1542,6 +1668,7 @@ public class ConfigOptions {
                     .withDescription(
                             "If true, compaction will be triggered automatically when tiering service writes to the datalake. It is disabled by default.");
 
+    @Documentation.Section("Table")
     public static final ConfigOption<Boolean> TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT =
             key("table.datalake.auto-expire-snapshot")
                     .booleanType()
@@ -1549,6 +1676,7 @@ public class ConfigOptions {
                     .withDescription(
                             "If true, snapshot expiration will be triggered automatically when tiering service commits to the datalake. It is disabled by default.");
 
+    @Documentation.Section("Table")
     public static final ConfigOption<MergeEngineType> TABLE_MERGE_ENGINE =
             key("table.merge-engine")
                     .enumType(MergeEngineType.class)
@@ -1560,6 +1688,7 @@ public class ConfigOptions {
                                     + "The `versioned` merge engine will keep the row with the largest version of the same primary key. "
                                     + "The `aggregation` merge engine will aggregate rows with the same primary key using field-level aggregate functions.");
 
+    @Documentation.Section("Table")
     public static final ConfigOption<String> TABLE_MERGE_ENGINE_VERSION_COLUMN =
             // we may need to introduce "del-column" in the future to support delete operation
             key("table.merge-engine.versioned.ver-column")
@@ -1569,6 +1698,7 @@ public class ConfigOptions {
                             "The column name of the version column for the `versioned` merge engine. "
                                     + "If the merge engine is set to `versioned`, the version column must be set.");
 
+    @Documentation.Section("Table")
     public static final ConfigOption<DeleteBehavior> TABLE_DELETE_BEHAVIOR =
             key("table.delete.behavior")
                     .enumType(DeleteBehavior.class)
@@ -1582,6 +1712,7 @@ public class ConfigOptions {
                                     + "For tables with FIRST_ROW, VERSIONED, or AGGREGATION merge engines, this option defaults to `ignore`. "
                                     + "Note: For AGGREGATION merge engine, when set to `allow`, delete operations will remove the entire record.");
 
+    @Documentation.Section("Table")
     public static final ConfigOption<Long> TABLE_AUTO_INCREMENT_CACHE_SIZE =
             key("table.auto-increment.cache-size")
                     .longType()
@@ -1592,6 +1723,7 @@ public class ConfigOptions {
                                     + "A larger cache size may cause significant auto-increment ID gaps, especially when unused cached ID segments are discarded due to TabletServer restarts or abnormal terminations. "
                                     + "Conversely, a smaller cache size increases the frequency of ID fetch requests to the distributed counter, introducing extra network overhead and reducing write throughput and performance.");
 
+    @Documentation.Section("Table")
     public static final ConfigOption<ChangelogImage> TABLE_CHANGELOG_IMAGE =
             key("table.changelog.image")
                     .enumType(ChangelogImage.class)
@@ -1619,6 +1751,7 @@ public class ConfigOptions {
                             "The interval to perform periodic snapshot for kv data. "
                                     + "The default setting is 10 minutes.");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<Integer> KV_SNAPSHOT_SCHEDULER_THREAD_NUM =
             key("kv.snapshot.scheduler-thread-num")
                     .intType()
@@ -1631,6 +1764,7 @@ public class ConfigOptions {
      *     instead.
      */
     @Deprecated
+    @Documentation.Section("KV")
     public static final ConfigOption<Integer> KV_SNAPSHOT_TRANSFER_THREAD_NUM =
             key("kv.snapshot.transfer-thread-num")
                     .intType()
@@ -1639,12 +1773,14 @@ public class ConfigOptions {
                             "The number of threads the server uses to transfer (download and upload) kv snapshot files. "
                                     + "This option is deprecated. Please use server.io-pool.size instead.");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<Integer> KV_MAX_RETAINED_SNAPSHOTS =
             key("kv.snapshot.num-retained")
                     .intType()
                     .defaultValue(2)
                     .withDescription("The maximum number of completed snapshots to retain.");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<Duration> KV_SNAPSHOT_LEASE_EXPIRATION_CHECK_INTERVAL =
             key("kv.snapshot.lease.expiration-check-interval")
                     .durationType()
@@ -1653,6 +1789,7 @@ public class ConfigOptions {
                             "The interval to check the expiration of kv snapshot lease. "
                                     + "The default setting is 10 minutes.");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<Integer> KV_MAX_BACKGROUND_THREADS =
             key("kv.rocksdb.thread.num")
                     .intType()
@@ -1661,6 +1798,7 @@ public class ConfigOptions {
                             "The maximum number of concurrent background flush and compaction jobs (per bucket of table). "
                                     + "The default value is `2`.");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<Integer> KV_MAX_OPEN_FILES =
             key("kv.rocksdb.files.open")
                     .intType()
@@ -1669,6 +1807,7 @@ public class ConfigOptions {
                             "The maximum number of open files (per  bucket of table) that can be used by the DB, `-1` means no limit. "
                                     + "The default value is `-1`.");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<MemorySize> KV_LOG_MAX_FILE_SIZE =
             key("kv.rocksdb.log.max-file-size")
                     .memoryType()
@@ -1679,6 +1818,7 @@ public class ConfigOptions {
                                     + "If 0, all logs will be written to one log file. "
                                     + "The default maximum file size is `25MB`. ");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<Integer> KV_LOG_FILE_NUM =
             key("kv.rocksdb.log.file-num")
                     .intType()
@@ -1686,6 +1826,7 @@ public class ConfigOptions {
                     .withDescription(
                             "The maximum number of files RocksDB should keep for information logging (Default setting: 4).");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<String> KV_LOG_DIR =
             key("kv.rocksdb.log.dir")
                     .stringType()
@@ -1696,6 +1837,7 @@ public class ConfigOptions {
                                     + "If non-empty, this directory will be used and the data directory's absolute path will be used as the prefix of the log file name. "
                                     + "If setting this option as a non-existing location, e.g `/dev/null`, RocksDB will then create the log under its own database folder as before.");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<InfoLogLevel> KV_LOG_LEVEL =
             key("kv.rocksdb.log.level")
                     .enumType(InfoLogLevel.class)
@@ -1715,6 +1857,7 @@ public class ConfigOptions {
                                     KV_LOG_MAX_FILE_SIZE.key(),
                                     KV_LOG_FILE_NUM.key()));
 
+    @Documentation.Section("KV")
     public static final ConfigOption<MemorySize> KV_WRITE_BATCH_SIZE =
             key("kv.rocksdb.write-batch-size")
                     .memoryType()
@@ -1723,6 +1866,7 @@ public class ConfigOptions {
                             "The max size of the consumed memory for RocksDB batch write, "
                                     + "will flush just based on item count if this config set to 0.");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<MemorySize> KV_SHARED_RATE_LIMITER_BYTES_PER_SEC =
             key("kv.rocksdb.shared-rate-limiter.bytes-per-sec")
                     .memoryType()
@@ -1737,6 +1881,7 @@ public class ConfigOptions {
     // Provided configurable ColumnFamilyOptions within Fluss
     // --------------------------------------------------------------------------
 
+    @Documentation.Section("KV")
     public static final ConfigOption<CompactionStyle> KV_COMPACTION_STYLE =
             key("kv.rocksdb.compaction.style")
                     .enumType(CompactionStyle.class)
@@ -1751,6 +1896,7 @@ public class ConfigOptions {
                                     NONE.name(),
                                     LEVEL.name()));
 
+    @Documentation.Section("KV")
     public static final ConfigOption<Boolean> KV_USE_DYNAMIC_LEVEL_SIZE =
             key("kv.rocksdb.compaction.level.use-dynamic-size")
                     .booleanType()
@@ -1760,9 +1906,9 @@ public class ConfigOptions {
                                     + "RocksDB would make last level the base level, which means merging L0 data into the last level, "
                                     + "until it exceeds max_bytes_for_level_base. And then repeat this process for second last level and so on. "
                                     + "The default value is `false`. "
-                                    + "For more information, please refer to %s https://github.com/facebook/rocksdb/wiki/Leveled-Compaction#level_compaction_dynamic_level_bytes-is-true"
-                                    + "RocksDB's doc.");
+                                    + "For more information, please refer to https://github.com/facebook/rocksdb/wiki/Leveled-Compaction#level_compaction_dynamic_level_bytes-is-true");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<List<KvCompressionType>> KV_COMPRESSION_PER_LEVEL =
             key("kv.rocksdb.compression.per.level")
                     .enumType(KvCompressionType.class)
@@ -1793,6 +1939,7 @@ public class ConfigOptions {
                                     + "CPU resources are adequate. If you find the IO pressure of the system is not big when writing a lot of data,"
                                     + " but CPU resources are inadequate, you can exchange I/O resources for CPU resources and change the compaction mode to `NO,NO,NO,LZ4,LZ4,ZSTD,ZSTD`. ");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<MemorySize> KV_TARGET_FILE_SIZE_BASE =
             key("kv.rocksdb.compaction.level.target-file-size-base")
                     .memoryType()
@@ -1801,6 +1948,7 @@ public class ConfigOptions {
                             "The target file size for compaction, which determines a level-1 file size. "
                                     + "The default value is `64MB`.");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<MemorySize> KV_MAX_SIZE_LEVEL_BASE =
             key("kv.rocksdb.compaction.level.max-size-level-base")
                     .memoryType()
@@ -1809,6 +1957,7 @@ public class ConfigOptions {
                             "The upper-bound of the total size of level base files in bytes. "
                                     + "The default value is `256MB`.");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<MemorySize> KV_WRITE_BUFFER_SIZE =
             key("kv.rocksdb.writebuffer.size")
                     .memoryType()
@@ -1817,6 +1966,7 @@ public class ConfigOptions {
                             "The amount of data built up in memory (backed by an unsorted log on disk) "
                                     + "before converting to a sorted on-disk files. The default writebuffer size is `64MB`.");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<Integer> KV_MAX_WRITE_BUFFER_NUMBER =
             key("kv.rocksdb.writebuffer.count")
                     .intType()
@@ -1825,6 +1975,7 @@ public class ConfigOptions {
                             "The maximum number of write buffers that are built up in memory. "
                                     + "The default value is `2`.");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<Integer> KV_MIN_WRITE_BUFFER_NUMBER_TO_MERGE =
             key("kv.rocksdb.writebuffer.number-to-merge")
                     .intType()
@@ -1833,6 +1984,7 @@ public class ConfigOptions {
                             "The minimum number of write buffers that will be merged together before writing to storage. "
                                     + "The default value is `1`.");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<MemorySize> KV_BLOCK_SIZE =
             key("kv.rocksdb.block.blocksize")
                     .memoryType()
@@ -1841,6 +1993,7 @@ public class ConfigOptions {
                             "The approximate size (in bytes) of user data packed per block. "
                                     + "The default blocksize is `4KB`.");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<MemorySize> KV_METADATA_BLOCK_SIZE =
             key("kv.rocksdb.block.metadata-blocksize")
                     .memoryType()
@@ -1850,6 +2003,7 @@ public class ConfigOptions {
                                     + "Currently applied to indexes block when partitioned index/filters option is enabled. "
                                     + "The default blocksize is `4KB`.");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<MemorySize> KV_BLOCK_CACHE_SIZE =
             key("kv.rocksdb.block.cache-size")
                     .memoryType()
@@ -1858,6 +2012,7 @@ public class ConfigOptions {
                             "The amount of the cache for data blocks in RocksDB. "
                                     + "The default block-cache size is `8MB`.");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<Boolean> KV_USE_BLOOM_FILTER =
             key("kv.rocksdb.use-bloom-filter")
                     .booleanType()
@@ -1866,6 +2021,7 @@ public class ConfigOptions {
                             "If true, every newly created SST file will contain a Bloom filter. "
                                     + "It is enabled by default.");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<Double> KV_BLOOM_FILTER_BITS_PER_KEY =
             key("kv.rocksdb.bloom-filter.bits-per-key")
                     .doubleType()
@@ -1874,6 +2030,7 @@ public class ConfigOptions {
                             "Bits per key that bloom filter will use, this only take effect when bloom filter is used. "
                                     + "The default value is 10.0.");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<Boolean> KV_BLOOM_FILTER_BLOCK_BASED_MODE =
             key("kv.rocksdb.bloom-filter.block-based-mode")
                     .booleanType()
@@ -1882,6 +2039,7 @@ public class ConfigOptions {
                             "If true, RocksDB will use block-based filter instead of full filter, this only take effect when bloom filter is used. "
                                     + "The default value is `false`.");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<Boolean> KV_CACHE_INDEX_AND_FILTER_BLOCKS =
             key("kv.rocksdb.block.cache-index-and-filter-blocks")
                     .booleanType()
@@ -1892,6 +2050,7 @@ public class ConfigOptions {
                                     + "so that the total memory used by RocksDB is bounded by block cache size. "
                                     + "The default value is `false`.");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<Boolean> KV_CACHE_INDEX_AND_FILTER_BLOCKS_WITH_HIGH_PRIORITY =
             key("kv.rocksdb.block.cache-index-and-filter-blocks-with-high-priority")
                     .booleanType()
@@ -1902,6 +2061,7 @@ public class ConfigOptions {
                                     + "making them less likely to be evicted than data blocks. "
                                     + "The default value is `false`.");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<Boolean> KV_PIN_L0_FILTER_AND_INDEX_BLOCKS_IN_CACHE =
             key("kv.rocksdb.block.pin-l0-filter-and-index-blocks-in-cache")
                     .booleanType()
@@ -1912,6 +2072,7 @@ public class ConfigOptions {
                                     + "This helps avoid performance degradation due to cache misses on L0 index/filter blocks. "
                                     + "The default value is `false`.");
 
+    @Documentation.Section("KV")
     public static final ConfigOption<Boolean> KV_PIN_TOP_LEVEL_INDEX_AND_FILTER =
             key("kv.rocksdb.block.pin-top-level-index-and-filter")
                     .booleanType()
@@ -1924,6 +2085,7 @@ public class ConfigOptions {
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv recovering
     // ------------------------------------------------------------------------
+    @Documentation.Section("KV")
     public static final ConfigOption<MemorySize> KV_RECOVER_LOG_RECORD_BATCH_MAX_SIZE =
             key("kv.recover.log-record-batch.max-size")
                     .memoryType()
@@ -1944,6 +2106,7 @@ public class ConfigOptions {
                             "An optional list of reporter names. "
                                     + "If configured, only reporters whose name matches in the list will be started");
 
+    @Documentation.Section("Metric")
     public static final ConfigOption<String> METRICS_REPORTER_PROMETHEUS_PORT =
             key("metrics.reporter.prometheus.port")
                     .stringType()
@@ -1958,6 +2121,7 @@ public class ConfigOptions {
     // ------------------------------------------------------------------------
     //  ConfigOptions for prometheus push gateway reporter
     // ------------------------------------------------------------------------
+    @Documentation.Section("Metric")
     public static final ConfigOption<String> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_HOST_URL =
             key("metrics.reporter.prometheus-push.host-url")
                     .stringType()
@@ -1965,12 +2129,14 @@ public class ConfigOptions {
                     .withDescription(
                             "The PushGateway server host URL including scheme, host name, and port.");
 
+    @Documentation.Section("Metric")
     public static final ConfigOption<String> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_JOB_NAME =
             key("metrics.reporter.prometheus-push.job-name")
                     .stringType()
                     .noDefaultValue()
                     .withDescription("The job name under which metrics will be pushed");
 
+    @Documentation.Section("Metric")
     public static final ConfigOption<Boolean>
             METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_RANDOM_JOB_NAME_SUFFIX =
                     key("metrics.reporter.prometheus-push.random-job-name-suffix")
@@ -1981,6 +2147,7 @@ public class ConfigOptions {
                                             + "This is useful when multiple instances of the reporter "
                                             + "are running on the same host.");
 
+    @Documentation.Section("Metric")
     public static final ConfigOption<Boolean>
             METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN =
                     key("metrics.reporter.prometheus-push.delete-on-shutdown")
@@ -1989,6 +2156,7 @@ public class ConfigOptions {
                             .withDescription(
                                     "Specifies whether to delete metrics from the PushGateway on shutdown, defaults to true. Fluss will try its best to delete the metrics but this is not guaranteed.");
 
+    @Documentation.Section("Metric")
     public static final ConfigOption<String> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_GROUPING_KEY =
             key("metrics.reporter.prometheus-push.grouping-key")
                     .stringType()
@@ -1996,6 +2164,7 @@ public class ConfigOptions {
                     .withDescription(
                             "Specifies the grouping key which is the group and global labels of all metrics. The label name and value are separated by '=', and labels are separated by ';', e.g., k1=v1;k2=v2.");
 
+    @Documentation.Section("Metric")
     public static final ConfigOption<Duration>
             METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_PUSH_INTERVAL =
                     key("metrics.reporter.prometheus-push.push-interval")
@@ -2007,6 +2176,7 @@ public class ConfigOptions {
     // ------------------------------------------------------------------------
     //  ConfigOptions for jmx reporter
     // ------------------------------------------------------------------------
+    @Documentation.Section("Metric")
     public static final ConfigOption<String> METRICS_REPORTER_JMX_HOST =
             key("metrics.reporter.jmx.port")
                     .stringType()
@@ -2022,6 +2192,7 @@ public class ConfigOptions {
     // ------------------------------------------------------------------------
     //  ConfigOptions for lakehouse storage
     // ------------------------------------------------------------------------
+    @Documentation.Section("Datalake")
     public static final ConfigOption<DataLakeFormat> DATALAKE_FORMAT =
             key("datalake.format")
                     .enumType(DataLakeFormat.class)
@@ -2034,6 +2205,7 @@ public class ConfigOptions {
     //  ConfigOptions for tiering service
     // ------------------------------------------------------------------------
 
+    @Documentation.Section("Datalake")
     public static final ConfigOption<Boolean> LAKE_TIERING_AUTO_EXPIRE_SNAPSHOT =
             key("lake.tiering.auto-expire-snapshot")
                     .booleanType()
@@ -2041,12 +2213,13 @@ public class ConfigOptions {
                     .withDescription(
                             "If true, snapshot expiration will be triggered automatically when tiering service commits to the datalake, "
                                     + "even if "
-                                    + ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT
+                                    + ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT.key()
                                     + " is false.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for fluss kafka
     // ------------------------------------------------------------------------
+    @Documentation.Section("Kafka")
     public static final ConfigOption<Boolean> KAFKA_ENABLED =
             key("kafka.enabled")
                     .booleanType()
@@ -2055,6 +2228,7 @@ public class ConfigOptions {
                             "Whether enable Fluss Kafka. Disabled by default. "
                                     + "When this option is set to true, the Fluss Kafka will be enabled.");
 
+    @Documentation.Section("Kafka")
     public static final ConfigOption<List<String>> KAFKA_LISTENER_NAMES =
             key("kafka.listener.names")
                     .stringType()
@@ -2063,6 +2237,7 @@ public class ConfigOptions {
                     .withDescription(
                             "The listener names for Kafka wire protocol communication. Support multiple listener names, separated by comma.");
 
+    @Documentation.Section("Kafka")
     public static final ConfigOption<String> KAFKA_DATABASE =
             key("kafka.database")
                     .stringType()
@@ -2070,6 +2245,7 @@ public class ConfigOptions {
                     .withDescription(
                             "The database for Fluss Kafka. The default database is `kafka`.");
 
+    @Documentation.Section("Kafka")
     public static final ConfigOption<Duration> KAFKA_CONNECTION_MAX_IDLE_TIME =
             key("kafka.connection.max-idle-time")
                     .durationType()
