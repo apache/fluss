@@ -19,19 +19,33 @@ package org.apache.fluss.docs;
 
 import org.junit.jupiter.api.Test;
 
-import java.io.File;
-
 import static org.assertj.core.api.Assertions.assertThat;
 
 class ConfigOptionsDocGeneratorTest {
 
     @Test
-    void testGeneratorRunsSuccessfully() throws Exception {
-        // This triggers your generator logic
-        ConfigOptionsDocGenerator.main(new String[] {});
+    void testGeneratorProducesCorrectContent() throws Exception {
+        String content = ConfigOptionsDocGenerator.generateMDXContent();
 
-        // Verify the file was actually created
-        File generatedFile = new File("website/docs/_configs/_partial_config.mdx");
-        assertThat(generatedFile).exists();
+        // Verify structure
+        assertThat(content).startsWith("{/* This file is auto-generated");
+
+        // Verify known sections appear
+        assertThat(content).contains("## Client\n");
+        assertThat(content).contains("## KV\n");
+        assertThat(content).contains("## ZooKeeper\n");
+
+        // Verify a known option appears with correct format
+        assertThat(content).contains("### `client.scanner.io.tmpdir`");
+
+        // Verify OverrideDefault is applied (should show /tmp/fluss, not system path)
+        assertThat(content).contains("* **Default**: `/tmp/fluss`");
+
+        // Verify Duration formatting via ConfigDocUtils (not raw ISO-8601)
+        assertThat(content).doesNotContain("PT15M");
+        assertThat(content).contains("15 min"); // acl.notification.expiration-time
+
+        // Verify no broken %s replacements
+        assertThat(content).doesNotContain("refer to true https://");
     }
 }
