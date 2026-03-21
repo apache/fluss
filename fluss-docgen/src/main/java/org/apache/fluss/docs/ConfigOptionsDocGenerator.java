@@ -1,25 +1,7 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
-
 package org.apache.fluss.docs;
 
+import org.apache.fluss.annotation.Documentation;
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.annotation.docs.ConfigOverrideDefault;
-import org.apache.fluss.annotation.docs.ConfigSection;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 
@@ -63,7 +45,7 @@ public class ConfigOptionsDocGenerator {
         System.out.println("SUCCESS: Generated " + outputFile.getAbsolutePath());
     }
 
-    private static String generateMDXContent() throws IllegalAccessException {
+    static String generateMDXContent() throws IllegalAccessException {
         StringBuilder builder = new StringBuilder();
         builder.append("{/* This file is auto-generated. Do not edit directly. */}\n\n");
 
@@ -71,50 +53,64 @@ public class ConfigOptionsDocGenerator {
         Map<String, List<Field>> sections = new TreeMap<>();
 
         for (Field field : fields) {
-            // Using name check to avoid retention issues with Internal.class if necessary
             if (field.isAnnotationPresent(Internal.class)) {
                 continue;
             }
-
-            if (field.getType().equals(ConfigOption.class)) {
-                ConfigOption<?> option = (ConfigOption<?>) field.get(null);
-                String sectionName = getSectionName(field, option);
-                sections.computeIfAbsent(sectionName, k -> new ArrayList<>()).add(field);
+            if (!field.getType().equals(ConfigOption.class)) {
+                continue;
             }
+
+            // Skip fields with no @Documentation.Section — they are intentionally internal
+            if (!field.isAnnotationPresent(Documentation.Section.class)) {
+                continue;
+            }
+
+            sections.computeIfAbsent(
+                            field.getAnnotation(Documentation.Section.class).value(),
+                            k -> new ArrayList<>())
+                    .add(field);
         }
 
         for (Map.Entry<String, List<Field>> entry : sections.entrySet()) {
-            builder.append("## ").append(entry.getKey()).append(" Configurations\n\n");
+            builder.append("## ").append(entry.getKey()).append("\n\n");
 
             List<Field> sectionFields = entry.getValue();
-            sectionFields.sort(Comparator.comparing(f -> getOptionKey(f)));
+            sectionFields.sort(Comparator.comparing(ConfigOptionsDocGenerator::getOptionKey));
 
             for (Field field : sectionFields) {
                 ConfigOption<?> option = (ConfigOption<?>) field.get(null);
-
-                String defaultValue = getFormattedDefaultValue(field, option);
-                String scope = getScope(option.key());
-                String description = cleanDescription(option.description());
-                boolean isDeprecated = field.isAnnotationPresent(Deprecated.class);
-
-                builder.append("### `")
-                        .append(option.key())
-                        .append("` {#")
-                        .append(option.key().replace(".", "-"))
-                        .append("}\n\n");
-
-                if (isDeprecated) {
-                    builder.append("> **Warning**: This configuration is **Deprecated**.\n\n");
-                }
-                builder.append("* **Default**: `").append(defaultValue).append("`\n");
-                builder.append("* **Type**: ").append(getType(field)).append("\n");
-                builder.append("* **Scope**: ").append(scope).append("\n\n");
-
-                builder.append(description).append("\n\n");
-                builder.append("---\n\n");
+                appendOptionEntry(builder, field, option);
             }
         }
         return builder.toString();
+    }
+
+    private static void appendOptionEntry(
+            StringBuilder builder, Field field, ConfigOption<?> option) {
+        String defaultValue = getFormattedDefaultValue(field, option);
+        String description = cleanDescription(option.description());
+        boolean isDeprecated = field.isAnnotationPresent(Deprecated.class);
+
+        builder.append("### `")
+                .append(option.key())
+                .append("` {#")
+                .append(option.key().replace(".", "-"))
+                .append("}\n\n");
+
+        if (isDeprecated) {
+            builder.append("> **Deprecated**: ");
+            // Extract the deprecation note from description if present
+            if (description.contains("deprecated")) {
+                builder.append("Use the replacement option described below.\n\n");
+            } else {
+                builder.append("This configuration option is deprecated.\n\n");
+            }
+        }
+
+        builder.append("* **Default**: `").append(defaultValue).append("`\n");
+        builder.append("* **Type**: ").append(getType(field)).append("\n\n");
+        builder.append(description).append("\n\n");
+        builder.append("---\n\n");
     }
 
     private static String getOptionKey(Field field) {
@@ -125,68 +121,48 @@ public class ConfigOptionsDocGenerator {
         }
     }
 
-    private static String getFormattedDefaultValue(Field field, ConfigOption<?> option) {
-        if (field.isAnnotationPresent(ConfigOverrideDefault.class)) {
-            return field.getAnnotation(ConfigOverrideDefault.class).value();
+    static String getFormattedDefaultValue(Field field, ConfigOption<?> option) {
+        // @Documentation.OverrideDefault takes priority
+        if (field.isAnnotationPresent(Documentation.OverrideDefault.class)) {
+            return field.getAnnotation(Documentation.OverrideDefault.class).value();
         }
-        Object defaultValue = option.defaultValue();
-        if (defaultValue == null) {
-            return "(none)";
-        }
-        return defaultValue.toString();
+        return ConfigDocUtils.formatDefaultValue(option);
     }
 
-    private static String getSectionName(Field field, ConfigOption<?> option) {
-        if (field.isAnnotationPresent(ConfigSection.class)) {
-            return field.getAnnotation(ConfigSection.class).value();
-        }
-        String key = option.key();
-        if (key.contains(".")) {
-            return capitalize(key.split("\\.")[0]);
-        }
-        return "Common";
-    }
-
-    private static String getScope(String key) {
-        if (key.startsWith("table.")) {
-            return "Table";
-        } else if (key.startsWith("client.")) {
-            return "Client";
-        }
-        return "Server";
-    }
-
-    private static String cleanDescription(String desc) {
-        if (desc == null) {
-            return "";
+    static String cleanDescription(String desc) {
+        if (desc == null || desc.isEmpty()) {
+            return "(No description provided.)";
         }
         return desc.replace("\n", " ")
                 .replace("\r", " ")
                 .replace("<", "&lt;")
                 .replace("{", "&#123;")
                 .replace("}", "&#125;")
-                .replace("%s", "true")
-                .replaceAll("\\[(.*?)\\]\\s*\\(.*?\\)", "$1");
+                // Remove markdown link syntax [text](url) -> text
+                .replaceAll("\\[(.*?)\\]\\s*\\(.*?\\)", "$1")
+                .trim();
     }
 
-    private static String getType(Field field) {
-        String typeName = "String";
+    static String getType(Field field) {
         try {
             Type genericType = field.getGenericType();
             if (genericType instanceof ParameterizedType) {
                 Type[] typeArgs = ((ParameterizedType) genericType).getActualTypeArguments();
                 if (typeArgs.length > 0) {
                     String fullTypeName = typeArgs[0].getTypeName();
-                    typeName = extractSimpleName(fullTypeName);
+                    return mapTypeName(extractSimpleName(fullTypeName));
                 }
             }
         } catch (Exception ignored) {
-            // fallback
+            // fallback to String
         }
+        return "String";
+    }
 
+    private static String mapTypeName(String typeName) {
         switch (typeName.toLowerCase()) {
             case "integer":
-                return "Int";
+                return "Integer";
             case "long":
                 return "Long";
             case "boolean":
@@ -198,7 +174,9 @@ public class ConfigOptionsDocGenerator {
             case "double":
                 return "Double";
             case "list":
-                return "List";
+                return "List<String>";
+            case "map":
+                return "Map<String,String>";
             case "string":
                 return "String";
             default:
@@ -207,14 +185,13 @@ public class ConfigOptionsDocGenerator {
     }
 
     private static String extractSimpleName(String fullTypeName) {
+        // Get simple name after last dot
         String simple = fullTypeName.substring(fullTypeName.lastIndexOf(".") + 1);
-        return simple.replace("$", "").replace(">", "");
-    }
-
-    private static String capitalize(String str) {
-        return (str == null || str.isEmpty())
-                ? str
-                : str.substring(0, 1).toUpperCase() + str.substring(1);
+        if (simple.contains("$")) {
+            simple = simple.substring(simple.lastIndexOf("$") + 1);
+        }
+        simple = simple.replace(">", "");
+        return simple;
     }
 
     private static Path findProjectRoot() {

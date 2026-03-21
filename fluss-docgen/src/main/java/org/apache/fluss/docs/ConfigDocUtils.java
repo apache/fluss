@@ -67,21 +67,33 @@ public class ConfigDocUtils {
 
     private static String formatDuration(Duration d) {
         long seconds = d.getSeconds();
+        int nanos = d.getNano();
+
         if (seconds >= INFINITE_THRESHOLD || seconds < 0) {
             return "infinite";
         }
-        if (seconds == 0) {
+        if (seconds == 0 && nanos == 0) {
             return "0 s";
         }
-
+        // Handle sub-second durations
+        if (seconds == 0) {
+            long millis = nanos / 1_000_000;
+            if (millis > 0 && nanos % 1_000_000 == 0) {
+                return millis + " ms";
+            }
+            return nanos + " ns";
+        }
         if (seconds >= 86400 && seconds % 86400 == 0) {
-            return (seconds / 86400) + " days";
+            long days = seconds / 86400;
+            return days + (days == 1 ? " day" : " days");
         }
         if (seconds >= 3600 && seconds % 3600 == 0) {
-            return (seconds / 3600) + " hours";
+            long hours = seconds / 3600;
+            return hours + (hours == 1 ? " hour" : " hours");
         }
         if (seconds >= 60 && seconds % 60 == 0) {
-            return (seconds / 60) + " min";
+            long mins = seconds / 60;
+            return mins + " min";
         }
         return seconds + " s";
     }

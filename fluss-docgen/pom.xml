@@ -65,9 +65,10 @@
                 <version>3.1.0</version>
                 <executions>
                     <execution>
-                        <phase>compile</phase> <goals>
-                        <goal>java</goal>
-                    </goals>
+                        <phase>compile</phase>
+                        <goals>
+                            <goal>java</goal>
+                        </goals>
                     </execution>
                 </executions>
                 <configuration>
