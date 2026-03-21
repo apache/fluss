@@ -17,7 +17,12 @@
 
 package org.apache.fluss.docs;
 
+import org.apache.fluss.config.ConfigOption;
+import org.apache.fluss.config.ConfigOptions;
+
 import org.junit.jupiter.api.Test;
+
+import java.lang.reflect.Field;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -47,5 +52,25 @@ class ConfigOptionsDocGeneratorTest {
 
         // Verify no broken %s replacements
         assertThat(content).doesNotContain("refer to true https://");
+    }
+
+    @Test
+    void testCleanDescriptionHandlesSpecialCharacters() {
+        assertThat(ConfigOptionsDocGenerator.cleanDescription("a {b} <c>"))
+                .isEqualTo("a &#123;b&#125; &lt;c>");
+    }
+
+    @Test
+    void testCleanDescriptionHandlesNull() {
+        assertThat(ConfigOptionsDocGenerator.cleanDescription(null))
+                .isEqualTo("(No description provided.)");
+    }
+
+    @Test
+    void testFormatDefaultValueUsesOverrideDefault() throws Exception {
+        Field field = ConfigOptions.class.getField("CLIENT_SCANNER_IO_TMP_DIR");
+        ConfigOption<?> option = (ConfigOption<?>) field.get(null);
+        assertThat(ConfigOptionsDocGenerator.getFormattedDefaultValue(field, option))
+                .isEqualTo("/tmp/fluss");
     }
 }
