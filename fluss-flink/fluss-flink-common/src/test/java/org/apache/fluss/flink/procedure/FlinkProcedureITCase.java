@@ -141,6 +141,7 @@ public abstract class FlinkProcedureITCase {
                             "+I[sys.reset_cluster_configs]",
                             "+I[sys.add_server_tag]",
                             "+I[sys.remove_server_tag]",
+                            "+I[sys.list_server_tag]",
                             "+I[sys.rebalance]",
                             "+I[sys.cancel_rebalance]",
                             "+I[sys.list_rebalance]",
@@ -557,6 +558,49 @@ public abstract class FlinkProcedureITCase {
                 .rootCause()
                 .hasMessageContaining(
                         "config_keys cannot be null or empty. Please specify valid configuration keys");
+    }
+
+    @Test
+    void testListServerTag() throws Exception {
+        // 1. Initially, no server tags should exist.
+        try (CloseableIterator<Row> resultIterator =
+                tEnv.executeSql(String.format("Call %s.sys.list_server_tag()", CATALOG_NAME))
+                        .collect()) {
+            assertCallResult(resultIterator, new String[0]);
+        }
+
+        // 2. Add server tags for server 0 and 1.
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.add_server_tag('0,1', 'PERMANENT_OFFLINE')",
+                                CATALOG_NAME))
+                .await();
+
+        // 3. List server tags and verify.
+        try (CloseableIterator<Row> resultIterator =
+                tEnv.executeSql(String.format("Call %s.sys.list_server_tag()", CATALOG_NAME))
+                        .collect()) {
+            List<Row> results = CollectionUtil.iteratorToList(resultIterator);
+            assertThat(results).hasSize(2);
+            List<String> resultStrings =
+                    results.stream().map(Row::toString).collect(Collectors.toList());
+            assertThat(resultStrings)
+                    .containsExactlyInAnyOrder(
+                            "+I[0, rack-0, PERMANENT_OFFLINE]", "+I[1, rack-1, PERMANENT_OFFLINE]");
+        }
+
+        // 4. Remove server tags and verify empty again.
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.remove_server_tag('0,1', 'PERMANENT_OFFLINE')",
+                                CATALOG_NAME))
+                .await();
+
+        try (CloseableIterator<Row> resultIterator =
+                tEnv.executeSql(String.format("Call %s.sys.list_server_tag()", CATALOG_NAME))
+                        .collect()) {
+            assertCallResult(resultIterator, new String[0]);
+        }
     }
 
     @ParameterizedTest

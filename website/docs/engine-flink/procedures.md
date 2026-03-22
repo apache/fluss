@@ -357,6 +357,37 @@ CALL sys.remove_server_tag('0', 'PERMANENT_OFFLINE');
 CALL sys.remove_server_tag('1,2,3', 'TEMPORARY_OFFLINE');
 ```
 
+### list_server_tag
+
+List all server tags currently assigned to TabletServers in the cluster. This procedure is useful for inspecting the current tagging status of TabletServers before or after rebalance operations.
+
+**Syntax:**
+
+```sql
+CALL [catalog_name.]sys.list_server_tag()
+```
+
+**Parameters:**
+
+This procedure takes no parameters.
+
+**Returns:** A table with the following columns:
+- `server_id` (INT): The ID of the TabletServer.
+- `rack` (STRING): The rack of the TabletServer.
+- `server_tag` (STRING): The tag assigned to the TabletServer (e.g., `PERMANENT_OFFLINE`, `TEMPORARY_OFFLINE`).
+
+Only TabletServers that have a tag assigned will be included in the result. If no TabletServers have tags, an empty result is returned.
+
+**Example:**
+
+```sql title="Flink SQL"
+-- Use the Fluss catalog (replace 'fluss_catalog' with your catalog name if different)
+USE fluss_catalog;
+
+-- List all server tags
+CALL sys.list_server_tag();
+```
+
 ### rebalance
 
 Trigger a rebalance operation to redistribute buckets across TabletServers in the cluster. This procedure helps balance workload based on specified goals, such as distributing replicas or leaders evenly across the cluster.

@@ -19,6 +19,7 @@ package org.apache.fluss.server;
 
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.KvSnapshotNotExistException;
@@ -46,6 +47,8 @@ import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsResponse;
+import org.apache.fluss.rpc.messages.DescribeClusterRequest;
+import org.apache.fluss.rpc.messages.DescribeClusterResponse;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
@@ -93,6 +96,7 @@ import org.apache.fluss.server.tablet.TabletService;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
+import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 
 import org.slf4j.Logger;
@@ -114,6 +118,7 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclFilter;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toResolvedPartitionSpec;
 import static org.apache.fluss.security.acl.Resource.TABLE_SPLITTER;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.buildDescribeClusterResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.buildMetadataResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeGetLakeSnapshotResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeGetLatestKvSnapshotsResponse;
@@ -543,6 +548,15 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                 new DescribeClusterConfigsResponse().addAllConfigs(toPbConfigEntries(configs)));
     }
 
+    @Override
+    public CompletableFuture<DescribeClusterResponse> describeCluster(
+            DescribeClusterRequest request) {
+        return CompletableFuture.completedFuture(
+                makeDescribeClusterResponse(currentListenerName(), getServerMetadataCache()));
+    }
+
+    protected abstract ServerMetadataCache getServerMetadataCache();
+
     protected MetadataResponse processMetadataRequest(
             MetadataRequest request,
             String listenerName,
@@ -642,5 +656,41 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                 new HashSet<>(metadataCache.getAllAliveTabletServers(listenerName).values());
         return buildMetadataResponse(
                 coordinatorServer, aliveTabletServers, tablesMetadata, partitionsMetadata);
+    }
+
+    protected DescribeClusterResponse makeDescribeClusterResponse(
+            String listenerName, ServerMetadataCache metadataCache) {
+        ServerNode coordinatorServer = metadataCache.getCoordinatorServer(listenerName);
+
+        Collection<ServerNode> aliveTabletServers =
+                metadataCache.getAllAliveTabletServers(listenerName).values();
+        Set<ServerNode> aliveTabletServersWithTag = new HashSet<>(aliveTabletServers.size());
+        try {
+            Optional<ServerTags> serverTagsOp = zkClient.getServerTags();
+            if (serverTagsOp.isPresent()) {
+                Map<Integer, ServerTag> tagMap = serverTagsOp.get().getServerTags();
+                for (ServerNode server : aliveTabletServers) {
+                    if (tagMap.containsKey(server.id())) {
+                        ServerNode serverWithTag =
+                                new ServerNode(
+                                        server.id(),
+                                        server.host(),
+                                        server.port(),
+                                        server.serverType(),
+                                        server.rack(),
+                                        tagMap.get(server.id()));
+                        aliveTabletServersWithTag.add(serverWithTag);
+                    } else {
+                        aliveTabletServersWithTag.add(server);
+                    }
+                }
+            } else {
+                aliveTabletServersWithTag.addAll(aliveTabletServers);
+            }
+        } catch (Exception e) {
+            throw new FlussRuntimeException("Failed to get server tags", e);
+        }
+
+        return buildDescribeClusterResponse(coordinatorServer, aliveTabletServersWithTag);
     }
 }
