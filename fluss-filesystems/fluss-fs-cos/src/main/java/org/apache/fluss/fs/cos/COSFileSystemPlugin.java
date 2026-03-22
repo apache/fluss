@@ -44,7 +44,8 @@ public class COSFileSystemPlugin implements FileSystemPlugin {
      */
     private static final String[] FLUSS_CONFIG_PREFIXES = {"fs.cosn."};
 
-    private static final String SECRET_ID = "fs.cosn.userinfo.secretId";
+    public static final String SECRET_ID = "fs.cosn.userinfo.secretId";
+    public static final String SECRET_KEY = "fs.cosn.userinfo.secretKey";
     public static final String CREDENTIALS_PROVIDER = "fs.cosn.credentials.provider";
 
     public static final String ENDPOINT_KEY = "fs.cosn.endpoint";

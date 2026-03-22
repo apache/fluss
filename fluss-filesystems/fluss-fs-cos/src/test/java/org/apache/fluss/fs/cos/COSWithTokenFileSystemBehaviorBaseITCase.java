@@ -21,6 +21,10 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FileSystemBehaviorTestSuite;
 
+import static org.apache.fluss.fs.cos.COSFileSystemPlugin.ENDPOINT_KEY;
+import static org.apache.fluss.fs.cos.COSFileSystemPlugin.SECRET_ID;
+import static org.apache.fluss.fs.cos.COSFileSystemPlugin.SECRET_KEY;
+
 /** Base IT case for access COS with temporary credentials in hadoop sdk as COS FileSystem. */
 abstract class COSWithTokenFileSystemBehaviorBaseITCase extends FileSystemBehaviorTestSuite {
 
@@ -29,9 +33,9 @@ abstract class COSWithTokenFileSystemBehaviorBaseITCase extends FileSystemBehavi
 
         // first init filesystem with secretId/secretKey
         final Configuration conf = new Configuration();
-        conf.setString("fs.cosn.endpoint", COSTestCredentials.getCOSEndpoint());
-        conf.setString("fs.cosn.userinfo.secretId", COSTestCredentials.getCOSSecretId());
-        conf.setString("fs.cosn.userinfo.secretKey", COSTestCredentials.getCOSSecretKey());
+        conf.setString(ENDPOINT_KEY, COSTestCredentials.getCOSEndpoint());
+        conf.setString(SECRET_ID, COSTestCredentials.getCOSSecretId());
+        conf.setString(SECRET_KEY, COSTestCredentials.getCOSSecretKey());
         FileSystem.initialize(conf, null);
     }
 }
