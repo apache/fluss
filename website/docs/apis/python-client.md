@@ -12,8 +12,8 @@ and supports idiomatic integration with Pandas.
 
 The client provides two main APIs:
 
-- **Admin API**: For managing databases, tables, and partitions.
-- **Table API**: For high-performance data reading (Scanners/Lookups) and writing (Append/Upsert writers).
+- **[Admin API](https://clients.fluss.apache.org/user-guide/python/api-reference#flussadmin)**: For managing databases, tables, and partitions.
+- **[Table API](https://clients.fluss.apache.org/user-guide/python/api-reference#flusstable)**: For reading and writing to Log and Primary Key tables
 
 ## Installation
 ```bash
@@ -36,6 +36,7 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 ```
+For more examples, see [Fluss Python Client documentation](https://clients.fluss.apache.org/user-guide/python/example/).
 
 ## Full Documentation
 
