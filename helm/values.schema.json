@@ -1,0 +1,395 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema",
+    "description": "Default values for fluss. Declare variables to be passed into your templates.",
+    "type": "object",
+    "x-docsSectionOrder": [
+        "Image",
+        "Coordinator Server",
+        "Tablet Server",
+        "Configuration Overrides",
+        "Ports",
+        "Security",
+        "Service Account"
+    ],
+    "additionalProperties": false,
+    "properties": {
+        "image": {
+            "description": "Fluss image configuration",
+            "type": "object",
+            "x-docsSection": "Image",
+            "additionalProperties": false,
+            "properties": {
+                "registry": {
+                    "description": "Container registry",
+                    "type": "string",
+                    "default": ""
+                },
+                "repository": {
+                    "description": "Fluss image repository",
+                    "type": "string",
+                    "default": "apache/fluss"
+                },
+                "tag": {
+                    "description": "Fluss image tag",
+                    "type": "string",
+                    "default": "0.10.0-incubating"
+                },
+                "pullPolicy": {
+                    "description": "The fluss image pull policy",
+                    "type": "string",
+                    "enum": ["Always", "Never", "IfNotPresent"],
+                    "default": "IfNotPresent"
+                },
+                "pullSecrets": {
+                    "description": "List of existing Kubernetes secrets containing Base64 encoded credentials to connect to private registries (will get passed to image.pullSecrets).",
+                    "type": "array",
+                    "default": [],
+                    "items": {
+                        "type": "string"
+                    },
+                    "uniqueItems": true
+                }
+            }
+        },
+        "coordinatorServer": {
+            "description": "Coordinator server configuration",
+            "type": "object",
+            "x-docsSection": "Coordinator Server",
+            "additionalProperties": false,
+            "properties": {
+                "replicas": {
+                    "description": "Amount of coordinator server replicas.",
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 1
+                },
+                "livenessProbe": {
+                    "description": "Liveness probe configuration for coordinator server containers.",
+                    "type": "object",
+                    "properties": {
+                        "failureThreshold": {
+                            "description": "Minimum consecutive failures for the probe to be considered failed after having succeeded. Minimum value is 1.",
+                            "type": "integer",
+                            "default": 100
+                        },
+                        "timeoutSeconds": {
+                            "description": "Number of seconds after which the probe times out. Minimum value is 1 seconds.",
+                            "type": "integer",
+                            "default": 1
+                        },
+                        "initialDelaySeconds": {
+                            "description": "Number of seconds after the container has started before liveness probes are initiated.",
+                            "type": "integer",
+                            "default": 10
+                        },
+                        "periodSeconds": {
+                            "description": "How often (in seconds) to perform the probe. Minimum value is 1.",
+                            "type": "integer",
+                            "default": 3
+                        }
+                    }
+                },
+                "readinessProbe": {
+                    "description": "Readiness probe configuration for coordinator server containers.",
+                    "type": "object",
+                    "properties": {
+                        "failureThreshold": {
+                            "description": "Minimum consecutive failures for the probe to be considered failed after having succeeded. Minimum value is 1.",
+                            "type": "integer",
+                            "default": 100
+                        },
+                        "timeoutSeconds": {
+                            "description": "Number of seconds after which the probe times out. Minimum value is 1 seconds.",
+                            "type": "integer",
+                            "default": 1
+                        },
+                        "initialDelaySeconds": {
+                            "description": "Number of seconds after the container has started before liveness probes are initiated.",
+                            "type": "integer",
+                            "default": 10
+                        },
+                        "periodSeconds": {
+                            "description": "How often (in seconds) to perform the probe. Minimum value is 1.",
+                            "type": "integer",
+                            "default": 3
+                        }
+                    }
+                },
+                "resources": {
+                    "description": "Resources for coordinator server pods.",
+                    "type": "object",
+                    "default": {},
+                    "examples": [
+                        {
+                            "limits": {
+                                "cpu": "100m",
+                                "memory": "128Mi"
+                            },
+                            "requests": {
+                                "cpu": "100m",
+                                "memory": "128Mi"
+                            }
+                        }
+                    ]
+                },
+                "persistence": {
+                    "description": "Persistence configuration for coordinator servers.",
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "description": "Enable persistent volumes.",
+                            "type": "boolean",
+                            "default": false
+                        },
+                        "size": {
+                            "description": "Volume size for the coordinator server.",
+                            "type": "string",
+                            "default": "1Gi"
+                        },
+                        "storageClass": {
+                            "description": "Storage class of the persistent volume.",
+                            "type": ["string", "null"],
+                            "default": null
+                        }
+                    }
+                }
+            }
+        },
+        "tabletServer": {
+            "type": "object",
+            "description": "Tablet server configuration",
+            "x-docsSection": "Tablet Server",
+            "additionalProperties": false,
+            "properties": {
+                "replicas": {
+                    "description": "Amount of tablet server replicas.",
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 1
+                },
+                "livenessProbe": {
+                    "description": "Liveness probe configuration for tablet server containers.",
+                    "type": "object",
+                    "properties": {
+                        "failureThreshold": {
+                            "description": "Minimum consecutive failures for the probe to be considered failed after having succeeded. Minimum value is 1.",
+                            "type": "integer",
+                            "default": 100
+                        },
+                        "timeoutSeconds": {
+                            "description": "Number of seconds after which the probe times out. Minimum value is 1 seconds.",
+                            "type": "integer",
+                            "default": 1
+                        },
+                        "initialDelaySeconds": {
+                            "description": "Number of seconds after the container has started before liveness probes are initiated.",
+                            "type": "integer",
+                            "default": 10
+                        },
+                        "periodSeconds": {
+                            "description": "How often (in seconds) to perform the probe. Minimum value is 1.",
+                            "type": "integer",
+                            "default": 3
+                        }
+                    }
+                },
+                "readinessProbe": {
+                    "description": "Readiness probe configuration for tablet server containers.",
+                    "type": "object",
+                    "properties": {
+                        "failureThreshold": {
+                            "description": "Minimum consecutive failures for the probe to be considered failed after having succeeded. Minimum value is 1.",
+                            "type": "integer",
+                            "default": 100
+                        },
+                        "timeoutSeconds": {
+                            "description": "Number of seconds after which the probe times out. Minimum value is 1 seconds.",
+                            "type": "integer",
+                            "default": 1
+                        },
+                        "initialDelaySeconds": {
+                            "description": "Number of seconds after the container has started before liveness probes are initiated.",
+                            "type": "integer",
+                            "default": 10
+                        },
+                        "periodSeconds": {
+                            "description": "How often (in seconds) to perform the probe. Minimum value is 1.",
+                            "type": "integer",
+                            "default": 3
+                        }
+                    }
+                },
+                "resources": {
+                    "description": "Resources for tablet server pods.",
+                    "type": "object",
+                    "default": {},
+                    "examples": [
+                        {
+                            "limits": {
+                                "cpu": "100m",
+                                "memory": "128Mi"
+                            },
+                            "requests": {
+                                "cpu": "100m",
+                                "memory": "128Mi"
+                            }
+                        }
+                    ]
+                },
+                "persistence": {
+                    "description": "Persistence configuration for tablet servers.",
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "description": "Enable persistent volumes.",
+                            "type": "boolean",
+                            "default": false
+                        },
+                        "size": {
+                            "description": "Volume size for the tablet server.",
+                            "type": "string",
+                            "default": "1Gi"
+                        },
+                        "storageClass": {
+                            "description": "Storage class of the persistent volume.",
+                            "type": ["string", "null"],
+                            "default": null
+                        }
+                    }
+                }
+            }
+        },
+        "configurationOverrides": {
+            "description": "Fluss configuration overrides (see detail: https://fluss.apache.org/docs/maintenance/configuration/)",
+            "type": "object",
+            "x-docsSection": "Configuration Overrides",
+            "default": {
+                "default.bucket.number": 3,
+                "default.replication.factor": 3,
+                "zookeeper.path.root": "/fluss",
+                "zookeeper.address": "zk-zookeeper.{{ .Release.Namespace }}.svc.cluster.local:2181",
+                "data.dir": "/tmp/fluss/data",
+                "internal.listener.name": "INTERNAL",
+                "remote.data.dir": "/tmp/fluss/remote-data"
+            },
+            "additionalProperties": {
+                "type": ["string", "number", "boolean"]
+            }
+        },
+        "ports": {
+            "description": "Fluss ports configuration",
+            "type": "object",
+            "x-docsSection": "Ports",
+            "additionalProperties": false,
+            "properties": {
+                "internal": {
+                    "description": "Internal port for Fluss",
+                    "type": "integer",
+                    "default": 9123
+                },
+                "client": {
+                    "description": "Client port for Fluss",
+                    "type": "integer",
+                    "default": 9124
+                }
+            }
+        },
+        "security": {
+            "description": "Fluss security configuration",
+            "type": "object",
+            "x-docsSection": "Security",
+            "additionalProperties": false,
+            "properties": {
+                "client": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "sasl": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "mechanism": {
+                                    "description": "SASL mechanism for client authentication",
+                                    "type": "string",
+                                    "default": ""
+                                },
+                                "plain": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                        "users": {
+                                            "description": "List of SASL PLAIN users",
+                                            "type": "array",
+                                            "default": [],
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "internal": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "sasl": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "mechanism": {
+                                    "description": "SASL mechanism for internal communication",
+                                    "type": "string",
+                                    "default": ""
+                                },
+                                "plain": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                        "username": {
+                                            "description": "Username for SASL PLAIN authentication",
+                                            "type": "string",
+                                            "default": ""
+                                        },
+                                        "password": {
+                                            "description": "Password for SASL PLAIN authentication",
+                                            "type": "string",
+                                            "default": ""
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "serviceAccount": {
+            "description": "ServiceAccount configuration",
+            "type": "object",
+            "x-docsSection": "Service Account",
+            "properties": {
+                "create": {
+                    "description": "Allow to create a service account",
+                    "type": "boolean",
+                    "default": false
+                },
+                "name": {
+                    "description": "Name of the service account",
+                    "type": "string",
+                    "default": ""
+                },
+                "annotations": {
+                    "description": "Additional annotations to apply to the ServiceAccount.",
+                    "type": "object",
+                    "default": {},
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                }
+            }
+        }
+    }
+}
