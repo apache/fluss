@@ -47,6 +47,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -64,6 +65,7 @@ public class DynamicConfigChangeTest {
     @BeforeAll
     static void beforeAll() {
         final Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.REMOTE_DATA_DIR, DEFAULT_REMOTE_DATA_DIR);
         configuration.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS,
                 zooKeeperExtensionWrapper.getCustomExtension().getConnectString());

@@ -91,7 +91,7 @@ class TableRegistrationJsonSerdeTest extends JsonSerdeTestBase<TableRegistration
                         new TableDistribution(32, Collections.emptyList()),
                         Collections.singletonMap("option-3", "300"),
                         Maps.newHashMap(),
-                        "file://local/remote",
+                        null,
                         -1,
                         -1);
 
@@ -103,7 +103,7 @@ class TableRegistrationJsonSerdeTest extends JsonSerdeTestBase<TableRegistration
         return new String[] {
             "{\"version\":1,\"table_id\":1234,\"comment\":\"first-table\",\"partition_key\":[\"a\",\"b\"],"
                     + "\"bucket_key\":[\"b\",\"c\"],\"bucket_count\":16,\"properties\":{},\"custom_properties\":{\"custom-3\":\"\\\"300\\\"\"},\"remote_data_dir\":\"file://local/remote\",\"created_time\":1735538268,\"modified_time\":1735538270}",
-            "{\"version\":1,\"table_id\":1234,\"comment\":\"second-table\",\"bucket_count\":32,\"properties\":{\"option-3\":\"300\"},\"custom_properties\":{},\"remote_data_dir\":\"file://local/remote\",\"created_time\":-1,\"modified_time\":-1}",
+            "{\"version\":1,\"table_id\":1234,\"comment\":\"second-table\",\"bucket_count\":32,\"properties\":{\"option-3\":\"300\"},\"custom_properties\":{},\"created_time\":-1,\"modified_time\":-1}",
         };
     }
 }

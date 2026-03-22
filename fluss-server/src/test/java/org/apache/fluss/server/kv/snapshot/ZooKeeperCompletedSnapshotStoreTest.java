@@ -41,6 +41,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for {@link CompletedSnapshotStore} with {@link ZooKeeperCompletedSnapshotHandleStore}. */
@@ -58,6 +59,7 @@ class ZooKeeperCompletedSnapshotStoreTest {
         configuration.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS,
                 zooKeeperExtensionWrapper.getCustomExtension().getConnectString());
+        configuration.set(ConfigOptions.REMOTE_DATA_DIR, DEFAULT_REMOTE_DATA_DIR);
         zooKeeperClient =
                 ZooKeeperUtils.startZookeeperClient(configuration, NOPErrorHandler.INSTANCE);
     }
@@ -103,6 +105,7 @@ class ZooKeeperCompletedSnapshotStoreTest {
         configuration.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS,
                 zooKeeperExtensionWrapper.getCustomExtension().getConnectString());
+        configuration.set(ConfigOptions.REMOTE_DATA_DIR, DEFAULT_REMOTE_DATA_DIR);
 
         SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry();
         TableBucket tableBucket = new TableBucket(1, 2);

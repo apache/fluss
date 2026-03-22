@@ -61,7 +61,7 @@ public class TableRegistration {
      * org.apache.fluss.server.zk.ZooKeeperClient#getTable}). This unifies subsequent usage and
      * eliminates the need to account for differences between versions.
      */
-    public final String remoteDataDir;
+    public final @Nullable String remoteDataDir;
 
     public final long createdTime;
     public final long modifiedTime;
@@ -73,7 +73,7 @@ public class TableRegistration {
             TableDistribution tableDistribution,
             Map<String, String> properties,
             Map<String, String> customProperties,
-            String remoteDataDir,
+            @Nullable String remoteDataDir,
             long createdTime,
             long modifiedTime) {
         checkArgument(

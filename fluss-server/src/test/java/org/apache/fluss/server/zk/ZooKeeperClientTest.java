@@ -743,6 +743,7 @@ class ZooKeeperClientTest {
                         new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
                         Collections.emptyMap(),
                         Collections.emptyMap(),
+                        remoteDataDir,
                         beforeCreateTime,
                         beforeCreateTime);
         zookeeperClient.registerTable(tablePath2, tableReg2);
@@ -755,6 +756,7 @@ class ZooKeeperClientTest {
                         new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
                         Collections.emptyMap(),
                         Collections.emptyMap(),
+                        remoteDataDir,
                         beforeCreateTime,
                         beforeCreateTime);
         zookeeperClient.registerTable(tablePath3, tableReg3);

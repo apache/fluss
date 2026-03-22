@@ -18,6 +18,14 @@
 package org.apache.fluss.server.zk.data;
 
 import org.apache.fluss.utils.json.JsonSerdeTestBase;
+import org.apache.fluss.utils.json.JsonSerdeUtils;
+
+import org.junit.jupiter.api.Test;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link PartitionRegistrationJsonSerde}. */
 class PartitionRegistrationJsonSerdeTest extends JsonSerdeTestBase<PartitionRegistration> {
@@ -28,9 +36,10 @@ class PartitionRegistrationJsonSerdeTest extends JsonSerdeTestBase<PartitionRegi
 
     @Override
     protected PartitionRegistration[] createObjects() {
-        PartitionRegistration[] partitionRegistrations = new PartitionRegistration[1];
+        PartitionRegistration[] partitionRegistrations = new PartitionRegistration[2];
 
         partitionRegistrations[0] = new PartitionRegistration(1234L, 5678L, "file://local/remote");
+        partitionRegistrations[1] = new PartitionRegistration(246L, 135L, null);
 
         return partitionRegistrations;
     }
@@ -38,7 +47,22 @@ class PartitionRegistrationJsonSerdeTest extends JsonSerdeTestBase<PartitionRegi
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            "{\"version\":1,\"table_id\":1234,\"partition_id\":5678,\"remote_data_dir\":\"file://local/remote\"}"
+            "{\"version\":1,\"table_id\":1234,\"partition_id\":5678,\"remote_data_dir\":\"file://local/remote\"}",
+            "{\"version\":1,\"table_id\":246,\"partition_id\":135}"
         };
+    }
+
+    @Test
+    void testTablePartitionCompatibility() throws IOException {
+        // Test that old TablePartition format (without remote_data_dir) can be deserialized
+        // correctly as PartitionRegistration
+        String tablePartitionJson = "{\"version\":1,\"table_id\":1234,\"partition_id\":5678}";
+        PartitionRegistration actual =
+                JsonSerdeUtils.readValue(
+                        tablePartitionJson.getBytes(StandardCharsets.UTF_8),
+                        PartitionRegistrationJsonSerde.INSTANCE);
+
+        PartitionRegistration expected = new PartitionRegistration(1234L, 5678L, null);
+        assertThat(actual).isEqualTo(expected);
     }
 }

@@ -64,6 +64,7 @@ import org.apache.fluss.server.zk.ZooKeeperTestUtils;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
@@ -710,10 +711,12 @@ public final class FlussClusterExtension
                 tableBuckets.add(new TableBucket(tableId, null, bucketId));
             }
         } else {
-            Map<String, Long> partitions = zooKeeperClient.getPartitionNameAndIds(tablePath);
-            for (Long partitionId : partitions.values()) {
+            Map<String, PartitionRegistration> partitions =
+                    zooKeeperClient.getPartitionRegistrations(tablePath);
+            for (PartitionRegistration partition : partitions.values()) {
                 for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
-                    tableBuckets.add(new TableBucket(tableId, partitionId, bucketId));
+                    tableBuckets.add(
+                            new TableBucket(tableId, partition.getPartitionId(), bucketId));
                 }
             }
         }
@@ -879,10 +882,16 @@ public final class FlussClusterExtension
     public Map<String, Long> waitUntilPartitionsCreated(TablePath tablePath, int expectCount) {
         return waitValue(
                 () -> {
-                    Map<String, Long> partitions =
-                            zooKeeperClient.getPartitionNameAndIds(tablePath);
+                    Map<String, PartitionRegistration> partitions =
+                            zooKeeperClient.getPartitionRegistrations(tablePath);
+                    Map<String, Long> partitionIdAndNames =
+                            partitions.entrySet().stream()
+                                    .collect(
+                                            Collectors.toMap(
+                                                    Map.Entry::getKey,
+                                                    e -> e.getValue().getPartitionId()));
                     if (partitions.size() == expectCount) {
-                        return Optional.of(partitions);
+                        return Optional.of(partitionIdAndNames);
                     } else {
                         return Optional.empty();
                     }
@@ -894,8 +903,8 @@ public final class FlussClusterExtension
     public void waitUntilPartitionsDropped(TablePath tablePath, List<String> droppedPartitions) {
         waitUntil(
                 () -> {
-                    Map<String, Long> partitions =
-                            zooKeeperClient.getPartitionNameAndIds(tablePath);
+                    Map<String, PartitionRegistration> partitions =
+                            zooKeeperClient.getPartitionRegistrations(tablePath);
                     for (String droppedPartition : droppedPartitions) {
                         if (partitions.containsKey(droppedPartition)) {
                             return false;

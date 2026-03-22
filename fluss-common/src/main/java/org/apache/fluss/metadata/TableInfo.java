@@ -59,7 +59,7 @@ public final class TableInfo {
     private final Configuration properties;
     private final TableConfig tableConfig;
     private final Configuration customProperties;
-    private final String remoteDataDir;
+    private final @Nullable String remoteDataDir;
     private final @Nullable String comment;
 
     private final long createdTime;
@@ -75,7 +75,7 @@ public final class TableInfo {
             int numBuckets,
             Configuration properties,
             Configuration customProperties,
-            String remoteDataDir,
+            @Nullable String remoteDataDir,
             @Nullable String comment,
             long createdTime,
             long modifiedTime) {
@@ -267,6 +267,7 @@ public final class TableInfo {
     }
 
     /** Returns the remote data directory of the table. */
+    @Nullable
     public String getRemoteDataDir() {
         return remoteDataDir;
     }

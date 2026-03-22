@@ -316,7 +316,8 @@ class AutoPartitionManagerTest {
         // the first auto-partition task is a non-periodic task
         periodicExecutor.triggerNonPeriodicScheduledTask();
 
-        Map<String, Long> partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
+        Map<String, PartitionRegistration> partitions =
+                zookeeperClient.getPartitionRegistrations(tablePath);
         // pre-create 4 partitions including current partition
         assertThat(partitions.keySet()).containsExactlyInAnyOrder(params.expectedPartitions);
 
@@ -357,20 +358,20 @@ class AutoPartitionManagerTest {
 
         clock.advanceTime(params.advanceDuration);
         periodicExecutor.triggerPeriodicScheduledTasks();
-        partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
         assertThat(partitions.keySet())
                 .containsExactlyInAnyOrder(params.expectedPartitionsAfterAdvance);
         verifyPartitionsRemoteDataDir(tablePath, partitions.keySet());
 
         clock.advanceTime(params.advanceDuration2);
         periodicExecutor.triggerPeriodicScheduledTasks();
-        partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
         assertThat(partitions.keySet()).containsExactlyInAnyOrder(params.expectedPartitionsFinal);
         verifyPartitionsRemoteDataDir(tablePath, partitions.keySet());
 
         // trigger again at the same time, should be nothing changes
         periodicExecutor.triggerPeriodicScheduledTasks();
-        partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
         assertThat(partitions.keySet()).containsExactlyInAnyOrder(params.expectedPartitionsFinal);
     }
 
@@ -409,7 +410,8 @@ class AutoPartitionManagerTest {
         // immediately
         periodicExecutor.triggerNonPeriodicScheduledTask();
 
-        Map<String, Long> partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
+        Map<String, PartitionRegistration> partitions =
+                zookeeperClient.getPartitionRegistrations(tablePath);
         // pre-create 4 partitions including current partition
         assertThat(partitions.keySet())
                 .containsExactlyInAnyOrder("20240910", "20240911", "20240912", "20240913");
@@ -443,7 +445,7 @@ class AutoPartitionManagerTest {
         // make sure the partitions can be created automatically
         clock.advanceTime(Duration.ofDays(4).plusHours(23));
         periodicExecutor.triggerPeriodicScheduledTasks();
-        partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
         assertThat(partitions.keySet())
                 .containsExactlyInAnyOrder(
                         "20240910",
@@ -482,7 +484,8 @@ class AutoPartitionManagerTest {
         TablePath tablePath = table.getTablePath();
         autoPartitionManager.addAutoPartitionTable(table, true);
         periodicExecutor.triggerNonPeriodicScheduledTasks();
-        Map<String, Long> partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
+        Map<String, PartitionRegistration> partitions =
+                zookeeperClient.getPartitionRegistrations(tablePath);
         // pre-create 4 partitions including current partition
         assertThat(partitions.keySet())
                 .containsExactlyInAnyOrder("20250419", "20250420", "20250422", "20250421");
@@ -493,7 +496,7 @@ class AutoPartitionManagerTest {
         // since the current minutes in day don't advance the delayInMinutes
         clock.advanceTime(Duration.ofDays(1).plusMinutes(delayInMinutes - 1));
         periodicExecutor.triggerPeriodicScheduledTasks();
-        partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
         assertThat(partitions.keySet())
                 .containsExactlyInAnyOrder("20250419", "20250420", "20250422", "20250421");
 
@@ -501,7 +504,7 @@ class AutoPartitionManagerTest {
         // the current minutes in day advance the delayInMinutes
         clock.advanceTime(Duration.ofMinutes(1));
         periodicExecutor.triggerPeriodicScheduledTasks();
-        partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
         assertThat(partitions.keySet())
                 .containsExactlyInAnyOrder(
                         "20250419", "20250420", "20250421", "20250422", "20250423");

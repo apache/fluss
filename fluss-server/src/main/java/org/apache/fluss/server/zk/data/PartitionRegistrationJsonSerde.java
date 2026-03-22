@@ -46,7 +46,9 @@ public class PartitionRegistrationJsonSerde
         generator.writeNumberField(VERSION_KEY, VERSION);
         generator.writeNumberField(TABLE_ID_KEY, registration.getTableId());
         generator.writeNumberField(PARTITION_ID_KEY, registration.getPartitionId());
-        generator.writeStringField(REMOTE_DATA_DIR_KEY, registration.getRemoteDataDir());
+        if (registration.getRemoteDataDir() != null) {
+            generator.writeStringField(REMOTE_DATA_DIR_KEY, registration.getRemoteDataDir());
+        }
         generator.writeEndObject();
     }
 

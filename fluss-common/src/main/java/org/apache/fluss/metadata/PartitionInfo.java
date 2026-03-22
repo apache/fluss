@@ -19,6 +19,8 @@ package org.apache.fluss.metadata;
 
 import org.apache.fluss.annotation.PublicEvolving;
 
+import javax.annotation.Nullable;
+
 import java.util.Objects;
 
 /**
@@ -31,10 +33,10 @@ import java.util.Objects;
 public class PartitionInfo {
     private final long partitionId;
     private final ResolvedPartitionSpec partitionSpec;
-    private final String remoteDataDir;
+    private final @Nullable String remoteDataDir;
 
     public PartitionInfo(
-            long partitionId, ResolvedPartitionSpec partitionSpec, String remoteDataDir) {
+            long partitionId, ResolvedPartitionSpec partitionSpec, @Nullable String remoteDataDir) {
         this.partitionId = partitionId;
         this.partitionSpec = partitionSpec;
         this.remoteDataDir = remoteDataDir;
@@ -61,6 +63,7 @@ public class PartitionInfo {
         return partitionSpec.toPartitionSpec();
     }
 
+    @Nullable
     public String getRemoteDataDir() {
         return remoteDataDir;
     }

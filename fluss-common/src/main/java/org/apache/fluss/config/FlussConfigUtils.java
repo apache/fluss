@@ -66,6 +66,8 @@ public class FlussConfigUtils {
      * @param conf the Fluss configuration
      * @return the default remote data directory path, never {@code null} if the configuration is
      *     valid (i.e., at least one of {@code remote.data.dir} or {@code remote.data.dirs} is set)
+     * @throws IllegalConfigurationException if the configuration is invalid (i.e., both {@code
+     *     remote.data.dir} and {@code remote.data.dirs} are unset)
      * @see ConfigOptions#REMOTE_DATA_DIR
      * @see ConfigOptions#REMOTE_DATA_DIRS
      */
@@ -75,7 +77,15 @@ public class FlussConfigUtils {
             return remoteDataDirs.get(0);
         }
 
-        return conf.get(ConfigOptions.REMOTE_DATA_DIR);
+        String remoteDataDir = conf.get(ConfigOptions.REMOTE_DATA_DIR);
+        if (remoteDataDir == null) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Either %s or %s must be configured.",
+                            ConfigOptions.REMOTE_DATA_DIR.key(),
+                            ConfigOptions.REMOTE_DATA_DIRS.key()));
+        }
+        return remoteDataDir;
     }
 
     @VisibleForTesting

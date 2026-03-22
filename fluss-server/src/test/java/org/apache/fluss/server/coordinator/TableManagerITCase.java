@@ -61,6 +61,7 @@ import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DataTypes;
@@ -411,11 +412,11 @@ class TableManagerITCase {
         adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
 
         // wait until partition is created
-        Map<String, Long> partitions =
+        Map<String, PartitionRegistration> partitions =
                 waitValue(
                         () -> {
-                            Map<String, Long> gotPartitions =
-                                    zkClient.getPartitionNameAndIds(tablePath);
+                            Map<String, PartitionRegistration> gotPartitions =
+                                    zkClient.getPartitionRegistrations(tablePath);
                             if (!gotPartitions.isEmpty()) {
                                 return Optional.of(gotPartitions);
                             } else {
@@ -443,10 +444,12 @@ class TableManagerITCase {
                 .get();
 
         // verify the partition assignment is deleted
-        for (Long partitionId : partitions.values()) {
+        for (PartitionRegistration partition : partitions.values()) {
             retry(
                     Duration.ofMinutes(1),
-                    () -> assertThat(zkClient.getPartitionAssignment(partitionId)).isEmpty());
+                    () ->
+                            assertThat(zkClient.getPartitionAssignment(partition.getPartitionId()))
+                                    .isEmpty());
         }
 
         // make sure the auto partition manager won't create partitions for the new table

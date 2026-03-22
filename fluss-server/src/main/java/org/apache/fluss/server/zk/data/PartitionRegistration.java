@@ -20,6 +20,8 @@ package org.apache.fluss.server.zk.data;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.TablePartition;
 
+import javax.annotation.Nullable;
+
 import java.util.Objects;
 
 /**
@@ -41,9 +43,9 @@ public class PartitionRegistration {
      * org.apache.fluss.server.zk.ZooKeeperClient#getPartition}). This unifies subsequent usage and
      * eliminates the need to account for differences between versions.
      */
-    private final String remoteDataDir;
+    private final @Nullable String remoteDataDir;
 
-    public PartitionRegistration(long tableId, long partitionId, String remoteDataDir) {
+    public PartitionRegistration(long tableId, long partitionId, @Nullable String remoteDataDir) {
         this.tableId = tableId;
         this.partitionId = partitionId;
         this.remoteDataDir = remoteDataDir;
@@ -57,6 +59,7 @@ public class PartitionRegistration {
         return partitionId;
     }
 
+    @Nullable
     public String getRemoteDataDir() {
         return remoteDataDir;
     }

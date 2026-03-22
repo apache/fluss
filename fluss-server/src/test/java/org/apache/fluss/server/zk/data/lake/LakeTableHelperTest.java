@@ -87,6 +87,7 @@ class LakeTableHelperTest {
         conf.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS,
                 ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getConnectString());
+        conf.setString(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
         LakeTableHelper lakeTableHelper = new LakeTableHelper(zookeeperClient, tempDir.toString());
         try (ZooKeeperClient zooKeeperClient =
                 ZooKeeperUtils.startZookeeperClient(conf, NOPErrorHandler.INSTANCE)) {

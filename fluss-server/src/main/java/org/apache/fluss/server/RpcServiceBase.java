@@ -436,19 +436,19 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         TablePath tablePath = toTablePath(request.getTablePath());
         authorizeTable(OperationType.DESCRIBE, tablePath);
 
-        Map<String, Long> partitionNameAndIds;
+        Map<String, PartitionRegistration> partitionRegistrations;
         if (request.hasPartialPartitionSpec()) {
             ResolvedPartitionSpec partitionSpecFromRequest =
                     toResolvedPartitionSpec(request.getPartialPartitionSpec());
-            partitionNameAndIds =
+            partitionRegistrations =
                     metadataManager.listPartitions(tablePath, partitionSpecFromRequest);
         } else {
-            partitionNameAndIds = metadataManager.listPartitions(tablePath);
+            partitionRegistrations = metadataManager.listPartitions(tablePath);
         }
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         List<String> partitionKeys = tableInfo.getPartitionKeys();
         return CompletableFuture.completedFuture(
-                toListPartitionInfosResponse(partitionKeys, partitionNameAndIds));
+                toListPartitionInfosResponse(partitionKeys, partitionRegistrations));
     }
 
     @Override

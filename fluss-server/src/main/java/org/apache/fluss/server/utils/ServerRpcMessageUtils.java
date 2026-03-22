@@ -193,6 +193,7 @@ import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
@@ -621,7 +622,7 @@ public class ServerRpcMessageUtils {
                         tableId,
                         pbTableMetadata.getSchemaId(),
                         TableDescriptor.fromJsonBytes(pbTableMetadata.getTableJson()),
-                        // For backword capability. When an older Coordinator sends an
+                        // For backward capability. When an older Coordinator sends an
                         // UpdateMetadataRequest to a newer TabletServer, the remoteDataDir will be
                         // missing. In this case, setting it to null is acceptable because the
                         // TabletServerMetadataCache does not maintain any remoteDataDir
@@ -1611,16 +1612,18 @@ public class ServerRpcMessageUtils {
     }
 
     public static ListPartitionInfosResponse toListPartitionInfosResponse(
-            List<String> partitionKeys, Map<String, Long> partitionNameAndIds) {
+            List<String> partitionKeys, Map<String, PartitionRegistration> partitionRegistrations) {
         ListPartitionInfosResponse listPartitionsResponse = new ListPartitionInfosResponse();
-        for (Map.Entry<String, Long> partitionNameAndId : partitionNameAndIds.entrySet()) {
+        for (Map.Entry<String, PartitionRegistration> partitionRegistration :
+                partitionRegistrations.entrySet()) {
             ResolvedPartitionSpec spec =
                     ResolvedPartitionSpec.fromPartitionName(
-                            partitionKeys, partitionNameAndId.getKey());
+                            partitionKeys, partitionRegistration.getKey());
             listPartitionsResponse
                     .addPartitionsInfo()
-                    .setPartitionId(partitionNameAndId.getValue())
-                    .setPartitionSpec(makePbPartitionSpec(spec));
+                    .setPartitionId(partitionRegistration.getValue().getPartitionId())
+                    .setPartitionSpec(makePbPartitionSpec(spec))
+                    .setRemoteDataDir(partitionRegistration.getValue().getRemoteDataDir());
         }
         return listPartitionsResponse;
     }

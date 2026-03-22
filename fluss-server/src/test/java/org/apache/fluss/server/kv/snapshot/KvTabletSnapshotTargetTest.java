@@ -67,6 +67,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
 
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.zk.ZooKeeperUtils.startZookeeperClient;
 import static org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory.Builder;
 import static org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory.builder;
@@ -575,14 +576,16 @@ class KvTabletSnapshotTargetTest {
 
     private ZooKeeperClient createFailingZooKeeperClient() {
         // Create a ZooKeeperClient that throws exception on getTableBucketSnapshot
-        return new FailingZooKeeperClient();
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, DEFAULT_REMOTE_DATA_DIR);
+        return new FailingZooKeeperClient(conf);
     }
 
     private static class FailingZooKeeperClient extends ZooKeeperClient {
 
-        public FailingZooKeeperClient() {
+        public FailingZooKeeperClient(Configuration conf) {
             // Create a new ZooKeeperClient using ZooKeeperUtils.startZookeeperClient
-            super(createCuratorFrameworkWrapper(), new Configuration());
+            super(createCuratorFrameworkWrapper(), conf);
         }
 
         private static CuratorFrameworkWithUnhandledErrorListener createCuratorFrameworkWrapper() {

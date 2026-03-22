@@ -266,9 +266,9 @@ public class MetadataManager {
     /**
      * List the partitions of the given table.
      *
-     * <p>Return a map from partition name to partition id.
+     * @return a map from partition name to partition registration.
      */
-    public Map<String, Long> listPartitions(TablePath tablePath)
+    public Map<String, PartitionRegistration> listPartitions(TablePath tablePath)
             throws TableNotExistException, TableNotPartitionedException {
         return listPartitions(tablePath, null);
     }
@@ -276,9 +276,9 @@ public class MetadataManager {
     /**
      * List the partitions of the given table and partitionSpec.
      *
-     * <p>Return a map from partition name to partition id.
+     * @return a map from partition name to partition registration.
      */
-    public Map<String, Long> listPartitions(
+    public Map<String, PartitionRegistration> listPartitions(
             TablePath tablePath, ResolvedPartitionSpec partitionFilter)
             throws TableNotExistException, TableNotPartitionedException, InvalidPartitionException {
         TableInfo tableInfo = getTable(tablePath);
@@ -288,10 +288,10 @@ public class MetadataManager {
         }
         try {
             if (partitionFilter == null) {
-                return zookeeperClient.getPartitionNameAndIds(tablePath);
+                return zookeeperClient.getPartitionRegistrations(tablePath);
             } else {
 
-                return zookeeperClient.getPartitionNameAndIds(
+                return zookeeperClient.getPartitionRegistrations(
                         tablePath, tableInfo.getPartitionKeys(), partitionFilter);
             }
         } catch (Exception e) {

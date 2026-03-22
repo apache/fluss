@@ -102,7 +102,9 @@ public class TableRegistrationJsonSerde
         generator.writeEndObject();
 
         // serialize remote data dir
-        generator.writeStringField(REMOTE_DATA_DIR, tableReg.remoteDataDir);
+        if (tableReg.remoteDataDir != null) {
+            generator.writeStringField(REMOTE_DATA_DIR, tableReg.remoteDataDir);
+        }
 
         // serialize createdTime
         generator.writeNumberField(CREATED_TIME, tableReg.createdTime);
