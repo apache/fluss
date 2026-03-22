@@ -11,8 +11,8 @@ with Fluss clusters with minimal overhead.
 
 The client provides two main APIs:
 
-- **Admin API**: For managing databases, tables, and partitions.
-- **Table API**: For high-throughput reading (Scanners/Lookups) and writing (Writers).
+- **[Admin API](https://clients.fluss.apache.org/user-guide/rust/api-reference#flussadmin)**: For managing databases, tables, and partitions.
+- **[Table API](https://clients.fluss.apache.org/user-guide/rust/api-reference/#flusstablea)**: For reading and writing to Log and Primary Key tables
 
 ## Installation
 
@@ -43,6 +43,8 @@ async fn main() -> Result<()> {
     Ok(())
 }
 ```
+
+For more examples, see [Fluss Rust Client documentation](https://clients.fluss.apache.org/user-guide/rust/example/).
 
 ## Full Documentation
 
