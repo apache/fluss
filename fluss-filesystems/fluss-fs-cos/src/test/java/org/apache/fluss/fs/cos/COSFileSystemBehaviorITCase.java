@@ -27,6 +27,10 @@ import org.junit.jupiter.api.BeforeAll;
 
 import java.util.UUID;
 
+import static org.apache.fluss.fs.cos.COSFileSystemPlugin.ENDPOINT_KEY;
+import static org.apache.fluss.fs.cos.COSFileSystemPlugin.SECRET_ID;
+import static org.apache.fluss.fs.cos.COSFileSystemPlugin.SECRET_KEY;
+
 /**
  * An implementation of the {@link FileSystemBehaviorTestSuite} for the COS file system with Hadoop
  * cos sdk.
@@ -40,9 +44,9 @@ class COSFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
         COSTestCredentials.assumeCredentialsAvailable();
 
         final Configuration conf = new Configuration();
-        conf.setString("fs.cosn.endpoint", COSTestCredentials.getCOSEndpoint());
-        conf.setString("fs.cosn.userinfo.secretId", COSTestCredentials.getCOSSecretId());
-        conf.setString("fs.cosn.userinfo.secretKey", COSTestCredentials.getCOSSecretKey());
+        conf.setString(ENDPOINT_KEY, COSTestCredentials.getCOSEndpoint());
+        conf.setString(SECRET_ID, COSTestCredentials.getCOSSecretId());
+        conf.setString(SECRET_KEY, COSTestCredentials.getCOSSecretKey());
         FileSystem.initialize(conf, null);
     }
 

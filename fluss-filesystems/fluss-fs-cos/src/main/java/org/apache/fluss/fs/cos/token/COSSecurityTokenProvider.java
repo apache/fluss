@@ -27,12 +27,11 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static org.apache.fluss.fs.cos.COSFileSystemPlugin.ENDPOINT_KEY;
+import static org.apache.fluss.fs.cos.COSFileSystemPlugin.SECRET_ID;
+import static org.apache.fluss.fs.cos.COSFileSystemPlugin.SECRET_KEY;
 
 /** A provider to provide Tencent Cloud COS security token. */
 public class COSSecurityTokenProvider {
-
-    private static final String SECRET_ID = "fs.cosn.userinfo.secretId";
-    private static final String SECRET_KEY = "fs.cosn.userinfo.secretKey";
 
     private final String endpoint;
     private final String secretId;
