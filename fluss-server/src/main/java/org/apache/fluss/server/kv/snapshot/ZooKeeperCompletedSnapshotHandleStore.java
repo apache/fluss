@@ -121,4 +121,11 @@ public class ZooKeeperCompletedSnapshotHandleStore implements CompletedSnapshotH
         return client.getTableBucketLatestSnapshot(tableBucket)
                 .map(BucketSnapshot::toCompletedSnapshotHandle);
     }
+
+    @Override
+    public Optional<CompletedSnapshotHandle> getCompletedSnapshotHandle(
+            TableBucket tableBucket, long snapshotId) throws Exception {
+        return client.getTableBucketSnapshot(tableBucket, snapshotId)
+                .map(BucketSnapshot::toCompletedSnapshotHandle);
+    }
 }

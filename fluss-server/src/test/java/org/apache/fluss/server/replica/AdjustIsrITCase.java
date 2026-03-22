@@ -135,6 +135,7 @@ public class AdjustIsrITCase {
                         currentLeaderAndIsr.leader(),
                         currentLeaderAndIsr.leaderEpoch() + 1,
                         isr,
+                        currentLeaderAndIsr.standbyReplicas(),
                         currentLeaderAndIsr.coordinatorEpoch(),
                         currentLeaderAndIsr.bucketEpoch());
         isr.add(stopFollower);
