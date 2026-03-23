@@ -407,7 +407,7 @@ class LanceTieringTest {
                         createLakeWriter(tablePath, bucket, partition, tableInfo)) {
                     Tuple2<String, Integer> partitionBucket = Tuple2.of(partition, bucket);
                     Tuple2<List<LogRecord>, List<LogRecord>> writeAndExpectRecords =
-                            genNestedRowLogRecords(partition, bucket, 10);
+                            genNestedRowLogRecords(bucket, 10);
                     List<LogRecord> writtenRecords = writeAndExpectRecords.f0;
                     List<LogRecord> expectRecords = writeAndExpectRecords.f1;
                     recordsByBucket.put(partitionBucket, expectRecords);
@@ -455,7 +455,7 @@ class LanceTieringTest {
                     reader.loadNextBatch();
                     Tuple2<String, Integer> partitionBucket = Tuple2.of(partition, bucket);
                     List<LogRecord> expectRecords = recordsByBucket.get(partitionBucket);
-                    verifyNestedRowRecords(readerRoot, expectRecords, bucket, isPartitioned);
+                    verifyNestedRowRecords(readerRoot, expectRecords);
                 }
             }
             assertThat(reader.loadNextBatch()).isFalse();
@@ -481,7 +481,7 @@ class LanceTieringTest {
     }
 
     private Tuple2<List<LogRecord>, List<LogRecord>> genNestedRowLogRecords(
-            @Nullable String partition, int bucket, int numRecords) {
+            int bucket, int numRecords) {
         List<LogRecord> logRecords = new ArrayList<>();
         for (int i = 0; i < numRecords; i++) {
             GenericRow genericRow = new GenericRow(3);
@@ -502,12 +502,7 @@ class LanceTieringTest {
         return Tuple2.of(logRecords, logRecords);
     }
 
-    private void verifyNestedRowRecords(
-            VectorSchemaRoot root,
-            List<LogRecord> expectRecords,
-            int expectBucket,
-            boolean isPartitioned)
-            throws Exception {
+    private void verifyNestedRowRecords(VectorSchemaRoot root, List<LogRecord> expectRecords) {
         assertThat(root.getRowCount()).isEqualTo(expectRecords.size());
         for (int i = 0; i < expectRecords.size(); i++) {
             LogRecord expectRecord = expectRecords.get(i);
