@@ -90,6 +90,7 @@ import javax.annotation.Nullable;
 
 import java.time.Duration;
 import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -1338,6 +1339,71 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         String.valueOf(currentYear - 2),
                         String.valueOf(currentYear - 1),
                         String.valueOf(currentYear)));
+    }
+
+    @Test
+    void testCreateInvalidPartitionForAutoPartitionedTable() throws Exception {
+        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+        // numToRetain defaults to 7; with DAY unit, anything older than (today - 7 days) is
+        // out-of-date.
+        TableDescriptor partitionedTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("name", DataTypes.STRING())
+                                        .column("pt", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("pt")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.DAY)
+                        .build();
+        TablePath tablePath = TablePath.of(dbName, "test_create_invalid_partition_auto_table");
+        admin.createTable(tablePath, partitionedTable, true).get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
+
+        LocalDate today = LocalDate.now();
+        DateTimeFormatter dayFormatter = DateTimeFormatter.ofPattern("yyyyMMdd");
+
+        // partition value does not match expected DAY format 'yyyyMMdd'
+        assertThatThrownBy(
+                        () ->
+                                admin.createPartition(
+                                                tablePath,
+                                                newPartitionSpec("pt", "2024-03-25"),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining("does not match the expected format 'yyyyMMdd'")
+                .hasMessageContaining("DAY");
+
+        // (today - 8 days) is beyond the retention window of 7, should be rejected.
+        String outOfDatePartition = today.minusDays(8).format(dayFormatter);
+        assertThatThrownBy(
+                        () ->
+                                admin.createPartition(
+                                                tablePath,
+                                                newPartitionSpec("pt", outOfDatePartition),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining("is out-of-date")
+                .hasMessageContaining("earliest retained partition");
+
+        // (today - 7 days) is exactly at the retention boundary and should be accepted.
+        String boundaryPartition = today.minusDays(7).format(dayFormatter);
+        admin.createPartition(tablePath, newPartitionSpec("pt", boundaryPartition), false).get();
+        assertPartitionInfo(
+                admin.listPartitionInfos(tablePath).get(),
+                Arrays.asList(
+                        boundaryPartition,
+                        today.format(dayFormatter),
+                        today.plusDays(1).format(dayFormatter)));
     }
 
     @Test

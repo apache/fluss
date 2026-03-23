@@ -28,8 +28,10 @@ import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypeRoot;
 
+import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -110,6 +112,46 @@ public class PartitionUtils {
     }
 
     /**
+     * Validates that the partition time value in the given {@link PartitionSpec} is valid and not
+     * out-of-date when auto-partition is enabled. Throws {@link InvalidPartitionException} if the
+     * format doesn't match or the partition is older than the earliest retained one.
+     */
+    public static void validateAutoPartitionTime(
+            PartitionSpec partitionSpec,
+            List<String> partitionKeys,
+            AutoPartitionStrategy autoPartitionStrategy) {
+        if (!autoPartitionStrategy.isAutoPartitionEnabled()) {
+            return;
+        }
+        String autoPartitionKey =
+                autoPartitionStrategy.key() != null
+                        ? autoPartitionStrategy.key()
+                        : partitionKeys.get(0);
+        String partitionTime = partitionSpec.getSpecMap().get(autoPartitionKey);
+        AutoPartitionTimeUnit timeUnit = autoPartitionStrategy.timeUnit();
+        if (partitionTime == null || !isValidPartitionTime(partitionTime, timeUnit)) {
+            throw new InvalidPartitionException(
+                    String.format(
+                            "Partition value '%s' does not match the expected format '%s' "
+                                    + "for auto-partition time unit '%s'.",
+                            partitionTime, getPartitionTimeFormat(timeUnit), timeUnit));
+        }
+        ZonedDateTime currentZonedDateTime =
+                ZonedDateTime.ofInstant(Instant.now(), autoPartitionStrategy.timeZone().toZoneId());
+        // Get the earliest partition time that needs to be retained.
+        String lastRetainPartitionTime =
+                generateAutoPartitionTime(
+                        currentZonedDateTime, -autoPartitionStrategy.numToRetain(), timeUnit);
+        if (lastRetainPartitionTime.compareTo(partitionTime) > 0) {
+            throw new InvalidPartitionException(
+                    String.format(
+                            "Partition value '%s' is out-of-date. The earliest retained "
+                                    + "partition is '%s'.",
+                            partitionTime, lastRetainPartitionTime));
+        }
+    }
+
+    /**
      * Generate {@link ResolvedPartitionSpec} for auto partition in server. When we auto creating a
      * partition, we need to first generate a {@link ResolvedPartitionSpec}.
      *
@@ -155,6 +197,36 @@ public class PartitionUtils {
                 throw new IllegalArgumentException("Unsupported time unit: " + timeUnit);
         }
         return autoPartitionFieldSpec;
+    }
+
+    /** Returns the time string format pattern for the given time unit. */
+    private static String getPartitionTimeFormat(AutoPartitionTimeUnit timeUnit) {
+        switch (timeUnit) {
+            case YEAR:
+                return YEAR_FORMAT;
+            case QUARTER:
+                return QUARTER_FORMAT;
+            case MONTH:
+                return MONTH_FORMAT;
+            case DAY:
+                return DAY_FORMAT;
+            case HOUR:
+                return HOUR_FORMAT;
+            default:
+                throw new IllegalArgumentException("Unsupported time unit: " + timeUnit);
+        }
+    }
+
+    /**
+     * Returns true if the given time string matches the format expected for the given time unit.
+     */
+    private static boolean isValidPartitionTime(String time, AutoPartitionTimeUnit timeUnit) {
+        try {
+            DateTimeFormatter.ofPattern(getPartitionTimeFormat(timeUnit)).parse(time);
+            return true;
+        } catch (DateTimeParseException e) {
+            return false;
+        }
     }
 
     private static String getFormattedTime(ZonedDateTime zonedDateTime, String format) {

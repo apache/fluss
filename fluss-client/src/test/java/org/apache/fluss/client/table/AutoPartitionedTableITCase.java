@@ -27,6 +27,7 @@ import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -45,7 +46,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -377,6 +380,38 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
 
         // then, let's verify the logs
         verifyPartitionLogs(table, schema.getRowType(), expectPartitionAppendRows);
+    }
+
+    @Test
+    void testWriteToInvalidPartitionShouldThrowException() throws Exception {
+        // Enable dynamic partition creation so the writer attempts to create the partition.
+        clientConf.set(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED, true);
+        TablePath tablePath = TablePath.of("test_db_1", "test_write_invalid_format_partition");
+        createPartitionedTable(tablePath, true);
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
+
+        Table table = conn.getTable(tablePath);
+        UpsertWriter upsertWriter = table.newUpsert().createWriter();
+
+        // Write a row with a partition value that doesn't match the YEAR format 'yyyy'.
+        assertThatThrownBy(() -> upsertWriter.upsert(row(1, "a", "2024-03-25")))
+                .rootCause()
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining(
+                        "does not match the expected format 'yyyy' for auto-partition time unit 'YEAR'");
+
+        // (today - 8 days) is beyond the default retention window of 7, should be rejected.
+        String outOfYearPartition =
+                LocalDate.now().minusYears(8).format(DateTimeFormatter.ofPattern("yyyy"));
+        String earliestRetainedPartition =
+                LocalDate.now().minusYears(7).format(DateTimeFormatter.ofPattern("yyyy"));
+        assertThatThrownBy(() -> upsertWriter.upsert(row(1, "a", outOfYearPartition)))
+                .rootCause()
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining(
+                        String.format(
+                                "Partition value '%s' is out-of-date. The earliest retained partition is '%s'",
+                                outOfYearPartition, earliestRetainedPartition));
     }
 
     private Schema createPartitionedTable(TablePath tablePath, boolean isPrimaryTable)

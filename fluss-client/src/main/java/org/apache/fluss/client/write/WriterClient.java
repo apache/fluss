@@ -177,7 +177,9 @@ public class WriterClient {
             TableInfo tableInfo = record.getTableInfo();
             PhysicalTablePath physicalTablePath = record.getPhysicalTablePath();
             dynamicPartitionCreator.checkAndCreatePartitionAsync(
-                    physicalTablePath, tableInfo.getPartitionKeys());
+                    physicalTablePath,
+                    tableInfo.getPartitionKeys(),
+                    tableInfo.getTableConfig().getAutoPartitionStrategy());
 
             // maybe create bucket assigner.
             Cluster cluster = metadataUpdater.getCluster();
