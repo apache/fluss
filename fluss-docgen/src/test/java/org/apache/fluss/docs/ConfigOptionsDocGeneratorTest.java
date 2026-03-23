@@ -17,21 +17,60 @@
 
 package org.apache.fluss.docs;
 
+import org.apache.fluss.config.ConfigOption;
+import org.apache.fluss.config.ConfigOptions;
+
 import org.junit.jupiter.api.Test;
 
-import java.io.File;
+import java.lang.reflect.Field;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class ConfigOptionsDocGeneratorTest {
 
     @Test
-    void testGeneratorRunsSuccessfully() throws Exception {
-        // This triggers your generator logic
-        ConfigOptionsDocGenerator.main(new String[] {});
+    void testGeneratorProducesCorrectContent() throws Exception {
+        String content = ConfigOptionsDocGenerator.generateMDXContent();
 
-        // Verify the file was actually created
-        File generatedFile = new File("website/docs/_configs/_partial_config.mdx");
-        assertThat(generatedFile).exists();
+        // Verify structure
+        assertThat(content).startsWith("{/* This file is auto-generated");
+
+        // Verify known sections appear
+        assertThat(content).contains("## Client\n");
+        assertThat(content).contains("## KV\n");
+        assertThat(content).contains("## ZooKeeper\n");
+
+        // Verify a known option appears with correct format
+        assertThat(content).contains("### `client.scanner.io.tmpdir`");
+
+        // Verify OverrideDefault is applied (should show /tmp/fluss, not system path)
+        assertThat(content).contains("* **Default**: `/tmp/fluss`");
+
+        // Verify Duration formatting via ConfigDocUtils (not raw ISO-8601)
+        assertThat(content).doesNotContain("PT15M");
+        assertThat(content).contains("15 min"); // acl.notification.expiration-time
+
+        // Verify no broken %s replacements
+        assertThat(content).doesNotContain("refer to true https://");
+    }
+
+    @Test
+    void testCleanDescriptionHandlesSpecialCharacters() {
+        assertThat(ConfigOptionsDocGenerator.cleanDescription("a {b} <c>"))
+                .isEqualTo("a &#123;b&#125; &lt;c>");
+    }
+
+    @Test
+    void testCleanDescriptionHandlesNull() {
+        assertThat(ConfigOptionsDocGenerator.cleanDescription(null))
+                .isEqualTo("(No description provided.)");
+    }
+
+    @Test
+    void testFormatDefaultValueUsesOverrideDefault() throws Exception {
+        Field field = ConfigOptions.class.getField("CLIENT_SCANNER_IO_TMP_DIR");
+        ConfigOption<?> option = (ConfigOption<?>) field.get(null);
+        assertThat(ConfigOptionsDocGenerator.getFormattedDefaultValue(field, option))
+                .isEqualTo("/tmp/fluss");
     }
 }
