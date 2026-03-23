@@ -19,27 +19,23 @@ package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.record.FileLogRecords;
 import org.apache.fluss.record.LogRecordReadContext;
+import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.rpc.protocol.ApiError;
-
-import java.io.IOException;
 
 /**
  * {@link RemoteCompletedFetch} is a {@link CompletedFetch} that represents a completed fetch that
- * the log records are fetched from remote log storage.
+ * the log records are fetched from remote log storage as file-backed or in-memory chunks.
  */
 @Internal
 class RemoteCompletedFetch extends CompletedFetch {
 
-    private final FileLogRecords fileLogRecords;
-
-    // recycle to clean up the fetched remote log files and increment the prefetch semaphore
+    // recycle to notify the downloader that this chunk has been consumed
     private final Runnable recycleCallback;
 
     RemoteCompletedFetch(
             TableBucket tableBucket,
-            FileLogRecords fileLogRecords,
+            LogRecords logRecords,
             long highWatermark,
             LogRecordReadContext readContext,
             LogScannerStatus logScannerStatus,
@@ -49,28 +45,27 @@ class RemoteCompletedFetch extends CompletedFetch {
         super(
                 tableBucket,
                 ApiError.NONE,
-                fileLogRecords.sizeInBytes(),
+                logRecords.sizeInBytes(),
                 highWatermark,
-                fileLogRecords.batches().iterator(),
+                logRecords.batches().iterator(),
                 readContext,
                 logScannerStatus,
                 isCheckCrc,
                 fetchOffset,
                 CompletedFetch.NO_FILTERED_END_OFFSET);
-        this.fileLogRecords = fileLogRecords;
         this.recycleCallback = recycleCallback;
     }
 
     @Override
     void drain() {
-        super.drain();
-        // close file channel only, don't need to flush the file which is very heavy
-        try {
-            fileLogRecords.closeHandlers();
-        } catch (IOException e) {
-            LOG.warn("Failed to close file channel for remote log records", e);
+        // Guard against double-drain: super.drain() is idempotent (checks isConsumed internally),
+        // but recycleCallback must only be called once to avoid double-incrementing chunksConsumed
+        // which would trigger a spurious semaphore release and corrupt flow-control counters.
+        if (isConsumed()) {
+            return;
         }
-        // call recycle to remove the fetched files and increment the prefetch semaphore
+        super.drain();
+        // call recycle to notify the downloader and trigger next chunk read
         recycleCallback.run();
     }
 }

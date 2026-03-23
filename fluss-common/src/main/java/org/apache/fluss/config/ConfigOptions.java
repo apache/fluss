@@ -1271,6 +1271,24 @@ public class ConfigOptions {
                             "The number of remote log segments to keep in local temp file for LogScanner, "
                                     + "which download from remote storage. The default setting is 4.");
 
+    public static final ConfigOption<MemorySize> CLIENT_SCANNER_REMOTE_LOG_CHUNK_SIZE =
+            key("client.scanner.remote-log.chunk-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("8mb"))
+                    .withDescription(
+                            "The size of each chunk when downloading remote log segments. "
+                                    + "A larger chunk size reduces the number of remote I/O requests but "
+                                    + "increases memory usage per chunk read. The default setting is 8MB.");
+
+    public static final ConfigOption<Integer> CLIENT_SCANNER_REMOTE_LOG_MAX_PREFETCH_CHUNKS =
+            key("client.scanner.remote-log.max-prefetch-chunks")
+                    .intType()
+                    .defaultValue(5)
+                    .withDescription(
+                            "The maximum number of pre-fetched but unconsumed chunks per remote log segment. "
+                                    + "The downloader pauses when this limit is reached "
+                                    + "and resumes when chunks are consumed.");
+
     public static final ConfigOption<String> CLIENT_SCANNER_IO_TMP_DIR =
             key("client.scanner.io.tmpdir")
                     .stringType()

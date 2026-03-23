@@ -21,7 +21,6 @@ import org.apache.fluss.client.metadata.ClientSchemaGetter;
 import org.apache.fluss.client.metadata.TestingClientSchemaGetter;
 import org.apache.fluss.client.metadata.TestingMetadataUpdater;
 import org.apache.fluss.client.metrics.TestingScannerMetricGroup;
-import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
@@ -84,7 +83,6 @@ public class LogFetcherTest {
                         new Configuration(),
                         metadataUpdater,
                         TestingScannerMetricGroup.newInstance(),
-                        new RemoteFileDownloader(1),
                         clientSchemaGetter);
     }
 

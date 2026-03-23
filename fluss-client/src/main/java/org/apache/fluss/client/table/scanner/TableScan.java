@@ -139,7 +139,6 @@ public class TableScan implements Scan {
                 tableInfo,
                 conn.getMetadataUpdater(),
                 conn.getClientMetricGroup(),
-                conn.getOrCreateRemoteFileDownloader(),
                 projectedColumns,
                 schemaGetter,
                 recordBatchFilter);

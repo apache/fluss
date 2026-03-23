@@ -20,7 +20,6 @@ package org.apache.fluss.client.table.scanner.log;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.ScannerMetricGroup;
-import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.WakeupException;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -80,7 +79,6 @@ public class LogScannerImpl implements LogScanner {
             TableInfo tableInfo,
             MetadataUpdater metadataUpdater,
             ClientMetricGroup clientMetricGroup,
-            RemoteFileDownloader remoteFileDownloader,
             @Nullable int[] projectedFields,
             SchemaGetter schemaGetter,
             @Nullable Predicate recordBatchFilter) {
@@ -102,7 +100,6 @@ public class LogScannerImpl implements LogScanner {
                         conf,
                         metadataUpdater,
                         scannerMetricGroup,
-                        remoteFileDownloader,
                         schemaGetter);
     }
 

@@ -20,7 +20,6 @@ package org.apache.fluss.client.table.scanner.log;
 import org.apache.fluss.client.admin.ClientToServerITCaseBase;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.TestingScannerMetricGroup;
-import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.TableBucket;
@@ -116,7 +115,6 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
                         clientConf,
                         metadataUpdater,
                         scannerMetricGroup,
-                        new RemoteFileDownloader(1),
                         TEST_SCHEMA_GETTER);
     }
 
@@ -438,7 +436,6 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
                 clientConf,
                 metadataUpdater,
                 scannerMetricGroup,
-                new RemoteFileDownloader(1),
                 TEST_SCHEMA_GETTER);
     }
 

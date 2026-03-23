@@ -245,6 +245,51 @@ public class RemoteLogScannerITCase {
                 table, DATA2_ROW_TYPE, expectPartitionAppendRows);
     }
 
+    @Test
+    void testScanManyRemoteSegments() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_many_seg", "test_many_remote_segments");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1).build();
+        long tableId = createTable(tablePath, tableDescriptor);
+
+        // Write many records to generate many remote log segments.
+        // With LOG_SEGMENT_FILE_SIZE = 1kb, each segment holds only a few records,
+        // so 500 records will produce dozens of segments that exercise the chunk
+        // download pipeline: prefetch semaphore, continuation queue, temp file
+        // lifecycle and cleanup.
+        int recordSize = 500;
+        List<GenericRow> expectedRows = new ArrayList<>();
+        Table table = conn.getTable(tablePath);
+        AppendWriter appendWriter = table.newAppend().createWriter();
+        for (int i = 0; i < recordSize; i++) {
+            GenericRow row = row(i, "val_" + i + "_padding_to_fill_segments_faster");
+            expectedRows.add(row);
+            appendWriter.append(row);
+            if (i % 10 == 0) {
+                appendWriter.flush();
+            }
+        }
+        appendWriter.flush();
+
+        FLUSS_CLUSTER_EXTENSION.waitUntilSomeLogSegmentsCopyToRemote(new TableBucket(tableId, 0));
+
+        // Scan from beginning and verify all records are downloaded correctly.
+        LogScanner logScanner = table.newScan().createLogScanner();
+        logScanner.subscribeFromBeginning(0);
+        List<GenericRow> rowList = new ArrayList<>();
+        while (rowList.size() < recordSize) {
+            ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+            for (ScanRecord scanRecord : scanRecords) {
+                assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
+                InternalRow row = scanRecord.getRow();
+                rowList.add(row(row.getInt(0), row.getString(1)));
+            }
+        }
+        assertThat(rowList).hasSize(recordSize);
+        assertThat(rowList).containsExactlyInAnyOrderElementsOf(expectedRows);
+        logScanner.close();
+    }
+
     @AfterEach
     protected void teardown() throws Exception {
         if (admin != null) {
