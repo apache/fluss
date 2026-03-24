@@ -151,6 +151,17 @@ public class TieringCommitOperator<WriteResult, Committable>
                 collectTableAllBucketWriteResult(tableId);
 
         if (committableWriteResults != null) {
+            // Check if any result is cancelled (table was dropped)
+            boolean isCancelled =
+                    committableWriteResults.stream().anyMatch(TableBucketWriteResult::isCancelled);
+            if (isCancelled) {
+                LOG.info(
+                        "Skipping commit for dropped table {}, table path {}.",
+                        tableId,
+                        tableBucketWriteResult.tablePath());
+                collectedTableBucketWriteResults.remove(tableId);
+                return;
+            }
             try {
                 CommitResult commitResult =
                         commitWriteResults(

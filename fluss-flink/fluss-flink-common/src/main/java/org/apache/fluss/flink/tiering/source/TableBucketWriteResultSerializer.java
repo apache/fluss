@@ -91,6 +91,9 @@ public class TableBucketWriteResultSerializer<WriteResult>
         // serialize number of write results
         out.writeInt(tableBucketWriteResult.numberOfWriteResults());
 
+        // serialize cancelled flag
+        out.writeBoolean(tableBucketWriteResult.isCancelled());
+
         final byte[] result = out.getCopyOfBuffer();
         out.clear();
         return result;
@@ -136,6 +139,10 @@ public class TableBucketWriteResultSerializer<WriteResult>
         long maxTimestamp = in.readLong();
         // deserialize number of write results
         int numberOfWriteResults = in.readInt();
+
+        // deserialize cancelled flag
+        boolean cancelled = in.readBoolean();
+
         return new TableBucketWriteResult<>(
                 tablePath,
                 tableBucket,
@@ -143,6 +150,7 @@ public class TableBucketWriteResultSerializer<WriteResult>
                 writeResult,
                 logEndOffset,
                 maxTimestamp,
-                numberOfWriteResults);
+                numberOfWriteResults,
+                cancelled);
     }
 }

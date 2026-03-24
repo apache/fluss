@@ -44,7 +44,14 @@ class TableBucketWriteResultSerializerTest {
         String partitionName = isPartitioned ? "partition1" : null;
         TableBucketWriteResult<TestingWriteResult> tableBucketWriteResult =
                 new TableBucketWriteResult<>(
-                        tablePath, tableBucket, partitionName, testingWriteResult, 10, 30L, 20);
+                        tablePath,
+                        tableBucket,
+                        partitionName,
+                        testingWriteResult,
+                        10,
+                        30L,
+                        20,
+                        false);
 
         // test serialize and deserialize
         byte[] serialized = tableBucketWriteResultSerializer.serialize(tableBucketWriteResult);
@@ -60,11 +67,12 @@ class TableBucketWriteResultSerializerTest {
         assertThat(deserializedWriteResult.getWriteResult())
                 .isEqualTo(testingWriteResult.getWriteResult());
         assertThat(deserialized.numberOfWriteResults()).isEqualTo(20);
+        assertThat(deserialized.isCancelled()).isFalse();
 
         // verify when writeResult is null
         tableBucketWriteResult =
                 new TableBucketWriteResult<>(
-                        tablePath, tableBucket, partitionName, null, 20, 30L, 30);
+                        tablePath, tableBucket, partitionName, null, 20, 30L, 30, false);
         serialized = tableBucketWriteResultSerializer.serialize(tableBucketWriteResult);
         deserialized =
                 tableBucketWriteResultSerializer.deserialize(
@@ -74,5 +82,25 @@ class TableBucketWriteResultSerializerTest {
         assertThat(deserialized.partitionName()).isEqualTo(partitionName);
         assertThat(deserialized.writeResult()).isNull();
         assertThat(deserialized.numberOfWriteResults()).isEqualTo(30);
+        assertThat(deserialized.isCancelled()).isFalse();
+
+        // verify when cancelled is true
+        tableBucketWriteResult =
+                new TableBucketWriteResult<>(
+                        tablePath,
+                        tableBucket,
+                        partitionName,
+                        testingWriteResult,
+                        40,
+                        50L,
+                        60,
+                        true);
+        serialized = tableBucketWriteResultSerializer.serialize(tableBucketWriteResult);
+        deserialized =
+                tableBucketWriteResultSerializer.deserialize(
+                        tableBucketWriteResultSerializer.getVersion(), serialized);
+        assertThat(deserialized.tablePath()).isEqualTo(tablePath);
+        assertThat(deserialized.tableBucket()).isEqualTo(tableBucket);
+        assertThat(deserialized.isCancelled()).isTrue();
     }
 }

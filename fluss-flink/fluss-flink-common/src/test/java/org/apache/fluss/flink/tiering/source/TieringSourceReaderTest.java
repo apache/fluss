@@ -25,6 +25,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.tiering.TestingLakeTieringFactory;
 import org.apache.fluss.flink.tiering.TestingWriteResult;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
+import org.apache.fluss.flink.tiering.event.TieringTableDroppedEvent;
 import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.metadata.TableBucket;
@@ -165,6 +166,113 @@ class TieringSourceReaderTest extends FlinkTestBase {
                             TestingReaderOutput<TableBucketWriteResult<TestingWriteResult>>
                                     output1 = new TestingReaderOutput<>();
                             // should force to finish, and the result is null
+                            reader.pollNext(output1);
+                            assertThat(output1.getEmittedRecords()).hasSize(1);
+                            TableBucketWriteResult<TestingWriteResult> result =
+                                    output1.getEmittedRecords().get(0);
+                            assertThat(result.writeResult()).isNull();
+                        });
+            }
+        }
+    }
+
+    @Test
+    void testHandleTieringTableDroppedEvent() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_tiering_table_dropped");
+        long tableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
+        Configuration conf = new Configuration(FLUSS_CLUSTER_EXTENSION.getClientConfig());
+        conf.set(
+                ConfigOptions.CLIENT_WRITER_BUCKET_NO_KEY_ASSIGNER,
+                ConfigOptions.NoKeyAssigner.ROUND_ROBIN);
+        try (Connection connection = ConnectionFactory.createConnection(conf)) {
+            FutureCompletingBlockingQueue<
+                            RecordsWithSplitIds<TableBucketWriteResult<TestingWriteResult>>>
+                    elementsQueue = new FutureCompletingBlockingQueue<>(16);
+            TestingReaderContext readerContext = new TestingReaderContext();
+            try (TieringSourceReader<TestingWriteResult> reader =
+                    new TieringSourceReader<>(
+                            elementsQueue,
+                            readerContext,
+                            connection,
+                            new TestingLakeTieringFactory(),
+                            Duration.ofMillis(500))) {
+
+                reader.start();
+
+                // write some data first
+                writeRows(
+                        connection,
+                        tablePath,
+                        Arrays.asList(row(0, "v0"), row(1, "v1"), row(2, "v2")),
+                        true);
+
+                // add a split for the table
+                TieringLogSplit split =
+                        new TieringLogSplit(
+                                tablePath,
+                                new TableBucket(tableId, 0),
+                                null,
+                                EARLIEST_OFFSET,
+                                100L);
+                reader.addSplits(Collections.singletonList(split));
+
+                // wait to run one round of tiering to do some tiering
+                FutureCompletingBlockingQueue<
+                                RecordsWithSplitIds<TableBucketWriteResult<TestingWriteResult>>>
+                        blockingQueue = getElementsQueue(reader);
+                waitUntil(
+                        () -> !blockingQueue.isEmpty(),
+                        Duration.ofSeconds(30),
+                        "Fail to wait element queue is not empty.");
+
+                // send TieringTableDroppedEvent (simulating enumerator's heartbeat detection)
+                TieringTableDroppedEvent event = new TieringTableDroppedEvent(tableId);
+
+                // Verify TieringTableDroppedEvent accessors for coverage
+                assertThat(event.getTableId()).isEqualTo(tableId);
+                assertThat(event).isEqualTo(new TieringTableDroppedEvent(tableId));
+                assertThat(event).isNotEqualTo(new TieringTableDroppedEvent(tableId + 1));
+                assertThat(event.hashCode())
+                        .isEqualTo(new TieringTableDroppedEvent(tableId).hashCode());
+                assertThat(event.toString()).contains(String.valueOf(tableId));
+
+                reader.handleSourceEvents(event);
+
+                // actually drop the table so log scanner encounters real
+                // "unknown table or bucket" error on next fetch
+                admin.dropTable(tablePath, true).get();
+
+                // should force to finish with empty results (dropped table discards data)
+                retry(
+                        Duration.ofMinutes(1),
+                        () -> {
+                            TestingReaderOutput<TableBucketWriteResult<TestingWriteResult>> output =
+                                    new TestingReaderOutput<>();
+                            reader.pollNext(output);
+                            assertThat(output.getEmittedRecords()).hasSize(1);
+                            TableBucketWriteResult<TestingWriteResult> result =
+                                    output.getEmittedRecords().get(0);
+                            // write result should be null since dropped table discards data
+                            assertThat(result.writeResult()).isNull();
+                        });
+
+                // add another split with skipCurrentRound to verify it's handled correctly
+                split =
+                        new TieringLogSplit(
+                                tablePath,
+                                new TableBucket(tableId, 1),
+                                null,
+                                EARLIEST_OFFSET,
+                                100L);
+                split.skipCurrentRound();
+                reader.addSplits(Collections.singletonList(split));
+
+                // should skip tiering for this split
+                retry(
+                        Duration.ofMinutes(1),
+                        () -> {
+                            TestingReaderOutput<TableBucketWriteResult<TestingWriteResult>>
+                                    output1 = new TestingReaderOutput<>();
                             reader.pollNext(output1);
                             assertThat(output1.getEmittedRecords()).hasSize(1);
                             TableBucketWriteResult<TestingWriteResult> result =

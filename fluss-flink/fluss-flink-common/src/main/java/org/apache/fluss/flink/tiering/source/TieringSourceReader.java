@@ -22,6 +22,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.flink.adapter.SingleThreadMultiplexSourceReaderBaseAdapter;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
+import org.apache.fluss.flink.tiering.event.TieringTableDroppedEvent;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.state.TieringSplitState;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
@@ -125,9 +126,15 @@ public final class TieringSourceReader<WriteResult>
             TieringReachMaxDurationEvent reachMaxDurationEvent =
                     (TieringReachMaxDurationEvent) sourceEvent;
             long tableId = reachMaxDurationEvent.getTableId();
-            LOG.info("Received reach max duration for table {}", tableId);
+            LOG.info("Received reach max duration event for table {}", tableId);
             ((TieringSourceFetcherManager<WriteResult>) splitFetcherManager)
                     .markTableReachTieringMaxDuration(tableId);
+        } else if (sourceEvent instanceof TieringTableDroppedEvent) {
+            TieringTableDroppedEvent tableDroppedEvent = (TieringTableDroppedEvent) sourceEvent;
+            long tableId = tableDroppedEvent.getTableId();
+            LOG.info("Received table dropped event for table {}", tableId);
+            ((TieringSourceFetcherManager<WriteResult>) splitFetcherManager)
+                    .markTableDropped(tableId);
         }
     }
 
