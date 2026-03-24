@@ -210,6 +210,7 @@ class DynamicServerConfig {
             throws ConfigException {
         for (String configKey : dynamicConfigs.keySet()) {
             if (newDynamicConfigs.containsKey(configKey)) {
+                effectiveChanges.put(configKey, newDynamicConfigs.get(configKey));
                 continue; // Not deleted
             }
 

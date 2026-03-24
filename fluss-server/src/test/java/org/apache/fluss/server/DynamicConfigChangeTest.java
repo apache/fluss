@@ -185,6 +185,47 @@ public class DynamicConfigChangeTest {
     }
 
     @Test
+    void testDatalakePrefixValidationSkippedWhenFormatIsNull() throws Exception {
+        Configuration configuration = new Configuration();
+        try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
+                new LakeCatalogDynamicLoader(configuration, null, true)) {
+            DynamicConfigManager dynamicConfigManager =
+                    new DynamicConfigManager(zookeeperClient, configuration, true);
+            dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            dynamicConfigManager.startup();
+
+            // Setting `datalake.paimon.*` without setting `datalake.format` should pass because
+            // prefix validation is skipped.
+            assertThatCode(
+                            () ->
+                                    dynamicConfigManager.alterConfigs(
+                                            Collections.singletonList(
+                                                    new AlterConfig(
+                                                            "datalake.iceberg.type",
+                                                            "rest",
+                                                            AlterConfigOpType.SET))))
+                    .doesNotThrowAnyException();
+
+            assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
+                    .isNull();
+            assertThatThrownBy(
+                            () ->
+                                    dynamicConfigManager.alterConfigs(
+                                            Arrays.asList(
+                                                    new AlterConfig(
+                                                            "datalake.iceberg.type",
+                                                            "rest",
+                                                            AlterConfigOpType.SET),
+                                                    new AlterConfig(
+                                                            "datalake.format",
+                                                            "paimon",
+                                                            AlterConfigOpType.SET))))
+                    .hasMessageContaining(
+                            "Invalid configuration 'datalake.iceberg.type' for 'paimon' datalake format");
+        }
+    }
+
+    @Test
     void testWrongLakeFormatPrefix() throws Exception {
         Configuration configuration = new Configuration();
         try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
