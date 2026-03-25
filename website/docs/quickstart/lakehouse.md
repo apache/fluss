@@ -114,6 +114,7 @@ services:
         s3.path-style-access: true
         s3.assumed.role.arn: arn:aws:iam::000000000000:role/rustfsadmin
         s3.assumed.role.sts.endpoint: http://rustfs:9000
+        datalake.enabled: true
         datalake.format: paimon
         datalake.paimon.metastore: filesystem
         datalake.paimon.warehouse: s3://fluss/paimon
@@ -142,6 +143,8 @@ services:
         s3.path-style-access: true
         s3.assumed.role.arn: arn:aws:iam::000000000000:role/rustfsadmin
         s3.assumed.role.sts.endpoint: http://rustfs:9000
+        kv.snapshot.interval: 0s
+        datalake.enabled: true
         datalake.format: paimon
         datalake.paimon.metastore: filesystem
         datalake.paimon.warehouse: s3://fluss/paimon
@@ -332,10 +335,15 @@ services:
         s3.endpoint: http://rustfs:9000
         s3.access-key: rustfsadmin
         s3.secret-key: rustfsadmin
+<<<<<<< HEAD
         s3.region: us-east-1
         s3.path-style-access: true
         s3.assumed.role.arn: arn:aws:iam::000000000000:role/rustfsadmin
         s3.assumed.role.sts.endpoint: http://rustfs:9000
+=======
+        s3.path.style.access: true
+        datalake.enabled: true
+>>>>>>> 9086949c2 (add doc)
         datalake.format: iceberg
         datalake.iceberg.catalog-impl: org.apache.iceberg.jdbc.JdbcCatalog
         datalake.iceberg.name: fluss_catalog
@@ -368,10 +376,15 @@ services:
         s3.endpoint: http://rustfs:9000
         s3.access-key: rustfsadmin
         s3.secret-key: rustfsadmin
+<<<<<<< HEAD
         s3.region: us-east-1
         s3.path-style-access: true
         s3.assumed.role.arn: arn:aws:iam::000000000000:role/rustfsadmin
         s3.assumed.role.sts.endpoint: http://rustfs:9000
+=======
+        s3.path.style.access: true
+        datalake.enabled: true
+>>>>>>> 9086949c2 (add doc)
         datalake.format: iceberg
         datalake.iceberg.catalog-impl: org.apache.iceberg.jdbc.JdbcCatalog
         datalake.iceberg.name: fluss_catalog
