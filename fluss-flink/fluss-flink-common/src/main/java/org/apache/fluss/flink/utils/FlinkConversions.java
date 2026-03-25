@@ -709,6 +709,10 @@ public class FlinkConversions {
             Configuration allProperties, Map<String, String> flussTableProperties) {
         Map<String, String> customProperties = new HashMap<>(allProperties.toMap());
         customProperties.keySet().removeAll(flussTableProperties.keySet());
+        // Remove bucket key and bucket num which is stored as table distribution rather than
+        // customer properties.
+        customProperties.remove(BUCKET_KEY.key());
+        customProperties.remove(BUCKET_NUMBER.key());
         return customProperties;
     }
 }

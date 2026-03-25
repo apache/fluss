@@ -637,8 +637,8 @@ abstract class FlinkCatalogITCase {
             expectedCustomProperties.put("schema.4.name", "cost");
             expectedCustomProperties.put("schema.4.expr", "`price` * `quantity`");
             expectedCustomProperties.put("schema.4.data-type", "DOUBLE");
-            expectedCustomProperties.put("bucket.num", "2");
             assertThat(tableInfo.getCustomProperties().toMap()).isEqualTo(expectedCustomProperties);
+            assertThat(tableInfo.getNumBuckets()).isEqualTo(2);
         }
     }
 
