@@ -94,6 +94,7 @@ services:
         zookeeper.address: zookeeper:2181
         bind.listeners: FLUSS://coordinator-server:9123
         remote.data.dir: /tmp/fluss/remote-data
+        datalake.enabled: true
         datalake.format: paimon
         datalake.paimon.metastore: filesystem
         datalake.paimon.warehouse: /tmp/paimon
@@ -118,6 +119,7 @@ services:
         data.dir: /tmp/fluss/data
         remote.data.dir: /tmp/fluss/remote-data
         kv.snapshot.interval: 0s
+        datalake.enabled: true
         datalake.format: paimon
         datalake.paimon.metastore: filesystem
         datalake.paimon.warehouse: /tmp/paimon
