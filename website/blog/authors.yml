@@ -62,4 +62,14 @@ jacopogardini:
   url: https://github.com/Lourousa
   image_url: /img/avatars/jacopogardini.png
 
-  
+anton:
+  name: Anton Borisov
+  title: Contributor of Apache Fluss (Incubating)
+  url: https://github.com/fresh-borzoni
+  image_url: https://github.com/fresh-borzoni.png
+
+keithlee:
+  name: Keith Lee
+  title: Apache Fluss (Incubating) Committer
+  url: https://github.com/leekeiabstraction
+  image_url: https://github.com/leekeiabstraction.png
