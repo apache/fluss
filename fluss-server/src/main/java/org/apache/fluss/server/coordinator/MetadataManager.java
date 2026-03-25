@@ -536,7 +536,6 @@ public class MetadataManager {
 
                 // reuse the same validate logic with the createTable() method
                 validateTableDescriptor(newDescriptor, maxBucketNum);
-
                 // pre alter table properties, e.g. create lake table in lake storage if it's to
                 // enable datalake for the table
                 preAlterTableProperties(
@@ -584,8 +583,6 @@ public class MetadataManager {
                                 + tablePath
                                 + " in data lake, because the Fluss cluster doesn't enable datalake tables.");
             }
-
-            // to enable lake table
             if (!isDataLakeEnabled(tableDescriptor)) {
                 // before create table in fluss, we may create in lake
                 try {

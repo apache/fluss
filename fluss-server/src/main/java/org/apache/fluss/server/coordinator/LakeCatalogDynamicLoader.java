@@ -33,14 +33,17 @@ import org.apache.fluss.utils.IOUtils;
 import javax.annotation.Nullable;
 
 import java.util.Map;
+import java.util.Optional;
+import java.util.stream.Collectors;
 
+import static org.apache.fluss.config.ConfigOptions.DATALAKE_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.server.utils.LakeStorageUtils.extractLakeProperties;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
- * A dynamic loader for lake catalog. Each time when the datalake format is changed, the lake
- * catalog will be changed.
+ * A dynamic loader for lake catalog. Each time when the effective datalake runtime mode changes,
+ * the lake catalog will be changed.
  */
 public class LakeCatalogDynamicLoader implements ServerReconfigurable, AutoCloseable {
     private volatile LakeCatalogContainer lakeCatalogContainer;
@@ -63,23 +66,40 @@ public class LakeCatalogDynamicLoader implements ServerReconfigurable, AutoClose
                 newConfig.getOptional(DATALAKE_FORMAT).isPresent()
                         ? newConfig.get(DATALAKE_FORMAT)
                         : currentConfiguration.get(DATALAKE_FORMAT);
+
+        boolean explicitDataLakeEnabled = newConfig.getOptional(DATALAKE_ENABLED).orElse(false);
+
+        Optional<DataLakeFormat> newDataLakeFormat = newConfig.getOptional(DATALAKE_FORMAT);
+        Optional<DataLakeFormat> effectiveDataLakeFormat =
+                newDataLakeFormat.isPresent()
+                        ? newDataLakeFormat
+                        : currentConfiguration.getOptional(DATALAKE_FORMAT);
+
+        if (explicitDataLakeEnabled && newDatalakeFormat != null) {
+            throw new ConfigException(
+                    String.format(
+                            "'%s' must be configured when '%s' is explicitly set.",
+                            DATALAKE_FORMAT.key(), DATALAKE_ENABLED.key()));
+        }
+
         // If datalake format is not set, skip prefix validation so that users can disable or enable
         // datalake format without re-supplying all datalake-prefixed properties.
         if (newDatalakeFormat == null) {
             return;
         }
 
+        String datalakePrefix = "datalake." + effectiveDataLakeFormat.get() + ".";
         Map<String, String> configMap = newConfig.toMap();
-        String datalakePrefix = "datalake." + newDatalakeFormat + ".";
         configMap.forEach(
                 (key, value) -> {
                     if (!key.equals(DATALAKE_FORMAT.key())
+                            && !key.equals(DATALAKE_ENABLED.key())
                             && key.startsWith("datalake.")
                             && !key.startsWith(datalakePrefix)) {
                         throw new ConfigException(
                                 String.format(
                                         "Invalid configuration '%s' for '%s' datalake format",
-                                        key, newDatalakeFormat));
+                                        key, effectiveDataLakeFormat.get()));
                     }
                 });
     }
@@ -87,15 +107,29 @@ public class LakeCatalogDynamicLoader implements ServerReconfigurable, AutoClose
     @Override
     public void reconfigure(Configuration newConfig) throws ConfigException {
         LakeCatalogContainer lastLakeCatalogContainer = lakeCatalogContainer;
-        DataLakeFormat newLakeFormat = newConfig.getOptional(DATALAKE_FORMAT).orElse(null);
-        if (newLakeFormat != lastLakeCatalogContainer.dataLakeFormat) {
-            IOUtils.closeQuietly(
-                    lastLakeCatalogContainer.lakeCatalog,
-                    "Close lake catalog because config changes");
-            this.lakeCatalogContainer =
-                    new LakeCatalogContainer(newConfig, pluginManager, isCoordinator);
+        if (!hasLakeRelevantConfigChanged(currentConfiguration, newConfig)) {
             this.currentConfiguration = newConfig;
+            return;
         }
+
+        LakeCatalogContainer newLakeCatalogContainer =
+                new LakeCatalogContainer(newConfig, pluginManager, isCoordinator);
+        IOUtils.closeQuietly(
+                lastLakeCatalogContainer.lakeCatalog, "Close lake catalog because config changes");
+        this.lakeCatalogContainer = newLakeCatalogContainer;
+        this.currentConfiguration = newConfig;
+    }
+
+    private static boolean hasLakeRelevantConfigChanged(
+            Configuration currentConfiguration, Configuration newConfig) {
+        return !extractLakeRelevantConfig(currentConfiguration)
+                .equals(extractLakeRelevantConfig(newConfig));
+    }
+
+    private static Map<String, String> extractLakeRelevantConfig(Configuration configuration) {
+        return configuration.toMap().entrySet().stream()
+                .filter(entry -> entry.getKey().startsWith("datalake."))
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
     }
 
     public LakeCatalogContainer getLakeCatalogContainer() {
@@ -112,6 +146,10 @@ public class LakeCatalogDynamicLoader implements ServerReconfigurable, AutoClose
 
     @Nullable
     private static LakeCatalog createLakeCatalog(Configuration conf, PluginManager pluginManager) {
+        if (!LakeCatalogContainer.isClusterDataLakeTableEnabled(conf)) {
+            return null;
+        }
+
         DataLakeFormat dataLakeFormat = conf.get(ConfigOptions.DATALAKE_FORMAT);
         if (dataLakeFormat == null) {
             return null;
@@ -127,7 +165,7 @@ public class LakeCatalogDynamicLoader implements ServerReconfigurable, AutoClose
 
     /** A container for lake catalog. */
     public static class LakeCatalogContainer {
-        // null if the cluster hasn't configured datalake format
+        private final boolean clusterDataLakeTableEnabled;
         private final @Nullable DataLakeFormat dataLakeFormat;
         private final @Nullable LakeCatalog lakeCatalog;
         private final @Nullable Map<String, String> defaultTableLakeOptions;
@@ -136,17 +174,29 @@ public class LakeCatalogDynamicLoader implements ServerReconfigurable, AutoClose
                 Configuration configuration,
                 @Nullable PluginManager pluginManager,
                 boolean isCoordinator) {
+            this.clusterDataLakeTableEnabled = isClusterDataLakeTableEnabled(configuration);
             this.dataLakeFormat = configuration.getOptional(DATALAKE_FORMAT).orElse(null);
             this.lakeCatalog =
                     isCoordinator ? createLakeCatalog(configuration, pluginManager) : null;
             this.defaultTableLakeOptions =
                     LakeStorageUtils.generateDefaultTableLakeOptions(configuration);
-            if (isCoordinator && ((dataLakeFormat == null) != (lakeCatalog == null))) {
+            if (isCoordinator && clusterDataLakeTableEnabled == (lakeCatalog == null)) {
                 throw new ConfigException(
                         String.format(
-                                "dataLakeFormat and lakeCatalog must both be null or both non-null, but dataLakeFormat is %s, lakeCatalog is %s.",
-                                dataLakeFormat, lakeCatalog));
+                                "clusterDataLakeTableEnabled and lakeCatalog must both be false/null or true/non-null, but clusterDataLakeTableEnabled is %s, lakeCatalog is %s.",
+                                clusterDataLakeTableEnabled, lakeCatalog));
             }
+        }
+
+        static boolean isClusterDataLakeTableEnabled(Configuration configuration) {
+            Optional<Boolean> explicitDataLakeEnabled = configuration.getOptional(DATALAKE_ENABLED);
+            // if datalake.enabled no set, use datalake.format for legacy cluster behavior
+            return explicitDataLakeEnabled.orElseGet(
+                    () -> configuration.getOptional(DATALAKE_FORMAT).isPresent());
+        }
+
+        public boolean isClusterDataLakeTableEnabled() {
+            return clusterDataLakeTableEnabled;
         }
 
         @Nullable
