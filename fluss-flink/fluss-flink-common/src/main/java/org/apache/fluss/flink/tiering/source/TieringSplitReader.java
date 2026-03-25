@@ -23,6 +23,7 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.flink.source.reader.BoundedSplitReader;
 import org.apache.fluss.flink.source.reader.RecordAndPos;
 import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
@@ -176,7 +177,7 @@ public class TieringSplitReader<WriteResult>
                 ScanRecords scanRecords;
                 try {
                     scanRecords = currentLogScanner.poll(pollTimeout);
-                } catch (Exception e) {
+                } catch (TableNotExistException e) {
                     // When a table is actually dropped, the log scanner's poll may fail
                     // because metadata update discovers the table no longer exists.
                     if (droppedTables.contains(currentTableId)) {
