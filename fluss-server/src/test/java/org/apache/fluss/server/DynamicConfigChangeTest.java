@@ -45,6 +45,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.apache.fluss.config.ConfigOptions.DATALAKE_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
@@ -527,5 +528,65 @@ public class DynamicConfigChangeTest {
 
         // Verify the reconfigurable was notified with the new value
         assertThat(reconfiguredValue.get()).isEqualTo(2);
+    }
+
+    @Test
+    void testExplicitDatalakeEnabledRequiresFormat() throws Exception {
+        try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
+                new LakeCatalogDynamicLoader(new Configuration(), null, true)) {
+            DynamicConfigManager dynamicConfigManager =
+                    new DynamicConfigManager(zookeeperClient, new Configuration(), true);
+            dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            dynamicConfigManager.startup();
+
+            assertThatThrownBy(
+                            () ->
+                                    dynamicConfigManager.alterConfigs(
+                                            Collections.singletonList(
+                                                    new AlterConfig(
+                                                            DATALAKE_ENABLED.key(),
+                                                            "false",
+                                                            AlterConfigOpType.SET))))
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining(
+                            "'datalake.format' must be configured when 'datalake.enabled' is explicitly set.");
+        }
+    }
+
+    @Test
+    void testPreBindOnlyModeDoesNotCreateLakeCatalog() throws Exception {
+        try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
+                new LakeCatalogDynamicLoader(new Configuration(), null, true)) {
+            DynamicConfigManager dynamicConfigManager =
+                    new DynamicConfigManager(zookeeperClient, new Configuration(), true);
+            dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            dynamicConfigManager.startup();
+
+            dynamicConfigManager.alterConfigs(
+                    Arrays.asList(
+                            new AlterConfig(DATALAKE_FORMAT.key(), "paimon", AlterConfigOpType.SET),
+                            new AlterConfig(DATALAKE_ENABLED.key(), "false", AlterConfigOpType.SET),
+                            new AlterConfig(
+                                    "datalake.paimon.metastore",
+                                    "filesystem",
+                                    AlterConfigOpType.SET)));
+
+            assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
+                    .isEqualTo(PAIMON);
+            assertThat(
+                            lakeCatalogDynamicLoader
+                                    .getLakeCatalogContainer()
+                                    .isClusterDataLakeTableEnabled())
+                    .isFalse();
+            assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getLakeCatalog())
+                    .isNull();
+            assertThat(
+                            lakeCatalogDynamicLoader
+                                    .getLakeCatalogContainer()
+                                    .getDefaultTableLakeOptions())
+                    .isEqualTo(
+                            Collections.singletonMap(
+                                    "table.datalake.paimon.metastore", "filesystem"));
+        }
     }
 }
