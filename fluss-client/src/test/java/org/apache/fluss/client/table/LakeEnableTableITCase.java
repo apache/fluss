@@ -22,6 +22,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.InvalidAlterTableException;
+import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.Schema;
@@ -180,6 +181,50 @@ class LakeEnableTableITCase extends ClientToServerITCaseBase {
         // Verify datalake is now enabled
         TableInfo updatedTableInfo = admin.getTableInfo(tablePath).get();
         assertThat(updatedTableInfo.getTableConfig().isDataLakeEnabled()).isTrue();
+    }
+
+    @Test
+    void testCannotEnableTableWhenTableFormatDiffersFromClusterFormat() throws Exception {
+        String databaseName = "test_db";
+        String tableName = "test_table_format_mismatch";
+        TablePath tablePath = TablePath.of(databaseName, tableName);
+
+        admin.createDatabase(databaseName, DatabaseDescriptor.EMPTY, true).get();
+        admin.alterClusterConfigs(
+                        Collections.singletonList(
+                                new AlterConfig(
+                                        DATALAKE_FORMAT.key(), null, AlterConfigOpType.SET)))
+                .get();
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(3, "c1")
+                        .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.ICEBERG)
+                        .build();
+        admin.createTable(tablePath, tableDescriptor, false).get();
+
+        admin.alterClusterConfigs(
+                        Arrays.asList(
+                                new AlterConfig(
+                                        DATALAKE_FORMAT.key(),
+                                        DataLakeFormat.PAIMON.toString(),
+                                        AlterConfigOpType.SET),
+                                new AlterConfig(
+                                        DATALAKE_ENABLED.key(), "true", AlterConfigOpType.SET)))
+                .get();
+
+        List<TableChange> enableDatalakeChange =
+                Collections.singletonList(TableChange.set(TABLE_DATALAKE_ENABLED.key(), "true"));
+        assertThatThrownBy(() -> admin.alterTable(tablePath, enableDatalakeChange, false).get())
+                .cause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("'table.datalake.format' ('iceberg')")
+                .hasMessageContaining("cluster 'datalake.format' ('paimon')");
     }
 
     @Test

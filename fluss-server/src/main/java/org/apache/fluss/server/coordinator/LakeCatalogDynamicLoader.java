@@ -67,15 +67,16 @@ public class LakeCatalogDynamicLoader implements ServerReconfigurable, AutoClose
                         ? newConfig.get(DATALAKE_FORMAT)
                         : currentConfiguration.get(DATALAKE_FORMAT);
 
+        // TODO: validate(...) only sees the merged effective cluster config, so it cannot
+        // detect the case where a user enables datalake.enabled and unsets
+        // datalake.format in the same dynamic config change. This may leave the cluster
+        // with datalake.enabled set but no datalake.format. Fixing this likely requires
+        // extending the validate/reconfigure framework to expose the incremental change
+        // set, rather than only the merged result. We accept this for now because
+        // table-level enablement is still validated, and enabling datalake for a table
+        // will fail if datalake.format is not configured.
         boolean explicitDataLakeEnabled = newConfig.getOptional(DATALAKE_ENABLED).orElse(false);
-
-        Optional<DataLakeFormat> newDataLakeFormat = newConfig.getOptional(DATALAKE_FORMAT);
-        Optional<DataLakeFormat> effectiveDataLakeFormat =
-                newDataLakeFormat.isPresent()
-                        ? newDataLakeFormat
-                        : currentConfiguration.getOptional(DATALAKE_FORMAT);
-
-        if (explicitDataLakeEnabled && newDatalakeFormat != null) {
+        if (explicitDataLakeEnabled && newDatalakeFormat == null) {
             throw new ConfigException(
                     String.format(
                             "'%s' must be configured when '%s' is explicitly set.",
@@ -88,7 +89,7 @@ public class LakeCatalogDynamicLoader implements ServerReconfigurable, AutoClose
             return;
         }
 
-        String datalakePrefix = "datalake." + effectiveDataLakeFormat.get() + ".";
+        String datalakePrefix = "datalake." + newDatalakeFormat + ".";
         Map<String, String> configMap = newConfig.toMap();
         configMap.forEach(
                 (key, value) -> {
@@ -99,7 +100,7 @@ public class LakeCatalogDynamicLoader implements ServerReconfigurable, AutoClose
                         throw new ConfigException(
                                 String.format(
                                         "Invalid configuration '%s' for '%s' datalake format",
-                                        key, effectiveDataLakeFormat.get()));
+                                        key, newDatalakeFormat));
                     }
                 });
     }
@@ -190,7 +191,7 @@ public class LakeCatalogDynamicLoader implements ServerReconfigurable, AutoClose
 
         static boolean isClusterDataLakeTableEnabled(Configuration configuration) {
             Optional<Boolean> explicitDataLakeEnabled = configuration.getOptional(DATALAKE_ENABLED);
-            // if datalake.enabled no set, use datalake.format for legacy cluster behavior
+            // if datalake.enabled not set, use datalake.format for legacy cluster behavior
             return explicitDataLakeEnabled.orElseGet(
                     () -> configuration.getOptional(DATALAKE_FORMAT).isPresent());
         }
