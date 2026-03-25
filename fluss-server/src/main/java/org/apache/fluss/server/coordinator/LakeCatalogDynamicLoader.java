@@ -75,11 +75,13 @@ public class LakeCatalogDynamicLoader implements ServerReconfigurable, AutoClose
         // set, rather than only the merged result. We accept this for now because
         // table-level enablement is still validated, and enabling datalake for a table
         // will fail if datalake.format is not configured.
-        boolean explicitDataLakeEnabled = newConfig.getOptional(DATALAKE_ENABLED).orElse(false);
-        if (explicitDataLakeEnabled && newDatalakeFormat == null) {
+        Optional<Boolean> optDataLakeEnabled = newConfig.getOptional(DATALAKE_ENABLED);
+        if (optDataLakeEnabled.isPresent()
+                && optDataLakeEnabled.get()
+                && newDatalakeFormat == null) {
             throw new ConfigException(
                     String.format(
-                            "'%s' must be configured when '%s' is explicitly set.",
+                            "'%s' must be configured when '%s' is explicitly set to true.",
                             DATALAKE_FORMAT.key(), DATALAKE_ENABLED.key()));
         }
 

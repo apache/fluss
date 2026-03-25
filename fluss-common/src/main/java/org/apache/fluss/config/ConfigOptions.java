@@ -2018,7 +2018,7 @@ public class ConfigOptions {
                                     + "If unset, Fluss keeps the legacy behavior where configuring `datalake.format` "
                                     + "also enables lakehouse tables. If set to `false`, Fluss pre-binds the lake format "
                                     + "for newly created tables but does not allow lakehouse tables yet. If set to `true`, "
-                                    + "Fluss fully enables lakehouse tables. When this option is explicitly configured, "
+                                    + "Fluss fully enables lakehouse tables. When this option is explicitly set to `true`, "
                                     + "`datalake.format` must also be configured.");
 
     public static final ConfigOption<DataLakeFormat> DATALAKE_FORMAT =

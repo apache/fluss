@@ -129,11 +129,17 @@ public class TableDescriptorValidation {
 
     private static void checkTableLakeFormatMatchesCluster(
             Configuration tableConf, @Nullable DataLakeFormat clusterDataLakeFormat) {
+        if (clusterDataLakeFormat == null) {
+            return;
+        }
+
+        if (!tableConf.get(ConfigOptions.TABLE_DATALAKE_ENABLED)) {
+            return;
+        }
+
         Optional<DataLakeFormat> tableDataLakeFormat =
                 tableConf.getOptional(ConfigOptions.TABLE_DATALAKE_FORMAT);
-        if (clusterDataLakeFormat != null
-                && tableDataLakeFormat.isPresent()
-                && tableDataLakeFormat.get() != clusterDataLakeFormat) {
+        if (tableDataLakeFormat.isPresent() && tableDataLakeFormat.get() != clusterDataLakeFormat) {
             throw new InvalidConfigException(
                     String.format(
                             "'%s' ('%s') must match cluster '%s' ('%s') when '%s' is enabled.",

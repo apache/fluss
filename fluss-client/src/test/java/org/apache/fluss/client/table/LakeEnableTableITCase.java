@@ -32,6 +32,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataTypes;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
@@ -46,6 +47,16 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** IT case for lake enable table. */
 class LakeEnableTableITCase extends ClientToServerITCaseBase {
+
+    @BeforeEach
+    void beforeEach() throws Exception {
+        admin.alterClusterConfigs(
+                        Arrays.asList(
+                                new AlterConfig(DATALAKE_FORMAT.key(), null, AlterConfigOpType.SET),
+                                new AlterConfig(
+                                        DATALAKE_ENABLED.key(), null, AlterConfigOpType.SET)))
+                .get();
+    }
 
     @Test
     void testCannotEnableDatalakeForTableCreatedBeforeClusterEnabledDatalake() throws Exception {
@@ -230,7 +241,7 @@ class LakeEnableTableITCase extends ClientToServerITCaseBase {
     @Test
     void testEnableTableAfterClusterEnablesDataLake() throws Exception {
         String databaseName = "test_db";
-        String tableName = "test_table_before_cluster_enable";
+        String tableName = "test_enable_datalake_table";
         TablePath tablePath = TablePath.of(databaseName, tableName);
 
         admin.createDatabase(databaseName, DatabaseDescriptor.EMPTY, true).get();

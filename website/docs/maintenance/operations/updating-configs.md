@@ -13,7 +13,7 @@ Fluss allows you to update cluster or table configurations dynamically without r
 From Fluss version 0.8 onwards, some of the server configs can be updated without restarting the server.
 
 Currently, the supported dynamically updatable server configurations include:
-- `datalake.enabled`: Control whether the cluster is ready to create and manage lakehouse tables. When this option is explicitly configured, `datalake.format` must also be configured.
+- `datalake.enabled`: Control whether the cluster is ready to create and manage lakehouse tables. When this option is explicitly configured to true, `datalake.format` must also be configured.
 - `datalake.format`: Specify the lakehouse format, e.g., `paimon`, `iceberg`. When enabling lakehouse storage explicitly, use it together with `datalake.enabled = true`.
 - Options with prefix `datalake.${datalake.format}`
 - `kv.rocksdb.shared-rate-limiter.bytes-per-sec`: Control RocksDB flush and compaction write rate shared across all RocksDB instances on the TabletServer. The rate limiter is always enabled. Set to a lower value (e.g., 100MB) to limit the rate, or a very high value to effectively disable rate limiting.
@@ -32,16 +32,10 @@ admin.alterClusterConfigs(
                 new AlterConfig(DATALAKE_ENABLED.key(), "true", AlterConfigOpType.SET),
                 new AlterConfig(DATALAKE_FORMAT.key(), "paimon", AlterConfigOpType.SET)));
 
-// Pre-bind the lakehouse format without enabling lakehouse tables
-admin.alterClusterConfigs(
-        Arrays.asList(
-                new AlterConfig(DATALAKE_ENABLED.key(), "false", AlterConfigOpType.SET),
-                new AlterConfig(DATALAKE_FORMAT.key(), "paimon", AlterConfigOpType.SET)));
-
-// Return to legacy behavior where configuring datalake.format alone also enables lakehouse tables
+// Disable lakehouse storage
 admin.alterClusterConfigs(
         Collections.singletonList(
-                new AlterConfig(DATALAKE_ENABLED.key(), null, AlterConfigOpType.DELETE)));
+                new AlterConfig(DATALAKE_ENABLED.key(), "false", AlterConfigOpType.SET)));
 
 // Set RocksDB shared rate limiter to 200MB/sec
 admin.alterClusterConfigs(
@@ -53,8 +47,6 @@ The `AlterConfig` class contains three properties:
 * `key`: The configuration key to be modified (e.g., `datalake.format`)
 * `value`: The configuration value to be set (e.g., `paimon`)
 * `opType`: The operation type, either `AlterConfigOpType.SET` or `AlterConfigOpType.DELETE`
-
-If `datalake.enabled` is explicitly configured, `datalake.format` must also be configured in the cluster.
 
 ### Using Flink Stored Procedures
 
