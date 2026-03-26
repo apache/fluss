@@ -136,30 +136,33 @@ public class AutoPartitionManager implements AutoCloseable {
         tableInfos.forEach(tableInfo -> addAutoPartitionTable(tableInfo, false));
     }
 
-    public void addAutoPartitionTable(TableInfo tableInfo, boolean forceDoAutoPartition) {
+    public void updateAutoPartitionTables(TableInfo tableInfo) {
         checkNotClosed();
         long tableId = tableInfo.getTableId();
+        LOG.info("Updating auto partition table [{}] (id={})", tableInfo.getTablePath(), tableId);
         Set<String> partitions = metadataManager.getPartitions(tableInfo.getTablePath());
         inLock(
                 lock,
                 () -> {
-                    autoPartitionTables.put(tableId, tableInfo);
-                    TreeMap<String, Set<String>> partitionMap =
-                            partitionsByTable.computeIfAbsent(
-                                    tableInfo.getTableId(), k -> new TreeMap<>());
-                    checkNotNull(partitionMap, "Partition map is null.");
-                    partitions.forEach(
-                            partitionName ->
-                                    addPartitionToPartitionsByTable(
-                                            tableInfo, partitionMap, partitionName));
-                    if (tableInfo.getTableConfig().getAutoPartitionStrategy().timeUnit()
-                            == AutoPartitionTimeUnit.DAY) {
-                        // get the delay minutes to create partition
-                        int delayMinutes = ThreadLocalRandom.current().nextInt(60 * 23);
-
-                        autoCreateDayPartitionDelayMinutes.put(tableId, delayMinutes);
-                    }
+                    // Remove old state
+                    removeAutoPartitionTableLocked(tableId);
+                    // Add new state
+                    addAutoPartitionTableLocked(tableInfo, partitions);
                 });
+
+        // schedule auto partition for this table immediately
+        periodicExecutor.schedule(() -> doAutoPartition(tableId, true), 0, TimeUnit.MILLISECONDS);
+        LOG.info(
+                "Updated auto partition table [{}] (id={}) in scheduler",
+                tableInfo.getTablePath(),
+                tableId);
+    }
+
+    public void addAutoPartitionTable(TableInfo tableInfo, boolean forceDoAutoPartition) {
+        checkNotClosed();
+        long tableId = tableInfo.getTableId();
+        Set<String> partitions = metadataManager.getPartitions(tableInfo.getTablePath());
+        inLock(lock, () -> addAutoPartitionTableLocked(tableInfo, partitions));
 
         // schedule auto partition for this table immediately
         periodicExecutor.schedule(
@@ -172,19 +175,38 @@ public class AutoPartitionManager implements AutoCloseable {
 
     public void removeAutoPartitionTable(long tableId) {
         checkNotClosed();
-        TableInfo tableInfo =
-                inLock(
-                        lock,
-                        () -> {
-                            partitionsByTable.remove(tableId);
-                            autoCreateDayPartitionDelayMinutes.remove(tableId);
-                            return autoPartitionTables.remove(tableId);
-                        });
+        TableInfo tableInfo = inLock(lock, () -> removeAutoPartitionTableLocked(tableId));
         if (tableInfo != null) {
             LOG.info(
                     "Removed auto partition table [{}] (id={}) from scheduler",
                     tableInfo.getTablePath(),
                     tableInfo.getTableId());
+        }
+    }
+
+    /** Must be called while holding {@link #lock}. */
+    @Nullable
+    private TableInfo removeAutoPartitionTableLocked(long tableId) {
+        partitionsByTable.remove(tableId);
+        autoCreateDayPartitionDelayMinutes.remove(tableId);
+        return autoPartitionTables.remove(tableId);
+    }
+
+    /** Must be called while holding {@link #lock}. */
+    private void addAutoPartitionTableLocked(TableInfo tableInfo, Set<String> partitions) {
+        long tableId = tableInfo.getTableId();
+        autoPartitionTables.put(tableId, tableInfo);
+        TreeMap<String, Set<String>> partitionMap =
+                partitionsByTable.computeIfAbsent(tableId, k -> new TreeMap<>());
+        checkNotNull(partitionMap, "Partition map is null.");
+        partitions.forEach(
+                partitionName ->
+                        addPartitionToPartitionsByTable(tableInfo, partitionMap, partitionName));
+        if (tableInfo.getTableConfig().getAutoPartitionStrategy().timeUnit()
+                == AutoPartitionTimeUnit.DAY) {
+            // get the delay minutes to create partition
+            int delayMinutes = ThreadLocalRandom.current().nextInt(60 * 23);
+            autoCreateDayPartitionDelayMinutes.put(tableId, delayMinutes);
         }
     }
 
@@ -312,6 +334,7 @@ public class AutoPartitionManager implements AutoCloseable {
                         tableId);
                 continue;
             }
+
             dropPartitions(
                     tablePath,
                     tableInfo.getPartitionKeys(),

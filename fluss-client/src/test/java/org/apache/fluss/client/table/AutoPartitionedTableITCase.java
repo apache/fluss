@@ -32,6 +32,7 @@ import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.GenericRow;
@@ -45,9 +46,12 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -377,6 +381,58 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
 
         // then, let's verify the logs
         verifyPartitionLogs(table, schema.getRowType(), expectPartitionAppendRows);
+    }
+
+    @Test
+    void testAlterAutoPartitionRetention() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_alter_auto_partition_retention");
+
+        // Create an auto-partitioned table with DAY time unit and retention=2
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("c", DataTypes.STRING())
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .partitionedBy("c")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.DAY)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION, 2)
+                        .build();
+        createTable(tablePath, descriptor, false);
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
+
+        LocalDate today = LocalDate.now();
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMdd");
+
+        // Manually add an old partition that falls outside retention=2 window
+        String oldPartition = today.minusDays(3).format(formatter);
+        admin.createPartition(tablePath, newPartitionSpec("c", oldPartition), false).get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath, 3);
+
+        // Now alter retention from 2 to 1 via admin API
+        List<TableChange> changes =
+                Collections.singletonList(
+                        TableChange.set(
+                                ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION.key(), "1"));
+        admin.alterTable(tablePath, changes, false).get();
+
+        // The old partition should be dropped after the periodic check fires
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionsDropped(
+                tablePath, Collections.singletonList(oldPartition));
+
+        // Verify remaining partitions are within the new retention window
+        List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
+        List<String> partitionNames =
+                partitionInfos.stream()
+                        .map(PartitionInfo::getPartitionName)
+                        .collect(Collectors.toList());
+        assertThat(partitionNames).doesNotContain(oldPartition);
     }
 
     private Schema createPartitionedTable(TablePath tablePath, boolean isPrimaryTable)

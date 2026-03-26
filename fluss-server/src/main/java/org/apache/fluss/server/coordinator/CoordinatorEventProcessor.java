@@ -118,6 +118,7 @@ import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
+import org.apache.fluss.utils.AutoPartitionStrategy;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -783,6 +784,15 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         newTableInfo.getTableId(), newFreshness.toMillis());
             }
         }
+
+        AutoPartitionStrategy autoPartitionStrategy =
+                newTableInfo.getTableConfig().getAutoPartitionStrategy();
+        if (autoPartitionStrategy.isAutoPartitionEnabled()
+                && autoPartitionStrategy.numToRetain()
+                        != oldTableInfo.getTableConfig().getAutoPartitionStrategy().numToRetain()) {
+            autoPartitionManager.updateAutoPartitionTables(newTableInfo);
+        }
+
         // more post-alter actions can be added here
     }
 
