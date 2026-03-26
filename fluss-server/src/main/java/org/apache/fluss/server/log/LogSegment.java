@@ -180,7 +180,6 @@ public final class LogSegment {
                             + lazyOffsetIndex.file().getAbsolutePath()
                             + " does not exist.");
         }
-        lazyOffsetIndex.get().sanityCheck();
 
         if (!lazyTimeIndex.file().exists()) {
             throw new NoSuchFileException(
@@ -188,7 +187,10 @@ public final class LogSegment {
                             + lazyTimeIndex.file().getAbsolutePath()
                             + " does not exist.");
         }
-        lazyTimeIndex.get().sanityCheck();
+
+        // Sanity checks for time index and offset index are skipped because
+        // we will recover the segments above the recovery point in recoverLog()
+        // in any case so sanity checking them here is redundant.
     }
 
     /**

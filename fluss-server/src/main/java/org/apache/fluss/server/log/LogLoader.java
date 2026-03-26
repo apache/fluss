@@ -23,7 +23,6 @@ import org.apache.fluss.exception.InvalidOffsetException;
 import org.apache.fluss.exception.LogSegmentOffsetOverflowException;
 import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.metadata.LogFormat;
-import org.apache.fluss.server.exception.CorruptIndexException;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -137,6 +136,7 @@ final class LogLoader {
      */
     private Tuple2<Long, Long> recoverLog() throws IOException {
         if (!isCleanShutdown) {
+            long recoverLogStart = System.currentTimeMillis();
             List<LogSegment> unflushed =
                     logSegments.values(recoveryPointCheckpoint, Long.MAX_VALUE);
             int numUnflushed = unflushed.size();
@@ -153,46 +153,41 @@ final class LogLoader {
                         numUnflushed,
                         logSegments.getTableBucket());
 
+                int truncatedBytes = -1;
                 try {
-                    segment.sanityCheck();
-                } catch (NoSuchFileException | CorruptIndexException e) {
+                    truncatedBytes = recoverSegment(segment);
+                } catch (InvalidOffsetException e) {
+                    long startOffset = segment.getBaseOffset();
                     LOG.warn(
-                            "Found invalid index file corresponding log file {} for bucket {}, "
-                                    + "recovering segment and rebuilding index files...",
-                            segment.getFileLogRecords().file().getAbsoluteFile(),
+                            "Found invalid offset during recovery for bucket {}. Deleting the corrupt segment "
+                                    + "and creating an empty one with starting offset {}",
                             logSegments.getTableBucket(),
-                            e);
-
-                    int truncatedBytes = -1;
-                    try {
-                        truncatedBytes = recoverSegment(segment);
-                    } catch (InvalidOffsetException invalidOffsetException) {
-                        long startOffset = segment.getBaseOffset();
-                        LOG.warn(
-                                "Found invalid offset during recovery for bucket {}. Deleting the corrupt segment "
-                                        + "and creating an empty one with starting offset {}",
-                                logSegments.getTableBucket(),
-                                startOffset);
-                        truncatedBytes = segment.truncateTo(startOffset);
-                    }
-
-                    if (truncatedBytes > 0) {
-                        // we had an invalid message, delete all remaining log
-                        LOG.warn(
-                                "Corruption found in segment {} for bucket {}, truncating to offset {}",
-                                segment.getBaseOffset(),
-                                logSegments.getTableBucket(),
-                                segment.readNextOffset());
-                        removeAndDeleteSegments(unflushedIter);
-                        truncated = true;
-                    }
+                            startOffset);
+                    truncatedBytes = segment.truncateTo(startOffset);
                 }
-                numFlushed += 1;
+
+                if (truncatedBytes > 0) {
+                    // we had an invalid message, delete all remaining log
+                    LOG.warn(
+                            "Corruption found in segment {} for bucket {}, truncating to offset {}",
+                            segment.getBaseOffset(),
+                            logSegments.getTableBucket(),
+                            segment.readNextOffset());
+                    removeAndDeleteSegments(unflushedIter);
+                    truncated = true;
+                } else {
+                    numFlushed += 1;
+                }
             }
+            long recoverLogEnd = System.currentTimeMillis();
+            LOG.info(
+                    "Log recovery completed for bucket {} in {} ms",
+                    logSegments.getTableBucket(),
+                    recoverLogEnd - recoverLogStart);
         }
 
-        // TODO truncate log to recover maybe unflush segments.
         if (logSegments.isEmpty()) {
+            // TODO: use logStartOffset if issue https://github.com/apache/fluss/issues/744 ready
             logSegments.add(LogSegment.open(logTabletDir, 0L, conf, logFormat));
         }
         long logEndOffset = logSegments.lastSegment().get().readNextOffset();
@@ -294,6 +289,20 @@ final class LogLoader {
                         long baseOffset = FlussPaths.offsetFromFile(file);
                         LogSegment segment =
                                 LogSegment.open(logTabletDir, baseOffset, conf, true, 0, logFormat);
+
+                        try {
+                            segment.sanityCheck();
+                        } catch (NoSuchFileException e) {
+                            if (isCleanShutdown
+                                    || segment.getBaseOffset() < recoveryPointCheckpoint) {
+                                LOG.error(
+                                        "Could not find offset index file corresponding to log file {} "
+                                                + "for bucket {}, recovering segment and rebuilding index files...",
+                                        logSegments.getTableBucket(),
+                                        segment.getFileLogRecords().file().getAbsoluteFile());
+                            }
+                            recoverSegment(segment);
+                        }
                         logSegments.add(segment);
                     }
                 }
