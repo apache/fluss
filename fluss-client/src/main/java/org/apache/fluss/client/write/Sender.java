@@ -297,7 +297,7 @@ public class Sender implements Runnable {
     private void maybeAbortBatches(Exception exception) {
         if (accumulator.hasIncomplete()) {
             LOG.error("Aborting write batches due to fatal error", exception);
-            accumulator.abortBatches(exception);
+            accumulator.abortAllBatches(exception);
         }
     }
 

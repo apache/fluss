@@ -40,6 +40,7 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 public final class CompactedLogWriteBatch extends AbstractRowLogWriteBatch<CompactedRow> {
 
     public CompactedLogWriteBatch(
+            long tableId,
             int bucketId,
             PhysicalTablePath physicalTablePath,
             int schemaId,
@@ -47,6 +48,7 @@ public final class CompactedLogWriteBatch extends AbstractRowLogWriteBatch<Compa
             AbstractPagedOutputView outputView,
             long createdMs) {
         super(
+                tableId,
                 bucketId,
                 physicalTablePath,
                 createdMs,

@@ -67,7 +67,6 @@ public class CompactedLogWriteBatchTest {
         CompactedLogWriteBatch logProducerBatch =
                 createLogWriteBatch(
                         new TableBucket(DATA1_TABLE_ID, bucketId),
-                        0L,
                         writeLimit,
                         MemorySegment.allocateHeapMemory(writeLimit));
 
@@ -89,7 +88,7 @@ public class CompactedLogWriteBatchTest {
     void testToBytes() throws Exception {
         int bucketId = 0;
         CompactedLogWriteBatch logProducerBatch =
-                createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId), 0L);
+                createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId));
         boolean appendResult = logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
         assertThat(appendResult).isTrue();
 
@@ -105,7 +104,7 @@ public class CompactedLogWriteBatchTest {
     void testCompleteTwice() throws Exception {
         int bucketId = 0;
         CompactedLogWriteBatch logWriteBatch =
-                createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId), 0L);
+                createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId));
         boolean appendResult = logWriteBatch.tryAppend(createWriteRecord(), newWriteCallback());
         assertThat(appendResult).isTrue();
 
@@ -120,7 +119,7 @@ public class CompactedLogWriteBatchTest {
     void testFailedTwice() throws Exception {
         int bucketId = 0;
         CompactedLogWriteBatch logWriteBatch =
-                createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId), 0L);
+                createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId));
         boolean appendResult = logWriteBatch.tryAppend(createWriteRecord(), newWriteCallback());
         assertThat(appendResult).isTrue();
 
@@ -135,7 +134,7 @@ public class CompactedLogWriteBatchTest {
     void testClose() throws Exception {
         int bucketId = 0;
         CompactedLogWriteBatch logProducerBatch =
-                createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId), 0L);
+                createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId));
         boolean appendResult = logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
         assertThat(appendResult).isTrue();
 
@@ -153,7 +152,6 @@ public class CompactedLogWriteBatchTest {
         CompactedLogWriteBatch logProducerBatch =
                 createLogWriteBatch(
                         new TableBucket(DATA1_TABLE_ID, bucketId),
-                        0L,
                         writeLimit,
                         MemorySegment.allocateHeapMemory(writeLimit));
 
@@ -202,15 +200,14 @@ public class CompactedLogWriteBatchTest {
                 DATA1_TABLE_INFO, DATA1_PHYSICAL_TABLE_PATH, row, null);
     }
 
-    private CompactedLogWriteBatch createLogWriteBatch(TableBucket tb, long baseLogOffset)
-            throws Exception {
-        return createLogWriteBatch(
-                tb, baseLogOffset, Integer.MAX_VALUE, MemorySegment.allocateHeapMemory(1000));
+    private CompactedLogWriteBatch createLogWriteBatch(TableBucket tb) throws Exception {
+        return createLogWriteBatch(tb, Integer.MAX_VALUE, MemorySegment.allocateHeapMemory(1000));
     }
 
     private CompactedLogWriteBatch createLogWriteBatch(
-            TableBucket tb, long baseLogOffset, int writeLimit, MemorySegment memorySegment) {
+            TableBucket tb, int writeLimit, MemorySegment memorySegment) {
         return new CompactedLogWriteBatch(
+                tb.getTableId(),
                 tb.getBucket(),
                 DATA1_PHYSICAL_TABLE_PATH,
                 DATA1_TABLE_INFO.getSchemaId(),
