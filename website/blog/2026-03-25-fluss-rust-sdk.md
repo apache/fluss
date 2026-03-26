@@ -57,11 +57,11 @@ The Rust core implements the complete Fluss client protocol. Here's how the piec
 
 When you write a record, the call is synchronous: the record gets queued into a per-bucket batch without touching the network. A background sender task picks up ready batches and ships them as RPCs to the responsible TabletServers. This follows the same pattern as both the Fluss Java client and Kafka producers.
 
-The caller gets back a `WriteResultFuture`. Await it to block until the server confirms, or drop it for fire-and-forget. Either way, the server acknowledges the write with acks=all by default, so dropping the future skips the client-side wait, not the durability guarantee.
+The caller gets back a `WriteResultFuture`. Await it to block until the server confirms, or drop it for fire-and-forget. The write proceeds through the background sender regardless, with the same retries and server-side durability (acks=all by default). In high-throughput pipelines you typically don't await every write individually, but collect futures for a batch of records and await them together before committing your source offset.
 
 Batches ship automatically when they fill up or after a short timeout (100ms by default), so `flush()` isn't needed for data to reach the server. It's there for when you need to confirm that everything in flight has landed. If the write buffer fills up, new writes block until space frees up rather than silently consuming unbounded memory.
 
-Fluss has two table types (primary key tables and log tables), and the Rust core has a writer for each: `UpsertWriter` for keyed upserts and deletes, `AppendWriter` for append-only log writes. Both support idempotent delivery, and `AppendWriter` can also accept Arrow `RecordBatch` directly if you already have columnar data.
+Fluss has two table types (primary key tables and log tables), and the Rust core has a writer for each. `UpsertWriter` handles keyed writes: full upserts, deletes, and partial updates where you send only the columns that changed. `AppendWriter` handles append-only log writes and can also accept Arrow `RecordBatch` directly if you already have columnar data. Both support idempotent delivery.
 
 For reads, `LogScanner` provides streaming consumption with offset tracking. You can push column projection down to the server, so if you only need three columns out of twenty, only those three travel over the network. Each record also carries changelog metadata (offset, timestamp, and change type like `AppendOnly`, `Insert`, `UpdateBefore`, `UpdateAfter`, `Delete`), which is how Fluss exposes its CDC semantics to consumers outside of Flink.
 
@@ -141,6 +141,8 @@ Beyond feature parity, there are two directions we're especially excited about.
 The first is **DataFusion integration**. The Rust core already produces Arrow RecordBatches, which is exactly what DataFusion's table provider interface expects. Wiring the two together would let users run SQL queries directly over Fluss data from Rust or Python, without going through Flink.
 
 The second is a **Fluss gateway service** built on top of the Rust core. Not every environment can load a native library. A lightweight Rust-based gateway could expose Fluss over HTTP or gRPC, making it accessible from any language or tool that can make a network call. The Rust SDK gives us the right foundation for that: a single process that handles the protocol, batching, and connection management, and serves multiple clients over a simple API.
+
+On the project side, the community is working toward moving fluss-rust into the main Apache Fluss repository. This would unify the release process, simplify cross-repo coordination, and signal the project's long-term commitment to the multi-language SDK as a first-class part of Fluss.
 
 If any of this is interesting to you, we welcome contributions, bug reports, and feedback.
 
