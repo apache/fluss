@@ -21,7 +21,6 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.PartitionNotExistException;
-import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TablePath;
@@ -88,13 +87,21 @@ public class DynamicPartitionCreator {
                 // if the partition exists, we should skip creating it.
                 LOG.debug("Partition {} already exists, skipping.", physicalTablePath);
             } else {
+                // Validate early, before touching any state.
+                ResolvedPartitionSpec resolvedPartitionSpec =
+                        ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName);
+                validateAutoPartitionTime(
+                        resolvedPartitionSpec.toPartitionSpec(),
+                        partitionKeys,
+                        autoPartitionStrategy);
+
                 // create partition if not exists.
                 // partition may not exist, we should try to create it.
                 if (inflightPartitionsToCreate.add(physicalTablePath)) {
                     // if the partition is not in inflightPartitionsToCreate, we should create it.
                     // this means that the partition is not being created by other threads.
                     LOG.info("Dynamically creating partition for {}", physicalTablePath);
-                    createPartition(physicalTablePath, partitionKeys, autoPartitionStrategy);
+                    createPartition(physicalTablePath, partitionKeys);
                 } else {
                     // if the partition is already in inflightPartitionsToCreate, we should skip
                     // creating it.
@@ -125,19 +132,14 @@ public class DynamicPartitionCreator {
         return idExist;
     }
 
-    private void createPartition(
-            PhysicalTablePath physicalTablePath,
-            List<String> partitionKeys,
-            AutoPartitionStrategy autoPartitionStrategy) {
+    private void createPartition(PhysicalTablePath physicalTablePath, List<String> partitionKeys) {
         String partitionName = physicalTablePath.getPartitionName();
         TablePath tablePath = physicalTablePath.getTablePath();
         checkArgument(partitionName != null, "Partition name shouldn't be null.");
         ResolvedPartitionSpec resolvedPartitionSpec =
                 ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName);
-        PartitionSpec partitionSpec = resolvedPartitionSpec.toPartitionSpec();
-        validateAutoPartitionTime(partitionSpec, partitionKeys, autoPartitionStrategy);
 
-        admin.createPartition(tablePath, partitionSpec, true)
+        admin.createPartition(tablePath, resolvedPartitionSpec.toPartitionSpec(), true)
                 .whenComplete(
                         (ignore, throwable) -> {
                             if (throwable != null) {
