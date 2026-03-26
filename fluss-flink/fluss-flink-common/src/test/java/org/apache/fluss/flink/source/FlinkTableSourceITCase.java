@@ -59,6 +59,8 @@ import javax.annotation.Nullable;
 
 import java.time.Duration;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -675,12 +677,19 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                                         tableName))
                         .collect();
         assertResultsIgnoreOrder(rowIter, expectedRowValues, false);
+        String partition1 =
+                LocalDateTime.now().minusYears(1).format(DateTimeFormatter.ofPattern("yyyy"));
+        String partition2 =
+                LocalDateTime.now().minusYears(2).format(DateTimeFormatter.ofPattern("yyyy"));
 
         // then create some new partitions, and write rows to the new partitions
-        tEnv.executeSql(String.format("alter table %s add partition (c = '2000')", tableName));
-        tEnv.executeSql(String.format("alter table %s add partition (c = '2001')", tableName));
+        tEnv.executeSql(
+                String.format("alter table %s add partition (c = '%s')", tableName, partition1));
+        tEnv.executeSql(
+                String.format("alter table %s add partition (c = '%s')", tableName, partition2));
         // write data to the new partitions
-        expectedRowValues = writeRowsToPartition(conn, tablePath, Arrays.asList("2000", "2001"));
+        expectedRowValues =
+                writeRowsToPartition(conn, tablePath, Arrays.asList(partition1, partition2));
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
     }
 

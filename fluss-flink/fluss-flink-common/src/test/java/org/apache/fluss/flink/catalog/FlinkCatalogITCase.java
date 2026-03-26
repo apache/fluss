@@ -26,6 +26,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
+import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.metadata.DataLakeFormat;
@@ -539,12 +540,16 @@ abstract class FlinkCatalogITCase {
                         .format(DateTimeFormatter.ofPattern(datetimePattern));
 
         // 2. test add partitions.
-        tEnv.executeSql(
-                String.format(
-                        "alter table %s add partition (b = 1,c = 1,hh = %s)", tblName, minus3hour));
-        tEnv.executeSql(
-                String.format(
-                        "alter table %s add partition (b = 1,c = 2,hh = %s)", tblName, minus3hour));
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        String.format(
+                                                "alter table %s add partition (b = 1,c = 1,hh = %s)",
+                                                tblName, minus3hour)))
+                .rootCause()
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining(
+                        String.format("Partition value '%s' is out-of-date.", minus3hour));
         tEnv.executeSql(
                 String.format(
                         "alter table %s add partition (b = 1,c = 1,hh = %s)", tblName, minus2hour));
