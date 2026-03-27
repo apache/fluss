@@ -74,6 +74,61 @@ public class TieringSourceFetcherManager<WriteResult>
         }
     }
 
+    /** Notify the SplitReader that a table tiering has failed and should be cleaned up. */
+    public void notifyTableTieringFailed(long tableId) {
+        if (!fetchers.isEmpty()) {
+            LOG.info("Notifying SplitReader that table {} tiering has failed", tableId);
+            fetchers.values()
+                    .forEach(
+                            splitFetcher ->
+                                    enqueueNotifyTableTieringFailedTask(splitFetcher, tableId));
+        } else {
+            SplitFetcher<TableBucketWriteResult<WriteResult>, TieringSplit> splitFetcher =
+                    createSplitFetcher();
+            LOG.info(
+                    "fetchers is empty, enqueue notify table tiering failed for table {}", tableId);
+            enqueueNotifyTableTieringFailedTask(splitFetcher, tableId);
+            startFetcher(splitFetcher);
+        }
+    }
+
+    /**
+     * Poll all failed table infos from the SplitReaders.
+     *
+     * @param consumer the consumer to process each failed table info
+     */
+    public void pollFailedTableInfos(
+            java.util.function.Consumer<TieringSplitReader.FailedTableInfo> consumer) {
+        for (SplitFetcher<TableBucketWriteResult<WriteResult>, TieringSplit> fetcher :
+                fetchers.values()) {
+            TieringSplitReader<WriteResult> splitReader =
+                    (TieringSplitReader<WriteResult>) fetcher.getSplitReader();
+            TieringSplitReader.FailedTableInfo failedInfo;
+            while ((failedInfo = splitReader.pollFailedTableInfo()) != null) {
+                consumer.accept(failedInfo);
+            }
+        }
+    }
+
+    private void enqueueNotifyTableTieringFailedTask(
+            SplitFetcher<TableBucketWriteResult<WriteResult>, TieringSplit> splitFetcher,
+            long failedTableId) {
+        splitFetcher.enqueueTask(
+                new SplitFetcherTask() {
+                    @Override
+                    public boolean run() {
+                        ((TieringSplitReader<WriteResult>) splitFetcher.getSplitReader())
+                                .notifyTableTieringFailed(failedTableId);
+                        return true;
+                    }
+
+                    @Override
+                    public void wakeUp() {
+                        // do nothing
+                    }
+                });
+    }
+
     private void enqueueMarkTableReachTieringMaxDurationTask(
             SplitFetcher<TableBucketWriteResult<WriteResult>, TieringSplit> splitFetcher,
             long reachTieringDeadlineTable) {

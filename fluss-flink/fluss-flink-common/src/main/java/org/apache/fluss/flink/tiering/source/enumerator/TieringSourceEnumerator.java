@@ -297,6 +297,8 @@ public class TieringSourceEnumerator
             } else {
                 failedTableEpochs.put(failedTableId, tieringEpoch);
             }
+            // Broadcast FailedTieringEvent to other readers
+            broadcastFailedTieringEvent(subtaskId, failedTableId, failedEvent.failReason());
         }
 
         if (!finishedTables.isEmpty() || !failedTableEpochs.isEmpty()) {
@@ -304,6 +306,20 @@ public class TieringSourceEnumerator
             LOG.info("Finished tiering table {}.", finishedTables);
             this.context.callAsync(
                     this::requestTieringTableSplitsViaHeartBeat, this::generateAndAssignSplits);
+        }
+    }
+
+    private void broadcastFailedTieringEvent(
+            int sourceSubtaskId, long failedTableId, String failReason) {
+        FailedTieringEvent failedEvent = new FailedTieringEvent(failedTableId, failReason);
+
+        // Broadcast to all readers including the sender.
+        for (Integer readerSubtaskId : context.registeredReaders().keySet()) {
+            LOG.info(
+                    "Sending FailedTieringEvent for table {} to reader {}.",
+                    failedTableId,
+                    readerSubtaskId);
+            context.sendEventToSourceReader(readerSubtaskId, failedEvent);
         }
     }
 
