@@ -97,7 +97,17 @@ public class AzureFileSystemPluginTest {
         try {
             plugin.create(uri, flussConfig);
         } catch (Exception e) {
-            // expected or ignored
+            // ABFS will fail to connect to Azure in a test environment, but it must NOT fail
+            // with a SharedKey/SimpleKeyProvider error — that would mean fs.azure.account.auth.type
+            // was not set to "Custom", causing the driver to ignore the custom token provider.
+            Throwable cause = e;
+            while (cause != null) {
+                assertThat(cause.getMessage())
+                        .as(
+                                "ABFS should not fall back to SharedKey auth when delegation tokens are configured")
+                        .doesNotContain("Failure to initialize configuration");
+                cause = cause.getCause();
+            }
         }
     }
 
