@@ -170,33 +170,25 @@ Usage:
 {{- end -}}
 
 {{/*
-Compile all warnings and errors into a single message.
+Collects security warning messages.
 Usage:
-  include "fluss.security.validateValues" .
+  include "fluss.security.validateWarning" .
 */}}
-{{- define "fluss.security.validateValues" -}}
+{{- define "fluss.security.validateWarning" -}}
+{{- include "fluss.security.sasl.warnInternalUser" . -}}
+{{- end -}}
 
+{{/*
+Collects security error messages.
+Usage:
+  include "fluss.security.validateError" .
+*/}}
+{{- define "fluss.security.validateError" -}}
 {{- $errMessages := list -}}
 {{- $errMessages = append $errMessages (include "fluss.security.sasl.validateMechanisms" .) -}}
 {{- $errMessages = append $errMessages (include "fluss.security.sasl.validateClientPlainUsers" .) -}}
-
 {{- $errMessages = without $errMessages "" -}}
-{{- $errMessage := join "\n" $errMessages -}}
-
-{{- $warnMessages := list -}}
-{{- $warnMessages = append $warnMessages (include "fluss.security.sasl.warnInternalUser" .) -}}
-
-{{- $warnMessages = without $warnMessages "" -}}
-{{- $warnMessage := join "\n" $warnMessages -}}
-
-{{- if $warnMessage -}}
-{{-   printf "\nVALUES WARNING:\n%s" $warnMessage -}}
-{{- end -}}
-
-{{- if $errMessage -}}
-{{-   printf "\nVALUES VALIDATION:\n%s" $errMessage | fail -}}
-{{- end -}}
-
+{{- join "\n" $errMessages -}}
 {{- end -}}
 
 {{/*

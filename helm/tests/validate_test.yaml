@@ -16,8 +16,26 @@
 # limitations under the License.
 #
 
-CHART NAME: {{ .Chart.Name }}
-CHART VERSION: {{ .Chart.Version }}
-APP VERSION: {{ .Chart.AppVersion }}
+suite: validate-aggregation
+templates:
+  - templates/NOTES.txt
+tests:
+  - it: renders warning for auto-generated internal SASL credentials
+    set:
+      security.internal.sasl.mechanism: plain
+    asserts:
+      - matchRegexRaw:
+          pattern: 'VALUES WARNING:'
+      - matchRegexRaw:
+          pattern: 'AUTO-GENERATED SASL credentials'
 
-{{ include "fluss.validate" . }}
+  - it: fails with error for invalid mechanism through aggregator
+    set:
+      security.client.sasl.mechanism: bogus
+    asserts:
+      - failedTemplate:
+          errorMessage: "VALUES VALIDATION:\nsecurity.client.sasl.mechanism must be empty or: plain"
+
+  - it: passes cleanly with default values
+    asserts:
+      - notFailedTemplate: {}
