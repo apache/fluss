@@ -21,6 +21,9 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotTableLease;
 import org.apache.fluss.utils.MapUtils;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.util.Arrays;
@@ -30,6 +33,7 @@ import java.util.Objects;
 /** handler of kv snapshot lease. */
 @NotThreadSafe
 public class KvSnapshotLeaseHandler {
+    private static final Logger LOG = LoggerFactory.getLogger(KvSnapshotLeaseHandler.class);
     private long expirationTime;
 
     /** A map from table id to kv snapshot lease for one table. */
@@ -135,7 +139,12 @@ public class KvSnapshotLeaseHandler {
         long tableId = tableBucket.getTableId();
         Long partitionId = tableBucket.getPartitionId();
         int bucketId = tableBucket.getBucket();
+        Long snapshotId = -1L;
         KvSnapshotTableLease tableLease = tableIdToTableLease.get(tableId);
+        if (tableLease == null) {
+            LOG.debug("Table lease not found for tableId: {}.", tableId);
+            return -1L;
+        }
         if (partitionId == null) {
             // For none-partitioned table.
             bucketIndex = tableLease.getBucketSnapshots();
@@ -144,7 +153,6 @@ public class KvSnapshotLeaseHandler {
             bucketIndex = tableLease.getBucketSnapshots(partitionId);
         }
 
-        Long snapshotId = -1L;
         if (bucketIndex != null) {
             // The bucket id exceeds the current array size, meaning it was never registered
             // under this lease. Return -1 directly.
