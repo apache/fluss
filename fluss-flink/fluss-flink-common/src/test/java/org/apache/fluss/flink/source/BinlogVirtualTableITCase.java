@@ -29,10 +29,6 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.utils.clock.ManualClock;
 
-import org.apache.flink.api.common.JobID;
-import org.apache.flink.configuration.CheckpointingOptions;
-import org.apache.flink.configuration.MemorySize;
-import org.apache.flink.configuration.StateBackendOptions;
 import org.apache.flink.core.execution.SavepointFormatType;
 import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -47,11 +43,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
-import org.junit.jupiter.api.io.TempDir;
 
 import javax.annotation.Nullable;
 
-import java.io.File;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -62,18 +56,14 @@ import java.util.concurrent.TimeUnit;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.flink.utils.FlinkTestBase.writeRows;
-import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
 import static org.apache.fluss.testutils.DataTestUtils.row;
-import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Integration test for $binlog virtual table functionality. */
-abstract class BinlogVirtualTableITCase {
+abstract class BinlogVirtualTableITCase extends FlussVirtualTableITCaseBase {
 
     protected static final ManualClock CLOCK = new ManualClock();
-    @TempDir public static File checkpointDir;
-    @TempDir public static File savepointDir;
 
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
@@ -154,12 +144,6 @@ abstract class BinlogVirtualTableITCase {
         tEnv.useDatabase(DEFAULT_DB);
 
         return tEnv;
-    }
-
-    @AfterEach
-    void after() {
-        tEnv.useDatabase(BUILTIN_DATABASE);
-        tEnv.executeSql(String.format("drop database %s cascade", DEFAULT_DB));
     }
 
     /** Deletes rows from a primary key table using the proper delete API. */
@@ -475,38 +459,5 @@ abstract class BinlogVirtualTableITCase {
 
         // Cleanup job
         insertResult.getJobClient().get().cancel().get();
-    }
-
-    private static org.apache.flink.configuration.Configuration getFileBasedCheckpointsConfig(
-            File savepointDir) {
-        return getFileBasedCheckpointsConfig(savepointDir.toURI().toString());
-    }
-
-    private static org.apache.flink.configuration.Configuration getFileBasedCheckpointsConfig(
-            final String savepointDir) {
-        final org.apache.flink.configuration.Configuration config =
-                new org.apache.flink.configuration.Configuration();
-        config.set(StateBackendOptions.STATE_BACKEND, "hashmap");
-        config.set(CheckpointingOptions.CHECKPOINTS_DIRECTORY, checkpointDir.toURI().toString());
-        config.set(CheckpointingOptions.FS_SMALL_FILE_THRESHOLD, MemorySize.ZERO);
-        config.set(CheckpointingOptions.SAVEPOINT_DIRECTORY, savepointDir);
-        return config;
-    }
-
-    protected static void waitForCheckpoint(JobID jobId) {
-        String jobIdStr = jobId.toHexString();
-        waitUntil(
-                () -> {
-                    File jobCheckpointDir = new File(checkpointDir, jobIdStr);
-                    if (!jobCheckpointDir.exists()) {
-                        return false;
-                    }
-                    File[] checkpoints =
-                            jobCheckpointDir.listFiles(
-                                    f -> f.isDirectory() && f.getName().startsWith("chk-"));
-                    return checkpoints != null && checkpoints.length > 0;
-                },
-                Duration.ofSeconds(60),
-                "Timeout waiting for checkpoint for job " + jobIdStr);
     }
 }
