@@ -274,11 +274,11 @@ tests:
           path: data["server.yaml"]
           pattern: 'security\.sasl\.enabled\.mechanisms: PLAIN,PLAIN'
   - it: writes server yaml using expected destination path
-    template: templates/sts-tablet.yaml
+    template: templates/configmap.yaml
     asserts:
       - matchRegex:
-          path: spec.template.spec.containers[0].command[2]
+          path: data["entrypoint.sh"]
           pattern: 'cp /opt/conf/server\.yaml \$FLUSS_HOME/conf'
       - matchRegex:
-          path: spec.template.spec.containers[0].command[2]
+          path: data["entrypoint.sh"]
           pattern: '>> \$FLUSS_HOME/conf/server\.yaml'
