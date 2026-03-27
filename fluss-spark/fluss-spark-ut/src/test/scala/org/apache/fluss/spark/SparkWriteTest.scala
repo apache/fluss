@@ -47,7 +47,9 @@ class SparkWriteTest extends FlussSparkTestBase {
                  |  1234567.89, 12345678900987654321.12,
                  |  "test",
                  |  TO_TIMESTAMP('2025-12-31 10:00:00', 'yyyy-MM-dd kk:mm:ss'),
-                 |  array(11.11F, 22.22F), struct(123L, "apache fluss")
+                 |  array(11.11F, 22.22F),
+                 |  map("k1", 111, "k2", 222),
+                 |  struct(123L, "apache fluss")
                  |)
                  |""".stripMargin)
 
@@ -56,7 +58,7 @@ class SparkWriteTest extends FlussSparkTestBase {
     assertThat(rows.length).isEqualTo(1)
 
     val row = rows.head
-    assertThat(row.getFieldCount).isEqualTo(13)
+    assertThat(row.getFieldCount).isEqualTo(14)
     assertThat(row.getBoolean(0)).isEqualTo(true)
     assertThat(row.getByte(1)).isEqualTo(1.toByte)
     assertThat(row.getShort(2)).isEqualTo(10.toShort)
@@ -71,7 +73,12 @@ class SparkWriteTest extends FlussSparkTestBase {
     assertThat(row.getTimestampLtz(10, 6).toInstant)
       .isEqualTo(Timestamp.valueOf("2025-12-31 10:00:00.0").toInstant)
     assertThat(row.getArray(11).toFloatArray).containsExactly(Array(11.11f, 22.22f): _*)
-    val nestedRow = row.getRow(12, 2)
+    val mapData = row.getMap(12)
+    assertThat(mapData.size()).isEqualTo(2)
+    assertThat(mapData.keyArray().getString(0).toString).isEqualTo("k1")
+    assertThat(mapData.keyArray().getString(1).toString).isEqualTo("k2")
+    assertThat(mapData.valueArray().toIntArray).containsExactly(Array(111, 222): _*)
+    val nestedRow = row.getRow(13, 2)
     assertThat(nestedRow.getFieldCount).isEqualTo(2)
     assertThat(nestedRow.getLong(0)).isEqualTo(123L)
     assertThat(nestedRow.getString(1).toString).isEqualTo("apache fluss")

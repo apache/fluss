@@ -76,8 +76,7 @@ object DataConverter {
   }
 
   def toSparkMap(flussMap: FlussInternalMap, mapType: FlussMapType): SparkMapData = {
-    // TODO: support map type in fluss-spark
-    throw new UnsupportedOperationException()
+    new FlussAsSparkMap(mapType).replace(flussMap)
   }
 
   def toSparkInternalRow(flussRow: FlussInternalRow, rowType: RowType): SparkInteralRow = {
