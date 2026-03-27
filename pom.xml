@@ -108,7 +108,7 @@
         <jaxb.api.version>2.3.1</jaxb.api.version>
         <junit5.version>5.9.1</junit5.version>
         <mockito.version>3.4.6</mockito.version>
-        <assertj.version>3.23.1</assertj.version>
+        <assertj.version>3.27.7</assertj.version>
 
         <protobuf.version>3.25.5</protobuf.version>
         <protostuff.version>1.7.2</protostuff.version>
