@@ -82,4 +82,14 @@ class FetchParamsTest {
         // the FileLogProjection should be cached
         assertThat(fetchParams.projection()).isNotNull().isSameAs(prevProjection);
     }
+
+    @Test
+    void testBuilderDefaultsToLeaderOnly() {
+        FetchParams fetchParams = new FetchParamsBuilder(-1, 100).build();
+        assertThat(fetchParams.fetchOnlyLeader()).isTrue();
+
+        FetchParams overrideFetchParams =
+                new FetchParamsBuilder(-1, 100).withFetchOnlyLeader(false).build();
+        assertThat(overrideFetchParams.fetchOnlyLeader()).isFalse();
+    }
 }

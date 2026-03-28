@@ -32,6 +32,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.record.DefaultLogRecordBatch;
 import org.apache.fluss.record.FileLogProjection;
 import org.apache.fluss.record.FileLogRecords;
@@ -395,13 +396,15 @@ public final class LogTablet {
         return append(records, false);
     }
 
-    /** Read messages from the local log. */
     public FetchDataInfo read(
             long readOffset,
             int maxLength,
             FetchIsolation fetchIsolation,
             boolean minOneMessage,
-            @Nullable FileLogProjection projection)
+            @Nullable FileLogProjection projection,
+            @Nullable Predicate recordBatchFilter,
+            @Nullable LogRecordBatch.ReadContext readContext,
+            @Nullable PredicateSchemaResolver predicateResolver)
             throws IOException {
         LogOffsetMetadata maxOffsetMetadata = null;
         if (fetchIsolation == FetchIsolation.LOG_END) {
@@ -410,7 +413,15 @@ public final class LogTablet {
             maxOffsetMetadata = fetchHighWatermarkMetadata();
         }
 
-        return localLog.read(readOffset, maxLength, minOneMessage, maxOffsetMetadata, projection);
+        return localLog.read(
+                readOffset,
+                maxLength,
+                minOneMessage,
+                maxOffsetMetadata,
+                projection,
+                recordBatchFilter,
+                readContext,
+                predicateResolver);
     }
 
     /**

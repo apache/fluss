@@ -21,12 +21,18 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.LogSegmentOffsetOverflowException;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.predicate.PredicateBuilder;
+import org.apache.fluss.record.FileLogProjection;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
+import org.apache.fluss.record.LogRecordBatchStatisticsTestUtils;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.LogTestBase;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.ProjectionPushdownCache;
+import org.apache.fluss.utils.CloseableIterator;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -36,14 +42,20 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
+import java.util.function.IntPredicate;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
+import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.testutils.DataTestUtils.assertLogRecordsEquals;
+import static org.apache.fluss.testutils.DataTestUtils.createRecordsWithoutBaseLogOffset;
 import static org.apache.fluss.testutils.DataTestUtils.genLogRecordsWithBaseOffsetAndTimestamp;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithBaseOffset;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -433,6 +445,537 @@ final class LogSegmentTest extends LogTestBase {
         long position = segmentReopen.getFileLogRecords().channel().position();
         assertThat(size).isEqualTo(oldSize);
         assertThat(position).isEqualTo(oldPosition);
+    }
+
+    @Test
+    void testReadWithFilterEqualPredicate() throws Exception {
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate equalPredicate = builder.equal(0, 5);
+        assertFilteredReadFindsMatchingRecord(equalPredicate, v -> v == 5);
+    }
+
+    @Test
+    void testReadWithFilterGreaterThanPredicate() throws Exception {
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate greaterThanPredicate = builder.greaterThan(0, 3);
+        assertFilteredReadFindsMatchingRecord(greaterThanPredicate, v -> v > 3);
+    }
+
+    @Test
+    void testReadWithFilterLessThanPredicate() throws Exception {
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate lessThanPredicate = builder.lessThan(0, 7);
+        assertFilteredReadFindsMatchingRecord(lessThanPredicate, v -> v < 7);
+    }
+
+    @Test
+    void testReadWithFilterComplexPredicate() throws Exception {
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate greaterThan = builder.greaterThan(0, 3);
+        Predicate lessThan = builder.lessThan(0, 7);
+        Predicate complexPredicate = PredicateBuilder.and(greaterThan, lessThan);
+        assertFilteredReadFindsMatchingRecord(complexPredicate, v -> v > 3 && v < 7);
+    }
+
+    /**
+     * Helper method to test filtered read with a given predicate and value matcher.
+     *
+     * @param predicate the predicate to apply
+     * @param valueMatcher function to check if first field value matches expectation
+     */
+    private void assertFilteredReadFindsMatchingRecord(
+            Predicate predicate, IntPredicate valueMatcher) throws Exception {
+        LogSegment segment = createSegment(40);
+        MemoryLogRecords memoryRecords =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        DATA1, DATA1_ROW_TYPE, 50, DEFAULT_SCHEMA_ID);
+        segment.append(59, -1L, -1L, memoryRecords);
+
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            FetchDataInfo read =
+                    segment.read(
+                            50, 300, segment.getSizeInBytes(), true, null, predicate, readContext);
+            assertThat(read).isNotNull();
+            assertThat(read.getRecords().sizeInBytes()).isGreaterThan(0);
+
+            boolean foundMatchingRecord = false;
+            for (LogRecordBatch batch : read.getRecords().batches()) {
+                try (CloseableIterator<LogRecord> iterator = batch.records(readContext)) {
+                    while (iterator.hasNext()) {
+                        LogRecord record = iterator.next();
+                        if (valueMatcher.test(record.getRow().getInt(0))) {
+                            foundMatchingRecord = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            assertThat(foundMatchingRecord).isTrue();
+        }
+    }
+
+    @Test
+    void testReadWithFilterMultipleBatches() throws Exception {
+        // Test reading with filter across multiple batches
+        LogSegment segment = createSegment(40);
+
+        // Create multiple batches with different data
+        List<Object[]> batch1Data =
+                Arrays.asList(new Object[] {1, "a"}, new Object[] {2, "b"}, new Object[] {3, "c"});
+        List<Object[]> batch2Data =
+                Arrays.asList(new Object[] {4, "d"}, new Object[] {5, "e"}, new Object[] {6, "f"});
+        List<Object[]> batch3Data =
+                Arrays.asList(new Object[] {7, "g"}, new Object[] {8, "h"}, new Object[] {9, "i"});
+
+        MemoryLogRecords batch1 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        batch1Data, DATA1_ROW_TYPE, 50, DEFAULT_SCHEMA_ID);
+        MemoryLogRecords batch2 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        batch2Data, DATA1_ROW_TYPE, 53, DEFAULT_SCHEMA_ID);
+        MemoryLogRecords batch3 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        batch3Data, DATA1_ROW_TYPE, 56, DEFAULT_SCHEMA_ID);
+
+        segment.append(52, -1L, -1L, batch1);
+        segment.append(55, -1L, -1L, batch2);
+        segment.append(58, -1L, -1L, batch3);
+
+        // Create predicate (first field greater than 3)
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate greaterThanPredicate = builder.greaterThan(0, 3);
+
+        // Verify that filtered records contain records from multiple batches
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            // Read with filter
+            FetchDataInfo read =
+                    segment.read(
+                            50,
+                            1000,
+                            segment.getSizeInBytes(),
+                            true,
+                            null,
+                            greaterThanPredicate,
+                            readContext);
+            assertThat(read).isNotNull();
+
+            List<Integer> returnedValues = new ArrayList<>();
+            for (LogRecordBatch batch : read.getRecords().batches()) {
+                try (CloseableIterator<LogRecord> iterator = batch.records(readContext)) {
+                    while (iterator.hasNext()) {
+                        LogRecord record = iterator.next();
+                        returnedValues.add(record.getRow().getInt(0));
+                    }
+                }
+            }
+            // batch1 (values 1,2,3) should be EXCLUDED — all values <= 3
+            assertThat(returnedValues).doesNotContain(1, 2, 3);
+            // batch2 (4,5,6) and batch3 (7,8,9) should be INCLUDED
+            assertThat(returnedValues).containsExactly(4, 5, 6, 7, 8, 9);
+            assertThat(returnedValues).hasSize(6);
+        }
+    }
+
+    @Test
+    void testReadWithFilterEmptySegment() throws Exception {
+        // Test reading with filter on empty segment
+        LogSegment segment = createSegment(40);
+
+        // Create predicate
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate equalPredicate = builder.equal(0, 5);
+
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            // Read with filter on empty segment should return null
+            FetchDataInfo read =
+                    segment.read(
+                            40,
+                            300,
+                            segment.getSizeInBytes(),
+                            true,
+                            null,
+                            equalPredicate,
+                            readContext);
+            assertThat(read).isNull();
+        }
+    }
+
+    @Test
+    void testReadWithFilterRejectsAllBatchesInSegment() throws Exception {
+        // Test that when a filter rejects ALL batches in a non-empty segment,
+        // we get a filtered empty response with a valid filteredEndOffset.
+        LogSegment segment = createSegment(40);
+
+        // Create multiple batches with values 1-9 (all <= 9)
+        List<Object[]> batch1Data =
+                Arrays.asList(new Object[] {1, "a"}, new Object[] {2, "b"}, new Object[] {3, "c"});
+        List<Object[]> batch2Data =
+                Arrays.asList(new Object[] {4, "d"}, new Object[] {5, "e"}, new Object[] {6, "f"});
+        List<Object[]> batch3Data =
+                Arrays.asList(new Object[] {7, "g"}, new Object[] {8, "h"}, new Object[] {9, "i"});
+
+        MemoryLogRecords batch1 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        batch1Data, DATA1_ROW_TYPE, 50, DEFAULT_SCHEMA_ID);
+        MemoryLogRecords batch2 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        batch2Data, DATA1_ROW_TYPE, 53, DEFAULT_SCHEMA_ID);
+        MemoryLogRecords batch3 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        batch3Data, DATA1_ROW_TYPE, 56, DEFAULT_SCHEMA_ID);
+
+        segment.append(52, -1L, -1L, batch1);
+        segment.append(55, -1L, -1L, batch2);
+        segment.append(58, -1L, -1L, batch3);
+
+        // Predicate: first field > 100 — no batch can match (max value is 9)
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate predicate = builder.greaterThan(0, 100);
+
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            FetchDataInfo read =
+                    segment.read(
+                            50, 1000, segment.getSizeInBytes(), true, null, predicate, readContext);
+            assertThat(read).isNotNull();
+            // All batches filtered out — records should be empty
+            assertThat(read.getRecords().sizeInBytes()).isEqualTo(0);
+            // filteredEndOffset should be set to allow client to advance
+            assertThat(read.hasFilteredEndOffset()).isTrue();
+            assertThat(read.getFilteredEndOffset()).isGreaterThanOrEqualTo(50L);
+        }
+    }
+
+    @Test
+    void testReadWithFilterExceptionInPredicateFallsBackToInclude() throws Exception {
+        LogSegment segment = createSegment(40);
+        MemoryLogRecords records =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        DATA1, DATA1_ROW_TYPE, 50, DEFAULT_SCHEMA_ID);
+        segment.append(59, -1L, -1L, records);
+
+        // Create a predicate that always throws during test()
+        Predicate throwingPredicate =
+                new Predicate() {
+                    @Override
+                    public boolean test(org.apache.fluss.row.InternalRow row) {
+                        throw new RuntimeException("Simulated filter failure");
+                    }
+
+                    @Override
+                    public boolean test(
+                            long rowCount,
+                            org.apache.fluss.row.InternalRow minValues,
+                            org.apache.fluss.row.InternalRow maxValues,
+                            Long[] nullCounts) {
+                        throw new RuntimeException("Simulated filter failure");
+                    }
+
+                    @Override
+                    public java.util.Optional<Predicate> negate() {
+                        return java.util.Optional.empty();
+                    }
+
+                    @Override
+                    public <T> T visit(org.apache.fluss.predicate.PredicateVisitor<T> visitor) {
+                        throw new RuntimeException("Simulated filter failure");
+                    }
+                };
+
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            // Should NOT throw — should fall back to including the batch
+            FetchDataInfo read =
+                    segment.read(
+                            50,
+                            300,
+                            segment.getSizeInBytes(),
+                            true,
+                            null,
+                            throwingPredicate,
+                            readContext);
+            assertThat(read).isNotNull();
+            assertThat(read.getRecords().sizeInBytes()).isGreaterThan(0);
+        }
+    }
+
+    @Test
+    void testReadWithFilterAndProjection() throws Exception {
+        // Test filter + projection combination: filter selects batches, projection selects columns
+        LogSegment segment = createSegment(40);
+
+        // Batch 1: values 1,2,3 — should be filtered out by "a > 5"
+        MemoryLogRecords batch1 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        Arrays.asList(
+                                new Object[] {1, "a"},
+                                new Object[] {2, "b"},
+                                new Object[] {3, "c"}),
+                        DATA1_ROW_TYPE,
+                        50,
+                        DEFAULT_SCHEMA_ID);
+        // Batch 2: values 7,8,9 — should pass filter "a > 5"
+        MemoryLogRecords batch2 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        Arrays.asList(
+                                new Object[] {7, "g"},
+                                new Object[] {8, "h"},
+                                new Object[] {9, "i"}),
+                        DATA1_ROW_TYPE,
+                        53,
+                        DEFAULT_SCHEMA_ID);
+
+        segment.append(52, -1L, -1L, batch1);
+        segment.append(55, -1L, -1L, batch2);
+
+        // Create filter: a > 5
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate filter = builder.greaterThan(0, 5);
+
+        // Create projection: project only column 0 (field "a")
+        FileLogProjection projection = new FileLogProjection(new ProjectionPushdownCache());
+        projection.setCurrentProjection(
+                1L,
+                TEST_SCHEMA_GETTER,
+                org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION,
+                new int[] {0});
+
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            FetchDataInfo read =
+                    segment.read(
+                            50,
+                            1000,
+                            segment.getSizeInBytes(),
+                            true,
+                            projection,
+                            filter,
+                            readContext);
+            assertThat(read).isNotNull();
+            assertThat(read.getRecords().sizeInBytes()).isGreaterThan(0);
+
+            // Verify: only batch2 data returned, projected to single column
+            org.apache.fluss.types.RowType projectedType = DATA1_ROW_TYPE.project(new int[] {0});
+            try (LogRecordReadContext projectedContext =
+                    LogRecordReadContext.createArrowReadContext(
+                            projectedType, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+                int recordCount = 0;
+                for (LogRecordBatch b : read.getRecords().batches()) {
+                    try (CloseableIterator<LogRecord> iter = b.records(projectedContext)) {
+                        while (iter.hasNext()) {
+                            LogRecord record = iter.next();
+                            // Projected row should have 1 field
+                            assertThat(record.getRow().getFieldCount()).isEqualTo(1);
+                            // Values should be from batch2 (> 5)
+                            assertThat(record.getRow().getInt(0)).isGreaterThan(5);
+                            recordCount++;
+                        }
+                    }
+                }
+                assertThat(recordCount).isEqualTo(3);
+            }
+        }
+    }
+
+    @Test
+    void testReadWithFilterAndProjectionOnEmptyBatchReturnsSkipOffset() throws Exception {
+        LogSegment segment = createSegment(40);
+        MemoryLogRecords emptyBatch =
+                createRecordsWithoutBaseLogOffset(
+                        DATA1_ROW_TYPE,
+                        DEFAULT_SCHEMA_ID,
+                        50L,
+                        System.currentTimeMillis(),
+                        CURRENT_LOG_MAGIC_VALUE,
+                        Collections.emptyList(),
+                        LogFormat.ARROW);
+        segment.append(49, -1L, -1L, emptyBatch);
+
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate filter = builder.greaterThan(0, 5);
+
+        FileLogProjection projection = new FileLogProjection(new ProjectionPushdownCache());
+        projection.setCurrentProjection(
+                1L,
+                TEST_SCHEMA_GETTER,
+                org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION,
+                new int[] {0});
+
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            FetchDataInfo read =
+                    segment.read(
+                            50,
+                            1000,
+                            segment.getSizeInBytes(),
+                            true,
+                            projection,
+                            filter,
+                            readContext);
+            assertThat(read).isNotNull();
+            assertThat(read.getRecords().sizeInBytes()).isEqualTo(0);
+            assertThat(read.getFilteredEndOffset()).isGreaterThanOrEqualTo(50L);
+        }
+    }
+
+    @Test
+    void testReadWithFilterOffsetMetadataUsesStartOffset() throws Exception {
+        LogSegment segment = createSegment(40);
+
+        // Batch 1: values 1,2,3 — will be filtered out by a > 5
+        MemoryLogRecords batch1 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        Arrays.asList(
+                                new Object[] {1, "a"},
+                                new Object[] {2, "b"},
+                                new Object[] {3, "c"}),
+                        DATA1_ROW_TYPE,
+                        50,
+                        DEFAULT_SCHEMA_ID);
+        // Batch 2: values 7,8,9 — passes filter
+        MemoryLogRecords batch2 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        Arrays.asList(
+                                new Object[] {7, "g"},
+                                new Object[] {8, "h"},
+                                new Object[] {9, "i"}),
+                        DATA1_ROW_TYPE,
+                        53,
+                        DEFAULT_SCHEMA_ID);
+
+        segment.append(52, -1L, -1L, batch1);
+        segment.append(55, -1L, -1L, batch2);
+
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate filter = builder.greaterThan(0, 5);
+
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            FetchDataInfo read =
+                    segment.read(
+                            50, 1000, segment.getSizeInBytes(), true, null, filter, readContext);
+            assertThat(read).isNotNull();
+            // The offset metadata should use the requested startOffset (50),
+            // NOT the first included batch's baseLogOffset (53)
+            assertThat(read.getFetchOffsetMetadata().getMessageOffset()).isEqualTo(50);
+        }
+    }
+
+    @Test
+    void testReadWithFilterAndProjectionSizeLimitUsesProjectedSize() throws Exception {
+        LogSegment segment = createSegment(40);
+
+        // Create 2 batches — all values > 5 so both pass filter "a > 5"
+        // Use long strings to make unprojected size much larger than projected
+        List<Object[]> batch1Data =
+                Arrays.asList(
+                        new Object[] {6, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                        new Object[] {7, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+                        new Object[] {8, "cccccccccccccccccccccccccccccccccccccccc"});
+        List<Object[]> batch2Data =
+                Arrays.asList(
+                        new Object[] {9, "dddddddddddddddddddddddddddddddddddddd"},
+                        new Object[] {10, "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
+                        new Object[] {11, "ffffffffffffffffffffffffffffffffffffffff"});
+
+        MemoryLogRecords batch1 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        batch1Data, DATA1_ROW_TYPE, 50, DEFAULT_SCHEMA_ID);
+        MemoryLogRecords batch2 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        batch2Data, DATA1_ROW_TYPE, 53, DEFAULT_SCHEMA_ID);
+
+        segment.append(52, -1L, -1L, batch1);
+        segment.append(55, -1L, -1L, batch2);
+
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate filter = builder.greaterThan(0, 5);
+
+        // Project only column 0 (int field "a") — much smaller than full row
+        FileLogProjection projection = new FileLogProjection(new ProjectionPushdownCache());
+        projection.setCurrentProjection(
+                1L,
+                TEST_SCHEMA_GETTER,
+                org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION,
+                new int[] {0});
+
+        int unprojectedBatch1Size = batch1.sizeInBytes();
+
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            // Set maxSize to slightly more than one unprojected batch but less than two.
+            // With the bug: only batch1 returned (break triggered by unprojected size).
+            // With the fix: both batches fit (projected sizes are smaller).
+            FetchDataInfo read =
+                    segment.read(
+                            50,
+                            unprojectedBatch1Size + 1,
+                            segment.getSizeInBytes(),
+                            true,
+                            projection,
+                            filter,
+                            readContext);
+            assertThat(read).isNotNull();
+
+            int batchCount = 0;
+            for (LogRecordBatch b : read.getRecords().batches()) {
+                batchCount++;
+            }
+            assertThat(batchCount).isEqualTo(2);
+        }
+    }
+
+    @Test
+    void testReadWithFilterRequiresReadContext() throws Exception {
+        LogSegment segment = createSegment(40);
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate predicate = builder.greaterThan(0, 3);
+
+        // filter non-null but readContext null → should throw
+        assertThatThrownBy(
+                        () ->
+                                segment.read(
+                                        40,
+                                        300,
+                                        segment.getSizeInBytes(),
+                                        true,
+                                        null,
+                                        predicate,
+                                        null))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void testReadWithReadContextRequiresFilter() throws Exception {
+        LogSegment segment = createSegment(40);
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            // readContext non-null but filter null → should throw
+            assertThatThrownBy(
+                            () ->
+                                    segment.read(
+                                            40,
+                                            300,
+                                            segment.getSizeInBytes(),
+                                            true,
+                                            null,
+                                            null,
+                                            readContext))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
     }
 
     private LogSegment createSegment(long baseOffset) throws IOException {

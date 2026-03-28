@@ -1412,13 +1412,21 @@ public class ReplicaManager implements ServerReconfigurable {
                     fetchParams.markReadOneMessage();
                 }
                 limitBytes = Math.max(0, limitBytes - recordBatchSize);
-
+                FetchLogResultForBucket fetchLogResult;
+                if (fetchedData.hasFilteredEndOffset()) {
+                    fetchLogResult =
+                            new FetchLogResultForBucket(
+                                    tb,
+                                    readInfo.getHighWatermark(),
+                                    fetchedData.getFilteredEndOffset());
+                } else {
+                    fetchLogResult =
+                            new FetchLogResultForBucket(
+                                    tb, fetchedData.getRecords(), readInfo.getHighWatermark());
+                }
                 logReadResult.put(
                         tb,
-                        new LogReadResult(
-                                new FetchLogResultForBucket(
-                                        tb, fetchedData.getRecords(), readInfo.getHighWatermark()),
-                                fetchedData.getFetchOffsetMetadata()));
+                        new LogReadResult(fetchLogResult, fetchedData.getFetchOffsetMetadata()));
 
                 // update metrics
                 if (isFromFollower) {

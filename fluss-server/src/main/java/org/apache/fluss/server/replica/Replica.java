@@ -34,6 +34,7 @@ import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -41,12 +42,15 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.KvRecordBatch;
+import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
+import org.apache.fluss.rpc.util.PredicateMessageUtils;
 import org.apache.fluss.server.SequenceIDCounter;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
@@ -67,6 +71,7 @@ import org.apache.fluss.server.kv.snapshot.SnapshotContext;
 import org.apache.fluss.server.log.FetchDataInfo;
 import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.log.FetchParams;
+import org.apache.fluss.server.log.FilterInfo;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogManager;
@@ -74,6 +79,7 @@ import org.apache.fluss.server.log.LogOffsetMetadata;
 import org.apache.fluss.server.log.LogOffsetSnapshot;
 import org.apache.fluss.server.log.LogReadInfo;
 import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.log.PredicateSchemaResolver;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
@@ -90,6 +96,7 @@ import org.apache.fluss.server.zk.ZkSequenceIDCounter;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.ZkData;
+import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
@@ -1335,6 +1342,9 @@ public final class Replica {
                                         Integer.MAX_VALUE,
                                         FetchIsolation.HIGH_WATERMARK,
                                         true,
+                                        null,
+                                        null,
+                                        null,
                                         null);
                         return dataInfo.getRecords();
                     } catch (IOException e) {
@@ -1494,13 +1504,71 @@ public final class Replica {
 
         // todo validate fetched epoch.
 
-        FetchDataInfo fetchDataInfo =
-                logTablet.read(
-                        readOffset,
-                        fetchParams.maxFetchBytes(),
-                        fetchParams.isolation(),
-                        fetchParams.minOneMessage(),
-                        fetchParams.projection());
+        // Create ReadContext for batch filtering if needed.
+        // Only ARROW format has batch-level statistics (V1+ magic) for filter evaluation.
+        // INDEXED and COMPACTED formats use V0 magic without statistics, so filter pushdown
+        // would be a no-op — skip it entirely to avoid unnecessary overhead.
+        Predicate resolvedFilter = null;
+        LogRecordReadContext readContext = null;
+        PredicateSchemaResolver predicateResolver = null;
+        FilterInfo filterInfo = fetchParams.getFilterInfo(tableBucket.getTableId());
+        if (filterInfo != null && logFormat == LogFormat.ARROW) {
+            try {
+                int filterSchemaId = filterInfo.getSchemaId();
+                RowType rowType;
+                int schemaIdForContext;
+                if (filterSchemaId >= 0) {
+                    Schema filterSchema = schemaGetter.getSchema(filterSchemaId);
+                    rowType = filterSchema.getRowType();
+                    schemaIdForContext = filterSchemaId;
+                } else {
+                    rowType = tableInfo.getSchema().getRowType();
+                    schemaIdForContext = tableInfo.getSchemaId();
+                }
+                resolvedFilter =
+                        PredicateMessageUtils.toPredicate(filterInfo.getPbPredicate(), rowType);
+                if (resolvedFilter != null) {
+                    readContext =
+                            LogRecordReadContext.createArrowReadContext(
+                                    rowType, schemaIdForContext, schemaGetter);
+                    predicateResolver =
+                            new PredicateSchemaResolver(
+                                    resolvedFilter, schemaIdForContext, schemaGetter);
+                }
+            } catch (Exception e) {
+                LOG.warn(
+                        "Failed to initialize filter context for {}, "
+                                + "falling back to unfiltered read.",
+                        tableBucket,
+                        e);
+                // Safe fallback: read without filter. resolvedFilter/readContext/predicateResolver
+                // remain null, so the read proceeds as if no filter was requested.
+            }
+        }
+
+        FetchDataInfo fetchDataInfo;
+        try {
+            fetchDataInfo =
+                    logTablet.read(
+                            readOffset,
+                            fetchParams.maxFetchBytes(),
+                            fetchParams.isolation(),
+                            fetchParams.minOneMessage(),
+                            fetchParams.projection(),
+                            resolvedFilter,
+                            readContext,
+                            predicateResolver);
+        } finally {
+            // Close readContext eagerly — it is only used for statistics extraction during
+            // batch filtering and is NOT referenced by the returned FetchDataInfo records.
+            if (readContext != null) {
+                try {
+                    readContext.close();
+                } catch (Exception e) {
+                    // ignore close exception
+                }
+            }
+        }
         return new LogReadInfo(fetchDataInfo, initialHighWatermark, initialLogEndOffset);
     }
 

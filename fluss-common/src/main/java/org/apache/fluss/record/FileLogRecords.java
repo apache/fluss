@@ -309,8 +309,23 @@ public class FileLogRecords implements LogRecords, Closeable {
 
     private AbstractIterator<FileChannelLogRecordBatch> batchIterator(int start)
             throws IOException {
+        return batchIterator(start, -1);
+    }
+
+    /**
+     * Get an iterator over the record batches in the file, starting at a specific position and
+     * ending at a specific position.
+     *
+     * @param start the start position in the file
+     * @param endPosition the end position in the file, or -1 to use the default end
+     * @return An iterator over batches starting from {@code start}
+     */
+    public AbstractIterator<FileChannelLogRecordBatch> batchIterator(int start, int endPosition)
+            throws IOException {
         final int end;
-        if (isSlice) {
+        if (endPosition >= 0) {
+            end = endPosition;
+        } else if (isSlice) {
             end = this.end;
         } else {
             end = this.sizeInBytes();

@@ -79,6 +79,7 @@ public class LogFetcherTest {
                 new LogFetcher(
                         DATA1_TABLE_INFO,
                         null,
+                        null,
                         logScannerStatus,
                         new Configuration(),
                         metadataUpdater,
@@ -89,7 +90,8 @@ public class LogFetcherTest {
 
     @Test
     void sendFetchRequestWithNotLeaderOrFollowerException() {
-        Map<Integer, FetchLogRequest> requestMap = logFetcher.prepareFetchLogRequests();
+        Map<Integer, org.apache.fluss.rpc.messages.FetchLogRequest> requestMap =
+                logFetcher.prepareFetchLogRequests();
         Set<Integer> serverSet = requestMap.keySet();
         assertThat(serverSet).containsExactlyInAnyOrder(1);
 
@@ -108,16 +110,6 @@ public class LogFetcherTest {
         // When NotLeaderOrFollowerException is received, the bucketLocation will be removed from
         // metadata updater to trigger get the latest bucketLocation in next fetch round.
         assertThat(metadataUpdater.getBucketLocation(tb1)).isNotPresent();
-    }
-
-    private TestingMetadataUpdater initializeMetadataUpdater() {
-
-        return new TestingMetadataUpdater(
-                TestingMetadataUpdater.COORDINATOR,
-                Arrays.asList(NODE1, NODE2, NODE3),
-                Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO),
-                Collections.singletonMap(1, new TestingTabletServerGateway()),
-                new Configuration());
     }
 
     private LogScannerStatus initializeLogScannerStatus() {
@@ -151,5 +143,15 @@ public class LogFetcherTest {
                     });
             return CompletableFuture.completedFuture(makeFetchLogResponse(resultForBucketMap));
         }
+    }
+
+    private TestingMetadataUpdater initializeMetadataUpdater() {
+
+        return new TestingMetadataUpdater(
+                TestingMetadataUpdater.COORDINATOR,
+                Arrays.asList(NODE1, NODE2, NODE3),
+                Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO),
+                Collections.singletonMap(1, new TestingTabletServerGateway()),
+                new Configuration());
     }
 }

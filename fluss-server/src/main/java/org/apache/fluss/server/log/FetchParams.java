@@ -26,6 +26,7 @@ import org.apache.fluss.rpc.messages.FetchLogRequest;
 
 import javax.annotation.Nullable;
 
+import java.util.Map;
 import java.util.Objects;
 
 /** Fetch data params. */
@@ -62,19 +63,20 @@ public final class FetchParams {
     private long fetchOffset;
     // whether column projection is enabled
     private boolean projectionEnabled = false;
+    // filter info per table (predicate + schema ID), null if no filters
+    @Nullable private final Map<Long, FilterInfo> tableFilterInfoMap;
     // the lazily initialized projection util to read and project file logs
     @Nullable private FileLogProjection fileLogProjection;
-
     private final int minFetchBytes;
     private final long maxWaitMs;
     // TODO: add more params like epoch etc.
 
     public FetchParams(int replicaId, int maxFetchBytes) {
-        this(replicaId, true, maxFetchBytes, DEFAULT_MIN_FETCH_BYTES, DEFAULT_MAX_WAIT_MS);
+        this(replicaId, true, maxFetchBytes, DEFAULT_MIN_FETCH_BYTES, DEFAULT_MAX_WAIT_MS, null);
     }
 
     public FetchParams(int replicaId, int maxFetchBytes, int minFetchBytes, long maxWaitMs) {
-        this(replicaId, true, maxFetchBytes, minFetchBytes, maxWaitMs);
+        this(replicaId, true, maxFetchBytes, minFetchBytes, maxWaitMs, null);
     }
 
     @VisibleForTesting
@@ -83,7 +85,8 @@ public final class FetchParams {
             boolean fetchOnlyLeader,
             int maxFetchBytes,
             int minFetchBytes,
-            long maxWaitMs) {
+            long maxWaitMs,
+            @Nullable Map<Long, FilterInfo> tableFilterInfoMap) {
         this.replicaId = replicaId;
         this.fetchOnlyLeader = fetchOnlyLeader;
         this.maxFetchBytes = maxFetchBytes;
@@ -92,6 +95,7 @@ public final class FetchParams {
         this.fetchOffset = -1;
         this.minFetchBytes = minFetchBytes;
         this.maxWaitMs = maxWaitMs;
+        this.tableFilterInfoMap = tableFilterInfoMap;
     }
 
     public void setCurrentFetch(
@@ -128,6 +132,15 @@ public final class FetchParams {
         } else {
             return null;
         }
+    }
+
+    /** Returns the filter info for the given table, or null if no filter is registered. */
+    @Nullable
+    public FilterInfo getFilterInfo(long tableId) {
+        if (tableFilterInfoMap == null) {
+            return null;
+        }
+        return tableFilterInfoMap.get(tableId);
     }
 
     /**
@@ -190,18 +203,19 @@ public final class FetchParams {
         return replicaId == that.replicaId
                 && maxFetchBytes == that.maxFetchBytes
                 && minFetchBytes == that.minFetchBytes
-                && maxWaitMs == that.maxWaitMs;
+                && maxWaitMs == that.maxWaitMs
+                && Objects.equals(tableFilterInfoMap, that.tableFilterInfoMap);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(replicaId, maxFetchBytes, minFetchBytes, maxWaitMs);
+        return Objects.hash(replicaId, maxFetchBytes, minFetchBytes, maxWaitMs, tableFilterInfoMap);
     }
 
     @Override
     public String toString() {
         return "FetchParams("
-                + ", replicaId="
+                + "replicaId="
                 + replicaId
                 + ", maxFetchBytes="
                 + maxFetchBytes
@@ -209,6 +223,8 @@ public final class FetchParams {
                 + minFetchBytes
                 + ", maxWaitMs="
                 + maxWaitMs
+                + ", tableFilterInfoMap="
+                + tableFilterInfoMap
                 + ')';
     }
 }

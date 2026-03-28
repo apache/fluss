@@ -21,6 +21,8 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.metadata.SchemaGetter;
+import org.apache.fluss.record.FileLogInputStream.FileChannelLogRecordBatch;
+import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.record.bytesview.MultiBytesView;
 import org.apache.fluss.shaded.arrow.com.google.flatbuffers.FlatBufferBuilder;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.Buffer;
@@ -70,6 +72,7 @@ import static org.apache.fluss.record.LogRecordBatchFormat.schemaIdOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.statisticsLengthOffset;
 import static org.apache.fluss.utils.FileUtils.readFully;
 import static org.apache.fluss.utils.FileUtils.readFullyOrFail;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** Column projection util on Arrow format {@link FileLogRecords}. */
@@ -122,6 +125,118 @@ public class FileLogProjection {
         this.schemaGetter = schemaGetter;
         this.compressionInfo = compressionInfo;
         this.selectedFieldPositions = selectedFieldPositions;
+    }
+
+    /**
+     * Project a single record batch to a subset of fields. This is used by the filter path where
+     * batches are iterated individually rather than as a contiguous file region.
+     *
+     * @param batch the file channel log record batch to project
+     * @return the projected bytes view
+     */
+    public BytesView projectRecordBatch(FileChannelLogRecordBatch batch) throws IOException {
+        FileChannel channel = batch.fileRecords.channel();
+        int position = batch.position();
+
+        // Read the log header to get schema ID
+        logHeaderBuffer.rewind();
+        readLogHeaderFullyOrFail(channel, logHeaderBuffer, position);
+        logHeaderBuffer.rewind();
+        byte magic = logHeaderBuffer.get(MAGIC_OFFSET);
+        int recordBatchHeaderSize = recordBatchHeaderSize(magic);
+        int batchSizeInBytes = LOG_OVERHEAD + logHeaderBuffer.getInt(LENGTH_OFFSET);
+        short schemaId = logHeaderBuffer.getShort(schemaIdOffset(magic));
+
+        ProjectionInfo currentProjection = getOrCreateProjectionInfo(schemaId);
+        checkNotNull(currentProjection, "There is no projection registered yet.");
+
+        MultiBytesView.Builder builder = MultiBytesView.builder();
+
+        // Return empty if meets empty batch
+        if (batchSizeInBytes == recordBatchHeaderSize) {
+            return builder.build();
+        }
+
+        boolean isAppendOnly =
+                (logHeaderBuffer.get(attributeOffset(magic)) & APPEND_ONLY_FLAG_MASK) > 0;
+
+        // For V1+, skip statistics data between header and records
+        int statisticsLength = 0;
+        if (magic >= LOG_MAGIC_VALUE_V1) {
+            statisticsLength = logHeaderBuffer.getInt(statisticsLengthOffset(magic));
+        }
+        int recordsStartOffset = recordBatchHeaderSize + statisticsLength;
+
+        final int changeTypeBytes;
+        final long arrowHeaderOffset;
+        if (isAppendOnly) {
+            changeTypeBytes = 0;
+            arrowHeaderOffset = position + recordsStartOffset;
+        } else {
+            changeTypeBytes = logHeaderBuffer.getInt(recordsCountOffset(magic));
+            arrowHeaderOffset = position + recordsStartOffset + changeTypeBytes;
+        }
+
+        // read arrow header
+        arrowHeaderBuffer.rewind();
+        readFullyOrFail(channel, arrowHeaderBuffer, arrowHeaderOffset, "arrow header");
+        arrowHeaderBuffer.position(ARROW_IPC_METADATA_SIZE_OFFSET);
+        int arrowMetadataSize = arrowHeaderBuffer.getInt();
+
+        resizeArrowMetadataBuffer(arrowMetadataSize);
+        arrowMetadataBuffer.rewind();
+        readFullyOrFail(
+                channel,
+                arrowMetadataBuffer,
+                arrowHeaderOffset + ARROW_HEADER_SIZE,
+                "arrow metadata");
+
+        arrowMetadataBuffer.rewind();
+        Message metadata = Message.getRootAsMessage(arrowMetadataBuffer);
+        ProjectedArrowBatch projectedArrowBatch =
+                projectArrowBatch(
+                        metadata,
+                        currentProjection.nodesProjection,
+                        currentProjection.buffersProjection,
+                        currentProjection.bufferCount);
+        long arrowBodyLength = projectedArrowBatch.bodyLength();
+
+        int newBatchSizeInBytes =
+                recordBatchHeaderSize
+                        + changeTypeBytes
+                        + currentProjection.arrowMetadataLength
+                        + (int) arrowBodyLength;
+
+        // create new arrow batch metadata which already projected
+        byte[] headerMetadata =
+                serializeArrowRecordBatchMetadata(
+                        projectedArrowBatch, arrowBodyLength, currentProjection.bodyCompression);
+        checkState(
+                headerMetadata.length == currentProjection.arrowMetadataLength,
+                "Invalid metadata length");
+
+        // update and copy log batch header
+        logHeaderBuffer.position(LENGTH_OFFSET);
+        logHeaderBuffer.putInt(newBatchSizeInBytes - LOG_OVERHEAD);
+
+        // For V1+ format, clear statistics information since projection removes statistics
+        LogRecordBatchFormat.clearStatisticsFromHeader(logHeaderBuffer, magic);
+
+        logHeaderBuffer.rewind();
+        byte[] logHeader = new byte[recordBatchHeaderSize];
+        logHeaderBuffer.get(logHeader);
+
+        // build log records
+        builder.addBytes(logHeader);
+        if (!isAppendOnly) {
+            builder.addBytes(channel, position + recordsStartOffset, changeTypeBytes);
+        }
+        builder.addBytes(headerMetadata);
+        final long bufferOffset = arrowHeaderOffset + ARROW_HEADER_SIZE + arrowMetadataSize;
+        projectedArrowBatch.buffers.forEach(
+                b -> builder.addBytes(channel, bufferOffset + b.getOffset(), (int) b.getSize()));
+
+        return builder.build();
     }
 
     /**
