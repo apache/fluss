@@ -39,6 +39,7 @@ import org.apache.fluss.record.GenericRecord;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.types.Tuple2;
@@ -517,6 +518,163 @@ class LanceTieringTest {
                     .isEqualTo(expectRecord.getRow().getString(1).toString());
             // For nested row, just verify that the struct vector is not null and has correct
             // structure
+            assertThat(root.getVector(2)).isNotNull();
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("tieringWriteArgs")
+    void testTieringWriteTableWithMapType(boolean isPartitioned) throws Exception {
+        int bucketNum = 3;
+        TablePath tablePath = TablePath.of("lance", "mapTable");
+        Map<String, String> customProperties = new HashMap<>();
+        customProperties.put("lance.batch_size", "256");
+        LanceConfig config =
+                LanceConfig.from(
+                        configuration.toMap(),
+                        customProperties,
+                        tablePath.getDatabaseName(),
+                        tablePath.getTableName());
+        Schema schema = createMapTable(config);
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(bucketNum)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .customProperties(customProperties)
+                        .build();
+        TableInfo tableInfo =
+                TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
+
+        List<LanceWriteResult> lanceWriteResults = new ArrayList<>();
+        SimpleVersionedSerializer<LanceWriteResult> writeResultSerializer =
+                lanceLakeTieringFactory.getWriteResultSerializer();
+        SimpleVersionedSerializer<LanceCommittable> committableSerializer =
+                lanceLakeTieringFactory.getCommittableSerializer();
+
+        Map<Tuple2<String, Integer>, List<LogRecord>> recordsByBucket = new HashMap<>();
+        Map<Long, String> partitionIdAndName =
+                isPartitioned
+                        ? new HashMap<Long, String>() {
+                            {
+                                put(1L, "p1");
+                                put(2L, "p2");
+                                put(3L, "p3");
+                            }
+                        }
+                        : Collections.singletonMap(null, null);
+
+        // First, write data with map types
+        for (int bucket = 0; bucket < bucketNum; bucket++) {
+            for (Map.Entry<Long, String> entry : partitionIdAndName.entrySet()) {
+                String partition = entry.getValue();
+                try (LakeWriter<LanceWriteResult> lakeWriter =
+                        createLakeWriter(tablePath, bucket, partition, tableInfo)) {
+                    Tuple2<String, Integer> partitionBucket = Tuple2.of(partition, bucket);
+                    Tuple2<List<LogRecord>, List<LogRecord>> writeAndExpectRecords =
+                            genMapLogRecords(bucket, 10);
+                    List<LogRecord> writtenRecords = writeAndExpectRecords.f0;
+                    List<LogRecord> expectRecords = writeAndExpectRecords.f1;
+                    recordsByBucket.put(partitionBucket, expectRecords);
+                    for (LogRecord logRecord : writtenRecords) {
+                        lakeWriter.write(logRecord);
+                    }
+                    // serialize/deserialize writeResult
+                    LanceWriteResult lanceWriteResult = lakeWriter.complete();
+                    byte[] serialized = writeResultSerializer.serialize(lanceWriteResult);
+                    lanceWriteResults.add(
+                            writeResultSerializer.deserialize(
+                                    writeResultSerializer.getVersion(), serialized));
+                }
+            }
+        }
+
+        // Second, commit data
+        try (LakeCommitter<LanceWriteResult, LanceCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo)) {
+            // serialize/deserialize committable
+            LanceCommittable lanceCommittable = lakeCommitter.toCommittable(lanceWriteResults);
+            byte[] serialized = committableSerializer.serialize(lanceCommittable);
+            lanceCommittable =
+                    committableSerializer.deserialize(
+                            committableSerializer.getVersion(), serialized);
+            Map<String, String> snapshotProperties =
+                    Collections.singletonMap(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "offsets");
+            LakeCommitResult commitResult =
+                    lakeCommitter.commit(lanceCommittable, snapshotProperties);
+            // lance dataset version starts from 1
+            assertThat(commitResult.getCommittedSnapshotId()).isEqualTo(2);
+        }
+
+        try (Dataset dataset =
+                Dataset.open(
+                        new RootAllocator(),
+                        config.getDatasetUri(),
+                        LanceConfig.genReadOptionFromConfig(config))) {
+            ArrowReader reader = dataset.newScan().scanBatches();
+            VectorSchemaRoot readerRoot = reader.getVectorSchemaRoot();
+
+            // Verify data can be read back
+            for (int bucket = 0; bucket < 3; bucket++) {
+                for (String partition : partitionIdAndName.values()) {
+                    reader.loadNextBatch();
+                    Tuple2<String, Integer> partitionBucket = Tuple2.of(partition, bucket);
+                    List<LogRecord> expectRecords = recordsByBucket.get(partitionBucket);
+                    verifyMapRecords(readerRoot, expectRecords);
+                }
+            }
+            assertThat(reader.loadNextBatch()).isFalse();
+        }
+    }
+
+    private Schema createMapTable(LanceConfig config) {
+        Schema.Builder schemaBuilder =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column("attributes", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()));
+        Schema schema = schemaBuilder.build();
+        WriteParams params = LanceConfig.genWriteParamsFromConfig(config);
+        LanceDatasetAdapter.createDataset(
+                config.getDatasetUri(), LanceArrowUtils.toArrowSchema(schema.getRowType()), params);
+
+        return schema;
+    }
+
+    private Tuple2<List<LogRecord>, List<LogRecord>> genMapLogRecords(int bucket, int numRecords) {
+        List<LogRecord> logRecords = new ArrayList<>();
+        for (int i = 0; i < numRecords; i++) {
+            GenericRow genericRow = new GenericRow(3);
+            genericRow.setField(0, i);
+            genericRow.setField(1, BinaryString.fromString("user" + bucket + "_" + i));
+
+            // Create map data
+            java.util.LinkedHashMap<BinaryString, Integer> mapData =
+                    new java.util.LinkedHashMap<>();
+            mapData.put(BinaryString.fromString("age"), 20 + bucket);
+            mapData.put(BinaryString.fromString("score"), 100 + i);
+            genericRow.setField(2, new GenericMap(mapData));
+
+            LogRecord logRecord =
+                    new GenericRecord(
+                            i, System.currentTimeMillis(), ChangeType.APPEND_ONLY, genericRow);
+            logRecords.add(logRecord);
+        }
+        return Tuple2.of(logRecords, logRecords);
+    }
+
+    private void verifyMapRecords(VectorSchemaRoot root, List<LogRecord> expectRecords) {
+        assertThat(root.getRowCount()).isEqualTo(expectRecords.size());
+        for (int i = 0; i < expectRecords.size(); i++) {
+            LogRecord expectRecord = expectRecords.get(i);
+            // check id column
+            assertThat((int) (root.getVector(0).getObject(i)))
+                    .isEqualTo(expectRecord.getRow().getInt(0));
+            // check name column
+            assertThat(((VarCharVector) root.getVector(1)).getObject(i).toString())
+                    .isEqualTo(expectRecord.getRow().getString(1).toString());
+            // For map, verify that the map vector is not null and has correct structure
             assertThat(root.getVector(2)).isNotNull();
         }
     }
