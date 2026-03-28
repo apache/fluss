@@ -114,5 +114,35 @@ In the above example, we set the compression codec to `LZ4_FRAME` and the compre
 2. The valid range of `table.log.arrow.compression.zstd.level` is 1 to 22.
 :::
 
+## Change Data Feed
+
+Fluss captures row-level inserts on Log Tables, making this **change data** available for downstream consumption via the [`$changelog`](/table-design/virtual-tables.md#changelog-table) virtual table.
+
+### Example
+
+```sql title="Flink SQL"
+CREATE TABLE log_table (
+  order_id BIGINT,
+  item_id BIGINT,
+  amount INT,
+  address STRING
+);
+
+INSERT INTO log_table VALUES (1, 100, 50, 'Beijing'), (2, 200, 75, 'Shanghai');
+
+SELECT * FROM log_table$changelog;
+```
+
+```
++--------------+-------------+---------------------+----------+---------+--------+----------+
+| _change_type | _log_offset | _commit_timestamp   | order_id | item_id | amount | address  |
++--------------+-------------+---------------------+----------+---------+--------+----------+
+| insert       |           0 | 2024-01-15 10:30:00 |        1 |     100 |     50 | Beijing  |
+| insert       |           1 | 2024-01-15 10:30:00 |        2 |     200 |     75 | Shanghai |
++--------------+-------------+---------------------+----------+---------+--------+----------+
+```
+
+For detailed information, see the [Virtual Tables](/table-design/virtual-tables.md) documentation.
+
 ## Log Tiering
 Log Table supports tiering data to different storage tiers. See more details about [Remote Log](maintenance/tiered-storage/remote-storage.md).
