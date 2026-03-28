@@ -524,7 +524,7 @@ public class ReplicaFetcherThreadTest {
                                         null,
                                         conf,
                                         new LakeCatalogDynamicLoader(conf, null, true))),
-                        RpcClient.create(conf, TestingClientMetricGroup.newInstance(), false),
+                        RpcClient.create(conf, TestingClientMetricGroup.newInstance()),
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         manualClock,
                         ioExecutor);

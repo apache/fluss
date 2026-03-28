@@ -50,7 +50,7 @@ public class MetadataUpdaterTest {
     void testInitializeClusterWithRetries() throws Exception {
         Configuration configuration = new Configuration();
         RpcClient rpcClient =
-                RpcClient.create(configuration, TestingClientMetricGroup.newInstance(), false);
+                RpcClient.create(configuration, TestingClientMetricGroup.newInstance());
 
         // retry lower than max retry count.
         AdminReadOnlyGateway gateway = new TestingAdminReadOnlyGateway(2);

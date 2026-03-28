@@ -126,8 +126,7 @@ public class ServerConnectionTest {
                         serverNode,
                         TestingClientMetricGroup.newInstance(),
                         clientAuthenticator,
-                        (con, ignore) -> {},
-                        false);
+                        (con, ignore) -> {});
         ConnectionState connectionState = connection.getConnectionState();
         assertThat(connectionState).isEqualTo(ConnectionState.CONNECTING);
 
@@ -157,20 +156,10 @@ public class ServerConnectionTest {
         ClientMetricGroup client = new ClientMetricGroup(metricRegistry, "client");
         ServerConnection connection =
                 new ServerConnection(
-                        bootstrap,
-                        serverNode,
-                        client,
-                        clientAuthenticator,
-                        (con, ignore) -> {},
-                        false);
+                        bootstrap, serverNode, client, clientAuthenticator, (con, ignore) -> {});
         ServerConnection connection2 =
                 new ServerConnection(
-                        bootstrap,
-                        serverNode2,
-                        client,
-                        clientAuthenticator,
-                        (con, ignore) -> {},
-                        false);
+                        bootstrap, serverNode2, client, clientAuthenticator, (con, ignore) -> {});
         LookupRequest request = new LookupRequest().setTableId(1);
         PbLookupReqForBucket pbLookupReqForBucket = request.addBucketsReq();
         pbLookupReqForBucket.setBucketId(1);
@@ -226,8 +215,7 @@ public class ServerConnectionTest {
                         wrongServerTypeNode,
                         TestingClientMetricGroup.newInstance(),
                         clientAuthenticator,
-                        (con, ignore) -> {},
-                        false);
+                        (con, ignore) -> {});
 
         // Pending request will be rejected with InvalidServerTypeException which is
         // InvalidRequestException.

@@ -20,12 +20,10 @@ package org.apache.fluss.rpc.netty.client;
 import org.apache.fluss.exception.CorruptMessageException;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ErrorResponse;
-import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.ApiMethod;
 import org.apache.fluss.rpc.protocol.ResponseType;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
-import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInboundHandlerAdapter;
 import org.apache.fluss.shaded.netty4.io.netty.handler.timeout.IdleState;
@@ -49,15 +47,8 @@ public final class NettyClientHandler extends ChannelInboundHandlerAdapter {
 
     private final ClientHandlerCallback callback;
 
-    /**
-     * Whether the NettyClientHandler is used as inner network client (Communicating between Fluss's
-     * servers).
-     */
-    private final boolean isInnerClient;
-
-    public NettyClientHandler(ClientHandlerCallback callback, boolean isInnerClient) {
+    public NettyClientHandler(ClientHandlerCallback callback) {
         this.callback = callback;
-        this.isInnerClient = isInnerClient;
     }
 
     @Override
@@ -90,26 +81,11 @@ public final class NettyClientHandler extends ChannelInboundHandlerAdapter {
                 }
                 ApiMessage response = apiMethod.getResponseConstructor().get();
                 if (response.isLazilyParsed()) {
-                    if (isInnerClient && response instanceof FetchLogResponse) {
-                        // For the FetchLogResponse returned by the FetchLogRequest sent by the
-                        // follower's TabletServer, we needn't perform an unHeap-to-heap memory
-                        // copy to preserve zero-copy capabilities. This requires users to manually
-                        // call ApiMessage#getParsedByteBuf().release() to release the ByteBuf after
-                        // processing the response.
-                        // TODO for the FetchLogResponse returned by the FetchLogRequest sent by the
-                        // Fluss client, We also aim to avoid this memory copy operation, traced by
-                        // https://github.com/apache/fluss/issues/1184
-                        response.parseFrom(buffer, messageSize);
-                    } else {
-                        // copy the buffer into a heap buffer, this can avoid the network buffer
-                        // being released before the bytes fields of the response are lazily parsed.
-                        ByteBuf copiedBuffer = Unpooled.buffer(messageSize, messageSize);
-                        copiedBuffer.writeBytes(buffer, messageSize);
-                        // response parsed from the copied buffer can be safely cached in user
-                        // queues.
-                        response.parseFrom(copiedBuffer, messageSize);
-                        buffer.release();
-                    }
+                    // Parse lazily from the original buffer without copying. The
+                    // consumer is responsible for releasing the buffer via
+                    // ApiMessage#getParsedByteBuf().release() after the response
+                    // has been fully consumed.
+                    response.parseFrom(buffer, messageSize);
                 } else {
                     response.parseFrom(buffer, messageSize);
                     // eagerly release the buffer to make the buffer recycle faster

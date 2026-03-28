@@ -51,6 +51,7 @@ import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForTable;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.Projection;
 
@@ -339,6 +340,11 @@ public class LogFetcher implements Closeable {
     /** Implements the core logic for a successful fetch log response. */
     private synchronized void handleFetchLogResponse(
             int destination, long requestStartTime, FetchLogResponse fetchLogResponse) {
+        // Capture the parsed ByteBuf for buffer lifecycle management. The response may
+        // have been lazily parsed from the network buffer. Each DefaultCompletedFetch
+        // that references the buffer's records data must retain it. We release the base
+        // reference in the finally block.
+        ByteBuf parsedByteBuf = fetchLogResponse.getParsedByteBuf();
         try {
             if (isClosed) {
                 return;
@@ -386,6 +392,11 @@ public class LogFetcher implements Closeable {
                             LogRecords logRecords = fetchResultForBucket.recordsOrEmpty();
                             if (!MemoryLogRecords.EMPTY.equals(logRecords)
                                     || fetchResultForBucket.getErrorCode() != Errors.NONE.code()) {
+                                // Retain the parsed buffer so it stays alive while
+                                // this CompletedFetch's records are being consumed.
+                                if (parsedByteBuf != null) {
+                                    parsedByteBuf.retain();
+                                }
                                 // In oder to not signal notEmptyCondition, add completed
                                 // fetch to buffer until log records is not empty.
                                 DefaultCompletedFetch completedFetch =
@@ -397,7 +408,8 @@ public class LogFetcher implements Closeable {
                                                 // skipping CRC check if projection push downed as
                                                 // the data is pruned
                                                 isCheckCrcs,
-                                                fetchOffset);
+                                                fetchOffset,
+                                                parsedByteBuf);
                                 logFetchBuffer.add(completedFetch);
                             }
                         }
@@ -405,6 +417,12 @@ public class LogFetcher implements Closeable {
                 }
             }
         } finally {
+            // Release the base reference from the network buffer. Any CompletedFetch
+            // objects created above hold their own retained references, keeping the
+            // buffer alive until they are drained.
+            if (parsedByteBuf != null) {
+                parsedByteBuf.release();
+            }
             LOG.debug("Removing pending request for node: {}", destination);
             nodesWithPendingFetchRequests.remove(destination);
         }

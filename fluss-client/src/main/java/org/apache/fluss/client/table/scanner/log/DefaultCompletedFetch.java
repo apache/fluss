@@ -22,6 +22,9 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+
+import javax.annotation.Nullable;
 
 /**
  * {@link DefaultCompletedFetch} is a {@link CompletedFetch} that represents a completed fetch that
@@ -30,13 +33,21 @@ import org.apache.fluss.rpc.messages.FetchLogRequest;
 @Internal
 class DefaultCompletedFetch extends CompletedFetch {
 
+    /**
+     * The parsed ByteBuf backing the lazily-parsed records data. This reference is retained to keep
+     * the underlying network buffer alive while the records are being consumed. Released in {@link
+     * #drain()}.
+     */
+    @Nullable private ByteBuf parsedByteBuf;
+
     public DefaultCompletedFetch(
             TableBucket tableBucket,
             FetchLogResultForBucket fetchLogResultForBucket,
             LogRecordReadContext readContext,
             LogScannerStatus logScannerStatus,
             boolean isCheckCrc,
-            Long fetchOffset) {
+            Long fetchOffset,
+            @Nullable ByteBuf parsedByteBuf) {
         super(
                 tableBucket,
                 fetchLogResultForBucket.getError(),
@@ -47,5 +58,18 @@ class DefaultCompletedFetch extends CompletedFetch {
                 logScannerStatus,
                 isCheckCrc,
                 fetchOffset);
+        this.parsedByteBuf = parsedByteBuf;
+    }
+
+    @Override
+    void drain() {
+        try {
+            super.drain();
+        } finally {
+            if (parsedByteBuf != null) {
+                parsedByteBuf.release();
+                parsedByteBuf = null;
+            }
+        }
     }
 }

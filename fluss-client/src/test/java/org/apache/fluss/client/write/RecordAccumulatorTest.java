@@ -678,8 +678,7 @@ class RecordAccumulatorTest {
                         conf.getInt(ConfigOptions.CLIENT_WRITER_MAX_INFLIGHT_REQUESTS_PER_BUCKET),
                         GatewayClientProxy.createGatewayProxy(
                                 () -> cluster.getRandomTabletServer(),
-                                RpcClient.create(
-                                        conf, TestingClientMetricGroup.newInstance(), false),
+                                RpcClient.create(conf, TestingClientMetricGroup.newInstance()),
                                 TabletServerGateway.class),
                         null),
                 TestingWriterMetricGroup.newInstance(),
