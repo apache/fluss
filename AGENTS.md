@@ -50,6 +50,43 @@ import org.apache.zookeeper.*                           // → org.apache.fluss.
 // ❌ Boolean.getBoolean("prop")  → ✅ Boolean.parseBoolean(System.getProperty("prop"))
 ```
 
+### Java Version Compatibility
+
+**Source level: Java 8** — All code MUST compile with JDK 8. CI enforces this via `compile-on-jdk8`.
+
+**Build requirement:** Java 11 is required to build the project, but all source code must remain Java 8 compatible.
+
+**FORBIDDEN Java 9+ features:**
+```java
+// ❌ var keyword (Java 10)
+var list = new ArrayList<>();  // → ✅ ArrayList<String> list = new ArrayList<>();
+
+// ❌ List.of(), Map.of(), Set.of() (Java 9)
+List.of("a", "b")              // → ✅ Arrays.asList("a", "b")
+Map.of("k", "v")               // → ✅ Collections.singletonMap("k", "v")
+Set.of("a", "b")               // → ✅ new HashSet<>(Arrays.asList("a", "b"))
+
+// ❌ Optional.isEmpty() (Java 11)
+optional.isEmpty()             // → ✅ !optional.isPresent()
+
+// ❌ String.strip(), String.isBlank() (Java 11)
+string.strip()                 // → ✅ string.trim()
+string.isBlank()               // → ✅ string.trim().isEmpty()
+
+// ❌ Stream.toList() (Java 16)
+stream.toList()                // → ✅ stream.collect(Collectors.toList())
+
+// ❌ Map.entry() (Java 9)
+Map.entry("k", "v")            // → ✅ new AbstractMap.SimpleEntry<>("k", "v")
+
+// ❌ InputStream.transferTo() (Java 9)
+inputStream.transferTo(out)    // → ✅ IOUtils.copyBytes(inputStream, out)
+
+// ❌ Switch expressions, text blocks, records, sealed classes, pattern matching
+```
+
+**FORBIDDEN language features:** Switch expressions (Java 12), text blocks (Java 13), records (Java 14), sealed classes (Java 17), pattern matching (Java 16+)
+
 ### Testing
 
 **MANDATORY: Use AssertJ, NOT JUnit assertions:**
@@ -131,6 +168,85 @@ public class ConnectionFactory {
 ---
 
 ## 3. Code Organization
+
+### Repository Structure
+
+Apache Fluss follows a layered Maven module architecture: `fluss-common` (foundation) → `fluss-rpc` → `fluss-client`/`fluss-server` (peers, cannot cross-depend) → connectors → lake tiering.
+
+#### Core Modules
+
+**`fluss-common`** - Foundation: data types, config, metadata, utilities, exceptions
+- Key packages: `annotation`, `config`, `types`, `row`, `record`, `metadata`, `utils`, `exception`, `fs`
+
+**`fluss-metrics`** - Metrics system (reporters, metric groups)
+
+**`fluss-rpc`** - RPC framework, Protocol Buffer messages (proto2)
+- Regenerate: `./mvnw clean install -DskipTests -pl fluss-protogen,fluss-rpc`
+
+**`fluss-client`** - Client library for table operations
+- APIs: `Connection`, `Admin`, `Table`, `LogScanner`, `LookupClient`, `UpsertWriter`, `AppendWriter`
+- Packages: `admin`, `table`, `write`, `lookup`, `scanner`, `metadata`
+
+**`fluss-server`** - CoordinatorServer (metadata, coordination) + TabletServer (data storage)
+- Packages: `coordinator`, `tablet`, `log`, `kv`, `replica`, `zk`, `metadata`, `authorizer`
+
+#### Connectors
+
+**`fluss-flink/`** - Flink connectors: `fluss-flink-common`, `fluss-flink-{1.18,1.19,1.20,2.2}`, `fluss-flink-tiering`
+
+**`fluss-spark/`** - Spark connectors: `fluss-spark-common`, `fluss-spark-{3.4,3.5}`, `fluss-spark-ut`
+
+**`fluss-kafka/`** - Kafka-compatible producer/consumer APIs
+
+#### Lake Tiering
+
+**`fluss-lake/`** - Lake format integrations: `fluss-lake-{iceberg,paimon,lance}`
+
+#### Filesystems
+
+**`fluss-filesystems/`** - Pluggable filesystem implementations: `fluss-fs-{hadoop,hdfs,s3,oss,obs,azure,gs}`
+
+#### Support
+
+**`fluss-test-utils`** - JUnit 5 extensions (`FlussClusterExtension`, `ZooKeeperExtension`), test base classes
+
+**`fluss-dist`** - Binary distribution with `bin/` scripts and `conf/` templates
+
+**`fluss-protogen`** - Protocol Buffer code generation
+
+**`fluss-test-coverage`** - Aggregated JaCoCo test coverage
+
+**`fluss-jmh`** - Performance microbenchmarks
+
+**`fluss-docgen`** - Configuration documentation generation
+
+#### Key Directories
+
+```
+fluss/
+├── fluss-common/          # Foundation module
+├── fluss-rpc/             # RPC framework
+├── fluss-client/          # Client APIs
+├── fluss-server/          # Server components
+├── fluss-flink/           # Flink connectors
+├── fluss-spark/           # Spark connectors
+├── fluss-lake/            # Lake tiering
+├── fluss-filesystems/     # Filesystem plugins
+├── fluss-dist/            # Binary distribution
+│   └── src/main/resources/
+│       ├── bin/           # coordinator-server.sh, tablet-server.sh, local-cluster.sh
+│       └── conf/          # server.yaml, log4j.properties
+├── .github/workflows/     # CI pipeline (ci.yaml)
+└── pom.xml                # Root Maven POM
+```
+
+#### Package Conventions
+
+- **`org.apache.fluss.<module>`** - Module root package
+- **`org.apache.fluss.shaded.*`** - Shaded dependencies (Guava, Jackson, Netty, Arrow, ZooKeeper)
+- **Test packages** - Mirror main structure in `src/test/java`
+
+---
 
 ### Naming Conventions
 
@@ -338,13 +454,9 @@ git remote add fork https://github.com/<your-username>/fluss.git
 [component] Brief description (under 70 chars)
 
 Detailed explanation of changes and motivation.
-
-Co-Authored-By: Claude <ai-assistant@anthropic.com>
 ```
 
 **Component tags:** `[client]`, `[server]`, `[rpc]`, `[flink]`, `[spark]`, `[docs]`, `[build]`, `[test]`
-
-**AI-generated code identification:** ALWAYS include `Co-Authored-By: Claude <ai-assistant@anthropic.com>` in commit messages for AI-generated changes.
 
 ### Pre-Push Self-Review
 
