@@ -77,8 +77,10 @@ import org.apache.fluss.server.entity.NotifyRemoteLogOffsetsData;
 import org.apache.fluss.server.entity.StopReplicaData;
 import org.apache.fluss.server.entity.StopReplicaResultForBucket;
 import org.apache.fluss.server.entity.UserContext;
+import org.apache.fluss.server.kv.KvIdleReleaseController;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvSnapshotResource;
+import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
 import org.apache.fluss.server.kv.snapshot.DefaultSnapshotContext;
 import org.apache.fluss.server.log.FetchDataInfo;
@@ -108,10 +110,12 @@ import org.apache.fluss.server.replica.fetcher.ReplicaFetcherManager;
 import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
+import org.apache.fluss.utils.ExecutorUtils;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.concurrent.Scheduler;
 
 import org.slf4j.Logger;
@@ -130,9 +134,13 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -153,6 +161,10 @@ public class ReplicaManager implements ServerReconfigurable {
     private static final Logger LOG = LoggerFactory.getLogger(ReplicaManager.class);
 
     public static final String HIGH_WATERMARK_CHECKPOINT_FILE_NAME = "high-watermark-checkpoint";
+
+    // ---- Idle release internal constants ----
+    private static final long IDLE_RELEASE_CHECK_INTERVAL_MS = 60_000;
+
     private final Configuration conf;
     private final Scheduler scheduler;
     private final LogManager logManager;
@@ -208,6 +220,10 @@ public class ReplicaManager implements ServerReconfigurable {
     private final String internalListenerName;
 
     private final Clock clock;
+
+    private final boolean kvIdleReleaseEnabled;
+    private @Nullable KvIdleReleaseController kvIdleReleaseController;
+    private @Nullable ScheduledExecutorService kvIdleReleaseScheduler;
 
     public ReplicaManager(
             Configuration conf,
@@ -310,6 +326,30 @@ public class ReplicaManager implements ServerReconfigurable {
         this.clock = clock;
         this.ioExecutor = ioExecutor;
         this.minInSyncReplicas = conf.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER);
+        this.kvIdleReleaseEnabled = kvManager != null && kvManager.isLazyOpenEnabled();
+        if (kvIdleReleaseEnabled) {
+            long closeIdleIntervalMs = conf.get(ConfigOptions.KV_LAZY_OPEN_IDLE_TIMEOUT).toMillis();
+            checkArgument(
+                    closeIdleIntervalMs > 0,
+                    "kv.lazy-open.idle-timeout must be positive, got: %s ms",
+                    closeIdleIntervalMs);
+            this.kvIdleReleaseScheduler =
+                    Executors.newSingleThreadScheduledExecutor(
+                            new ExecutorThreadFactory("kv-idle-release"));
+            this.kvIdleReleaseController =
+                    new KvIdleReleaseController(
+                            kvIdleReleaseScheduler,
+                            () ->
+                                    onlineReplicas()
+                                            .filter(Replica::isKvTable)
+                                            .map(Replica::getKvTablet)
+                                            .filter(Objects::nonNull)
+                                            .filter(KvTablet::isLazyOpen)
+                                            .collect(Collectors.toList()),
+                            clock,
+                            IDLE_RELEASE_CHECK_INTERVAL_MS,
+                            closeIdleIntervalMs);
+        }
         registerMetrics();
     }
 
@@ -322,6 +362,11 @@ public class ReplicaManager implements ServerReconfigurable {
                 this::maybeShrinkIsr,
                 0L,
                 conf.get(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME).toMillis() / 2);
+
+        // Start idle release controller if enabled
+        if (kvIdleReleaseController != null) {
+            kvIdleReleaseController.start();
+        }
     }
 
     public RemoteLogManager getRemoteLogManager() {
@@ -2009,6 +2054,14 @@ public class ReplicaManager implements ServerReconfigurable {
     public static final class OfflineReplica implements HostedReplica {}
 
     public void shutdown() throws InterruptedException {
+        // Shut down the idle release controller if it was created
+        if (kvIdleReleaseController != null) {
+            kvIdleReleaseController.close();
+        }
+        if (kvIdleReleaseScheduler != null) {
+            ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, kvIdleReleaseScheduler);
+        }
+
         // Close the resources for snapshot kv
         kvSnapshotResource.close();
         replicaFetcherManager.shutdown();

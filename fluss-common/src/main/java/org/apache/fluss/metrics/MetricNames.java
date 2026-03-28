@@ -147,6 +147,9 @@ public class MetricNames {
             "preWriteBufferTruncateAsDuplicatedPerSecond";
     public static final String KV_PRE_WRITE_BUFFER_TRUNCATE_AS_ERROR_RATE =
             "preWriteBufferTruncateAsErrorPerSecond";
+    public static final String KV_TABLET_OPEN_COUNT = "kvTabletOpenCount";
+    public static final String KV_TABLET_LAZY_COUNT = "kvTabletLazyCount";
+    public static final String KV_TABLET_FAILED_COUNT = "kvTabletFailedCount";
 
     // --------------------------------------------------------------------------------------------
     // RocksDB metrics
