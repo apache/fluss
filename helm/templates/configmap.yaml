@@ -53,3 +53,9 @@ data:
     {{- end }}
 
     {{- end }}
+
+    ### Zookeeper
+
+    {{- if (include "fluss.security.zookeeper.sasl.enabled" .) }}
+    zookeeper.client.config.path: /etc/fluss/conf/zookeeper-client.properties
+    {{- end }}

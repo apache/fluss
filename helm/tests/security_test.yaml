@@ -282,3 +282,234 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: '>> \$FLUSS_HOME/conf/server\.yaml'
+
+---
+
+suite: zookeeper-sasl-enabled-secret
+templates:
+  - templates/secret-jaas-config.yaml
+tests:
+  - it: renders ZookeeperClient JAAS block when ZK SASL is enabled
+    set:
+      security.zookeeper.sasl.mechanism: plain
+      security.zookeeper.sasl.plain.username: zk-user
+      security.zookeeper.sasl.plain.password: zk-pass
+    asserts:
+      - hasDocuments:
+          count: 1
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'ZookeeperClient\s*\{'
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'username="zk-user"'
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'password="zk-pass"'
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'DigestLoginModule required'
+      - matchRegex:
+          path: stringData["zookeeper-client.properties"]
+          pattern: 'zookeeper\.sasl\.clientconfig=ZookeeperClient'
+  - it: renders both SASL and ZK JAAS blocks when both are enabled
+    set:
+      security.internal.sasl.mechanism: plain
+      security.internal.sasl.plain.username: internal-user
+      security.internal.sasl.plain.password: internal-pass
+      security.zookeeper.sasl.mechanism: plain
+      security.zookeeper.sasl.plain.username: zk-user
+      security.zookeeper.sasl.plain.password: zk-pass
+    asserts:
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'internal\.FlussServer\s*\{'
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'ZookeeperClient\s*\{'
+  - it: does not render SASL listener blocks when only ZK SASL is enabled
+    set:
+      security.zookeeper.sasl.mechanism: plain
+      security.zookeeper.sasl.plain.username: zk-user
+      security.zookeeper.sasl.plain.password: zk-pass
+    asserts:
+      - notMatchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'internal\.FlussServer\s*\{'
+      - notMatchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'FlussClient\s*\{'
+
+---
+
+suite: zookeeper-sasl-enabled-statefulset
+templates:
+  - templates/sts-coordinator.yaml
+  - templates/sts-tablet.yaml
+  - templates/configmap.yaml
+tests:
+  - it: renders JAAS env var and mounts secret volume for coordinator when ZK SASL is enabled
+    template: templates/sts-coordinator.yaml
+    set:
+      security.zookeeper.sasl.mechanism: plain
+      security.zookeeper.sasl.plain.username: zk-user
+      security.zookeeper.sasl.plain.password: zk-pass
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FLUSS_ENV_JAVA_OPTS
+            value: "-Djava.security.auth.login.config=/etc/fluss/conf/jaas.conf"
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: sasl-config
+            secret:
+              secretName: RELEASE-NAME-fluss-sasl-jaas-config
+  - it: renders JAAS env var and mounts secret volume for tablet when ZK SASL is enabled
+    template: templates/sts-tablet.yaml
+    set:
+      security.zookeeper.sasl.mechanism: plain
+      security.zookeeper.sasl.plain.username: zk-user
+      security.zookeeper.sasl.plain.password: zk-pass
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FLUSS_ENV_JAVA_OPTS
+            value: "-Djava.security.auth.login.config=/etc/fluss/conf/jaas.conf"
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: sasl-config
+            secret:
+              secretName: RELEASE-NAME-fluss-sasl-jaas-config
+  - it: renders zookeeper client config path in configmap when ZK SASL is enabled
+    template: templates/configmap.yaml
+    set:
+      security.zookeeper.sasl.mechanism: plain
+      security.zookeeper.sasl.plain.username: zk-user
+      security.zookeeper.sasl.plain.password: zk-pass
+    asserts:
+      - matchRegex:
+          path: data["server.yaml"]
+          pattern: 'zookeeper\.client\.config\.path: /etc/fluss/conf/zookeeper-client\.properties'
+
+---
+
+suite: zookeeper-sasl-custom-login-module
+templates:
+  - templates/secret-jaas-config.yaml
+tests:
+  - it: renders custom login module class in ZookeeperClient JAAS block
+    set:
+      security.zookeeper.sasl.mechanism: plain
+      security.zookeeper.sasl.plain.username: zk-user
+      security.zookeeper.sasl.plain.password: zk-pass
+      security.zookeeper.sasl.plain.loginModuleClass: "com.example.CustomLoginModule"
+    asserts:
+      - matchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'com\.example\.CustomLoginModule required'
+      - notMatchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'DigestLoginModule'
+
+---
+
+suite: zookeeper-sasl-disabled
+templates:
+  - templates/secret-jaas-config.yaml
+  - templates/sts-coordinator.yaml
+  - templates/sts-tablet.yaml
+  - templates/configmap.yaml
+tests:
+  - it: does not render ZookeeperClient JAAS block when ZK SASL is disabled
+    template: templates/secret-jaas-config.yaml
+    set:
+      security.internal.sasl.mechanism: plain
+      security.internal.sasl.plain.username: internal-user
+      security.internal.sasl.plain.password: internal-pass
+    asserts:
+      - hasDocuments:
+          count: 1
+      - notMatchRegex:
+          path: stringData["jaas.conf"]
+          pattern: 'ZookeeperClient\s*\{'
+      - isNull:
+          path: stringData["zookeeper-client.properties"]
+  - it: does not render JAAS secret when neither SASL nor ZK SASL is enabled
+    template: templates/secret-jaas-config.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: does not render JAAS env var or volume mount for coordinator when ZK SASL is disabled
+    template: templates/sts-coordinator.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FLUSS_ENV_JAVA_OPTS
+            value: "-Djava.security.auth.login.config=/etc/fluss/conf/jaas.conf"
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: sasl-config
+          any: true
+  - it: does not render JAAS env var or volume mount for tablet when ZK SASL is disabled
+    template: templates/sts-tablet.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: FLUSS_ENV_JAVA_OPTS
+            value: "-Djava.security.auth.login.config=/etc/fluss/conf/jaas.conf"
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: sasl-config
+          any: true
+  - it: does not render zookeeper client config path in configmap when ZK SASL is disabled
+    template: templates/configmap.yaml
+    asserts:
+      - notMatchRegex:
+          path: data["server.yaml"]
+          pattern: 'zookeeper\.client\.config\.path'
+
+---
+
+suite: zookeeper-sasl-validation
+templates:
+  - templates/NOTES.txt
+tests:
+  - it: fails when loginModuleClass is empty and ZK SASL is enabled
+    set:
+      security.zookeeper.sasl.mechanism: plain
+      security.zookeeper.sasl.plain.username: zk-user
+      security.zookeeper.sasl.plain.password: zk-pass
+      security.zookeeper.sasl.plain.loginModuleClass: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "VALUES VALIDATION:\nsecurity.zookeeper.sasl.plain.loginModuleClass must not be empty when security.zookeeper.sasl.mechanism is plain"
+  - it: fails when ZK SASL is enabled but username is empty
+    set:
+      security.zookeeper.sasl.mechanism: plain
+      security.zookeeper.sasl.plain.password: zk-pass
+    asserts:
+      - failedTemplate:
+          errorMessage: "VALUES VALIDATION:\nsecurity.zookeeper.sasl.plain.username must not be empty when security.zookeeper.sasl.mechanism is plain"
+  - it: fails when ZK SASL is enabled but password is empty
+    set:
+      security.zookeeper.sasl.mechanism: plain
+      security.zookeeper.sasl.plain.username: zk-user
+    asserts:
+      - failedTemplate:
+          errorMessage: "VALUES VALIDATION:\nsecurity.zookeeper.sasl.plain.password must not be empty when security.zookeeper.sasl.mechanism is plain"
+  - it: fails for invalid zookeeper mechanism value
+    set:
+      security.zookeeper.sasl.mechanism: bogus
+      security.zookeeper.sasl.plain.username: zk-user
+      security.zookeeper.sasl.plain.password: zk-pass
+    asserts:
+      - failedTemplate:
+          errorMessage: "VALUES VALIDATION:\nsecurity.zookeeper.sasl.mechanism must be empty or: plain"
