@@ -19,6 +19,15 @@ The client provides two main APIs:
 The C++ client is not yet published as a package and must be built from source.
 
 **Prerequisites:** CMake 3.22+, C++17 compiler, Rust 1.85+, Apache Arrow C++ library
+
+Install dependencies:
+```bash
+# macOS
+brew install cmake arrow
+
+# Ubuntu/Debian
+sudo apt-get install cmake libarrow-dev
+```
 ```bash
 git clone https://github.com/apache/fluss-rust.git
 cd fluss-rust/bindings/cpp
@@ -26,6 +35,9 @@ mkdir -p build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release ..
 cmake --build .
 ```
+
+For full build options including CMake integration into your own project, see the
+[C++ client installation guide](https://clients.fluss.apache.org/user-guide/cpp/installation).
 
 ## Quick Example
 ```cpp
