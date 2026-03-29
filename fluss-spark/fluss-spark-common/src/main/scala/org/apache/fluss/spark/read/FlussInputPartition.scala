@@ -46,6 +46,24 @@ case class FlussAppendInputPartition(tableBucket: TableBucket, startOffset: Long
 }
 
 /**
+ * Represents an input partition for reading data from a single lake split. Each lake split maps to
+ * one Spark task, enabling parallel lake reads across splits.
+ *
+ * @param tableBucket
+ *   the table bucket this split belongs to
+ * @param lakeSplitBytes
+ *   serialized lake split data
+ */
+case class FlussLakeInputPartition(tableBucket: TableBucket, lakeSplitBytes: Array[Byte])
+  extends FlussInputPartition {
+  override def toString: String = {
+    s"FlussLakeInputPartition{tableId=${tableBucket.getTableId}, bucketId=${tableBucket.getBucket}," +
+      s" partitionId=${tableBucket.getPartitionId}," +
+      s" splitSize=${lakeSplitBytes.length}}"
+  }
+}
+
+/**
  * Represents an input partition for reading data from a primary key table bucket. This partition
  * includes snapshot information for hybrid snapshot-log reading.
  *

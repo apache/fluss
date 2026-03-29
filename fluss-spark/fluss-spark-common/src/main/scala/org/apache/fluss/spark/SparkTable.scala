@@ -21,7 +21,7 @@ import org.apache.fluss.client.admin.Admin
 import org.apache.fluss.config.{Configuration => FlussConfiguration}
 import org.apache.fluss.metadata.{TableInfo, TablePath}
 import org.apache.fluss.spark.catalog.{AbstractSparkTable, SupportsFlussPartitionManagement}
-import org.apache.fluss.spark.read.{FlussAppendScanBuilder, FlussUpsertScanBuilder}
+import org.apache.fluss.spark.read.{FlussAppendScanBuilder, FlussLakeAppendScanBuilder, FlussUpsertScanBuilder}
 import org.apache.fluss.spark.write.{FlussAppendWriteBuilder, FlussUpsertWriteBuilder}
 
 import org.apache.spark.sql.catalyst.SQLConfHelper
@@ -61,8 +61,19 @@ class SparkTable(
 
   override def newScanBuilder(options: CaseInsensitiveStringMap): ScanBuilder = {
     populateSparkConf(flussConfig)
+    val isDataLakeEnabled = tableInfo.getTableConfig.isDataLakeEnabled
+    val startupMode = options
+      .getOrDefault(
+        SparkFlussConf.SCAN_START_UP_MODE.key(),
+        flussConfig.get(SparkFlussConf.SCAN_START_UP_MODE))
+      .toUpperCase
+    val isFullMode = startupMode == SparkFlussConf.StartUpMode.FULL.toString
     if (tableInfo.getPrimaryKeys.isEmpty) {
-      new FlussAppendScanBuilder(tablePath, tableInfo, options, flussConfig)
+      if (isDataLakeEnabled && isFullMode) {
+        new FlussLakeAppendScanBuilder(tablePath, tableInfo, options, flussConfig)
+      } else {
+        new FlussAppendScanBuilder(tablePath, tableInfo, options, flussConfig)
+      }
     } else {
       new FlussUpsertScanBuilder(tablePath, tableInfo, options, flussConfig)
     }
