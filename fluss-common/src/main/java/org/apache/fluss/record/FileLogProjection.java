@@ -152,7 +152,8 @@ public class FileLogProjection {
 
         MultiBytesView.Builder builder = MultiBytesView.builder();
 
-        // Return empty if meets empty batch
+        // Empty batches (header-only) can occur for CDC log batches with no changes;
+        // return empty projection to preserve offset advancement.
         if (batchSizeInBytes == recordBatchHeaderSize) {
             return builder.build();
         }

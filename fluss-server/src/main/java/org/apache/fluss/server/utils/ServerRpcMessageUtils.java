@@ -201,6 +201,9 @@ import org.apache.fluss.utils.json.DataTypeJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 import org.apache.fluss.utils.json.TableBucketOffsets;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import javax.annotation.Nullable;
 
 import java.nio.ByteBuffer;
@@ -222,13 +225,14 @@ import java.util.stream.Stream;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toByteBuffer;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclInfo;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
-import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * Utils for making rpc request/response from inner object or convert inner class to rpc
  * request/response.
  */
 public class ServerRpcMessageUtils {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ServerRpcMessageUtils.class);
 
     public static TablePath toTablePath(PbTablePath pbTablePath) {
         return new TablePath(pbTablePath.getDatabaseName(), pbTablePath.getTableName());
@@ -902,7 +906,7 @@ public class ServerRpcMessageUtils {
                         new FilterInfo(tableReq.getFilterPredicate(), schemaId));
             }
         }
-        return result;
+        return result == null ? null : Collections.unmodifiableMap(result);
     }
 
     public static Map<TableBucket, FetchReqInfo> getFetchLogData(FetchLogRequest request) {
@@ -952,13 +956,16 @@ public class ServerRpcMessageUtils {
             PbFetchLogRespForBucket fetchLogRespForBucket =
                     new PbFetchLogRespForBucket().setBucketId(tb.getBucket());
             if (bucketResult.hasFilteredEndOffset()) {
-                fetchLogRespForBucket.setFilteredEndOffset(bucketResult.getFilteredEndOffset());
                 // filteredEndOffset and records are mutually exclusive: when all batches are
                 // filtered out, there should be no record data to send.
-                checkState(
-                        bucketResult.recordsOrEmpty().sizeInBytes() == 0,
-                        "filteredEndOffset is set but records are not empty for bucket %s",
-                        tb);
+                if (bucketResult.recordsOrEmpty().sizeInBytes() != 0) {
+                    LOG.warn(
+                            "filteredEndOffset is set but records are not empty for bucket {}, "
+                                    + "clearing filteredEndOffset as fallback.",
+                            tb);
+                } else {
+                    fetchLogRespForBucket.setFilteredEndOffset(bucketResult.getFilteredEndOffset());
+                }
             }
             if (tb.getPartitionId() != null) {
                 fetchLogRespForBucket.setPartitionId(tb.getPartitionId());

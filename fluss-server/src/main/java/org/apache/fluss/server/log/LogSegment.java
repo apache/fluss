@@ -718,10 +718,11 @@ public final class LogSegment {
                 }
             } catch (Exception e) {
                 LOG.warn(
-                        "Failed to evaluate filter for batch at offset {} in segment {}, "
+                        "Failed to evaluate filter for batch at offset {} in segment {} ({}), "
                                 + "including batch as safe fallback.",
                         batch.baseLogOffset(),
                         fileLogRecords,
+                        e.getClass().getSimpleName(),
                         e);
                 include = true;
             }

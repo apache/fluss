@@ -52,8 +52,8 @@ import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newProduceLo
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Test for {@link LogFetcher} with recordBatchFilter pushdown scenarios. */
-public class LogFetcherFilterTest extends ClientToServerITCaseBase {
+/** Integration test for {@link LogFetcher} with recordBatchFilter pushdown scenarios. */
+public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
     private LogFetcher logFetcher;
     private long tableId;
     private final int bucketId0 = 0;
@@ -181,7 +181,7 @@ public class LogFetcherFilterTest extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testFetchWithMixedData() throws Exception {
+    void testBatchLevelFilterIncludesEntireBatchWhenStatisticsOverlap() throws Exception {
         TableBucket tb0 = new TableBucket(tableId, bucketId0);
 
         // Create mixed data: some matching, some not matching (using DATA1 structure)
@@ -275,9 +275,7 @@ public class LogFetcherFilterTest extends ClientToServerITCaseBase {
         // For a batch where max value = 5 and filter is a > 5, the entire batch should be
         // filtered out at the server side. collectFetch() may omit the bucket entirely because
         // there are no user-visible records to return.
-        if (records.containsKey(tb0)) {
-            assertThat(records.get(tb0)).isEmpty();
-        }
+        assertThat(records.getOrDefault(tb0, Collections.emptyList())).isEmpty();
     }
 
     @Test

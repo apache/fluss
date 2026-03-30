@@ -42,9 +42,9 @@ import java.util.List;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
- * {@link CompletedFetch} represents the result that was returned from the tablet server via a
- * {@link FetchLogRequest}, which can be a {@link LogRecordBatch} or remote log segments path. It
- * contains logic to maintain state between calls to {@link #fetchRecords(int)}.
+ * {@link CompletedFetch} represents the result that was returned from the tablet server via a fetch
+ * log request, which can be a {@link LogRecordBatch} or remote log segments path. It contains logic
+ * to maintain state between calls to {@link #fetchRecords(int)}.
  */
 @Internal
 abstract class CompletedFetch {
@@ -198,8 +198,8 @@ abstract class CompletedFetch {
                 ScanRecord record = toScanRecord(lastRecord);
                 scanRecords.add(record);
                 recordsRead++;
-                // Update nextFetchOffset based on the current record
-                // This will be overridden by batch-level nextLogOffset when batch is complete
+                // Per-record offset is a best-effort value; the authoritative offset
+                // comes from the batch's nextLogOffset once the batch is fully consumed.
                 nextFetchOffset = lastRecord.logOffset() + 1;
                 cachedRecordException = null;
             }

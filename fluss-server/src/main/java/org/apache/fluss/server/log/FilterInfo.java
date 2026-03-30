@@ -19,6 +19,8 @@ package org.apache.fluss.server.log;
 
 import org.apache.fluss.rpc.messages.PbPredicate;
 
+import java.util.Objects;
+
 /** Holds the raw filter predicate and schema ID from a fetch request. */
 public final class FilterInfo {
     private final PbPredicate pbPredicate;
@@ -35,5 +37,22 @@ public final class FilterInfo {
 
     public int getSchemaId() {
         return schemaId;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+        FilterInfo that = (FilterInfo) o;
+        return schemaId == that.schemaId && Objects.equals(pbPredicate, that.pbPredicate);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(pbPredicate, schemaId);
     }
 }

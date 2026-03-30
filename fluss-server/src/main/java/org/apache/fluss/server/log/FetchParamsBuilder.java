@@ -19,6 +19,8 @@ package org.apache.fluss.server.log;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 
+import javax.annotation.Nullable;
+
 import java.util.Map;
 
 import static org.apache.fluss.server.log.FetchParams.DEFAULT_MAX_WAIT_MS;
@@ -26,10 +28,10 @@ import static org.apache.fluss.server.log.FetchParams.DEFAULT_MIN_FETCH_BYTES;
 
 /** Builder of FetchParams. */
 public final class FetchParamsBuilder {
-    private int replicaId;
+    private final int replicaId;
     private boolean fetchOnlyLeader = true;
-    private int maxFetchBytes;
-    private Map<Long, FilterInfo> tableFilterInfoMap;
+    private final int maxFetchBytes;
+    @Nullable private Map<Long, FilterInfo> tableFilterInfoMap;
     private int minFetchBytes;
     private long maxWaitMs;
 

@@ -322,6 +322,10 @@ public class FileLogRecords implements LogRecords, Closeable {
      */
     public AbstractIterator<FileChannelLogRecordBatch> batchIterator(int start, int endPosition)
             throws IOException {
+        if (endPosition >= 0 && start > endPosition) {
+            throw new IllegalArgumentException(
+                    "start (" + start + ") must be <= endPosition (" + endPosition + ")");
+        }
         final int end;
         if (endPosition >= 0) {
             end = endPosition;

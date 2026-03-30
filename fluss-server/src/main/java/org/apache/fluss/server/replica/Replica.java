@@ -1537,9 +1537,10 @@ public final class Replica {
                 }
             } catch (Exception e) {
                 LOG.warn(
-                        "Failed to initialize filter context for {}, "
+                        "Failed to initialize filter context for {} ({}), "
                                 + "falling back to unfiltered read.",
                         tableBucket,
+                        e.getClass().getSimpleName(),
                         e);
                 // Safe fallback: read without filter. resolvedFilter/readContext/predicateResolver
                 // remain null, so the read proceeds as if no filter was requested.
@@ -1565,7 +1566,7 @@ public final class Replica {
                 try {
                     readContext.close();
                 } catch (Exception e) {
-                    // ignore close exception
+                    LOG.debug("Failed to close readContext for {}", tableBucket, e);
                 }
             }
         }
