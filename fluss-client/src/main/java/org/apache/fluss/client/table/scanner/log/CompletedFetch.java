@@ -109,6 +109,10 @@ abstract class CompletedFetch {
         return isConsumed;
     }
 
+    public int getSizeInBytes() {
+        return sizeInBytes;
+    }
+
     boolean isInitialized() {
         return initialized;
     }

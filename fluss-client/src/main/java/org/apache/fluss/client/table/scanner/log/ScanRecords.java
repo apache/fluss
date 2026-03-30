@@ -37,12 +37,27 @@ import java.util.Set;
  */
 @PublicEvolving
 public class ScanRecords implements Iterable<ScanRecord> {
-    public static final ScanRecords EMPTY = new ScanRecords(Collections.emptyMap());
+    public static final ScanRecords EMPTY = new ScanRecords(Collections.emptyMap(), 0);
 
     private final Map<TableBucket, List<ScanRecord>> records;
+    private final long totalBytesRead;
 
     public ScanRecords(Map<TableBucket, List<ScanRecord>> records) {
+        this(records, 0);
+    }
+
+    public ScanRecords(Map<TableBucket, List<ScanRecord>> records, long totalBytesRead) {
         this.records = records;
+        this.totalBytesRead = totalBytesRead;
+    }
+
+    /**
+     * Get the total bytes read from the Fluss log in this batch.
+     *
+     * @return the total bytes read
+     */
+    public long getTotalBytesRead() {
+        return totalBytesRead;
     }
 
     /**

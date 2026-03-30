@@ -280,4 +280,12 @@ public class MetricNames {
     public static final String NETTY_NUM_ALLOCATIONS_PER_SECONDS = "numAllocationsPerSecond";
     public static final String NETTY_NUM_HUGE_ALLOCATIONS_PER_SECONDS =
             "numHugeAllocationsPerSecond";
+
+    // --------------------------------------------------------------------------------------------
+    // metrics for tiering service
+    // --------------------------------------------------------------------------------------------
+
+    // for lake tiering metrics - operator level
+    public static final String TIERING_SERVICE_READ_BYTES = "readBytes";
+    public static final String TIERING_SERVICE_READ_BYTES_RATE = "readBytesPerSecond";
 }

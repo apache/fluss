@@ -22,7 +22,6 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.ScannerMetricGroup;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
-import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -161,7 +160,7 @@ public class LogFetcher implements Closeable {
         return !logFetchBuffer.isEmpty();
     }
 
-    public Map<TableBucket, List<ScanRecord>> collectFetch() {
+    public ScanRecords collectFetch() {
         return logFetchCollector.collectFetch(logFetchBuffer);
     }
 

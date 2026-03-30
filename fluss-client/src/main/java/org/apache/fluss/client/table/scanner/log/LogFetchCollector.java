@@ -83,9 +83,10 @@ public class LogFetchCollector {
      * @throws LogOffsetOutOfRangeException If there is OffsetOutOfRange error in fetchResponse and
      *     the defaultResetPolicy is NONE
      */
-    public Map<TableBucket, List<ScanRecord>> collectFetch(final LogFetchBuffer logFetchBuffer) {
+    public ScanRecords collectFetch(final LogFetchBuffer logFetchBuffer) {
         Map<TableBucket, List<ScanRecord>> fetched = new HashMap<>();
         int recordsRemaining = maxPollRecords;
+        long totalBytesRead = 0;
 
         try {
             while (recordsRemaining > 0) {
@@ -135,6 +136,11 @@ public class LogFetchCollector {
 
                         recordsRemaining -= records.size();
                     }
+
+                    // Only count bytes when the fetch is fully consumed
+                    if (nextInLineFetch.isConsumed()) {
+                        totalBytesRead += nextInLineFetch.getSizeInBytes();
+                    }
                 }
             }
         } catch (FetchException e) {
@@ -143,7 +149,7 @@ public class LogFetchCollector {
             }
         }
 
-        return fetched;
+        return new ScanRecords(fetched, totalBytesRead);
     }
 
     private List<ScanRecord> fetchRecords(CompletedFetch nextInLineFetch, int maxRecords) {

@@ -1125,6 +1125,36 @@ How to Use Flink Metrics, you can see [Flink Metrics](https://nightlies.apache.o
             <td>Table</td>
             <td>The output records per second.</td>
             <td>Meter</td>
-        </tr>  
+        </tr>
+    </tbody>
+</table>
+
+### Tiering Service Metrics
+
+These metrics are exposed by the Flink-based tiering source reader when running the Lake Tiering Service.
+All metrics are registered under the `fluss.tieringService` metric group, which is a child of the Flink `SourceReaderMetricGroup`.
+
+<table class="table table-bordered">
+    <thead>
+    <tr>
+      <th class="text-left" style={{width: '225pt'}}>Metrics Name</th>
+      <th class="text-left" style={{width: '165pt'}}>Level</th>
+      <th class="text-left" style={{width: '300pt'}}>Description</th>
+      <th class="text-left" style={{width: '70pt'}}>Type</th>
+    </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>readBytes</td>
+            <td>Flink Source Operator</td>
+            <td>The cumulative bytes read from Fluss records since the tiering job started. For the snapshot path, this measures per-record BinaryRow size; for the log path, this measures batch-level byte size from log fetches.</td>
+            <td>Counter</td>
+        </tr>
+        <tr>
+            <td>readBytesPerSecond</td>
+            <td>Flink Source Operator</td>
+            <td>The read throughput rate in bytes per second, derived from the readBytes counter using a 60-second sliding window.</td>
+            <td>Meter</td>
+        </tr>
     </tbody>
 </table>

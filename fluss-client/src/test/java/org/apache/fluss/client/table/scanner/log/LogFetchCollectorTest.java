@@ -19,7 +19,6 @@ package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metadata.TestingMetadataUpdater;
-import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecordReadContext;
@@ -31,7 +30,6 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 import static org.apache.fluss.record.TestData.DATA1;
@@ -97,10 +95,9 @@ public class LogFetchCollectorTest {
         assertThat(completedFetch.isInitialized()).isFalse();
 
         // Fetch the data and validate that we get all the records we want back.
-        Map<TableBucket, List<ScanRecord>> bucketAndRecords =
-                logFetchCollector.collectFetch(logFetchBuffer);
-        assertThat(bucketAndRecords.size()).isEqualTo(1);
-        assertThat(bucketAndRecords.get(tb)).size().isEqualTo(10);
+        ScanRecords bucketAndRecords = logFetchCollector.collectFetch(logFetchBuffer);
+        assertThat(bucketAndRecords.buckets().size()).isEqualTo(1);
+        assertThat(bucketAndRecords.records(tb).size()).isEqualTo(10);
 
         // When we collected the data from the buffer, this will cause the completed fetch to get
         // initialized.
@@ -122,7 +119,7 @@ public class LogFetchCollectorTest {
 
         // Now attempt to collect more records from the fetch buffer.
         bucketAndRecords = logFetchCollector.collectFetch(logFetchBuffer);
-        assertThat(bucketAndRecords.size()).isEqualTo(0);
+        assertThat(bucketAndRecords.buckets().size()).isEqualTo(0);
     }
 
     @Test
@@ -147,14 +144,48 @@ public class LogFetchCollectorTest {
         // unassign bucket 2
         logScannerStatus.unassignScanBuckets(Collections.singletonList(tb2));
 
-        Map<TableBucket, List<ScanRecord>> bucketAndRecords =
-                logFetchCollector.collectFetch(logFetchBuffer);
+        ScanRecords bucketAndRecords = logFetchCollector.collectFetch(logFetchBuffer);
         // should only contain records for bucket 1
-        assertThat(bucketAndRecords.keySet()).containsExactly(tb1);
+        assertThat(bucketAndRecords.buckets()).containsExactly(tb1);
 
         // collect again, should be empty
         bucketAndRecords = logFetchCollector.collectFetch(logFetchBuffer);
-        assertThat(bucketAndRecords.size()).isEqualTo(0);
+        assertThat(bucketAndRecords.buckets().size()).isEqualTo(0);
+    }
+
+    @Test
+    void testTotalBytesRead() throws Exception {
+        TableBucket tb1 = new TableBucket(DATA1_TABLE_ID, 1L, 1);
+        TableBucket tb2 = new TableBucket(DATA1_TABLE_ID, 1L, 2);
+        Map<TableBucket, Long> scanBuckets = new HashMap<>();
+        scanBuckets.put(tb1, 0L);
+        scanBuckets.put(tb2, 0L);
+        logScannerStatus.assignScanBuckets(scanBuckets);
+
+        CompletedFetch completedFetch1 =
+                makeCompletedFetch(
+                        tb1,
+                        new FetchLogResultForBucket(tb1, genMemoryLogRecordsByObject(DATA1), 10L),
+                        0L);
+        CompletedFetch completedFetch2 =
+                makeCompletedFetch(
+                        tb2,
+                        new FetchLogResultForBucket(tb2, genMemoryLogRecordsByObject(DATA1), 10L),
+                        0L);
+
+        logFetchBuffer.add(completedFetch1);
+        logFetchBuffer.add(completedFetch2);
+
+        ScanRecords scanRecords = logFetchCollector.collectFetch(logFetchBuffer);
+
+        // Both fetches should be fully consumed
+        assertThat(completedFetch1.isConsumed()).isTrue();
+        assertThat(completedFetch2.isConsumed()).isTrue();
+
+        // totalBytesRead should be the sum of both completed fetches
+        long expectedBytes = completedFetch1.getSizeInBytes() + completedFetch2.getSizeInBytes();
+        assertThat(scanRecords.getTotalBytesRead()).isEqualTo(expectedBytes);
+        assertThat(scanRecords.getTotalBytesRead()).isGreaterThan(0);
     }
 
     private DefaultCompletedFetch makeCompletedFetch(
