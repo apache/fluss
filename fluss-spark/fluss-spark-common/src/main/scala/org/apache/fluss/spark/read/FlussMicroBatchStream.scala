@@ -25,10 +25,12 @@ import org.apache.fluss.metadata.{PartitionInfo, TableBucket, TableInfo, TablePa
 import org.apache.fluss.utils.json.TableBucketOffsets
 
 import org.apache.spark.internal.Logging
+import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReaderFactory}
 import org.apache.spark.sql.connector.read.streaming._
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
+import org.apache.spark.util.LongAccumulator
 
 import java.util
 import java.util.Optional
@@ -69,6 +71,28 @@ abstract class FlussMicroBatchStream(
   val stoppingOffsetsInitializer: OffsetsInitializer =
     FlussOffsetInitializers.stoppingOffsetsInitializer(false, options, flussConfig)
 
+  // Cached batch metadata for metrics reporting
+  @volatile protected var lastBatchPlannedInputRows: Long = 0L
+  @volatile protected var lastBatchNumBucketsRead: Int = 0
+
+  // Accumulators for executor-side scanner metrics
+  lazy val fetchRequestsAccum: LongAccumulator =
+    SparkSession.active.sparkContext.longAccumulator("flussFetchRequests")
+  lazy val fetchTimeMsAccum: LongAccumulator =
+    SparkSession.active.sparkContext.longAccumulator("flussFetchTimeMs")
+  lazy val maxFetchTimeMsAccum: MaxLongAccumulator = {
+    val acc = new MaxLongAccumulator
+    SparkSession.active.sparkContext.register(acc, "flussMaxFetchTimeMs")
+    acc
+  }
+  lazy val fetchErrorsAccum: LongAccumulator =
+    SparkSession.active.sparkContext.longAccumulator("flussFetchErrors")
+
+  // Snapshots for computing per-batch deltas
+  private var prevFetchRequests: Long = 0L
+  private var prevFetchTimeMs: Long = 0L
+  private var prevFetchErrors: Long = 0L
+
   protected def projection: Array[Int] = {
     val columnNameToIndex = tableInfo.getSchema.getColumnNames.asScala.zipWithIndex.toMap
     readSchema.fields.map {
@@ -106,6 +130,13 @@ abstract class FlussMicroBatchStream(
     if (!readLimit.isInstanceOf[ReadAllAvailable]) {
       throw new UnsupportedOperationException(s"Only ReadAllAvailable is supported, but $readLimit")
     }
+
+    // Snapshot accumulator values at batch start for delta computation
+    prevFetchRequests = fetchRequestsAccum.value
+    prevFetchTimeMs = fetchTimeMsAccum.value
+    prevFetchErrors = fetchErrorsAccum.value
+    // Reset the max accumulator per batch (max is not delta-computable)
+    maxFetchTimeMsAccum.reset()
 
     val latestTableBucketOffsets = if (allDataForTriggerAvailableNow.isDefined) {
       allDataForTriggerAvailableNow.get
@@ -152,8 +183,52 @@ abstract class FlussMicroBatchStream(
   }
 
   override def metrics(latestConsumedOffset: Optional[Offset]): util.Map[String, String] = {
-    // TODO add metrics
-    Map.empty[String, String].asJava
+    val metricsMap = new java.util.HashMap[String, String]()
+
+    // Driver-side batch metrics
+    metricsMap.put("plannedInputRows", lastBatchPlannedInputRows.toString)
+    metricsMap.put("numBucketsRead", lastBatchNumBucketsRead.toString)
+    metricsMap.put("numBucketsTotal", tableInfo.getNumBuckets.toString)
+
+    // Offset lag metrics (fetch fresh server offsets)
+    if (latestConsumedOffset.isPresent) {
+      try {
+        val consumed = latestConsumedOffset.get.asInstanceOf[FlussSourceOffset].tableBucketOffsets
+        val latestOpt = fetchLatestOffsets()
+        if (latestOpt.isDefined) {
+          val consumedMap = consumed.getOffsets.asScala
+          val latestMap = latestOpt.get.getOffsets.asScala
+          val lags = consumedMap.map {
+            case (bucket, consumedOff) =>
+              val latestOff =
+                latestMap.get(bucket).map(Long.unbox).getOrElse(Long.unbox(consumedOff))
+              math.max(0L, latestOff - Long.unbox(consumedOff))
+          }
+          if (lags.nonEmpty) {
+            metricsMap.put("maxOffsetsBehindLatest", lags.max.toString)
+            metricsMap.put("avgOffsetsBehindLatest", f"${lags.sum.toDouble / lags.size}%.1f")
+          }
+        }
+      } catch {
+        case e: Exception =>
+          logWarning("Failed to compute offset lag metrics", e)
+      }
+    }
+
+    // Scanner metrics (from executor-side accumulators)
+    val batchFetchRequests = fetchRequestsAccum.value - prevFetchRequests
+    val batchFetchTimeMs = fetchTimeMsAccum.value - prevFetchTimeMs
+    val batchFetchErrors = fetchErrorsAccum.value - prevFetchErrors
+    metricsMap.put("batchFetchRequests", batchFetchRequests.toString)
+    metricsMap.put("maxFetchLatencyMs", maxFetchTimeMsAccum.value.toString)
+    metricsMap.put("totalFetchErrors", batchFetchErrors.toString)
+    if (batchFetchRequests > 0) {
+      metricsMap.put("avgFetchLatencyMs", f"${batchFetchTimeMs.toDouble / batchFetchRequests}%.1f")
+    } else {
+      metricsMap.put("avgFetchLatencyMs", "0.0")
+    }
+
+    metricsMap
   }
 
   private def getOrCreateInitialPartitionOffsets(): TableBucketOffsets = {
@@ -260,7 +335,15 @@ class FlussAppendMicroBatchStream(
     checkpointLocation) {
 
   override def createReaderFactory(): PartitionReaderFactory = {
-    new FlussAppendPartitionReaderFactory(tablePath, projection, options, flussConfig)
+    new FlussAppendPartitionReaderFactory(
+      tablePath,
+      projection,
+      options,
+      flussConfig,
+      fetchRequestsAccum,
+      fetchTimeMsAccum,
+      maxFetchTimeMsAccum,
+      fetchErrorsAccum)
   }
 
   override def planInputPartitions(start: Offset, end: Offset): Array[InputPartition] = {
@@ -290,6 +373,9 @@ class FlussAppendMicroBatchStream(
       }
       .filter(e => e.startOffset < e.stopOffset)
       .toArray
+    // Cache batch metadata for metrics reporting
+    lastBatchPlannedInputRows = inputPartitions.map(p => p.stopOffset - p.startOffset).sum
+    lastBatchNumBucketsRead = inputPartitions.length
     inputPartitions.map(_.asInstanceOf[InputPartition])
   }
 }
@@ -337,10 +423,22 @@ class FlussUpsertMicroBatchStream(
       }
       .filter(e => e.logStartingOffset < e.logStoppingOffset)
       .toArray
+    // Cache batch metadata for metrics reporting
+    lastBatchPlannedInputRows =
+      inputPartitions.map(p => p.logStoppingOffset - p.logStartingOffset).sum
+    lastBatchNumBucketsRead = inputPartitions.length
     inputPartitions.map(_.asInstanceOf[InputPartition])
   }
 
   override def createReaderFactory(): PartitionReaderFactory = {
-    new FlussUpsertPartitionReaderFactory(tablePath, projection, options, flussConfig)
+    new FlussUpsertPartitionReaderFactory(
+      tablePath,
+      projection,
+      options,
+      flussConfig,
+      fetchRequestsAccum,
+      fetchTimeMsAccum,
+      maxFetchTimeMsAccum,
+      fetchErrorsAccum)
   }
 }
