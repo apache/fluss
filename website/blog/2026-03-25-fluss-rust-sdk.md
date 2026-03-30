@@ -23,6 +23,8 @@ If you've worked with Kafka clients outside of Java, you've probably used [librd
 
 The model is elegant because it inverts the usual maintenance equation. Instead of N full client implementations that diverge over time, each developing its own bugs, its own subtle behavioral differences, its own backlog of features the Java client has but the Python client doesn't yet, you get one implementation and N thin bindings that stay in sync by construction. A bug gets fixed once, and every language picks it up on the next build.
 
+![N Separate Clients vs Shared Core](assets/fluss_rust/n_separate_clients_vs_shared_core.png)
+
 The deeper benefit is correctness, not just code reuse. When you maintain three separate implementations of a client protocol, behavioral drift is inevitable. Edge cases in retry logic, subtle differences in how backpressure kicks in, inconsistencies in how idempotent writes handle sequence numbers. These are the bugs that don't show up in unit tests but surface in production under load, and they surface differently in each language.
 
 We built fluss-rust on this same idea. A single Rust core implements the full Fluss client protocol (Protobuf-based RPC, record batching with backpressure, background I/O, Arrow serialization, idempotent writes, SASL authentication) and exposes it to three languages:
@@ -30,6 +32,8 @@ We built fluss-rust on this same idea. A single Rust core implements the full Fl
 - **Rust**: directly, as the `fluss-rs` crate
 - **Python**: via [PyO3](https://pyo3.rs), the Rust-Python bridge
 - **C++**: via [CXX](https://cxx.rs), the Rust-C++ bridge
+
+![Bindings Structure](assets/fluss_rust/bindings_structure.png)
 
 To give a sense of proportion: the Rust core is roughly 40k lines, while the Python binding is around 5k and the C++ binding around 6k. The bindings handle type conversion, async runtime bridging, and memory ownership at the language boundary, but all the protocol logic, batching, Arrow codec, and retry handling live in the shared core.
 
@@ -59,6 +63,8 @@ When you write a record, the call is synchronous: the record gets queued into a 
 
 The caller gets back a `WriteResultFuture`. Await it to block until the server confirms, or drop it for fire-and-forget. The write proceeds through the background sender regardless, with the same retries and server-side durability (acks=all by default). In high-throughput pipelines you typically don't await every write individually, but collect futures for a batch of records and await them together before committing your source offset.
 
+![Write Modes](assets/fluss_rust/write_modes.png)
+
 Batches ship automatically when they fill up or after a short timeout (100ms by default), so `flush()` isn't needed for data to reach the server. It's there for when you need to confirm that everything in flight has landed. If the write buffer fills up, new writes block until space frees up rather than silently consuming unbounded memory.
 
 Fluss has two table types (primary key tables and log tables), and the Rust core has a writer for each. `UpsertWriter` handles keyed writes: full upserts, deletes, and partial updates where you send only the columns that changed. `AppendWriter` handles append-only log writes and can also accept Arrow `RecordBatch` directly if you already have columnar data. Both support idempotent delivery.
@@ -75,6 +81,8 @@ Arrow deserves its own section because it's the architectural decision that make
 
 Fluss transmits data as Arrow IPC, compressed with ZSTD by default. When you write an Arrow `RecordBatch`, it goes straight into the wire format. When you scan, the response comes back as Arrow `RecordBatch`. The data stays in Arrow throughout, which means there's no serialization boundary between the Rust core and the caller.
 
+![Arrow Data Flow](assets/fluss_rust/arrow_data_flow.png)
+
 This matters most at the language boundary. The Python binding already supports full Arrow interop in both directions: `poll_arrow()` returns scan results as a PyArrow Table, and `write_arrow_batch()` accepts a PyArrow RecordBatch for writes. Both cross the Rust-Python boundary without copying, because `arrow-pyarrow` shares the underlying memory buffers. A scan result goes straight from the Rust core into PyArrow, and from there into Pandas, Polars, or DuckDB with no conversion step.
 
 On the C++ side, the Arrow C Data Interface handles the same zero-copy handoff for callers that export or import Arrow arrays.
@@ -82,6 +90,8 @@ On the C++ side, the Arrow C Data Interface handles the same zero-copy handoff f
 Looking ahead, Arrow also makes [Apache DataFusion](https://datafusion.apache.org/) integration straightforward. DataFusion's table providers already expect Arrow, so wiring fluss-rust as a data source is a natural extension.
 
 ## What This Looks Like in Practice
+
+![One Table, Many Languages](assets/fluss_rust/one_table_four_languages.png)
 
 Suppose a Flink job consumes CDC from Postgres, computes user features, and writes them into a Fluss primary key table. A Python scoring service needs to look up those features before running a model. With the Python binding, that's a few lines:
 
@@ -114,6 +124,8 @@ for (const auto& event : events) {
 
 ## When the Caller Is a Machine
 
+![AI and Fluss](assets/fluss_rust/ai_and_fluss.png)
+
 The examples above involve humans writing Python or C++ code. But increasingly, the caller isn't a human at all. AI agents interact with data infrastructure through tool calls, and the way they use a client library is different from how a developer does.
 
 An agent that needs to check a user's subscription tier or write back a recommendation doesn't read documentation or understand batching internals. It sees a tool definition: `lookup(table, key)`, `upsert(table, row)`, `flush()`. The smaller and more predictable that interface is, the more reliably the agent uses it. If you've worked with LLM tool-calling, you've seen how quickly reliability degrades as the number of functions or the complexity of their signatures grows.
@@ -126,6 +138,8 @@ More broadly, as we discussed in [What does Apache Fluss mean in the context of 
 
 We didn't build everything at once. The Rust core came first with the protocol, batching, Arrow integration, writes, and scanning. We added [PyO3](https://pyo3.rs) for Python and [CXX](https://cxx.rs) for C++ once those paths were stable, and features like lookups landed later as the Rust API matured. If we'd started the bindings earlier, the FFI boundary would have been designed around a half-finished API, and we'd have spent more time reshaping glue code than building features.
 
+![Async complexity in the Rust SDK Core](assets/fluss_rust/async_complexity_in_core.png)
+
 Async was the most involved design problem. Rust runs on Tokio, Python on asyncio, and C++ callers expect synchronous returns. We decided early that all async complexity would stay inside the Rust core: Python spawns work on the shared Tokio runtime and gets back an asyncio-compatible future, while C++ blocks on Tokio and returns when the operation completes. That meant tricky problems like `WriteResultFuture` drop semantics (making sure a dropped future doesn't leak memory or leave a batch stuck in the accumulator) only had to be solved once.
 
 We also underestimated how many bugs live at the language boundary rather than in the core. The Rust integration tests against a real Fluss cluster all passed, but when we ran the same scenarios through the Python and C++ bindings, new issues appeared. On the Python side, API errors from the server weren't being propagated through PyO3 at all, so operations would fail silently. On the C++ side, the row access layer had panics that required a significant rework, and the error handling for pointer-returning FFI methods was swallowing server errors instead of surfacing them. As a result, we now run full round-trip integration tests for all three languages in CI.
@@ -136,12 +150,17 @@ The core read and write paths work, but there are gaps to close before the Rust 
 
 On the infrastructure side, we're adding client metrics so operators can monitor the SDK in production, and improving Python ergonomics with async iterator support for log scanning.
 
-Beyond feature parity, there are two directions we're especially excited about.
+Beyond feature parity, there are four directions we're especially excited about.
+
+![What is next?](assets/fluss_rust/what_is_next.png)
 
 The first is **DataFusion integration**. The Rust core already produces Arrow RecordBatches, which is exactly what DataFusion's table provider interface expects. Wiring the two together would let users run SQL queries directly over Fluss data from Rust or Python, without going through Flink.
 
-The second is a **Fluss gateway service** built on top of the Rust core. Not every environment can load a native library. A lightweight Rust-based gateway could expose Fluss over HTTP or gRPC, making it accessible from any language or tool that can make a network call. The Rust SDK gives us the right foundation for that: a single process that handles the protocol, batching, and connection management, and serves multiple clients over a simple API.
+The second is a **Go client**. The shared-core model extends naturally to Go via CGo or a similar FFI bridge. A Go client would unlock native log ingestion for the Go ecosystem, including integrations with tools like Filebeat, and is already something Fluss users have asked for.
 
+The third is a **CLI for AI agent integration**. A command-line tool built on the Rust core that can look up keys, write records, and scan tables gives AI agents a natural way to interact with Fluss through tool-calling, without importing a library or managing a runtime. It's equally useful for operators debugging in production, shell scripts, and CI/CD pipelines.
+
+The fourth is a **multiprotocol query gateway** built on top of the Rust core. A Rust-based gateway could expose Fluss through Flight SQL (accessible via ADBC), REST, and the PostgreSQL wire protocol. For SQL queries it delegates to DataFusion; for lookups and log writes it calls the Rust core directly.
 On the project side, the community is working toward moving fluss-rust into the main Apache Fluss repository. This would unify the release process, simplify cross-repo coordination, and signal the project's long-term commitment to the multi-language SDK as a first-class part of Fluss.
 
 If any of this is interesting to you, we welcome contributions, bug reports, and feedback.
