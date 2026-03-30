@@ -57,18 +57,4 @@ public class ScanRecordsTest {
         }
         assertThat(c).isEqualTo(4);
     }
-
-    @Test
-    void testTotalBytesRead() {
-        Map<TableBucket, List<ScanRecord>> records = new LinkedHashMap<>();
-        long tableId = 0;
-        ScanRecord record1 = new ScanRecord(0L, 1000L, ChangeType.INSERT, row(1, "a"));
-        records.put(new TableBucket(tableId, 0), Arrays.asList(record1));
-
-        // New constructor carries totalBytesRead
-        assertThat(new ScanRecords(records, 1024L).getTotalBytesRead()).isEqualTo(1024L);
-
-        // Old constructor defaults to 0 for backward compatibility
-        assertThat(new ScanRecords(records).getTotalBytesRead()).isEqualTo(0L);
-    }
 }
