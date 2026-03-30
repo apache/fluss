@@ -20,6 +20,7 @@ package org.apache.fluss.flink.tiering.source;
 
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.tiering.TestingLakeTieringFactory;
@@ -177,14 +178,26 @@ class TieringSourceReaderTest extends FlinkTestBase {
     }
 
     @Test
-    void testHandleTieringTableDroppedEvent() throws Exception {
-        TablePath tablePath = TablePath.of("fluss", "test_tiering_table_dropped");
-        long tableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
+    void testHandlePendingTableDroppedBeforeFetch() throws Exception {
+        // Create two tables: one as "current" table and one as "pending" table
+        TablePath currentTablePath = TablePath.of("fluss", "test_current_table");
+        long currentTableId = createTable(currentTablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
+
+        TablePath pendingTablePath = TablePath.of("fluss", "test_pending_table_dropped");
+        long pendingTableId = createTable(pendingTablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
+
         Configuration conf = new Configuration(FLUSS_CLUSTER_EXTENSION.getClientConfig());
         conf.set(
                 ConfigOptions.CLIENT_WRITER_BUCKET_NO_KEY_ASSIGNER,
                 ConfigOptions.NoKeyAssigner.ROUND_ROBIN);
         try (Connection connection = ConnectionFactory.createConnection(conf)) {
+            // Write some data to current table
+            writeRows(
+                    connection,
+                    currentTablePath,
+                    Arrays.asList(row(0, "v0"), row(1, "v1"), row(2, "v2")),
+                    true);
+
             FutureCompletingBlockingQueue<
                             RecordsWithSplitIds<TableBucketWriteResult<TestingWriteResult>>>
                     elementsQueue = new FutureCompletingBlockingQueue<>(16);
@@ -199,24 +212,17 @@ class TieringSourceReaderTest extends FlinkTestBase {
 
                 reader.start();
 
-                // write some data first
-                writeRows(
-                        connection,
-                        tablePath,
-                        Arrays.asList(row(0, "v0"), row(1, "v1"), row(2, "v2")),
-                        true);
-
-                // add a split for the table
-                TieringLogSplit split =
+                // Add split for current table first - it will become the active table
+                TieringLogSplit currentSplit =
                         new TieringLogSplit(
-                                tablePath,
-                                new TableBucket(tableId, 0),
+                                currentTablePath,
+                                new TableBucket(currentTableId, 0),
                                 null,
                                 EARLIEST_OFFSET,
                                 100L);
-                reader.addSplits(Collections.singletonList(split));
+                reader.addSplits(Collections.singletonList(currentSplit));
 
-                // wait to run one round of tiering to do some tiering
+                // Wait for the current table to start tiering
                 FutureCompletingBlockingQueue<
                                 RecordsWithSplitIds<TableBucketWriteResult<TestingWriteResult>>>
                         blockingQueue = getElementsQueue(reader);
@@ -225,24 +231,38 @@ class TieringSourceReaderTest extends FlinkTestBase {
                         Duration.ofSeconds(30),
                         "Fail to wait element queue is not empty.");
 
-                // send TieringTableDroppedEvent (simulating enumerator's heartbeat detection)
-                TieringTableDroppedEvent event = new TieringTableDroppedEvent(tableId);
+                // Now add split for pending table - it will go into pendingTieringSplits
+                TieringLogSplit pendingSplit =
+                        new TieringLogSplit(
+                                pendingTablePath,
+                                new TableBucket(pendingTableId, 0),
+                                null,
+                                EARLIEST_OFFSET,
+                                100);
+                reader.addSplits(Collections.singletonList(pendingSplit));
 
-                // Verify TieringTableDroppedEvent accessors for coverage
-                assertThat(event.getTableId()).isEqualTo(tableId);
-                assertThat(event).isEqualTo(new TieringTableDroppedEvent(tableId));
-                assertThat(event).isNotEqualTo(new TieringTableDroppedEvent(tableId + 1));
-                assertThat(event.hashCode())
-                        .isEqualTo(new TieringTableDroppedEvent(tableId).hashCode());
-                assertThat(event.toString()).contains(String.valueOf(tableId));
-
+                // Mark the pending table as dropped BEFORE it becomes the active table
+                TieringTableDroppedEvent event = new TieringTableDroppedEvent(pendingTableId);
                 reader.handleSourceEvents(event);
 
-                // actually drop the table so log scanner encounters real
-                // "unknown table or bucket" error on next fetch
-                admin.dropTable(tablePath, true).get();
+                // Use an independent Connection to drop the table, avoiding
+                // invalidation of the reader's metadata cache.
+                // This simulates the real scenario: an external client drops
+                // the table, and the reader discovers it via fetch response
+                // error code (UNKNOWN_TABLE_OR_BUCKET).
+                try (Connection dropConnection =
+                                ConnectionFactory.createConnection(
+                                        FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                        Admin dropAdmin = dropConnection.getAdmin()) {
+                    dropAdmin.dropTable(pendingTablePath, true).get();
+                }
 
-                // should force to finish with empty results (dropped table discards data)
+                // Force complete the current table so the pending table becomes active
+                TieringReachMaxDurationEvent maxDurationEvent =
+                        new TieringReachMaxDurationEvent(currentTableId);
+                reader.handleSourceEvents(maxDurationEvent);
+
+                // First, complete the current table
                 retry(
                         Duration.ofMinutes(1),
                         () -> {
@@ -252,32 +272,30 @@ class TieringSourceReaderTest extends FlinkTestBase {
                             assertThat(output.getEmittedRecords()).hasSize(1);
                             TableBucketWriteResult<TestingWriteResult> result =
                                     output.getEmittedRecords().get(0);
-                            // write result should be null since dropped table discards data
-                            assertThat(result.writeResult()).isNull();
+                            // This should be the current table's result
+                            assertThat(result.tableBucket().getTableId()).isEqualTo(currentTableId);
                         });
 
-                // add another split with skipCurrentRound to verify it's handled correctly
-                split =
-                        new TieringLogSplit(
-                                tablePath,
-                                new TableBucket(tableId, 1),
-                                null,
-                                EARLIEST_OFFSET,
-                                100L);
-                split.skipCurrentRound();
-                reader.addSplits(Collections.singletonList(split));
-
-                // should skip tiering for this split
+                // Now the pending (dropped) table should become active and complete
+                // without throwing RPC exception
                 retry(
                         Duration.ofMinutes(1),
                         () -> {
-                            TestingReaderOutput<TableBucketWriteResult<TestingWriteResult>>
-                                    output1 = new TestingReaderOutput<>();
-                            reader.pollNext(output1);
-                            assertThat(output1.getEmittedRecords()).hasSize(1);
+                            TestingReaderOutput<TableBucketWriteResult<TestingWriteResult>> output =
+                                    new TestingReaderOutput<>();
+                            reader.pollNext(output);
+                            assertThat(output.getEmittedRecords()).hasSize(1);
                             TableBucketWriteResult<TestingWriteResult> result =
-                                    output1.getEmittedRecords().get(0);
+                                    output.getEmittedRecords().get(0);
+                            // This should be the pending table's result
+                            assertThat(result.tableBucket().getTableId()).isEqualTo(pendingTableId);
+                            // write result should be null since dropped table discards data
                             assertThat(result.writeResult()).isNull();
+                            // offset and timestamp should be UNKNOWN
+                            assertThat(result.logEndOffset()).isEqualTo(-1L);
+                            assertThat(result.maxTimestamp()).isEqualTo(-1L);
+                            // should be marked as cancelled
+                            assertThat(result.isCancelled()).isTrue();
                         });
             }
         }

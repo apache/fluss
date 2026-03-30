@@ -23,7 +23,6 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
-import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.flink.source.reader.BoundedSplitReader;
 import org.apache.fluss.flink.source.reader.RecordAndPos;
 import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
@@ -174,26 +173,7 @@ public class TieringSplitReader<WriteResult>
                 if (reachTieringMaxDurationTables.contains(currentTableId)) {
                     return forceCompleteTieringLogRecords();
                 }
-                ScanRecords scanRecords;
-                try {
-                    scanRecords = currentLogScanner.poll(pollTimeout);
-                } catch (TableNotExistException e) {
-                    // When a table is actually dropped, the log scanner's poll may fail
-                    // because metadata update discovers the table no longer exists.
-                    if (droppedTables.contains(currentTableId)) {
-                        LOG.warn(
-                                "Log scanner poll failed for dropped table {}, force completing.",
-                                currentTableId,
-                                e);
-                        return forceCompleteDroppedTable();
-                    }
-                    // The table may have been dropped but TieringTableDroppedEvent
-                    // hasn't been processed yet. Return empty to let the fetcher
-                    // retry on next iteration when the event will be processed.
-                    LOG.warn(
-                            "Log scanner poll failed for table {}, will retry.", currentTableId, e);
-                    return emptyTableBucketWriteResultWithSplitIds();
-                }
+                ScanRecords scanRecords = currentLogScanner.poll(pollTimeout);
                 return forLogRecords(scanRecords);
             } else {
                 return emptyTableBucketWriteResultWithSplitIds();
@@ -280,6 +260,25 @@ public class TieringSplitReader<WriteResult>
         }
 
         Set<TieringSplit> pendingSplits = pendingTieringSplits.remove(pendingTableId);
+
+        // If the pending table is already dropped, set minimal table state from split metadata
+        // without calling getOrMoveToTable() to avoid RPC exception (TableNotExistException).
+        // The next fetch() cycle will detect the dropped flag and call forceCompleteDroppedTable().
+        if (droppedTables.contains(pendingTableId)) {
+            TieringSplit firstSplit = pendingSplits.iterator().next();
+            currentTableId = pendingTableId;
+            currentTablePath = firstSplit.getTablePath();
+            currentTableNumberOfSplits = firstSplit.getNumberOfSplits();
+            for (TieringSplit split : pendingSplits) {
+                currentTableSplitsByBucket.put(split.getTableBucket(), split);
+            }
+            LOG.info(
+                    "Skipping RPC for dropped table {} (path: {}), will force complete in next fetch cycle.",
+                    pendingTableId,
+                    currentTablePath);
+            return;
+        }
+
         for (TieringSplit split : pendingSplits) {
             getOrMoveToTable(split);
             addSplitToCurrentTable(split);

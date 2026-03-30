@@ -22,7 +22,6 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.StaleMetadataException;
-import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.messages.MetadataRequest;
@@ -71,24 +70,6 @@ public class MetadataUpdaterTest {
                 .hasMessageContaining("The metadata is stale.");
     }
 
-    @Test
-    void testTableNotExistExceptionIsNotWrapped() throws Exception {
-        Configuration configuration = new Configuration();
-        RpcClient rpcClient =
-                RpcClient.create(configuration, TestingClientMetricGroup.newInstance(), false);
-
-        // Gateway that throws TableNotExistException on metadata request
-        AdminReadOnlyGateway gateway = new TestingTableNotExistGateway();
-
-        // TableNotExistException should propagate directly without being wrapped
-        assertThatThrownBy(
-                        () ->
-                                MetadataUpdater.tryToInitializeClusterWithRetries(
-                                        rpcClient, CS_NODE, gateway, 3))
-                .isInstanceOf(TableNotExistException.class)
-                .hasMessageContaining("test_table");
-    }
-
     private static final class TestingAdminReadOnlyGateway extends TestCoordinatorGateway {
 
         private final int maxRetryCount;
@@ -112,18 +93,6 @@ public class MetadataUpdaterTest {
                                 Collections.emptyList());
                 return CompletableFuture.completedFuture(metadataResponse);
             }
-        }
-    }
-
-    /**
-     * A testing gateway that throws TableNotExistException when metadata is requested. Used to
-     * verify that TableNotExistException is propagated without being wrapped.
-     */
-    private static final class TestingTableNotExistGateway extends TestCoordinatorGateway {
-
-        @Override
-        public CompletableFuture<MetadataResponse> metadata(MetadataRequest request) {
-            throw new TableNotExistException("Table 'test_table' does not exist.");
         }
     }
 }

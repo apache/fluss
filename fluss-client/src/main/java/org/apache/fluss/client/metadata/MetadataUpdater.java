@@ -30,7 +30,6 @@ import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.exception.StaleMetadataException;
-import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePartition;
@@ -288,9 +287,6 @@ public class MetadataUpdater {
             } else if (t instanceof PartitionNotExistException) {
                 LOG.warn("Failed to update metadata because the partition does not exist", t);
                 throw (PartitionNotExistException) t;
-            } else if (t instanceof TableNotExistException) {
-                LOG.warn("Failed to update metadata because the table does not exist", t);
-                throw (TableNotExistException) t;
             } else {
                 throw new FlussRuntimeException("Failed to update metadata", t);
             }
