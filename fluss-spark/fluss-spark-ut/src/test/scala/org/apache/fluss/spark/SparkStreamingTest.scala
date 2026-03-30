@@ -19,6 +19,7 @@ package org.apache.fluss.spark
 
 import org.apache.fluss.client.initializer.{BucketOffsetsRetrieverImpl, OffsetsInitializer}
 import org.apache.fluss.client.table.Table
+import org.apache.fluss.spark.SparkFlussConf
 import org.apache.fluss.spark.read.{FlussMicroBatchStream, FlussSourceOffset}
 import org.apache.fluss.spark.write.{FlussAppendDataWriter, FlussUpsertDataWriter}
 import org.apache.fluss.utils.json.TableBucketOffsets
@@ -334,6 +335,58 @@ class SparkStreamingTest extends FlussSparkTestBase with StreamTest {
           Row(7, "data7", 77, "gg", "a"))
       )
     }
+  }
+
+  test("read: log table with maxOffsetsPerTrigger rate limit") {
+    val tableName = "t"
+    withTable(tableName) {
+      sql(s"CREATE TABLE $tableName (id int, data string) TBLPROPERTIES('bucket.num' = '1')")
+
+      // Pre-load data BEFORE starting the stream and use "earliest" startup mode so the stream reads from the beginning.
+      // This avoids using AddFlussData mid-stream.
+      sql(
+        s"INSERT INTO $tableName VALUES (1, 'data1'), (2, 'data2'), (3, 'data3'), (4, 'data4'), (5, 'data5')")
+
+      val clock = new StreamManualClock
+      testStream(
+        spark.readStream
+          .options(
+            Map(
+              "scan.startup.mode" -> "earliest",
+              SparkFlussConf.MAX_OFFSETS_PER_TRIGGER.key() -> "2"
+            ))
+          .table(tableName))(
+        StartStream(trigger = Trigger.ProcessingTime(500), clock),
+
+        // First trigger should only get 2 records due to rate limit
+        AdvanceManualClock(500),
+        waitUntilBatchProcessed(clock),
+        CheckNewAnswer(Row(1, "data1"), Row(2, "data2")),
+
+        // Second trigger should get next 2 records
+        AdvanceManualClock(500),
+        waitUntilBatchProcessed(clock),
+        CheckNewAnswer(Row(3, "data3"), Row(4, "data4")),
+
+        // Third trigger should get the remaining 1 record
+        AdvanceManualClock(500),
+        waitUntilBatchProcessed(clock),
+        CheckNewAnswer(Row(5, "data5"))
+      )
+    }
+  }
+
+  private def waitUntilBatchProcessed(clock: StreamManualClock) = AssertOnQuery {
+    q =>
+      eventually(timeout(streamingTimeout)) {
+        if (!q.exception.isDefined) {
+          assert(clock.isStreamWaitingAt(clock.getTimeMillis()))
+        }
+      }
+      if (q.exception.isDefined) {
+        throw q.exception.get
+      }
+      true
   }
 
   private def writeToLogTable(table: Table, schema: StructType, dataArr: Seq[Row]): Unit = {
