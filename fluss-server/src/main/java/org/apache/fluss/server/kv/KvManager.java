@@ -50,12 +50,15 @@ import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.types.Tuple2;
 
+import org.rocksdb.Cache;
+import org.rocksdb.LRUCache;
 import org.rocksdb.RateLimiter;
 import org.rocksdb.RateLimiterMode;
 import org.rocksdb.RocksDB;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.io.File;
@@ -135,6 +138,27 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
      */
     private final RateLimiter sharedRocksDBRateLimiter;
 
+    /** The shared block cache for all RocksDB instances, null if disabled. */
+    @Nullable private final Cache sharedBlockCache;
+
+    /**
+     * Returns the shared block cache usage in bytes, or 0 if shared cache is disabled.
+     *
+     * @return shared block cache usage in bytes
+     */
+    public long getSharedBlockCacheUsage() {
+        return sharedBlockCache != null ? sharedBlockCache.getUsage() : 0L;
+    }
+
+    /**
+     * Returns the shared block cache pinned usage in bytes, or 0 if shared cache is disabled.
+     *
+     * @return shared block cache pinned usage in bytes
+     */
+    public long getSharedBlockCachePinnedUsage() {
+        return sharedBlockCache != null ? sharedBlockCache.getPinnedUsage() : 0L;
+    }
+
     /** Current shared rate limiter configuration in bytes per second. */
     private volatile long currentSharedRateLimitBytesPerSec;
 
@@ -157,6 +181,10 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         this.remoteFileSystem = remoteKvDir.getFileSystem();
         this.serverMetricGroup = tabletServerMetricGroup;
         this.sharedRocksDBRateLimiter = createSharedRateLimiter(conf);
+        this.sharedBlockCache = createSharedBlockCache(conf);
+        if (sharedBlockCache != null) {
+            tabletServerMetricGroup.setSharedBlockCacheUsageSupplier(sharedBlockCache::getUsage);
+        }
         this.currentSharedRateLimitBytesPerSec =
                 conf.get(ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC).getBytes();
     }
@@ -177,6 +205,15 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                 RateLimiter.DEFAULT_FAIRNESS,
                 RateLimiterMode.WRITES_ONLY,
                 false);
+    }
+
+    private static @Nullable Cache createSharedBlockCache(Configuration conf) {
+        if (!conf.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_ENABLED)) {
+            return null;
+        }
+        long sharedBlockCacheSize = conf.get(ConfigOptions.KV_SHARED_BLOCK_CACHE_SIZE).getBytes();
+        RocksDB.loadLibrary();
+        return new LRUCache(sharedBlockCacheSize);
     }
 
     public static KvManager create(
@@ -215,6 +252,9 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         memorySegmentPool.close();
         if (sharedRocksDBRateLimiter != null) {
             sharedRocksDBRateLimiter.close();
+        }
+        if (sharedBlockCache != null) {
+            sharedBlockCache.close();
         }
         LOG.info("Shut down KvManager complete.");
     }
@@ -273,6 +313,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                                     schemaGetter,
                                     tableConfig.getChangelogImage(),
                                     sharedRocksDBRateLimiter,
+                                    sharedBlockCache,
                                     autoIncrementManager);
                     currentKvs.put(tableBucket, tablet);
 
@@ -390,6 +431,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                         schemaGetter,
                         tableConfig.getChangelogImage(),
                         sharedRocksDBRateLimiter,
+                        sharedBlockCache,
                         autoIncrementManager);
         if (this.currentKvs.containsKey(tableBucket)) {
             throw new IllegalStateException(
