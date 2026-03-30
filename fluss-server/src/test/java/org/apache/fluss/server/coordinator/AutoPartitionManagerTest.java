@@ -31,6 +31,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
@@ -49,7 +50,11 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Stream;
@@ -67,6 +72,7 @@ class AutoPartitionManagerTest {
 
     protected static ZooKeeperClient zookeeperClient;
     private static MetadataManager metadataManager;
+    private static String remoteDataDir;
 
     @BeforeAll
     static void beforeAll() {
@@ -79,6 +85,7 @@ class AutoPartitionManagerTest {
                         zookeeperClient,
                         new Configuration(),
                         new LakeCatalogDynamicLoader(new Configuration(), null, true));
+        remoteDataDir = zookeeperClient.getDefaultRemoteDataDir();
     }
 
     @AfterEach
@@ -309,7 +316,8 @@ class AutoPartitionManagerTest {
         // the first auto-partition task is a non-periodic task
         periodicExecutor.triggerNonPeriodicScheduledTask();
 
-        Map<String, Long> partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
+        Map<String, PartitionRegistration> partitions =
+                zookeeperClient.getPartitionRegistrations(tablePath);
         // pre-create 4 partitions including current partition
         assertThat(partitions.keySet()).containsExactlyInAnyOrder(params.expectedPartitions);
 
@@ -350,18 +358,20 @@ class AutoPartitionManagerTest {
 
         clock.advanceTime(params.advanceDuration);
         periodicExecutor.triggerPeriodicScheduledTasks();
-        partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
         assertThat(partitions.keySet())
                 .containsExactlyInAnyOrder(params.expectedPartitionsAfterAdvance);
+        verifyPartitionsRemoteDataDir(tablePath, partitions.keySet());
 
         clock.advanceTime(params.advanceDuration2);
         periodicExecutor.triggerPeriodicScheduledTasks();
-        partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
         assertThat(partitions.keySet()).containsExactlyInAnyOrder(params.expectedPartitionsFinal);
+        verifyPartitionsRemoteDataDir(tablePath, partitions.keySet());
 
         // trigger again at the same time, should be nothing changes
         periodicExecutor.triggerPeriodicScheduledTasks();
-        partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
         assertThat(partitions.keySet()).containsExactlyInAnyOrder(params.expectedPartitionsFinal);
     }
 
@@ -400,7 +410,8 @@ class AutoPartitionManagerTest {
         // immediately
         periodicExecutor.triggerNonPeriodicScheduledTask();
 
-        Map<String, Long> partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
+        Map<String, PartitionRegistration> partitions =
+                zookeeperClient.getPartitionRegistrations(tablePath);
         // pre-create 4 partitions including current partition
         assertThat(partitions.keySet())
                 .containsExactlyInAnyOrder("20240910", "20240911", "20240912", "20240913");
@@ -434,7 +445,7 @@ class AutoPartitionManagerTest {
         // make sure the partitions can be created automatically
         clock.advanceTime(Duration.ofDays(4).plusHours(23));
         periodicExecutor.triggerPeriodicScheduledTasks();
-        partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
         assertThat(partitions.keySet())
                 .containsExactlyInAnyOrder(
                         "20240910",
@@ -473,7 +484,8 @@ class AutoPartitionManagerTest {
         TablePath tablePath = table.getTablePath();
         autoPartitionManager.addAutoPartitionTable(table, true);
         periodicExecutor.triggerNonPeriodicScheduledTasks();
-        Map<String, Long> partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
+        Map<String, PartitionRegistration> partitions =
+                zookeeperClient.getPartitionRegistrations(tablePath);
         // pre-create 4 partitions including current partition
         assertThat(partitions.keySet())
                 .containsExactlyInAnyOrder("20250419", "20250420", "20250422", "20250421");
@@ -484,7 +496,7 @@ class AutoPartitionManagerTest {
         // since the current minutes in day don't advance the delayInMinutes
         clock.advanceTime(Duration.ofDays(1).plusMinutes(delayInMinutes - 1));
         periodicExecutor.triggerPeriodicScheduledTasks();
-        partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
         assertThat(partitions.keySet())
                 .containsExactlyInAnyOrder("20250419", "20250420", "20250422", "20250421");
 
@@ -492,7 +504,7 @@ class AutoPartitionManagerTest {
         // the current minutes in day advance the delayInMinutes
         clock.advanceTime(Duration.ofMinutes(1));
         periodicExecutor.triggerPeriodicScheduledTasks();
-        partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
         assertThat(partitions.keySet())
                 .containsExactlyInAnyOrder(
                         "20250419", "20250420", "20250421", "20250422", "20250423");
@@ -698,6 +710,19 @@ class AutoPartitionManagerTest {
 
     // -------------------------------------------------------------------------------------------
 
+    private void verifyPartitionsRemoteDataDir(
+            TablePath tablePath, Collection<String> partitionNames) throws Exception {
+        Set<String> allRemoteDataDirs = new HashSet<>();
+        allRemoteDataDirs.add(remoteDataDir);
+        for (String partitionName : partitionNames) {
+            Optional<PartitionRegistration> partition =
+                    zookeeperClient.getPartition(tablePath, partitionName);
+            String remoteDataDir = partition.get().getRemoteDataDir();
+            assertThat(remoteDataDir).isNotNull();
+            assertThat(allRemoteDataDirs).contains(remoteDataDir);
+        }
+    }
+
     private TableInfo createPartitionedTable(
             int partitionRetentionNum, int partitionPreCreateNum, AutoPartitionTimeUnit timeUnit)
             throws Exception {
@@ -752,8 +777,16 @@ class AutoPartitionManagerTest {
                         .build();
         long currentMillis = System.currentTimeMillis();
         TableInfo tableInfo =
-                TableInfo.of(tablePath, tableId, 1, descriptor, currentMillis, currentMillis);
-        TableRegistration registration = TableRegistration.newTable(tableId, descriptor);
+                TableInfo.of(
+                        tablePath,
+                        tableId,
+                        1,
+                        descriptor,
+                        remoteDataDir,
+                        currentMillis,
+                        currentMillis);
+        TableRegistration registration =
+                TableRegistration.newTable(tableId, remoteDataDir, descriptor);
         zookeeperClient.registerTable(tablePath, registration);
         return tableInfo;
     }
@@ -794,8 +827,16 @@ class AutoPartitionManagerTest {
                         .build();
         long currentMillis = System.currentTimeMillis();
         TableInfo tableInfo =
-                TableInfo.of(tablePath, tableId, 1, descriptor, currentMillis, currentMillis);
-        TableRegistration registration = TableRegistration.newTable(tableId, descriptor);
+                TableInfo.of(
+                        tablePath,
+                        tableId,
+                        1,
+                        descriptor,
+                        remoteDataDir,
+                        currentMillis,
+                        currentMillis);
+        TableRegistration registration =
+                TableRegistration.newTable(tableId, remoteDataDir, descriptor);
         zookeeperClient.registerTable(tablePath, registration);
         return tableInfo;
     }

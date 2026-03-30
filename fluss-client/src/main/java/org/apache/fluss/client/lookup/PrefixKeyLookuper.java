@@ -48,8 +48,11 @@ import static org.apache.fluss.client.utils.ClientUtils.getPartitionId;
 @NotThreadSafe
 class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
 
-    /** Extract bucket key from prefix lookup key row. */
+    /** Encode bucket key from prefix lookup key row. */
     private final KeyEncoder bucketKeyEncoder;
+
+    /** Encode prefix key for prefix lookup (follows primary key encoding rules). */
+    private final KeyEncoder prefixKeyEncoder;
 
     private final BucketingFunction bucketingFunction;
     private final int numBuckets;
@@ -73,7 +76,24 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
         RowType lookupRowType = tableInfo.getRowType().project(lookupColumnNames);
         DataLakeFormat lakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
 
-        this.bucketKeyEncoder = KeyEncoder.of(lookupRowType, tableInfo.getBucketKeys(), lakeFormat);
+        // Use ofPrimaryKeyEncoder which follows primary key encoding rules
+        this.prefixKeyEncoder =
+                KeyEncoder.ofPrimaryKeyEncoder(
+                        lookupRowType,
+                        // bucket keys are prefix keys
+                        tableInfo.getBucketKeys(),
+                        tableInfo.getTableConfig(),
+                        tableInfo.isDefaultBucketKey());
+
+        this.bucketKeyEncoder =
+                lakeFormat == null
+                        // if lake format is null, don't need need to use lake format bucket
+                        // encoder,
+                        // we can just use the prefixKeyEncoder
+                        ? this.prefixKeyEncoder
+                        : KeyEncoder.ofBucketKeyEncoder(
+                                lookupRowType, tableInfo.getBucketKeys(), lakeFormat);
+
         this.bucketingFunction = BucketingFunction.of(lakeFormat);
         this.partitionGetter =
                 tableInfo.isPartitioned()
@@ -127,11 +147,24 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
                                     + "because the lookup columns %s must contain all bucket keys %s in order.",
                             tableInfo.getTablePath(), lookupColumns, bucketKeys));
         }
+
+        if (bucketKeys.equals(physicalPrimaryKeys)) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Can not perform prefix lookup on table '%s', "
+                                    + "because the lookup columns %s equals the physical primary keys %s. "
+                                    + "Please use primary key lookup (Lookuper without lookupBy) instead.",
+                            tableInfo.getTablePath(), lookupColumns, physicalPrimaryKeys));
+        }
     }
 
     @Override
     public CompletableFuture<LookupResult> lookup(InternalRow prefixKey) {
-        byte[] bucketKeyBytes = bucketKeyEncoder.encodeKey(prefixKey);
+        byte[] prefixKeyBytes = prefixKeyEncoder.encodeKey(prefixKey);
+        byte[] bucketKeyBytes =
+                prefixKeyEncoder == bucketKeyEncoder
+                        ? prefixKeyBytes
+                        : bucketKeyEncoder.encodeKey(prefixKey);
         int bucketId = bucketingFunction.bucketing(bucketKeyBytes, numBuckets);
 
         Long partitionId = null;
@@ -151,7 +184,7 @@ class PrefixKeyLookuper extends AbstractLookuper implements Lookuper {
         CompletableFuture<LookupResult> lookupFuture = new CompletableFuture<>();
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
         lookupClient
-                .prefixLookup(tableInfo.getTablePath(), tableBucket, bucketKeyBytes)
+                .prefixLookup(tableInfo.getTablePath(), tableBucket, prefixKeyBytes)
                 .whenComplete(
                         (result, error) -> {
                             if (error != null) {

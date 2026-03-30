@@ -9,7 +9,7 @@ We'd like to thank the following members and committers to the Apache Fluss proj
 ### Members
 
 | Public Name          | GitHub Username                                    | Apache ID                                                                     | Role(s)             |
-| -------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------- |
+|----------------------| -------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------- |
 | Yu Li                | [@carp84](https://github.com/carp84)               | [liyu](https://people.apache.org/committer-index.html#liyu)                   | Mentor, PPMC Member |
 | Becket Qin           | [@becketqin](https://github.com/becketqin)         | [jqin](https://people.apache.org/committer-index.html#jqin)                   | Mentor, PPMC Member |
 | Jean-Baptiste Onofré | [@jbonofre](https://github.com/jbonofre)           | [jbonofre](https://people.apache.org/committer-index.html#jbonofre)           | Mentor, PPMC Member |
@@ -24,7 +24,9 @@ We'd like to thank the following members and committers to the Apache Fluss proj
 | Feng Wang            | [@wangfengpro](https://github.com/wangfengpro)     | [fengwang](https://people.apache.org/committer-index.html#fengwang)           | PPMC Member         |
 | Benchao Li           | [@libenchao](https://github.com/libenchao)         | [libenchao](https://people.apache.org/committer-index.html#libenchao)         | PPMC Member         |
 | Hongshun Wang        | [@loserwang1024](https://github.com/loserwang1024) | [hongshun](https://people.apache.org/committer-index.html#hongshun)           | Committer           |
-| Mehul Batra          | [@MehulBatra](https://github.com/MehulBatra)       | [mehulbatra](https://people.apache.org/committer-index.html#mehulbatra)       | Committer           |
+| Mehul Batra          | [@MehulBatra](https://github.com/MehulBatra)       | [mehulbatra](https://people.apache.org/committer-index.html#mehulbatra)       | PPMC Member            |
+| Cheng Wang           | [@xx789633](https://github.com/xx789633) | [chengwang](https://people.apache.org/committer-index.html#chengwang)           | Committer           |
+| Leonard Xu           | [@leonardBang](https://github.com/leonardBang) | [leonard](https://people.apache.org/committer-index.html#leonard)           | Committer           |
 
 
 The Apache Fluss project recognizes the following roles, each representing a distinct type of contribution to the project’s development:

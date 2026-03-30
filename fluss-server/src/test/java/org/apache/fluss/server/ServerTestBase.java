@@ -36,7 +36,6 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
 import java.util.List;
-import java.util.Optional;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -104,9 +103,7 @@ public abstract class ServerTestBase {
         retry(
                 Duration.ofMinutes(2),
                 () -> {
-                    Optional<Stat> optionalStat = zookeeperClient.getStat(path);
-                    assertThat(optionalStat).isPresent();
-                    Stat stat = optionalStat.get();
+                    Stat stat = zookeeperClient.getStat(path).get();
                     assertThat(stat.getCtime()).isGreaterThan(oldNodeCtime);
                 });
     }

@@ -65,6 +65,10 @@ public final class TableDescriptor implements Serializable {
     public static final String LOG_OFFSET_COLUMN = "_log_offset";
     public static final String COMMIT_TIMESTAMP_COLUMN = "_commit_timestamp";
 
+    // column names for $binlog virtual table nested row fields
+    public static final String BEFORE_COLUMN = "before";
+    public static final String AFTER_COLUMN = "after";
+
     private final Schema schema;
     private final @Nullable String comment;
     private final List<String> partitionKeys;

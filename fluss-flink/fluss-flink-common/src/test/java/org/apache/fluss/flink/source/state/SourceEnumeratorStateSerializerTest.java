@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.source.state;
 
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
+import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
 import org.apache.fluss.flink.source.split.LogSplit;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
@@ -81,7 +82,10 @@ class SourceEnumeratorStateSerializerTest {
 
         SourceEnumeratorState sourceEnumeratorState =
                 new SourceEnumeratorState(
-                        assignedBuckets, assignedPartitions, remainingHybridLakeFlussSplits);
+                        assignedBuckets,
+                        assignedPartitions,
+                        remainingHybridLakeFlussSplits,
+                        "leaseId");
 
         // serialize state with remaining hybrid lake fluss splits
         byte[] serialized = serializer.serialize(sourceEnumeratorState);
@@ -107,7 +111,11 @@ class SourceEnumeratorStateSerializerTest {
         assignedPartitions.put(1L, "partition1");
         assignedPartitions.put(2L, "partition2");
         SourceEnumeratorState sourceEnumeratorState =
-                new SourceEnumeratorState(assignedBuckets, assignedPartitions, null);
+                new SourceEnumeratorState(
+                        assignedBuckets,
+                        assignedPartitions,
+                        null,
+                        LeaseContext.DEFAULT.getKvSnapshotLeaseId());
         byte[] serialized = serializer.serializeV0(sourceEnumeratorState);
 
         // then deserialize
@@ -124,7 +132,10 @@ class SourceEnumeratorStateSerializerTest {
         remainingHybridLakeFlussSplits.add(logSplit);
         sourceEnumeratorState =
                 new SourceEnumeratorState(
-                        assignedBuckets, assignedPartitions, remainingHybridLakeFlussSplits);
+                        assignedBuckets,
+                        assignedPartitions,
+                        remainingHybridLakeFlussSplits,
+                        LeaseContext.DEFAULT.getKvSnapshotLeaseId());
 
         serialized = serializer.serializeV0(sourceEnumeratorState);
 
@@ -145,7 +156,11 @@ class SourceEnumeratorStateSerializerTest {
         assignedPartitions.put(1L, "partition1");
         assignedPartitions.put(2L, "partition2");
         SourceEnumeratorState sourceEnumeratorState =
-                new SourceEnumeratorState(assignedBuckets, assignedPartitions, null);
+                new SourceEnumeratorState(
+                        assignedBuckets,
+                        assignedPartitions,
+                        null,
+                        LeaseContext.DEFAULT.getKvSnapshotLeaseId());
         byte[] serialized = serializer.serialize(sourceEnumeratorState);
 
         // test deserialize with nonnull lake source

@@ -21,6 +21,8 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.FlussConfigUtils;
+import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
@@ -34,8 +36,10 @@ import org.apache.fluss.security.acl.ResourceType;
 import org.apache.fluss.server.authorizer.DefaultAuthorizer.VersionedAcls;
 import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
 import org.apache.fluss.server.metadata.BucketMetadata;
+import org.apache.fluss.server.zk.ZkAsyncRequest.ZkCheckExistsRequest;
 import org.apache.fluss.server.zk.ZkAsyncRequest.ZkGetChildrenRequest;
 import org.apache.fluss.server.zk.ZkAsyncRequest.ZkGetDataRequest;
+import org.apache.fluss.server.zk.ZkAsyncResponse.ZkCheckExistsResponse;
 import org.apache.fluss.server.zk.ZkAsyncResponse.ZkGetChildrenResponse;
 import org.apache.fluss.server.zk.ZkAsyncResponse.ZkGetDataResponse;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
@@ -43,6 +47,7 @@ import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.DatabaseRegistration;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ResourceAcl;
@@ -60,12 +65,16 @@ import org.apache.fluss.server.zk.data.ZkData.ConfigEntityZNode;
 import org.apache.fluss.server.zk.data.ZkData.CoordinatorZNode;
 import org.apache.fluss.server.zk.data.ZkData.DatabaseZNode;
 import org.apache.fluss.server.zk.data.ZkData.DatabasesZNode;
+import org.apache.fluss.server.zk.data.ZkData.KvSnapshotLeaseZNode;
+import org.apache.fluss.server.zk.data.ZkData.KvSnapshotLeasesZNode;
 import org.apache.fluss.server.zk.data.ZkData.LakeTableZNode;
 import org.apache.fluss.server.zk.data.ZkData.LeaderAndIsrZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionSequenceIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionsZNode;
+import org.apache.fluss.server.zk.data.ZkData.ProducerIdZNode;
+import org.apache.fluss.server.zk.data.ZkData.ProducersZNode;
 import org.apache.fluss.server.zk.data.ZkData.RebalanceZNode;
 import org.apache.fluss.server.zk.data.ZkData.ResourceAclNode;
 import org.apache.fluss.server.zk.data.ZkData.SchemaZNode;
@@ -80,6 +89,8 @@ import org.apache.fluss.server.zk.data.ZkData.TablesZNode;
 import org.apache.fluss.server.zk.data.ZkData.WriterIdZNode;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
+import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
+import org.apache.fluss.server.zk.data.producer.ProducerOffsets;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.BackgroundCallback;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.CuratorEvent;
@@ -141,6 +152,8 @@ public class ZooKeeperClient implements AutoCloseable {
     private final Semaphore inFlightRequests;
     private final Configuration configuration;
 
+    private final String defaultRemoteDataDir;
+
     public ZooKeeperClient(
             CuratorFrameworkWithUnhandledErrorListener curatorFrameworkWrapper,
             Configuration configuration) {
@@ -155,6 +168,8 @@ public class ZooKeeperClient implements AutoCloseable {
                 configuration.getInt(ConfigOptions.ZOOKEEPER_MAX_INFLIGHT_REQUESTS);
         this.inFlightRequests = new Semaphore(maxInFlightRequests);
         this.configuration = configuration;
+
+        this.defaultRemoteDataDir = FlussConfigUtils.getDefaultRemoteDataDir(configuration);
     }
 
     public Optional<byte[]> getOrEmpty(String path) throws Exception {
@@ -163,6 +178,10 @@ public class ZooKeeperClient implements AutoCloseable {
         } catch (KeeperException.NoNodeException e) {
             return Optional.empty();
         }
+    }
+
+    public String getDefaultRemoteDataDir() {
+        return defaultRemoteDataDir;
     }
 
     // --------------------------------------------------------------------------------------------
@@ -463,6 +482,13 @@ public class ZooKeeperClient implements AutoCloseable {
         LOG.info("Registered database {}", database);
     }
 
+    public void updateDatabase(String database, DatabaseRegistration databaseRegistration)
+            throws Exception {
+        String path = DatabaseZNode.path(database);
+        zkClient.setData().forPath(path, DatabaseZNode.encode(databaseRegistration));
+        LOG.info("Updated database {}", database);
+    }
+
     /** Get the database in ZK. */
     public Optional<DatabaseRegistration> getDatabase(String database) throws Exception {
         String path = DatabaseZNode.path(database);
@@ -482,6 +508,57 @@ public class ZooKeeperClient implements AutoCloseable {
 
     public List<String> listDatabases() throws Exception {
         return getChildren(DatabasesZNode.path());
+    }
+
+    public List<DatabaseSummary> listDatabaseSummaries(Collection<String> databaseNames)
+            throws Exception {
+        Map<String, String> dbPathToDatabaseName =
+                databaseNames.stream()
+                        .collect(toMap(DatabaseZNode::path, databaseName -> databaseName));
+        Map<String, String> tablesPathToDatabaseName =
+                databaseNames.stream()
+                        .collect(toMap(TablesZNode::path, databaseName -> databaseName));
+        List<String> requestPaths = new ArrayList<>(dbPathToDatabaseName.keySet());
+        requestPaths.addAll(tablesPathToDatabaseName.keySet());
+        List<ZkCheckExistsResponse> statResponses = getStatInBackground(requestPaths);
+
+        List<DatabaseSummary> databaseSummaries = new ArrayList<>();
+
+        Map<String, Long> dbCreatedTimes = new HashMap<>();
+        Map<String, Integer> dbTableCounts = new HashMap<>();
+        for (ZkCheckExistsResponse response : statResponses) {
+            Stat stat = response.getStat();
+            String path = response.getPath();
+            if (!response.hasError() && stat != null) {
+                if (dbPathToDatabaseName.containsKey(path)) {
+                    // Use zk node creation time as the database creation time to avoid reading
+                    // node data.
+                    dbCreatedTimes.put(dbPathToDatabaseName.get(path), stat.getCtime());
+                } else {
+                    dbTableCounts.put(tablesPathToDatabaseName.get(path), stat.getNumChildren());
+                }
+            } else if (response.getResultCode().equals(KeeperException.Code.NONODE)
+                    && tablesPathToDatabaseName.containsKey(path)) {
+                dbTableCounts.put(tablesPathToDatabaseName.get(path), 0);
+            } else {
+                LOG.warn(
+                        "Failed to get database summary for database {}: {}",
+                        path,
+                        response.getErrorMessage());
+            }
+        }
+
+        for (String databaseName : databaseNames) {
+            if (dbCreatedTimes.containsKey(databaseName)
+                    && dbTableCounts.containsKey(databaseName)) {
+                databaseSummaries.add(
+                        new DatabaseSummary(
+                                databaseName,
+                                dbCreatedTimes.get(databaseName),
+                                dbTableCounts.get(databaseName)));
+            }
+        }
+        return databaseSummaries;
     }
 
     public List<String> listTables(String databaseName) throws Exception {
@@ -537,7 +614,11 @@ public class ZooKeeperClient implements AutoCloseable {
     /** Get the table in ZK. */
     public Optional<TableRegistration> getTable(TablePath tablePath) throws Exception {
         Optional<byte[]> bytes = getOrEmpty(TableZNode.path(tablePath));
-        return bytes.map(TableZNode::decode);
+        Optional<TableRegistration> tableRegistration = bytes.map(TableZNode::decode);
+        // Set the default remote data dir for a node generated by an older version which does not
+        // have remote data dir
+        return tableRegistration.map(
+                t -> t.remoteDataDir == null ? t.newRemoteDataDir(defaultRemoteDataDir) : t);
     }
 
     /** Get the tables in ZK. */
@@ -550,7 +631,17 @@ public class ZooKeeperClient implements AutoCloseable {
         return processGetDataResponses(
                 responses,
                 response -> path2TablePathMap.get(response.getPath()),
-                TableZNode::decode,
+                (data) -> {
+                    TableRegistration tableRegistration = TableZNode.decode(data);
+                    // Set the default remote data dir for a node generated by an older version
+                    // which does not
+                    // have remote data dir
+                    if (tableRegistration.remoteDataDir == null) {
+                        tableRegistration =
+                                tableRegistration.newRemoteDataDir(defaultRemoteDataDir);
+                    }
+                    return tableRegistration;
+                },
                 "tables registration");
     }
 
@@ -642,13 +733,13 @@ public class ZooKeeperClient implements AutoCloseable {
                 "partitions for tables");
     }
 
-    /** Get the partition and the id for the partitions of a table in ZK. */
-    public Map<String, Long> getPartitionNameAndIds(TablePath tablePath) throws Exception {
-        Map<String, Long> partitions = new HashMap<>();
+    /** Get the partition registrations of a table in ZK. */
+    public Map<String, PartitionRegistration> getPartitionRegistrations(TablePath tablePath)
+            throws Exception {
+        Map<String, PartitionRegistration> partitions = new HashMap<>();
         for (String partitionName : getPartitions(tablePath)) {
-            Optional<TablePartition> optPartition = getPartition(tablePath, partitionName);
-            optPartition.ifPresent(
-                    partition -> partitions.put(partitionName, partition.getPartitionId()));
+            Optional<PartitionRegistration> optPartition = getPartition(tablePath, partitionName);
+            optPartition.ifPresent(partition -> partitions.put(partitionName, partition));
         }
         return partitions;
     }
@@ -692,22 +783,22 @@ public class ZooKeeperClient implements AutoCloseable {
         return result;
     }
 
-    /** Get the partition and the id for the partitions of a table in ZK by partition spec. */
-    public Map<String, Long> getPartitionNameAndIds(
+    /** Get the partition registrations of a table in ZK by partition spec. */
+    public Map<String, PartitionRegistration> getPartitionRegistrations(
             TablePath tablePath,
             List<String> partitionKeys,
             ResolvedPartitionSpec partialPartitionSpec)
             throws Exception {
-        Map<String, Long> partitions = new HashMap<>();
+        Map<String, PartitionRegistration> partitions = new HashMap<>();
 
         for (String partitionName : getPartitions(tablePath)) {
             ResolvedPartitionSpec resolvedPartitionSpec =
                     fromPartitionName(partitionKeys, partitionName);
             boolean contains = resolvedPartitionSpec.contains(partialPartitionSpec);
             if (contains) {
-                Optional<TablePartition> optPartition = getPartition(tablePath, partitionName);
-                optPartition.ifPresent(
-                        partition -> partitions.put(partitionName, partition.getPartitionId()));
+                Optional<PartitionRegistration> optPartition =
+                        getPartition(tablePath, partitionName);
+                optPartition.ifPresent(partition -> partitions.put(partitionName, partition));
             }
         }
 
@@ -751,10 +842,15 @@ public class ZooKeeperClient implements AutoCloseable {
     }
 
     /** Get a partition of a table in ZK. */
-    public Optional<TablePartition> getPartition(TablePath tablePath, String partitionName)
+    public Optional<PartitionRegistration> getPartition(TablePath tablePath, String partitionName)
             throws Exception {
         String path = PartitionZNode.path(tablePath, partitionName);
-        return getOrEmpty(path).map(PartitionZNode::decode);
+        Optional<PartitionRegistration> partitionRegistration =
+                getOrEmpty(path).map(PartitionZNode::decode);
+        // Set the default remote data dir for a node generated by an older version which does not
+        // have remote data dir
+        return partitionRegistration.map(
+                p -> p.getRemoteDataDir() == null ? p.newRemoteDataDir(defaultRemoteDataDir) : p);
     }
 
     /** Get partition id and table id for each partition in a batch async way. */
@@ -774,7 +870,7 @@ public class ZooKeeperClient implements AutoCloseable {
         return processGetDataResponses(
                 responses,
                 response -> path2PartitionPathMap.get(response.getPath()),
-                PartitionZNode::decode,
+                (byte[] data) -> PartitionZNode.decode(data).toTablePartition(),
                 "partition");
     }
 
@@ -799,6 +895,7 @@ public class ZooKeeperClient implements AutoCloseable {
             long partitionId,
             String partitionName,
             PartitionAssignment partitionAssignment,
+            String remoteDataDir,
             TablePath tablePath,
             long tableId)
             throws Exception {
@@ -844,12 +941,15 @@ public class ZooKeeperClient implements AutoCloseable {
                         .withMode(CreateMode.PERSISTENT)
                         .forPath(
                                 metadataPath,
-                                PartitionZNode.encode(new TablePartition(tableId, partitionId)));
+                                PartitionZNode.encode(
+                                        new PartitionRegistration(
+                                                tableId, partitionId, remoteDataDir)));
 
         ops.add(tabletServerPartitionNode);
         ops.add(metadataPartitionNode);
         zkClient.transaction().forOperations(ops);
     }
+
     // --------------------------------------------------------------------------------------------
     // Schema
     // --------------------------------------------------------------------------------------------
@@ -1003,6 +1103,36 @@ public class ZooKeeperClient implements AutoCloseable {
         return snapshots;
     }
 
+    public List<String> getKvSnapshotLeasesList() throws Exception {
+        return getChildren(KvSnapshotLeasesZNode.path());
+    }
+
+    public void registerKvSnapshotLeaseMetadata(
+            String leaseId, KvSnapshotLeaseMetadata leaseMetadata) throws Exception {
+        String path = KvSnapshotLeaseZNode.path(leaseId);
+        zkClient.create()
+                .creatingParentsIfNeeded()
+                .withMode(CreateMode.PERSISTENT)
+                .forPath(path, KvSnapshotLeaseZNode.encode(leaseMetadata));
+    }
+
+    public void updateKvSnapshotLeaseMetadata(String leaseId, KvSnapshotLeaseMetadata leaseMetadata)
+            throws Exception {
+        String path = KvSnapshotLeaseZNode.path(leaseId);
+        zkClient.setData().forPath(path, KvSnapshotLeaseZNode.encode(leaseMetadata));
+    }
+
+    public Optional<KvSnapshotLeaseMetadata> getKvSnapshotLeaseMetadata(String leaseId)
+            throws Exception {
+        String path = KvSnapshotLeaseZNode.path(leaseId);
+        return getOrEmpty(path).map(KvSnapshotLeaseZNode::decode);
+    }
+
+    public void deleteKvSnapshotLease(String leaseId) throws Exception {
+        String path = KvSnapshotLeaseZNode.path(leaseId);
+        zkClient.delete().forPath(path);
+    }
+
     // --------------------------------------------------------------------------------------------
     // Writer
     // --------------------------------------------------------------------------------------------
@@ -1069,14 +1199,42 @@ public class ZooKeeperClient implements AutoCloseable {
      * Gets the {@link LakeTableSnapshot} for the given table ID.
      *
      * @param tableId the table ID
+     * @param snapshotId the snapshot id for the snapshot to get, null means to get latest snapshot
+     *     id
      * @return an Optional containing the LakeTableSnapshot if the table exists, empty otherwise
      * @throws Exception if the operation fails
      */
-    public Optional<LakeTableSnapshot> getLakeTableSnapshot(long tableId) throws Exception {
+    public Optional<LakeTableSnapshot> getLakeTableSnapshot(long tableId, @Nullable Long snapshotId)
+            throws Exception {
         Optional<LakeTable> optLakeTable = getLakeTable(tableId);
         if (optLakeTable.isPresent()) {
             // always get the latest snapshot
-            return Optional.of(optLakeTable.get().getOrReadLatestTableSnapshot());
+            if (snapshotId == null) {
+                return Optional.ofNullable(optLakeTable.get().getOrReadLatestTableSnapshot());
+            } else {
+                return Optional.ofNullable(optLakeTable.get().getOrReadTableSnapshot(snapshotId));
+            }
+
+        } else {
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Gets the latest readable {@link LakeTableSnapshot} for the given table ID.
+     *
+     * @param tableId the table ID
+     * @return an Optional containing the latest readable LakeTableSnapshot if found, empty
+     *     otherwise
+     * @throws Exception if the operation fails
+     */
+    public Optional<LakeTableSnapshot> getLatestReadableLakeTableSnapshot(long tableId)
+            throws Exception {
+        Optional<LakeTable> optLakeTable = getLakeTable(tableId);
+        if (optLakeTable.isPresent()) {
+            LakeTableSnapshot readableSnapshot =
+                    optLakeTable.get().getOrReadLatestReadableTableSnapshot();
+            return Optional.ofNullable(readableSnapshot);
         } else {
             return Optional.empty();
         }
@@ -1423,7 +1581,8 @@ public class ZooKeeperClient implements AutoCloseable {
 
                     } else if (request instanceof ZkGetChildrenRequest) {
                         zkClient.getChildren().inBackground(callback).forPath(request.getPath());
-
+                    } else if (request instanceof ZkCheckExistsRequest) {
+                        zkClient.checkExists().inBackground(callback).forPath(request.getPath());
                     } else {
                         throw new IllegalArgumentException(
                                 "Unsupported request type: " + request.getClass());
@@ -1493,6 +1652,20 @@ public class ZooKeeperClient implements AutoCloseable {
         List<ZkGetDataRequest> requests =
                 paths.stream().map(ZkGetDataRequest::new).collect(Collectors.toList());
         return handleRequestInBackground(requests, ZkGetDataResponse::create);
+    }
+
+    /**
+     * Gets the stat of given zk node paths in background.
+     *
+     * @param paths the paths to fetch stat
+     * @return list of async responses for each path
+     * @throws Exception if there is an error during the operation
+     */
+    private List<ZkCheckExistsResponse> getStatInBackground(Collection<String> paths)
+            throws Exception {
+        List<ZkCheckExistsRequest> requests =
+                paths.stream().map(ZkCheckExistsRequest::new).collect(Collectors.toList());
+        return handleRequestInBackground(requests, ZkCheckExistsResponse::create);
     }
 
     /**
@@ -1589,5 +1762,136 @@ public class ZooKeeperClient implements AutoCloseable {
             }
         }
         return result;
+    }
+
+    // --------------------------------------------------------------------------------------------
+    // Producer Offset Snapshot
+    // --------------------------------------------------------------------------------------------
+
+    /**
+     * Tries to atomically register a producer offset snapshot to ZK.
+     *
+     * <p>This method leverages ZooKeeper's atomic create operation to ensure that only one
+     * concurrent request can successfully create the snapshot. If a snapshot already exists for the
+     * given producer ID, this method returns false instead of throwing an exception.
+     *
+     * @param producerId the producer ID (typically Flink job ID)
+     * @param producerOffsets the producer offsets containing expiration time and table offset
+     *     metadata
+     * @return true if the snapshot was created successfully, false if a snapshot already exists
+     * @throws Exception if the operation fails for reasons other than node already existing
+     */
+    public boolean tryRegisterProducerOffsets(String producerId, ProducerOffsets producerOffsets)
+            throws Exception {
+        String path = ProducerIdZNode.path(producerId);
+        try {
+            zkClient.create()
+                    .creatingParentsIfNeeded()
+                    .withMode(CreateMode.PERSISTENT)
+                    .forPath(path, ProducerIdZNode.encode(producerOffsets));
+            LOG.info("Registered producer snapshot for producer {} at path {}.", producerId, path);
+            return true;
+        } catch (KeeperException.NodeExistsException e) {
+            LOG.debug(
+                    "Producer snapshot already exists for producer {} at path {}, "
+                            + "returning false.",
+                    producerId,
+                    path);
+            return false;
+        }
+    }
+
+    /**
+     * Gets the {@link ProducerOffsets} for the given producer ID.
+     *
+     * @param producerId the producer ID
+     * @return an Optional containing the ProducerOffsets if it exists, empty otherwise
+     * @throws Exception if the operation fails
+     */
+    public Optional<ProducerOffsets> getProducerOffsets(String producerId) throws Exception {
+        String zkPath = ProducerIdZNode.path(producerId);
+        return getOrEmpty(zkPath).map(ProducerIdZNode::decode);
+    }
+
+    /**
+     * Deletes the producer offset snapshot for the given producer ID.
+     *
+     * @param producerId the producer ID
+     * @throws Exception if the operation fails
+     */
+    public void deleteProducerOffsets(String producerId) throws Exception {
+        String path = ProducerIdZNode.path(producerId);
+        zkClient.delete().forPath(path);
+        LOG.info("Deleted producer offsets snapshot for producer {} at path {}.", producerId, path);
+    }
+
+    /**
+     * Gets the {@link ProducerOffsets} for the given producer ID along with its ZK version.
+     *
+     * <p>The version can be used for conditional updates/deletes to handle concurrent modifications
+     * safely.
+     *
+     * @param producerId the producer ID
+     * @return an Optional containing a Tuple2 of (ProducerOffsets, version) if it exists, empty
+     *     otherwise
+     * @throws Exception if the operation fails
+     */
+    public Optional<Tuple2<ProducerOffsets, Integer>> getProducerOffsetsWithVersion(
+            String producerId) throws Exception {
+        String zkPath = ProducerIdZNode.path(producerId);
+        try {
+            Stat stat = new Stat();
+            byte[] data = zkClient.getData().storingStatIn(stat).forPath(zkPath);
+            return Optional.of(Tuple2.of(ProducerIdZNode.decode(data), stat.getVersion()));
+        } catch (KeeperException.NoNodeException e) {
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Deletes the producer offset snapshot for the given producer ID only if the version matches.
+     *
+     * <p>This provides optimistic concurrency control - the delete will only succeed if no other
+     * process has modified the snapshot since it was read.
+     *
+     * @param producerId the producer ID
+     * @param expectedVersion the expected ZK version (obtained from getProducerSnapshotWithVersion)
+     * @return true if deleted successfully, false if version mismatch (snapshot was modified)
+     * @throws Exception if the operation fails for reasons other than version mismatch
+     */
+    public boolean deleteProducerSnapshotIfVersion(String producerId, int expectedVersion)
+            throws Exception {
+        String path = ProducerIdZNode.path(producerId);
+        try {
+            zkClient.delete().withVersion(expectedVersion).forPath(path);
+            LOG.info(
+                    "Deleted producer snapshot for producer {} at path {} with version {}.",
+                    producerId,
+                    path,
+                    expectedVersion);
+            return true;
+        } catch (KeeperException.BadVersionException e) {
+            LOG.debug(
+                    "Failed to delete producer snapshot for producer {} - version mismatch "
+                            + "(expected {}, snapshot was modified by another process).",
+                    producerId,
+                    expectedVersion);
+            return false;
+        } catch (KeeperException.NoNodeException e) {
+            LOG.debug(
+                    "Producer snapshot for producer {} was already deleted by another process.",
+                    producerId);
+            return true; // Already deleted, consider it success
+        }
+    }
+
+    /**
+     * Lists all producer IDs that have registered snapshots.
+     *
+     * @return list of producer IDs
+     * @throws Exception if the operation fails
+     */
+    public List<String> listProducerIds() throws Exception {
+        return getChildren(ProducersZNode.path());
     }
 }

@@ -44,9 +44,10 @@ import java.util.concurrent.TimeUnit;
  * that is responsible for turning these lookup operations into network requests and transmitting
  * them to the cluster.
  *
- * <p>The {@link #lookup(TablePath, TableBucket, byte[])} method is asynchronous, when called, it
- * adds the lookup operation to a queue of pending lookup operations and immediately returns. This
- * allows the lookup operations to batch together individual lookup operations for efficiency.
+ * <p>The {@link #lookup(TablePath, TableBucket, byte[], boolean)} method is asynchronous, when
+ * called, it adds the lookup operation to a queue of pending lookup operations and immediately
+ * returns. This allows the lookup operations to batch together individual lookup operations for
+ * efficiency.
  */
 @ThreadSafe
 @Internal
@@ -64,13 +65,28 @@ public class LookupClient {
     public LookupClient(Configuration conf, MetadataUpdater metadataUpdater) {
         this.lookupQueue = new LookupQueue(conf);
         this.lookupSenderThreadPool = createThreadPool();
+        short acks = configureAcks(conf);
         this.lookupSender =
                 new LookupSender(
                         metadataUpdater,
                         lookupQueue,
                         conf.getInt(ConfigOptions.CLIENT_LOOKUP_MAX_INFLIGHT_SIZE),
-                        conf.getInt(ConfigOptions.CLIENT_LOOKUP_MAX_RETRIES));
+                        conf.getInt(ConfigOptions.CLIENT_LOOKUP_MAX_RETRIES),
+                        acks,
+                        (int) conf.get(ConfigOptions.CLIENT_REQUEST_TIMEOUT).toMillis());
         lookupSenderThreadPool.submit(lookupSender);
+    }
+
+    private short configureAcks(Configuration conf) {
+        String acks = conf.get(ConfigOptions.CLIENT_WRITER_ACKS);
+        short ack;
+        if (acks.equals("all")) {
+            ack = -1;
+        } else {
+            ack = Short.parseShort(acks);
+        }
+
+        return ack;
     }
 
     private ExecutorService createThreadPool() {
@@ -80,8 +96,11 @@ public class LookupClient {
     }
 
     public CompletableFuture<byte[]> lookup(
-            TablePath tablePath, TableBucket tableBucket, byte[] keyBytes) {
-        LookupQuery lookup = new LookupQuery(tablePath, tableBucket, keyBytes);
+            TablePath tablePath,
+            TableBucket tableBucket,
+            byte[] keyBytes,
+            boolean insertIfNotExists) {
+        LookupQuery lookup = new LookupQuery(tablePath, tableBucket, keyBytes, insertIfNotExists);
         lookupQueue.appendLookup(lookup);
         return lookup.future();
     }

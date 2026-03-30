@@ -27,6 +27,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.types.DataTypeRoot;
 
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Identifier;
@@ -41,6 +42,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.SYSTEM_COLUMNS;
@@ -57,6 +59,7 @@ public class PaimonConversions {
 
     // for fluss config
     public static final String FLUSS_CONF_PREFIX = "fluss.";
+    public static final String TABLE_DATALAKE_PAIMON_PREFIX = "table.datalake.paimon.";
     // for paimon config
     private static final String PAIMON_CONF_PREFIX = "paimon.";
 
@@ -119,15 +122,14 @@ public class PaimonConversions {
         for (TableChange tableChange : tableChanges) {
             if (tableChange instanceof TableChange.SetOption) {
                 TableChange.SetOption setOption = (TableChange.SetOption) tableChange;
-                schemaChanges.add(
-                        SchemaChange.setOption(
-                                convertFlussPropertyKeyToPaimon(setOption.getKey()),
-                                setOption.getValue()));
+                String key = convertFlussPropertyKeyToPaimon(setOption.getKey());
+                validateAlterPaimonOptions(key);
+                schemaChanges.add(SchemaChange.setOption(key, setOption.getValue()));
             } else if (tableChange instanceof TableChange.ResetOption) {
                 TableChange.ResetOption resetOption = (TableChange.ResetOption) tableChange;
-                schemaChanges.add(
-                        SchemaChange.removeOption(
-                                convertFlussPropertyKeyToPaimon(resetOption.getKey())));
+                String key = convertFlussPropertyKeyToPaimon(resetOption.getKey());
+                validateAlterPaimonOptions(key);
+                schemaChanges.add(SchemaChange.removeOption(key));
             } else if (tableChange instanceof TableChange.AddColumn) {
                 TableChange.AddColumn addColumn = (TableChange.AddColumn) tableChange;
 
@@ -219,6 +221,7 @@ public class PaimonConversions {
                     CoreOptions.CHANGELOG_PRODUCER.key(),
                     CoreOptions.ChangelogProducer.INPUT.toString());
         }
+
         // set partition keys
         schemaBuilder.partitionKeys(tableDescriptor.getPartitionKeys());
 
@@ -228,6 +231,25 @@ public class PaimonConversions {
                 .getCustomProperties()
                 .forEach((k, v) -> setFlussPropertyToPaimon(k, v, options));
         schemaBuilder.options(options.toMap());
+
+        // currently we only support string type, todo
+        // consider to support other types
+        if (options.get(CoreOptions.DELETION_VECTORS_ENABLED)) {
+            org.apache.fluss.types.RowType rowType = tableDescriptor.getSchema().getRowType();
+            Optional<String> invalidKey =
+                    tableDescriptor.getPartitionKeys().stream()
+                            .filter(
+                                    key ->
+                                            rowType.getField(key).getType().getTypeRoot()
+                                                    != DataTypeRoot.STRING)
+                            .findFirst();
+            if (invalidKey.isPresent()) {
+                throw new UnsupportedOperationException(
+                        String.format(
+                                "Only support String type as partitioned key when 'deletion-vectors.enabled' is set to true for paimon, found '%s' is not String type.",
+                                invalidKey.get()));
+            }
+        }
 
         // set comment
         tableDescriptor.getComment().ifPresent(schemaBuilder::comment);
@@ -252,6 +274,14 @@ public class PaimonConversions {
                 });
     }
 
+    private static void validateAlterPaimonOptions(String key) {
+        if (PAIMON_UNSETTABLE_OPTIONS.contains(key)
+                || CoreOptions.IMMUTABLE_OPTIONS.contains(key)) {
+            throw new InvalidConfigException(
+                    String.format("The Paimon option %s cannot be changed.", key));
+        }
+    }
+
     private static void setPaimonDefaultProperties(Options options) {
         // set partition.legacy-name to false, otherwise paimon will use toString for all types,
         // which will cause inconsistent partition value for the same binary value
@@ -261,7 +291,7 @@ public class PaimonConversions {
     private static void setFlussPropertyToPaimon(String key, String value, Options options) {
         if (key.startsWith(PAIMON_CONF_PREFIX)) {
             options.set(key.substring(PAIMON_CONF_PREFIX.length()), value);
-        } else {
+        } else if (!key.startsWith(TABLE_DATALAKE_PAIMON_PREFIX)) {
             options.set(FLUSS_CONF_PREFIX + key, value);
         }
     }

@@ -23,7 +23,7 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss</artifactId>
-        <version>0.9-SNAPSHOT</version>
+        <version>0.10-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-test-coverage</artifactId>
@@ -96,6 +96,14 @@
             <version>${project.version}</version>
             <scope>compile</scope>
         </dependency>
+
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-docgen</artifactId>
+            <version>${project.version}</version>
+            <scope>compile</scope>
+        </dependency>
+
     </dependencies>
 
     <profiles>
@@ -337,6 +345,7 @@
                                         <exclude>
                                             org.apache.fluss.row.columnar.BytesColumnVector.Bytes
                                         </exclude>
+                                        <exclude>org.apache.fluss.row.decode.KeyDecoder</exclude>
                                         <exclude>org.apache.fluss.row.encode.RowEncoder</exclude>
                                         <exclude>org.apache.fluss.row.encode.KeyEncoder</exclude>
                                         <exclude>org.apache.fluss.table.*</exclude>
@@ -398,6 +407,9 @@
                                         <exclude>
                                             org.apache.fluss.flink.metrics.*
                                         </exclude>
+                                        <exclude>
+                                            org.apache.fluss.flink.procedure.*
+                                        </exclude>
                                         <!-- end exclude for flink-connector -->
                                         <!-- exclude flink 1.18 compatibility class for sink -->
                                         <exclude>org.apache.flink.streaming.api.functions.sink.v2.*</exclude>
@@ -448,6 +460,7 @@
                                         <exclude>org.apache.fluss.flink.tiering.source.TieringWriterInitContext
                                         </exclude>
                                         <exclude>org.apache.fluss.flink.tiering.source.TieringSourceReader</exclude>
+                                        <exclude>org.apache.fluss.flink.tiering.source.TieringSourceFetcherManager</exclude>
                                         <exclude>org.apache.fluss.flink.tiering.source.TableBucketWriteResultEmitter
                                         </exclude>
                                         <exclude>
@@ -464,6 +477,7 @@
                                         <exclude>
                                             org.apache.fluss.flink.tiering.LakeTieringJobBuilder
                                         </exclude>
+                                        <exclude>org.apache.fluss.lake.committer.LakeCommitResult*</exclude>
                                         <exclude>org.apache.fluss.flink.tiering.FlussLakeTieringEntrypoint</exclude>
                                         <exclude>org.apache.fluss.flink.tiering.FlussLakeTiering</exclude>
                                         <!-- end exclude for flink tiering service -->

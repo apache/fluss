@@ -24,7 +24,7 @@ metadata:
   {{- include "fluss.labels" . | nindent 4 }}
 spec:
   serviceName: coordinator-server-hs
-  replicas: 1 # can only be 1 for now
+  replicas: {{ .Values.coordinator.numberOfReplicas }}
   selector:
     matchLabels:
       {{- include "fluss.selectorLabels" . | nindent 6 }}
@@ -38,27 +38,37 @@ spec:
       {{- if .Values.serviceAccount.create }}
       serviceAccountName: {{ .Values.serviceAccount.name | default (include "fluss.fullname" .) }}
       {{- end }}
+      {{- include "fluss.imagePullSecrets" . | nindent 6 }}
       containers:
         - name: {{ .Chart.Name }}-coordinator
-          image: "{{.Values.image.repository}}:{{ .Values.image.tag }}"
+          image: {{ include "fluss.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: POD_NAME
-              valueFrom: 
-                fieldRef: 
-                  fieldPath: metadata.name 
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: POD_IP
-              valueFrom: 
-                fieldRef: 
+              valueFrom:
+                fieldRef:
                   fieldPath: status.podIP
             - name: POD_NAMESPACE
-              valueFrom: 
-                fieldRef: 
+              valueFrom:
+                fieldRef:
                   fieldPath: metadata.namespace
             - name: NODE_IP
               valueFrom:
                 fieldRef:
                   fieldPath: status.hostIP
+            {{- if (include "fluss.security.jaas.required" .) }}
+            - name: FLUSS_ENV_JAVA_OPTS
+              value: "-Djava.security.auth.login.config=/etc/fluss/conf/jaas.conf"
+            {{- end }}
+          ports:
+            - name: internal
+              containerPort: {{ .Values.listeners.internal.port }}
+            - name: client
+              containerPort: {{ .Values.listeners.client.port }}
           command:
             - "/bin/sh"
             - "-c"
@@ -66,10 +76,12 @@ spec:
               export FLUSS_SERVER_ID=${POD_NAME##*-} && \
               cp /opt/conf/server.yaml $FLUSS_HOME/conf && \
 
+              BIND_LISTENERS="INTERNAL://${POD_IP}:{{ .Values.listeners.internal.port }}, CLIENT://${POD_IP}:{{ .Values.listeners.client.port }}" && \
+              ADVERTISED_LISTENERS="CLIENT://${POD_NAME}.coordinator-server-hs.${POD_NAMESPACE}.svc.cluster.local:{{ .Values.listeners.client.port }}" && \
+
               echo "" >> $FLUSS_HOME/conf/server.yaml && \
-              echo "tablet-server.id: ${FLUSS_SERVER_ID}" >> $FLUSS_HOME/conf/server.yaml && \
-              echo "bind.listeners: INTERNAL://0.0.0.0:{{ .Values.appConfig.internalPort }}, CLIENT://0.0.0.0:{{ .Values.appConfig.externalPort }}" >> $FLUSS_HOME/conf/server.yaml && \
-              echo "advertised.listeners: CLIENT://${POD_NAME}.coordinator-server-hs.${POD_NAMESPACE}.svc.cluster.local:{{ .Values.appConfig.externalPort }}" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "bind.listeners: ${BIND_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "advertised.listeners: ${ADVERTISED_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
 
               bin/coordinator-server.sh start-foreground
           livenessProbe:
@@ -78,14 +90,14 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 3
             tcpSocket:
-              port: {{.Values.appConfig.externalPort}}
+              port: {{ .Values.listeners.client.port }}
           readinessProbe:
             failureThreshold: 100
             timeoutSeconds: 1
             initialDelaySeconds: 10
             periodSeconds: 3
             tcpSocket:
-              port: {{.Values.appConfig.externalPort}}
+              port: {{ .Values.listeners.client.port }}
           resources:
             {{- toYaml .Values.resources.tabletServer | nindent 12 }}
           volumeMounts:
@@ -93,15 +105,25 @@ spec:
               mountPath: /opt/conf
             - name: data
               mountPath: /tmp/fluss/data
+            {{- if (include "fluss.security.jaas.required" .) }}
+            - name: sasl-config
+              mountPath: /etc/fluss/conf
+              readOnly: true
+            {{- end }}
       volumes:
         - name: fluss-conf
           configMap:
             name: fluss-conf-file
-        {{- if not .Values.persistence.enabled }}
+        {{- if not .Values.coordinator.storage.enabled }}
         - name: data
           emptyDir: {}
         {{- end }}
-  {{- if .Values.persistence.enabled }}
+        {{- if (include "fluss.security.jaas.required" .) }}
+        - name: sasl-config
+          secret:
+            secretName: {{ include "fluss.security.jaas.configName" . }}
+        {{- end }}
+  {{- if .Values.coordinator.storage.enabled }}
   volumeClaimTemplates:
     - metadata:
         name: data
@@ -109,6 +131,6 @@ spec:
         accessModes: [ "ReadWriteOnce" ]
         resources:
           requests:
-            storage: {{ .Values.persistence.size }}
-        storageClassName: {{ .Values.persistence.storageClass }}
+            storage: {{ .Values.coordinator.storage.size }}
+        storageClassName: {{ .Values.coordinator.storage.storageClass }}
   {{- end}}

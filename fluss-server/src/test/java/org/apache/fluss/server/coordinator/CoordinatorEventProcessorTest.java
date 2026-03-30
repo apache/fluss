@@ -48,6 +48,7 @@ import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
+import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.statemachine.BucketState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
@@ -78,6 +79,7 @@ import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -154,6 +156,8 @@ class CoordinatorEventProcessorTest {
     private LakeTableTieringManager lakeTableTieringManager;
     private CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private CoordinatorMetadataCache serverMetadataCache;
+    private KvSnapshotLeaseManager kvSnapshotLeaseManager;
+    private String remoteDataDir;
 
     @BeforeAll
     static void baseBeforeAll() throws Exception {
@@ -191,9 +195,20 @@ class CoordinatorEventProcessorTest {
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
         autoPartitionManager =
                 new AutoPartitionManager(serverMetadataCache, metadataManager, new Configuration());
-        lakeTableTieringManager = new LakeTableTieringManager();
+        lakeTableTieringManager =
+                new LakeTableTieringManager(TestingMetricGroups.LAKE_TIERING_METRICS);
         Configuration conf = new Configuration();
-        conf.setString(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
+        remoteDataDir = zookeeperClient.getDefaultRemoteDataDir();
+        conf.setString(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        kvSnapshotLeaseManager =
+                new KvSnapshotLeaseManager(
+                        Duration.ofMinutes(10).toMillis(),
+                        zookeeperClient,
+                        remoteDataDir,
+                        SystemClock.getInstance(),
+                        TestingMetricGroups.COORDINATOR_METRICS);
+        kvSnapshotLeaseManager.start();
+
         eventProcessor = buildCoordinatorEventProcessor();
         eventProcessor.startup();
         metadataManager.createDatabase(
@@ -1051,7 +1066,8 @@ class CoordinatorEventProcessorTest {
                 TestingMetricGroups.COORDINATOR_METRICS,
                 new Configuration(),
                 Executors.newFixedThreadPool(1, new ExecutorThreadFactory("test-coordinator-io")),
-                metadataManager);
+                metadataManager,
+                kvSnapshotLeaseManager);
     }
 
     private void initCoordinatorChannel() throws Exception {
@@ -1093,9 +1109,19 @@ class CoordinatorEventProcessorTest {
         String partition1Name = "2024";
         String partition2Name = "2025";
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                partition1Id, partition1Name, partitionAssignment, tablePath, tableId);
+                partition1Id,
+                partition1Name,
+                partitionAssignment,
+                remoteDataDir,
+                tablePath,
+                tableId);
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                partition2Id, partition2Name, partitionAssignment, tablePath, tableId);
+                partition2Id,
+                partition2Name,
+                partitionAssignment,
+                remoteDataDir,
+                tablePath,
+                tableId);
 
         return Tuple2.of(
                 new PartitionIdName(partition1Id, partition1Name),
@@ -1356,8 +1382,8 @@ class CoordinatorEventProcessorTest {
                 });
     }
 
-    private <T> T fromCtx(Function<CoordinatorContext, T> retriveFunction) throws Exception {
-        AccessContextEvent<T> event = new AccessContextEvent<>(retriveFunction);
+    private <T> T fromCtx(Function<CoordinatorContext, T> retrieveFunction) throws Exception {
+        AccessContextEvent<T> event = new AccessContextEvent<>(retrieveFunction);
         eventProcessor.getCoordinatorEventManager().put(event);
         return event.getResultFuture().get(30, TimeUnit.SECONDS);
     }

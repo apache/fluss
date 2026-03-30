@@ -17,20 +17,19 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.SchemaChangeException;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
-import org.apache.fluss.metadata.TableInfo;
 
 import java.util.List;
-import java.util.Objects;
 
 /** Schema update. */
 public class SchemaUpdate {
 
     /** Apply schema changes to the given table info and return the updated schema. */
-    public static Schema applySchemaChanges(TableInfo tableInfo, List<TableChange> changes) {
-        SchemaUpdate schemaUpdate = new SchemaUpdate(tableInfo);
+    public static Schema applySchemaChanges(Schema initialSchema, List<TableChange> changes) {
+        SchemaUpdate schemaUpdate = new SchemaUpdate(initialSchema);
         for (TableChange change : changes) {
             schemaUpdate = schemaUpdate.applySchemaChange(change);
         }
@@ -40,9 +39,9 @@ public class SchemaUpdate {
     // Now we only maintain the Builder
     private final Schema.Builder builder;
 
-    public SchemaUpdate(TableInfo tableInfo) {
+    public SchemaUpdate(Schema initialSchema) {
         // Initialize builder from the current table schema
-        this.builder = Schema.newBuilder().fromSchema(tableInfo.getSchema());
+        this.builder = Schema.newBuilder().fromSchema(initialSchema);
     }
 
     public Schema getSchema() {
@@ -50,7 +49,7 @@ public class SchemaUpdate {
         return builder.build();
     }
 
-    public SchemaUpdate applySchemaChange(TableChange columnChange) {
+    private SchemaUpdate applySchemaChange(TableChange columnChange) {
         if (columnChange instanceof TableChange.AddColumn) {
             return addColumn((TableChange.AddColumn) columnChange);
         } else if (columnChange instanceof TableChange.ModifyColumn) {
@@ -69,13 +68,8 @@ public class SchemaUpdate {
         Schema.Column existingColumn = builder.getColumn(addColumn.getName()).orElse(null);
 
         if (existingColumn != null) {
-            if (!existingColumn.getDataType().equals(addColumn.getDataType())
-                    || !Objects.equals(
-                            existingColumn.getComment().orElse(null), addColumn.getComment())) {
-                throw new IllegalArgumentException(
-                        "Column " + addColumn.getName() + " already exists.");
-            }
-            return this;
+            throw new InvalidAlterTableException(
+                    "Column " + addColumn.getName() + " already exists.");
         }
 
         if (addColumn.getPosition() != TableChange.ColumnPosition.last()) {

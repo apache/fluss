@@ -21,6 +21,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.zk.NOPErrorHandler;
@@ -41,9 +42,12 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -61,6 +65,7 @@ public class DynamicConfigChangeTest {
     @BeforeAll
     static void beforeAll() {
         final Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.REMOTE_DATA_DIR, DEFAULT_REMOTE_DATA_DIR);
         configuration.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS,
                 zooKeeperExtensionWrapper.getCustomExtension().getConnectString());
@@ -178,6 +183,47 @@ public class DynamicConfigChangeTest {
 
             assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
                     .isNull();
+        }
+    }
+
+    @Test
+    void testDatalakePrefixValidationSkippedWhenFormatIsNull() throws Exception {
+        Configuration configuration = new Configuration();
+        try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
+                new LakeCatalogDynamicLoader(configuration, null, true)) {
+            DynamicConfigManager dynamicConfigManager =
+                    new DynamicConfigManager(zookeeperClient, configuration, true);
+            dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            dynamicConfigManager.startup();
+
+            // Setting `datalake.paimon.*` without setting `datalake.format` should pass because
+            // prefix validation is skipped.
+            assertThatCode(
+                            () ->
+                                    dynamicConfigManager.alterConfigs(
+                                            Collections.singletonList(
+                                                    new AlterConfig(
+                                                            "datalake.iceberg.type",
+                                                            "rest",
+                                                            AlterConfigOpType.SET))))
+                    .doesNotThrowAnyException();
+
+            assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
+                    .isNull();
+            assertThatThrownBy(
+                            () ->
+                                    dynamicConfigManager.alterConfigs(
+                                            Arrays.asList(
+                                                    new AlterConfig(
+                                                            "datalake.iceberg.type",
+                                                            "rest",
+                                                            AlterConfigOpType.SET),
+                                                    new AlterConfig(
+                                                            "datalake.format",
+                                                            "paimon",
+                                                            AlterConfigOpType.SET))))
+                    .hasMessageContaining(
+                            "Invalid configuration 'datalake.iceberg.type' for 'paimon' datalake format");
         }
     }
 
@@ -346,5 +392,140 @@ public class DynamicConfigChangeTest {
             assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
                     .isEqualTo(PAIMON);
         }
+    }
+
+    @Test
+    void testPreventInvalidSnapshotInterval() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofMinutes(10));
+
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+        dynamicConfigManager.startup();
+
+        // Try to set snapshot interval to an invalid value - should be rejected by type validation
+        assertThatThrownBy(
+                        () ->
+                                dynamicConfigManager.alterConfigs(
+                                        Collections.singletonList(
+                                                new AlterConfig(
+                                                        ConfigOptions.KV_SNAPSHOT_INTERVAL.key(),
+                                                        "invalid_value",
+                                                        AlterConfigOpType.SET))))
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining(
+                        "Cannot parse 'invalid_value' as Duration for config 'kv.snapshot.interval'");
+    }
+
+    @Test
+    void testDynamicSnapshotIntervalChange() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofMinutes(10));
+
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+
+        AtomicReference<Duration> reconfiguredInterval = new AtomicReference<>();
+        dynamicConfigManager.register(
+                new ServerReconfigurable() {
+                    @Override
+                    public void validate(Configuration newConfig) throws ConfigException {}
+
+                    @Override
+                    public void reconfigure(Configuration newConfig) {
+                        reconfiguredInterval.set(newConfig.get(ConfigOptions.KV_SNAPSHOT_INTERVAL));
+                    }
+                });
+        dynamicConfigManager.startup();
+
+        // Change snapshot interval to 5 minutes - should succeed
+        assertThatCode(
+                        () ->
+                                dynamicConfigManager.alterConfigs(
+                                        Collections.singletonList(
+                                                new AlterConfig(
+                                                        ConfigOptions.KV_SNAPSHOT_INTERVAL.key(),
+                                                        "5min",
+                                                        AlterConfigOpType.SET))))
+                .doesNotThrowAnyException();
+
+        // Verify config was persisted to ZK
+        Map<String, String> zkConfig = zookeeperClient.fetchEntityConfig();
+        assertThat(zkConfig.get(ConfigOptions.KV_SNAPSHOT_INTERVAL.key())).isEqualTo("5min");
+
+        // Verify the reconfigurable was notified with the new value
+        assertThat(reconfiguredInterval.get()).isEqualTo(Duration.ofMinutes(5));
+    }
+
+    @Test
+    void testPreventInvalidMinInSyncReplicas() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.setInt(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER, 1);
+
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+        dynamicConfigManager.startup();
+
+        // Try to set min-in-sync-replicas to an invalid value - should be rejected by type
+        // validation
+        assertThatThrownBy(
+                        () ->
+                                dynamicConfigManager.alterConfigs(
+                                        Collections.singletonList(
+                                                new AlterConfig(
+                                                        ConfigOptions
+                                                                .LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER
+                                                                .key(),
+                                                        "invalid_value",
+                                                        AlterConfigOpType.SET))))
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining(
+                        "Cannot parse 'invalid_value' as Integer for config"
+                                + " 'log.replica.min-in-sync-replicas-number'");
+    }
+
+    @Test
+    void testDynamicMinInSyncReplicasChange() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.setInt(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER, 1);
+
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+
+        AtomicInteger reconfiguredValue = new AtomicInteger();
+        dynamicConfigManager.register(
+                new ServerReconfigurable() {
+                    @Override
+                    public void validate(Configuration newConfig) throws ConfigException {}
+
+                    @Override
+                    public void reconfigure(Configuration newConfig) {
+                        reconfiguredValue.set(
+                                newConfig.get(
+                                        ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER));
+                    }
+                });
+        dynamicConfigManager.startup();
+
+        // Change min-in-sync-replicas to 2 - should succeed
+        assertThatCode(
+                        () ->
+                                dynamicConfigManager.alterConfigs(
+                                        Collections.singletonList(
+                                                new AlterConfig(
+                                                        ConfigOptions
+                                                                .LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER
+                                                                .key(),
+                                                        "2",
+                                                        AlterConfigOpType.SET))))
+                .doesNotThrowAnyException();
+
+        // Verify config was persisted to ZK
+        Map<String, String> zkConfig = zookeeperClient.fetchEntityConfig();
+        assertThat(zkConfig.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER.key()))
+                .isEqualTo("2");
+
+        // Verify the reconfigurable was notified with the new value
+        assertThat(reconfiguredValue.get()).isEqualTo(2);
     }
 }

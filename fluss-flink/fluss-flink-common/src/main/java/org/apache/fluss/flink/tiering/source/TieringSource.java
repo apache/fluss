@@ -36,13 +36,17 @@ import org.apache.flink.api.connector.source.SourceReader;
 import org.apache.flink.api.connector.source.SourceReaderContext;
 import org.apache.flink.api.connector.source.SplitEnumerator;
 import org.apache.flink.api.connector.source.SplitEnumeratorContext;
+import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
+import org.apache.flink.connector.base.source.reader.synchronization.FutureCompletingBlockingQueue;
 import org.apache.flink.core.io.SimpleVersionedSerializer;
 import org.apache.flink.runtime.jobgraph.OperatorID;
 import org.apache.flink.streaming.api.graph.StreamGraphHasherV2;
 
 import java.nio.charset.StandardCharsets;
 
+import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
+import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.getClientScannerIoTmpDir;
 
 /**
  * The flink source implementation for tiering data from Fluss to downstream lake.
@@ -78,7 +82,7 @@ public class TieringSource<WriteResult>
 
     @Override
     public SplitEnumerator<TieringSplit, TieringSourceEnumeratorState> createEnumerator(
-            SplitEnumeratorContext<TieringSplit> splitEnumeratorContext) throws Exception {
+            SplitEnumeratorContext<TieringSplit> splitEnumeratorContext) {
         return new TieringSourceEnumerator(
                 flussConf, splitEnumeratorContext, pollTieringTableIntervalMs);
     }
@@ -86,8 +90,7 @@ public class TieringSource<WriteResult>
     @Override
     public SplitEnumerator<TieringSplit, TieringSourceEnumeratorState> restoreEnumerator(
             SplitEnumeratorContext<TieringSplit> splitEnumeratorContext,
-            TieringSourceEnumeratorState tieringSourceEnumeratorState)
-            throws Exception {
+            TieringSourceEnumeratorState tieringSourceEnumeratorState) {
         // stateless operator
         return new TieringSourceEnumerator(
                 flussConf, splitEnumeratorContext, pollTieringTableIntervalMs);
@@ -107,8 +110,14 @@ public class TieringSource<WriteResult>
     @Override
     public SourceReader<TableBucketWriteResult<WriteResult>, TieringSplit> createReader(
             SourceReaderContext sourceReaderContext) {
+        FutureCompletingBlockingQueue<RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>>
+                elementsQueue = new FutureCompletingBlockingQueue<>();
+        flussConf.set(
+                CLIENT_SCANNER_IO_TMP_DIR,
+                getClientScannerIoTmpDir(flussConf, sourceReaderContext.getConfiguration()));
         Connection connection = ConnectionFactory.createConnection(flussConf);
-        return new TieringSourceReader<>(sourceReaderContext, connection, lakeTieringFactory);
+        return new TieringSourceReader<>(
+                elementsQueue, sourceReaderContext, connection, lakeTieringFactory);
     }
 
     /** This follows the operator uid hash generation logic of flink {@link StreamGraphHasherV2}. */

@@ -63,6 +63,12 @@ public class LakeCatalogDynamicLoader implements ServerReconfigurable, AutoClose
                 newConfig.getOptional(DATALAKE_FORMAT).isPresent()
                         ? newConfig.get(DATALAKE_FORMAT)
                         : currentConfiguration.get(DATALAKE_FORMAT);
+        // If datalake format is not set, skip prefix validation so that users can disable or enable
+        // datalake format without re-supplying all datalake-prefixed properties.
+        if (newDatalakeFormat == null) {
+            return;
+        }
+
         Map<String, String> configMap = newConfig.toMap();
         String datalakePrefix = "datalake." + newDatalakeFormat + ".";
         configMap.forEach(

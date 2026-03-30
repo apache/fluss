@@ -27,7 +27,7 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap
 /** An interface that extends from Spark [[ScanBuilder]]. */
 trait FlussScanBuilder extends ScanBuilder with SupportsPushDownRequiredColumns {
 
-  protected var requiredSchema: Option[StructType] = _
+  protected var requiredSchema: Option[StructType] = None
 
   override def pruneColumns(requiredSchema: StructType): Unit = {
     this.requiredSchema = Some(requiredSchema)

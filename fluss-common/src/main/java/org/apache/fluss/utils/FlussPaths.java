@@ -93,6 +93,14 @@ public class FlussPaths {
 
     private static final String REMOTE_LAKE_DIR_NAME = "lake";
 
+    /** The directory name for storing producer offsets files. */
+    private static final String REMOTE_PRODUCERS_DIR_NAME = "producers";
+
+    /** Suffix of a producer offsets file. */
+    private static final String PRODUCER_OFFSETS_FILE_SUFFIX = ".offsets";
+
+    private static final String REMOTE_LEASE_DIR_NAME = "lease";
+
     // ----------------------------------------------------------------------------------------
     // LOG/KV Tablet Paths
     // ----------------------------------------------------------------------------------------
@@ -723,6 +731,41 @@ public class FlussPaths {
     }
 
     /**
+     * Returns the remote directory path for storing kv snapshot lease files.
+     *
+     * <p>The path contract:
+     *
+     * <pre>
+     * {$remote.data.dir}/lease/kv-snapshot/{leaseId}/{tableId}/
+     * </pre>
+     */
+    private static FsPath remoteKvSnapshotLeaseDir(
+            String remoteDataDir, String leaseId, long tableId) {
+        return new FsPath(
+                String.format(
+                        "%s/%s/kv-snapshot/%s/%d",
+                        remoteDataDir, REMOTE_LEASE_DIR_NAME, leaseId, tableId));
+    }
+
+    /**
+     * Returns the remote file path for storing kv snapshot lease files.
+     *
+     * <p>The path contract:
+     *
+     * <pre>
+     * {$remoteKvSnapshotLeaseDir}/{uuid}.metadata
+     * </pre>
+     */
+    public static FsPath remoteKvSnapshotLeaseFile(
+            String remoteDataDir, String leaseId, long tableId) {
+        return new FsPath(
+                String.format(
+                        "%s/%s.metadata",
+                        remoteKvSnapshotLeaseDir(remoteDataDir, leaseId, tableId),
+                        UUID.randomUUID()));
+    }
+
+    /**
      * Returns the remote directory path for storing kv snapshot shared files (SST files with UUID
      * prefix).
      *
@@ -737,6 +780,57 @@ public class FlussPaths {
      */
     public static FsPath remoteKvSharedDir(FsPath remoteKvTabletDir) {
         return new FsPath(remoteKvTabletDir, REMOTE_KV_SNAPSHOT_SHARED_DIR);
+    }
+
+    // ----------------------------------------------------------------------------------------
+    // Remote Producer Offsets Paths
+    // ----------------------------------------------------------------------------------------
+
+    /**
+     * Returns the remote root directory path for storing producer offsets files.
+     *
+     * <p>The path contract:
+     *
+     * <pre>
+     * {$remote.data.dir}/producers
+     * </pre>
+     *
+     * @param remoteDataDir the remote data root directory, i.e. the "remote.data.dir" in the
+     *     configuration
+     */
+    public static FsPath remoteProducersDir(String remoteDataDir) {
+        return new FsPath(remoteDataDir, REMOTE_PRODUCERS_DIR_NAME);
+    }
+
+    /**
+     * Returns the remote file path for storing producer offsets for a specific table.
+     *
+     * <p>Producer offsets are stored per producer and per table. Each file contains the offsets for
+     * all buckets of a single table that the producer has written to. The file is named with a UUID
+     * to ensure uniqueness and avoid conflicts during concurrent writes.
+     *
+     * <p>The path contract:
+     *
+     * <pre>
+     * {$remote.data.dir}/producers/{producerId}/{tableId}/{uuid}.offsets
+     * </pre>
+     *
+     * <p>For example: {@code s3://bucket/fluss/producers/my-producer-1/12345/550e8400-e29b.offsets}
+     *
+     * @param remoteDataDir the remote data root directory, i.e. the "remote.data.dir" in the
+     *     configuration
+     * @param producerId the unique identifier of the producer (e.g., Flink job ID)
+     * @param tableId the table ID for which offsets are being stored
+     * @param uuid a unique identifier for this specific offsets file
+     * @return the full path to the producer offsets file
+     */
+    public static FsPath remoteProducerOffsetsPath(
+            String remoteDataDir, String producerId, long tableId, UUID uuid) {
+        return new FsPath(
+                new FsPath(
+                        new FsPath(remoteProducersDir(remoteDataDir), producerId),
+                        String.valueOf(tableId)),
+                uuid + PRODUCER_OFFSETS_FILE_SUFFIX);
     }
 
     // ----------------------------------------------------------------------------------------

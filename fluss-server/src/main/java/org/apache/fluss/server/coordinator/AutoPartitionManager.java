@@ -338,6 +338,7 @@ public class AutoPartitionManager implements AutoCloseable {
         }
 
         TablePath tablePath = tableInfo.getTablePath();
+
         for (ResolvedPartitionSpec partition : partitionsToPreCreate) {
             long tableId = tableInfo.getTableId();
             int replicaFactor = tableInfo.getTableConfig().getReplicationFactor();

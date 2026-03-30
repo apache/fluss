@@ -5,9 +5,11 @@ sidebar_position: 2
 
 # Deploying Local Cluster
 :::warning
-**This setup deploys Fluss to a single machine only.** The Fluss endpoint will **only be accessible locally** (e.g. via `localhost`).
-If you need access your Fluss cluster from a different machine or deploy across multiple servers, please refer to the [Deploying Distributed Cluster](install-deploy/deploying-distributed-cluster.md).
-That guide explains how to use `coordinator-server.sh` and `tablet-server.sh` with an externally accessible homename and port.
+**This setup deploys Fluss to a single machine only.**
+
+By default, the local cluster endpoint is **accessible only locally** (e.g., via `localhost`). To allow external access to your local cluster, configure an externally reachable hostname or IP address of this machine in the `bind.listeners` field of `server.yaml`. When this is set, all services—including TabletServers—will bind to that address, making their ports accessible from remote clients.
+
+If you require full control over network exposure or plan to deploy Fluss across multiple machines, refer to the [Deploying Distributed Cluster](install-deploy/deploying-distributed-cluster.md) guide. That guide explains how to deploy each `CoordinatorServer` and `TabletServer` with explicitly configured, externally accessible hostnames and ports.
 :::
 
 This page provides instructions on how to deploy a *local cluster* (on one machine, but in separate processes) for Fluss.

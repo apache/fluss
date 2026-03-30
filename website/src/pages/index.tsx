@@ -93,6 +93,11 @@ export default function Home(): JSX.Element {
                     box-shadow: ${isScrolled ? 'var(--ifm-navbar-shadow)' : 'none'} !important;
                     transition: background-color 0.3s ease, backdrop-filter 0.3s ease, box-shadow 0.3s ease !important;
                 }
+                .navbar__brand {
+                    font-family: 'Roboto', sans-serif !important;
+                    font-weight: 700 !important;
+                    letter-spacing: -0.01em !important;
+                }
                 .navbar__link,
                 .navbar__brand,
                 .navbar__brand b,

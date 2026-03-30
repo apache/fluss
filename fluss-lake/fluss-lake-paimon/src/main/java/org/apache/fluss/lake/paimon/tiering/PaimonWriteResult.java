@@ -21,7 +21,7 @@ import org.apache.paimon.table.sink.CommitMessage;
 
 import java.io.Serializable;
 
-/** The write result of Paimon lake writer to pass to commiter to commit. */
+/** The write result of Paimon lake writer to pass to committer to commit. */
 public class PaimonWriteResult implements Serializable {
 
     private static final long serialVersionUID = 1L;

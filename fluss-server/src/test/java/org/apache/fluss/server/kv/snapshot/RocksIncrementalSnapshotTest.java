@@ -190,7 +190,11 @@ class RocksIncrementalSnapshotTest {
                 incrementalSnapshot.syncPrepareResources(snapshotId);
 
         return incrementalSnapshot
-                .asyncSnapshot(nativeRocksDBSnapshotResources, snapshotId, 0L, snapshotLocation)
+                .asyncSnapshot(
+                        nativeRocksDBSnapshotResources,
+                        snapshotId,
+                        new TabletState(0L, null, null),
+                        snapshotLocation)
                 .get(closeableRegistry)
                 .getKvSnapshotHandle();
     }

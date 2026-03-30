@@ -155,7 +155,7 @@ public class FlinkTestBase extends AbstractTestBase {
     }
 
     @BeforeEach
-    void beforeEach() throws Exception {
+    public void beforeEach() throws Exception {
         admin.createDatabase(DEFAULT_DB, DatabaseDescriptor.EMPTY, true).get();
     }
 
@@ -237,6 +237,7 @@ public class FlinkTestBase extends AbstractTestBase {
                     partition,
                     new PartitionAssignment(
                             tableInfo.getTableId(), assignment.getBucketAssignments()),
+                    zkClient.getDefaultRemoteDataDir(),
                     tablePath,
                     tableInfo.getTableId());
         }

@@ -33,6 +33,7 @@ import org.apache.fluss.record.KvRecordReadContext;
 import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
+import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.types.DataType;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -167,7 +168,7 @@ class KvWriteBatchTest {
             CompletableFuture<Void> future = new CompletableFuture<>();
             kvProducerBatch.tryAppend(
                     createWriteRecord(),
-                    exception -> {
+                    (bucket, offset, exception) -> {
                         if (exception != null) {
                             future.completeExceptionally(exception);
                         } else {
@@ -227,11 +228,12 @@ class KvWriteBatchTest {
                 writeLimit,
                 outputView,
                 null,
+                MergeMode.DEFAULT,
                 System.currentTimeMillis());
     }
 
     private WriteCallback newWriteCallback() {
-        return exception -> {
+        return (bucket, offset, exception) -> {
             if (exception != null) {
                 throw new RuntimeException(exception);
             }
@@ -253,5 +255,87 @@ class KvWriteBatchTest {
         KvRecord kvRecord = iterator.next();
         assertThat(toArray(kvRecord.getKey())).isEqualTo(key);
         assertThat(kvRecord.getRow()).isEqualTo(row);
+    }
+
+    // ==================== MergeMode Tests ====================
+
+    @Test
+    void testMergeModeConsistencyValidation() throws Exception {
+        // Create batch with DEFAULT mode
+        KvWriteBatch defaultBatch =
+                createKvWriteBatchWithMergeMode(
+                        new TableBucket(DATA1_TABLE_ID_PK, 0), MergeMode.DEFAULT);
+
+        // Append record with DEFAULT mode should succeed
+        WriteRecord defaultRecord = createWriteRecordWithMergeMode(MergeMode.DEFAULT);
+        assertThat(defaultBatch.tryAppend(defaultRecord, newWriteCallback())).isTrue();
+
+        // Append record with OVERWRITE mode should fail
+        WriteRecord overwriteRecord = createWriteRecordWithMergeMode(MergeMode.OVERWRITE);
+        assertThatThrownBy(() -> defaultBatch.tryAppend(overwriteRecord, newWriteCallback()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(
+                        "Cannot mix records with different mergeMode in the same batch")
+                .hasMessageContaining("Batch mergeMode: DEFAULT")
+                .hasMessageContaining("Record mergeMode: OVERWRITE");
+    }
+
+    @Test
+    void testOverwriteModeBatch() throws Exception {
+        // Create batch with OVERWRITE mode
+        KvWriteBatch overwriteBatch =
+                createKvWriteBatchWithMergeMode(
+                        new TableBucket(DATA1_TABLE_ID_PK, 0), MergeMode.OVERWRITE);
+
+        // Verify batch has correct mergeMode
+        assertThat(overwriteBatch.getMergeMode()).isEqualTo(MergeMode.OVERWRITE);
+
+        // Append record with OVERWRITE mode should succeed
+        WriteRecord overwriteRecord = createWriteRecordWithMergeMode(MergeMode.OVERWRITE);
+        assertThat(overwriteBatch.tryAppend(overwriteRecord, newWriteCallback())).isTrue();
+
+        // Append record with DEFAULT mode should fail
+        WriteRecord defaultRecord = createWriteRecordWithMergeMode(MergeMode.DEFAULT);
+        assertThatThrownBy(() -> overwriteBatch.tryAppend(defaultRecord, newWriteCallback()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(
+                        "Cannot mix records with different mergeMode in the same batch")
+                .hasMessageContaining("Batch mergeMode: OVERWRITE")
+                .hasMessageContaining("Record mergeMode: DEFAULT");
+    }
+
+    @Test
+    void testDefaultMergeModeIsDefault() throws Exception {
+        KvWriteBatch batch = createKvWriteBatch(new TableBucket(DATA1_TABLE_ID_PK, 0));
+        assertThat(batch.getMergeMode()).isEqualTo(MergeMode.DEFAULT);
+    }
+
+    private KvWriteBatch createKvWriteBatchWithMergeMode(TableBucket tb, MergeMode mergeMode)
+            throws Exception {
+        PreAllocatedPagedOutputView outputView =
+                new PreAllocatedPagedOutputView(
+                        Collections.singletonList(memoryPool.nextSegment()));
+        return new KvWriteBatch(
+                tb.getBucket(),
+                PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
+                DATA1_TABLE_INFO_PK.getSchemaId(),
+                KvFormat.COMPACTED,
+                Integer.MAX_VALUE,
+                outputView,
+                null,
+                mergeMode,
+                System.currentTimeMillis());
+    }
+
+    private WriteRecord createWriteRecordWithMergeMode(MergeMode mergeMode) {
+        return WriteRecord.forUpsert(
+                DATA1_TABLE_INFO_PK,
+                PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
+                row,
+                key,
+                key,
+                WriteFormat.COMPACTED_KV,
+                null,
+                mergeMode);
     }
 }

@@ -43,6 +43,7 @@ public class FlussSink<InputT> extends FlinkSink<InputT>
      * Constructs a FlussSink with the given SinkWriterBuilder.
      *
      * @param builder the builder used to create the sink writer
+     * @param tablePath the table path
      */
     FlussSink(
             SinkWriterBuilder<? extends FlinkSinkWriter<InputT>, InputT> builder,

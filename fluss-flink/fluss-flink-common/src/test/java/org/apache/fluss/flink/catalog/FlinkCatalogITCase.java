@@ -26,7 +26,9 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
+import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -40,6 +42,7 @@ import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.api.config.TableConfigOptions;
 import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.catalog.CatalogBaseTable;
+import org.apache.flink.table.catalog.CatalogDatabase;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.ObjectPath;
 import org.apache.flink.table.catalog.exceptions.CatalogException;
@@ -65,6 +68,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.config.ConfigOptions.CURRENT_KV_FORMAT_VERSION;
 import static org.apache.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
@@ -247,53 +251,39 @@ abstract class FlinkCatalogITCase {
 
         // alter table set an unsupported modification option should throw exception
         String unSupportedDml1 =
-                "alter table test_alter_table_append_only set ('table.auto-partition.enabled' = 'true')";
+                "alter table test_alter_table_append_only set ('table.auto-partition.enabled' = 'true', 'table.kv.format' = 'indexed')";
 
         assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml1))
                 .rootCause()
                 .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessage(
-                        "The option 'table.auto-partition.enabled' is not supported to alter yet.");
+                .hasMessageContaining("The following options are not supported to alter yet:")
+                .hasMessageContaining("table.kv.format")
+                .hasMessageContaining("table.auto-partition.enabled");
 
         String unSupportedDml2 =
-                "alter table test_alter_table_append_only set ('k1' = 'v1', 'table.kv.format' = 'indexed')";
-        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml2))
-                .rootCause()
-                .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessage("The option 'table.kv.format' is not supported to alter yet.");
-
-        String unSupportedDml3 =
                 "alter table test_alter_table_append_only set ('bucket.num' = '1000')";
-        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml3))
+        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml2))
                 .rootCause()
                 .isInstanceOf(CatalogException.class)
                 .hasMessage("The option 'bucket.num' is not supported to alter yet.");
 
-        String unSupportedDml4 =
+        String unSupportedDml3 =
                 "alter table test_alter_table_append_only set ('bucket.key' = 'a')";
-        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml4))
+        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml3))
                 .rootCause()
                 .isInstanceOf(CatalogException.class)
                 .hasMessage("The option 'bucket.key' is not supported to alter yet.");
 
-        String unSupportedDml5 =
+        String unSupportedDml4 =
                 "alter table test_alter_table_append_only reset ('bootstrap.servers')";
-        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml5))
+        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml4))
                 .rootCause()
                 .isInstanceOf(CatalogException.class)
                 .hasMessage("The option 'bootstrap.servers' is not supported to alter yet.");
 
-        String unSupportedDml6 =
-                "alter table test_alter_table_append_only set ('paimon.file.format' = 'orc')";
-        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml6))
-                .rootCause()
-                .isInstanceOf(InvalidConfigException.class)
-                .hasMessage(
-                        "Property 'paimon.file.format' is not supported to alter which is for datalake table.");
-
-        String unSupportedDml7 =
+        String unSupportedDml5 =
                 "alter table test_alter_table_append_only set ('auto-increment.fields' = 'b')";
-        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml7))
+        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml5))
                 .rootCause()
                 .isInstanceOf(CatalogException.class)
                 .hasMessage("The option 'auto-increment.fields' is not supported to alter yet.");
@@ -550,12 +540,16 @@ abstract class FlinkCatalogITCase {
                         .format(DateTimeFormatter.ofPattern(datetimePattern));
 
         // 2. test add partitions.
-        tEnv.executeSql(
-                String.format(
-                        "alter table %s add partition (b = 1,c = 1,hh = %s)", tblName, minus3hour));
-        tEnv.executeSql(
-                String.format(
-                        "alter table %s add partition (b = 1,c = 2,hh = %s)", tblName, minus3hour));
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        String.format(
+                                                "alter table %s add partition (b = 1,c = 1,hh = %s)",
+                                                tblName, minus3hour)))
+                .rootCause()
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining(
+                        String.format("Partition value '%s' is out-of-date.", minus3hour));
         tEnv.executeSql(
                 String.format(
                         "alter table %s add partition (b = 1,c = 1,hh = %s)", tblName, minus2hour));
@@ -634,6 +628,8 @@ abstract class FlinkCatalogITCase {
             Map<String, String> expectedTableProperties = new HashMap<>();
             expectedTableProperties.put("table.datalake.format", "paimon");
             expectedTableProperties.put("table.replication.factor", "1");
+            expectedTableProperties.put(
+                    "table.kv.format-version", String.valueOf(CURRENT_KV_FORMAT_VERSION));
             assertThat(tableInfo.getProperties().toMap()).isEqualTo(expectedTableProperties);
 
             Map<String, String> expectedCustomProperties = new HashMap<>();
@@ -646,8 +642,8 @@ abstract class FlinkCatalogITCase {
             expectedCustomProperties.put("schema.4.name", "cost");
             expectedCustomProperties.put("schema.4.expr", "`price` * `quantity`");
             expectedCustomProperties.put("schema.4.data-type", "DOUBLE");
-            expectedCustomProperties.put("bucket.num", "2");
             assertThat(tableInfo.getCustomProperties().toMap()).isEqualTo(expectedCustomProperties);
+            assertThat(tableInfo.getNumBuckets()).isEqualTo(2);
         }
     }
 
@@ -693,6 +689,37 @@ abstract class FlinkCatalogITCase {
         tEnv.executeSql("drop database test_db");
         databases = CollectionUtil.iteratorToList(tEnv.executeSql("show databases").collect());
         assertThat(databases.toString()).isEqualTo(String.format("[+I[%s]]", DEFAULT_DB));
+    }
+
+    @Test
+    void testAlterDatabase() throws Exception {
+        String dbName = "test_alter_db";
+        // Create database with initial properties
+        tEnv.executeSql(
+                String.format(
+                        "create database %s comment 'initial comment' with ('key1' = 'value1', 'key2' = 'value2')",
+                        dbName));
+
+        // Verify initial state
+        CatalogDatabase currentDb = catalog.getDatabase(dbName);
+        assertThat(currentDb.getProperties()).containsEntry("key1", "value1");
+        assertThat(currentDb.getProperties()).containsEntry("key2", "value2");
+        assertThat(currentDb.getComment()).isEqualTo("initial comment");
+
+        // Alter database: add new property and update existing property
+        String alterSql1 =
+                "alter database " + dbName + " set ('key3' = 'value3', 'key1' = 'updated_value1')";
+        tEnv.executeSql(alterSql1);
+
+        // Verify first alteration
+        CatalogDatabase alteredDb1 = catalog.getDatabase(dbName);
+        assertThat(alteredDb1.getProperties()).containsEntry("key1", "updated_value1");
+        assertThat(alteredDb1.getProperties()).containsEntry("key2", "value2");
+        assertThat(alteredDb1.getProperties()).containsEntry("key3", "value3");
+        assertThat(alteredDb1.getComment()).isEqualTo("initial comment");
+
+        // Drop database for cleanup
+        tEnv.executeSql("drop database " + dbName);
     }
 
     @Test
@@ -757,20 +784,11 @@ abstract class FlinkCatalogITCase {
                 "create table test_table_other_unknown_options (a int, b int)"
                         + " with ('connector' = 'fluss', 'bootstrap.servers' = 'localhost:9092', 'other.unknown.option' = 'other-unknown-val')");
 
-        // test invalid table as source
-        assertThatThrownBy(() -> tEnv.explainSql("select * from test_table_other_unknown_options"))
-                .cause()
-                .isInstanceOf(ValidationException.class)
-                .hasMessageContaining("Unsupported options found for 'fluss'");
+        // test table with unknown option as source
+        tEnv.explainSql("select * from test_table_other_unknown_options");
 
-        // test invalid table as sink
-        assertThatThrownBy(
-                        () ->
-                                tEnv.explainSql(
-                                        "insert into test_table_other_unknown_options values (1, 2)"))
-                .cause()
-                .isInstanceOf(ValidationException.class)
-                .hasMessageContaining("Unsupported options found for 'fluss'");
+        // test table with unknown option as sink
+        tEnv.explainSql("insert into test_table_other_unknown_options values (1, 2)");
     }
 
     @Test
@@ -920,18 +938,74 @@ abstract class FlinkCatalogITCase {
         // Verify options are inherited from base table
         assertThat(changelogTable.getOptions()).containsEntry("bucket.num", "1");
 
-        // Verify $changelog on non-PK table throws appropriate error
+        // Verify $changelog log tables (append-only with insert change type)
         tEnv.executeSql("CREATE TABLE log_table_for_changelog (id INT, name STRING)");
+
+        CatalogTable logChangelogTable =
+                (CatalogTable)
+                        catalog.getTable(
+                                new ObjectPath(DEFAULT_DB, "log_table_for_changelog$changelog"));
+
+        // Log table changelog should have same metadata columns
+        Schema expectedLogSchema =
+                Schema.newBuilder()
+                        .column("_change_type", DataTypes.STRING().notNull())
+                        .column("_log_offset", DataTypes.BIGINT().notNull())
+                        .column("_commit_timestamp", DataTypes.TIMESTAMP_LTZ(3).notNull())
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .build();
+
+        assertThat(logChangelogTable.getUnresolvedSchema()).isEqualTo(expectedLogSchema);
+    }
+
+    @Test
+    void testGetBinlogVirtualTable() throws Exception {
+        // Create a primary key table with partition
+        tEnv.executeSql(
+                "CREATE TABLE pk_table_for_binlog ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING NOT NULL,"
+                        + "  amount BIGINT,"
+                        + "  PRIMARY KEY (id, name) NOT ENFORCED"
+                        + ") PARTITIONED BY (name) "
+                        + "WITH ('bucket.num' = '1')");
+
+        // Get the $binlog virtual table via catalog API
+        CatalogTable binlogTable =
+                (CatalogTable)
+                        catalog.getTable(new ObjectPath(DEFAULT_DB, "pk_table_for_binlog$binlog"));
+
+        // use string representation for assertion to simplify the unresolved schema comparison
+        assertThat(binlogTable.getUnresolvedSchema().toString())
+                .isEqualTo(
+                        "(\n"
+                                + "  `_change_type` STRING NOT NULL,\n"
+                                + "  `_log_offset` BIGINT NOT NULL,\n"
+                                + "  `_commit_timestamp` TIMESTAMP_LTZ(3) NOT NULL,\n"
+                                + "  `before` [ROW<id INT NOT NULL, name STRING NOT NULL, amount BIGINT>],\n"
+                                + "  `after` [ROW<id INT NOT NULL, name STRING NOT NULL, amount BIGINT>]\n"
+                                + ")");
+
+        // Binlog virtual tables have empty partition keys (columns are nested)
+        assertThat(binlogTable.getPartitionKeys()).isEmpty();
+
+        // Partition info is stored as an internal boolean flag
+        assertThat(binlogTable.getOptions())
+                .containsEntry(FlinkConnectorOptions.INTERNAL_BINLOG_IS_PARTITIONED.key(), "true");
+
+        // Verify options are inherited from base table
+        assertThat(binlogTable.getOptions()).containsEntry("bucket.num", "1");
+
+        // Verify $binlog is NOT supported for log tables (no primary key)
+        tEnv.executeSql("CREATE TABLE log_table_for_binlog (id INT, name STRING)");
 
         assertThatThrownBy(
                         () ->
                                 catalog.getTable(
-                                        new ObjectPath(
-                                                DEFAULT_DB, "log_table_for_changelog$changelog")))
-                .isInstanceOf(CatalogException.class)
-                .hasRootCauseMessage(
-                        "Virtual $changelog tables are only supported for primary key tables. "
-                                + "Table fluss.log_table_for_changelog does not have a primary key.");
+                                        new ObjectPath(DEFAULT_DB, "log_table_for_binlog$binlog")))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("only supported for primary key tables");
     }
 
     /**
@@ -945,6 +1019,7 @@ abstract class FlinkCatalogITCase {
             Map<String, String> actualOptions, Map<String, String> expectedOptions) {
         actualOptions.remove(ConfigOptions.BOOTSTRAP_SERVERS.key());
         actualOptions.remove(ConfigOptions.TABLE_REPLICATION_FACTOR.key());
+        actualOptions.remove(ConfigOptions.TABLE_KV_FORMAT_VERSION.key());
         assertThat(actualOptions).isEqualTo(expectedOptions);
     }
 }

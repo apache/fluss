@@ -284,6 +284,27 @@ public class RpcMessageTestUtils {
         return lookupRequest;
     }
 
+    public static LookupRequest newLookupRequest(
+            long tableId,
+            int bucketId,
+            boolean insertIfNotExists,
+            int timeoutMs,
+            int acks,
+            byte[]... keys) {
+        LookupRequest lookupRequest =
+                new LookupRequest()
+                        .setTableId(tableId)
+                        .setInsertIfNotExists(insertIfNotExists)
+                        .setTimeoutMs(timeoutMs)
+                        .setAcks(acks);
+        PbLookupReqForBucket pbLookupReqForBucket = lookupRequest.addBucketsReq();
+        pbLookupReqForBucket.setBucketId(bucketId);
+        for (byte[] key : keys) {
+            pbLookupReqForBucket.addKey(key);
+        }
+        return lookupRequest;
+    }
+
     public static PrefixLookupRequest newPrefixLookupRequest(
             long tableId, int bucketId, List<byte[]> prefixKeys) {
         PrefixLookupRequest prefixLookupRequest = new PrefixLookupRequest().setTableId(tableId);
@@ -385,6 +406,22 @@ public class RpcMessageTestUtils {
         GetTableInfoResponse response =
                 coordinatorGateway.getTableInfo(newGetTableInfoRequest(tablePath)).get();
         return response.getTableId();
+    }
+
+    public static void dropTable(FlussClusterExtension extension, TablePath tablePath)
+            throws Exception {
+        CoordinatorGateway coordinatorGateway = extension.newCoordinatorClient();
+        coordinatorGateway
+                .dropTable(
+                        newDropTableRequest(
+                                tablePath.getDatabaseName(), tablePath.getTableName(), true))
+                .get();
+    }
+
+    public static void dropDatabase(FlussClusterExtension extension, String databaseName)
+            throws Exception {
+        CoordinatorGateway coordinatorGateway = extension.newCoordinatorClient();
+        coordinatorGateway.dropDatabase(newDropDatabaseRequest(databaseName, true, true)).get();
     }
 
     public static void assertProduceLogResponse(

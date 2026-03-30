@@ -129,7 +129,9 @@ public class KvTestUtils {
                                         tableBucket.getBucket(),
                                         snapshotId)),
                 new KvSnapshotHandle(Collections.emptyList(), Collections.emptyList(), 0),
-                0);
+                0,
+                null,
+                null);
     }
 
     public static int getKeyCounts(RocksDB rocksDB) {

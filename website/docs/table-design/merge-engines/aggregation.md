@@ -115,13 +115,15 @@ CREATE TABLE product_stats (
 -- Insert data - these will be aggregated
 INSERT INTO product_stats VALUES
     (1, 23.0, 15, TIMESTAMP '2024-01-01 10:00:00'),
-    (1, 30.2, 20, TIMESTAMP '2024-01-01 11:00:00');  -- Same primary key - triggers aggregation
+    -- Same primary key - triggers aggregation
+    (1, 30.2, 20, TIMESTAMP '2024-01-01 11:00:00');
 ```
 
 ### Querying Results
 
 ```sql
-SELECT * FROM product_stats;
+-- Point query by primary key
+SELECT * FROM product_stats WHERE product_id = 1;
 ```
 
 **Result after aggregation:**
@@ -232,7 +234,7 @@ INSERT INTO test_sum VALUES
     (1, 100.50),
     (1, 200.75);
 
-SELECT * FROM test_sum;
+SELECT * FROM test_sum WHERE id = 1;
 +------------+---------+
 | id         | amount  |
 +------------+---------+
@@ -265,7 +267,7 @@ TableDescriptor.builder()
 
 Computes the product of values across multiple rows.
 
-- **Supported Data Types**: TINYINT, SMALLINT, INT, BIGINT, FLOAT, DOUBLE, DECIMAL
+- **Supported Data Types**: `TINYINT`, `SMALLINT`, `INT`, `BIGINT`, `FLOAT`, `DOUBLE`, `DECIMAL`
 - **Behavior**: Multiplies incoming values with the accumulator
 - **Null Handling**: Null values are ignored
 
@@ -287,13 +289,17 @@ INSERT INTO test_product VALUES
     (1, 0.9),
     (1, 0.8);
 
-SELECT * FROM test_product;
-+------------+---------+
-| id         | amount  |
-+------------+---------+
-|          1 | 0.72    |
-+------------+---------+
+SELECT * FROM test_product WHERE id = 1;
++------------+-----------------------+
+| id         | discount_factor       |
++------------+-----------------------+
+|          1 | 0.7200000000000001    |
++------------+-----------------------+
 ```
+
+:::note
+The result `0.7200000000000001` instead of `0.72` is expected behavior due to IEEE 754 double-precision floating-point arithmetic. If exact precision is required, consider using `DECIMAL` type instead of `DOUBLE`.
+:::
 
 </TabItem>
 <TabItem value="java-client" label="Java Client">
@@ -311,7 +317,8 @@ TableDescriptor.builder()
     .build();
 
 // Input: (1, 0.9), (1, 0.8)
-// Result: (1, 0.72) -- 90% * 80% = 72%
+// Result: (1, 0.7200000000000001) -- due to IEEE 754 floating-point arithmetic
+// Use DECIMAL type if exact precision is needed
 ```
 
 </TabItem>
@@ -321,7 +328,7 @@ TableDescriptor.builder()
 
 Identifies and retains the maximum value.
 
-- **Supported Data Types**: CHAR, STRING, TINYINT, SMALLINT, INT, BIGINT, FLOAT, DOUBLE, DECIMAL, DATE, TIME, TIMESTAMP, TIMESTAMP_LTZ
+- **Supported Data Types**: `CHAR`, `STRING`, `TINYINT`, `SMALLINT`, `INT`, `BIGINT`, `FLOAT`, `DOUBLE`, `DECIMAL`, `DATE`, `TIME`, `TIMESTAMP`, `TIMESTAMP_LTZ`
 - **Behavior**: Keeps the larger value between accumulator and incoming value
 - **Null Handling**: Null values are ignored
 
@@ -345,7 +352,7 @@ INSERT INTO test_max VALUES
     (1, 25.5, TIMESTAMP '2024-01-01 10:00:00'),
     (1, 28.3, TIMESTAMP '2024-01-01 11:00:00');
 
-SELECT * FROM test_max;
+SELECT * FROM test_max WHERE id = 1;
 +------------+----------------+---------------------+
 | id         | temperature    | reading_time        |
 +------------+----------------+---------------------+
@@ -379,7 +386,7 @@ TableDescriptor.builder()
 
 Identifies and retains the minimum value.
 
-- **Supported Data Types**: CHAR, STRING, TINYINT, SMALLINT, INT, BIGINT, FLOAT, DOUBLE, DECIMAL, DATE, TIME, TIMESTAMP, TIMESTAMP_LTZ
+- **Supported Data Types**: `CHAR`, `STRING`, `TINYINT`, `SMALLINT`, `INT`, `BIGINT`, `FLOAT`, `DOUBLE`, `DECIMAL`, `DATE`, `TIME`, `TIMESTAMP`, `TIMESTAMP_LTZ`
 - **Behavior**: Keeps the smaller value between accumulator and incoming value
 - **Null Handling**: Null values are ignored
 
@@ -402,7 +409,7 @@ INSERT INTO test_min VALUES
     (1, 79.99),
     (1, 89.99);
 
-SELECT * FROM test_min;
+SELECT * FROM test_min WHERE id = 1;
 +------------+--------------+
 | id         | lowest_price |
 +------------+--------------+
@@ -458,11 +465,13 @@ CREATE TABLE test_last_value  (
 
 
 INSERT INTO test_last_value VALUES
-    (1, 'online', TIMESTAMP '2024-01-01 10:00:00'),
-    (1, 'offline', TIMESTAMP '2024-01-01 11:00:00'),
-    (1, null, TIMESTAMP '2024-01-01 12:00:00');  -- Null overwrites previous 'offline' value
+    (1, 'online', TIMESTAMP '2024-01-01 10:00:00');
+INSERT INTO test_last_value VALUES
+    (1, 'offline', TIMESTAMP '2024-01-01 11:00:00');
+INSERT INTO test_last_value VALUES
+    (1, CAST(NULL AS STRING), TIMESTAMP '2024-01-01 12:00:00');  -- Null overwrites previous 'offline' value
 
-SELECT * FROM test_last_value;
+SELECT * FROM test_last_value WHERE id = 1;
 +------------+---------+---------------------+
 | id         | status  | last_login          |
 +------------+---------+---------------------+
@@ -530,11 +539,13 @@ CREATE TABLE test_last_value_ignore_nulls  (
 
 
 INSERT INTO test_last_value_ignore_nulls VALUES
-    (1, 'user@example.com', '123-456'),
-    (1, null, '789-012'),  -- Null is ignored, email retains previous value
-    (1, 'new@example.com', null);
+    (1, 'user@example.com', '123-456');
+INSERT INTO test_last_value_ignore_nulls VALUES
+    (1, CAST(NULL AS STRING), '789-012');  -- Null is ignored, email retains previous value
+INSERT INTO test_last_value_ignore_nulls VALUES
+    (1, 'new@example.com', CAST(NULL AS STRING));
 
-SELECT * FROM test_last_value_ignore_nulls;
+SELECT * FROM test_last_value_ignore_nulls WHERE id = 1;
 +------------+-------------------+---------+
 | id         | email             | phone   |
 +------------+-------------------+---------+
@@ -606,7 +617,7 @@ INSERT INTO test_first_value VALUES
     (1, '2024-01-01', 'ProductA'),
     (1, '2024-02-01', 'ProductB');  -- Ignored, first value retained
 
-SELECT * FROM test_first_value;
+SELECT * FROM test_first_value WHERE id = 1;
 +------------+---------------------+---------------+
 | id         | first_purchase_date | first_product |
 +------------+---------------------+---------------+
@@ -663,11 +674,13 @@ CREATE TABLE test_first_value_ignore_nulls  (
 );
 
 INSERT INTO test_first_value_ignore_nulls VALUES
-    (1, null, null),
-    (1, 'user@example.com', '2024-01-01 10:00:00'),
-    (1, 'other@example.com', '2024-01-02 10:00:00'); -- Only the first non-null value is retained
+    (1, CAST(NULL AS STRING), CAST(NULL AS TIMESTAMP(3)));
+INSERT INTO test_first_value_ignore_nulls VALUES
+    (1, 'user@example.com', TIMESTAMP '2024-01-01 10:00:00');
+INSERT INTO test_first_value_ignore_nulls VALUES
+    (1, 'other@example.com', TIMESTAMP '2024-01-02 10:00:00'); -- Only the first non-null value is retained
 
-SELECT * FROM test_first_value_ignore_nulls;
+SELECT * FROM test_first_value_ignore_nulls WHERE id = 1;
 +------------+-------------------+---------------------+
 | id         | email             | verified_at         |
 +------------+-------------------+---------------------+
@@ -702,7 +715,7 @@ TableDescriptor.builder()
 
 Concatenates multiple string values into a single string with a delimiter.
 
-- **Supported Data Types**: STRING, CHAR
+- **Supported Data Types**: `STRING`, `CHAR`
 - **Behavior**: Concatenates values using the specified delimiter
 - **Null Handling**: Null values are skipped
 - **Delimiter**: Specify delimiter directly in the aggregation function (default is comma `,`)
@@ -729,7 +742,7 @@ INSERT INTO test_listagg VALUES
     (1, 'java', 'java'),
     (1, 'flink', 'flink');
 
-SELECT * FROM test_listagg;
+SELECT * FROM test_listagg WHERE id = 1;
 +------------+-----------------------+-----------------------+
 | id         | tags1                 | tags2                 |
 +------------+-----------------------+-----------------------+
@@ -764,7 +777,7 @@ TableDescriptor.builder()
 
 Alias for `listagg`. Concatenates multiple string values into a single string with a delimiter.
 
-- **Supported Data Types**: STRING, CHAR
+- **Supported Data Types**: `STRING`, `CHAR`
 - **Behavior**: Same as `listagg` - concatenates values using the specified delimiter
 - **Null Handling**: Null values are skipped
 - **Delimiter**: Specify delimiter directly in the aggregation function (default is comma `,`)
@@ -791,7 +804,7 @@ INSERT INTO test_string_agg VALUES
     (1, 'java', 'java'),
     (1, 'flink', 'flink');
 
-SELECT * FROM test_string_agg;
+SELECT * FROM test_string_agg WHERE id = 1;
 +------------+-----------------------+-----------------------+
 | id         | tags1                 | tags2                 |
 +------------+-----------------------+-----------------------+
@@ -831,7 +844,7 @@ TableDescriptor.builder()
 
 Aggregates serialized 32-bit RoaringBitmap values by union.
 
-- **Supported Data Types**: BYTES
+- **Supported Data Types**: `BYTES`
 - **Behavior**: ORs incoming bitmaps with the accumulator
 - **Null Handling**: Null values are ignored
 
@@ -848,7 +861,21 @@ CREATE TABLE user_visits (
     'table.merge-engine' = 'aggregation',
     'fields.visit_bitmap.agg' = 'rbm32'
 );
+
+-- Insert serialized RoaringBitmap values as hex literals
+-- Bitmap {1,2}
+INSERT INTO user_visits VALUES (1, x'3A30000001000000000001001000000001000200');
+-- Bitmap {2,3}
+INSERT INTO user_visits VALUES (1, x'3A30000001000000000001001000000002000300');
+
+SELECT * FROM user_visits WHERE user_id = 1;
+-- Result: visit_bitmap contains the union {1,2,3}
+-- (serialized as x'3A300000010000000000020010000000010002000300')
 ```
+
+:::note
+RoaringBitmap values must be pre-serialized on the client side. The hex literals above represent bitmaps serialized using the [RoaringBitmap](https://github.com/RoaringBitmap/RoaringBitmap) library's standard format.
+:::
 
 </TabItem>
 <TabItem value="java-client" label="Java Client">
@@ -859,6 +886,20 @@ Schema schema = Schema.newBuilder()
     .column("visit_bitmap", DataTypes.BYTES(), AggFunctions.RBM32())
     .primaryKey("user_id")
     .build();
+
+TableDescriptor.builder()
+    .schema(schema)
+    .property("table.merge-engine", "aggregation")
+    .build();
+
+// Serialize bitmaps using the RoaringBitmap library
+// RoaringBitmap rbm1 = RoaringBitmap.bitmapOf(1, 2);
+// byte[] bytes1 = serialize(rbm1);
+// RoaringBitmap rbm2 = RoaringBitmap.bitmapOf(2, 3);
+// byte[] bytes2 = serialize(rbm2);
+
+// Input: (1, bitmap{1,2}), (1, bitmap{2,3})
+// Result: (1, bitmap{1,2,3}) -- union of the two bitmaps
 ```
 
 </TabItem>
@@ -868,7 +909,7 @@ Schema schema = Schema.newBuilder()
 
 Aggregates serialized 64-bit RoaringBitmap values by union.
 
-- **Supported Data Types**: BYTES
+- **Supported Data Types**: `BYTES`
 - **Behavior**: ORs incoming bitmaps with the accumulator
 - **Null Handling**: Null values are ignored
 
@@ -885,7 +926,21 @@ CREATE TABLE session_interactions (
     'table.merge-engine' = 'aggregation',
     'fields.interaction_bitmap.agg' = 'rbm64'
 );
+
+-- Insert serialized Roaring64Bitmap values as hex literals
+-- Bitmap {10,20}
+INSERT INTO session_interactions VALUES (1, x'01010000000000000004000000000000000000000000000000000001000000FE0100000001020200000 00A00140001000000000000000000000000000000');
+-- Bitmap {20,30}
+INSERT INTO session_interactions VALUES (1, x'01010000000000000004000000000000000000000000000000000001000000FE01000000010202000000 14001E0001000000000000000000000000000000');
+
+SELECT * FROM session_interactions WHERE session_id = 1;
+-- Result: interaction_bitmap contains the union {10,20,30}
+-- (serialized as x'01010000000000000004000000000000000000000000000000000001000000FE010000000102030000000A0014001E0001000000000000000000000000000000')
 ```
+
+:::note
+Roaring64Bitmap values must be pre-serialized on the client side. The hex literals above represent bitmaps serialized using the [RoaringBitmap](https://github.com/RoaringBitmap/RoaringBitmap) library's 64-bit format.
+:::
 
 </TabItem>
 <TabItem value="java-client" label="Java Client">
@@ -896,6 +951,20 @@ Schema schema = Schema.newBuilder()
     .column("interaction_bitmap", DataTypes.BYTES(), AggFunctions.RBM64())
     .primaryKey("session_id")
     .build();
+
+TableDescriptor.builder()
+    .schema(schema)
+    .property("table.merge-engine", "aggregation")
+    .build();
+
+// Serialize bitmaps using the RoaringBitmap library
+// Roaring64Bitmap rbm1 = Roaring64Bitmap.bitmapOf(10, 20);
+// byte[] bytes1 = serialize(rbm1);
+// Roaring64Bitmap rbm2 = Roaring64Bitmap.bitmapOf(20, 30);
+// byte[] bytes2 = serialize(rbm2);
+
+// Input: (1, bitmap{10,20}), (1, bitmap{20,30})
+// Result: (1, bitmap{10,20,30}) -- union of the two bitmaps
 ```
 
 </TabItem>
@@ -905,7 +974,7 @@ Schema schema = Schema.newBuilder()
 
 Evaluates whether all boolean values in a set are true (logical AND).
 
-- **Supported Data Types**: BOOLEAN
+- **Supported Data Types**: `BOOLEAN`
 - **Behavior**: Returns true only if all values are true
 - **Null Handling**: Null values are ignored
 
@@ -928,7 +997,7 @@ INSERT INTO test_bool_and VALUES
     (1, true),
     (1, false);
 
-SELECT * FROM test_bool_and;
+SELECT * FROM test_bool_and WHERE id = 1;
 +------------+----------------------+
 | id         | has_all_permissions  |
 +------------+----------------------+
@@ -962,7 +1031,7 @@ TableDescriptor.builder()
 
 Checks if at least one boolean value in a set is true (logical OR).
 
-- **Supported Data Types**: BOOLEAN
+- **Supported Data Types**: `BOOLEAN`
 - **Behavior**: Returns true if any value is true
 - **Null Handling**: Null values are ignored
 
@@ -985,7 +1054,7 @@ INSERT INTO test_bool_or VALUES
     (1, false),
     (1, true);
 
-SELECT * FROM test_bool_or;
+SELECT * FROM test_bool_or WHERE id = 1;
 +------------+------------------+
 | id         | has_any_alert    |
 +------------+------------------+

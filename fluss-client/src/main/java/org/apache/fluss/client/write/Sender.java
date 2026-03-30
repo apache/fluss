@@ -263,6 +263,17 @@ public class Sender implements Runnable {
         }
     }
 
+    /** Complete batch with bucket and log end offset info (for KV batches). */
+    private void completeBatch(
+            ReadyWriteBatch readyWriteBatch, TableBucket bucket, long logEndOffset) {
+        if (idempotenceManager.idempotenceEnabled()) {
+            idempotenceManager.handleCompletedBatch(readyWriteBatch);
+        }
+        if (readyWriteBatch.writeBatch().complete(bucket, logEndOffset)) {
+            maybeRemoveAndDeallocateBatch(readyWriteBatch);
+        }
+    }
+
     private void failBatch(
             ReadyWriteBatch batch, Exception exception, boolean adjustBatchSequences) {
         if (batch.writeBatch().completeExceptionally(exception)) {
@@ -492,7 +503,10 @@ public class Sender implements Runnable {
                                 writeBatch, ApiError.fromErrorMessage(respForBucket));
                 invalidMetadataTablesSet.addAll(invalidMetadataTables);
             } else {
-                completeBatch(writeBatch);
+                // Get log end offset (LEO) from response for KV batches
+                long logEndOffset =
+                        respForBucket.hasLogEndOffset() ? respForBucket.getLogEndOffset() : -1;
+                completeBatch(writeBatch, tb, logEndOffset);
             }
         }
         metadataUpdater.invalidPhysicalTableBucketMeta(invalidMetadataTablesSet);
@@ -518,7 +532,27 @@ public class Sender implements Runnable {
             ReadyWriteBatch readyWriteBatch, ApiError error) {
         Set<PhysicalTablePath> invalidMetadataTables = new HashSet<>();
         WriteBatch writeBatch = readyWriteBatch.writeBatch();
-        if (canRetry(readyWriteBatch, error.error())) {
+        if (error.error() == Errors.DUPLICATE_SEQUENCE_EXCEPTION) {
+            // If we have received a duplicate batch sequence error, it means that the batch
+            // sequence has advanced beyond the sequence of the current batch.
+            // The only thing we can do is to return success to the user.
+            completeBatch(readyWriteBatch);
+        } else if (error.error() == Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION
+                && idempotenceManager.idempotenceEnabled()
+                && idempotenceManager.isAlreadyCommitted(
+                        writeBatch, readyWriteBatch.tableBucket())) {
+            // The batch received OUT_OF_ORDER_SEQUENCE_EXCEPTION but its sequence is already
+            // <= lastAckedBatchSequence, which means it was successfully written on the server
+            // but the response was lost. Complete it as success to avoid infinite retry loop.
+            LOG.warn(
+                    "Batch for table-bucket {} with sequence {} received "
+                            + "OUT_OF_ORDER_SEQUENCE_EXCEPTION but has already been committed "
+                            + "(lastAckedBatchSequence={}). Treating as success due to lost response.",
+                    readyWriteBatch.tableBucket(),
+                    writeBatch.batchSequence(),
+                    idempotenceManager.lastAckedBatchSequence(readyWriteBatch.tableBucket()));
+            completeBatch(readyWriteBatch);
+        } else if (canRetry(readyWriteBatch, error.error())) {
             // if batch failed because of retrievable exception, we need to retry send all those
             // batches.
             LOG.warn(
@@ -561,11 +595,6 @@ public class Sender implements Runnable {
                 }
                 invalidMetadataTables.add(writeBatch.physicalTablePath());
             }
-        } else if (error.error() == Errors.DUPLICATE_SEQUENCE_EXCEPTION) {
-            // If we have received a duplicate batch sequence error, it means that the batch
-            // sequence has advanced beyond the sequence of the current batch.
-            // The only thing we can do is to return success to the user.
-            completeBatch(readyWriteBatch);
         } else {
             LOG.warn(
                     "Get error write response on table bucket {}, fail. Error: {}",

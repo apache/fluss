@@ -29,19 +29,29 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.utils.clock.ManualClock;
 
+import org.apache.flink.api.common.JobID;
+import org.apache.flink.configuration.CheckpointingOptions;
+import org.apache.flink.configuration.MemorySize;
+import org.apache.flink.configuration.StateBackendOptions;
+import org.apache.flink.core.execution.SavepointFormatType;
+import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.api.EnvironmentSettings;
+import org.apache.flink.table.api.TableResult;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
-import org.apache.flink.test.util.AbstractTestBase;
+import org.apache.flink.test.util.MiniClusterWithClientResource;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.api.io.TempDir;
 
+import javax.annotation.Nullable;
+
+import java.io.File;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -51,15 +61,16 @@ import java.util.concurrent.TimeUnit;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.flink.utils.FlinkTestBase.writeRows;
-import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Integration test for $changelog virtual table functionality. */
-abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
+abstract class ChangelogVirtualTableITCase {
 
     protected static final ManualClock CLOCK = new ManualClock();
+    @TempDir public static File checkpointDir;
+    @TempDir public static File savepointDir;
 
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
@@ -73,42 +84,73 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
     static final String DEFAULT_DB = "test_changelog_db";
     protected StreamExecutionEnvironment execEnv;
     protected StreamTableEnvironment tEnv;
-    protected static Connection conn;
-    protected static Admin admin;
+    protected Connection conn;
+    protected Admin admin;
+    protected Configuration clientConf;
+    protected MiniClusterWithClientResource cluster;
 
-    protected static Configuration clientConf;
-
-    @BeforeAll
-    protected static void beforeAll() {
+    @BeforeEach
+    protected void beforeEach() throws Exception {
         clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
         conn = ConnectionFactory.createConnection(clientConf);
         admin = conn.getAdmin();
-    }
 
-    @BeforeEach
-    void before() {
+        cluster =
+                new MiniClusterWithClientResource(
+                        new MiniClusterResourceConfiguration.Builder()
+                                .setConfiguration(getFileBasedCheckpointsConfig(savepointDir))
+                                .setNumberTaskManagers(2)
+                                .setNumberSlotsPerTaskManager(2)
+                                .build());
+        cluster.before();
+
         // Initialize Flink environment
-        execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
-        tEnv = StreamTableEnvironment.create(execEnv, EnvironmentSettings.inStreamingMode());
-
-        // Initialize catalog and database
-        String bootstrapServers = String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
-        tEnv.executeSql(
-                String.format(
-                        "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
-                        CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
-        tEnv.executeSql("use catalog " + CATALOG_NAME);
-        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 2);
-        tEnv.executeSql("create database " + DEFAULT_DB);
-        tEnv.useDatabase(DEFAULT_DB);
+        tEnv = initTableEnvironment(null);
         // reset clock before each test
         CLOCK.advanceTime(-CLOCK.milliseconds(), TimeUnit.MILLISECONDS);
     }
 
     @AfterEach
-    void after() {
-        tEnv.useDatabase(BUILTIN_DATABASE);
-        tEnv.executeSql(String.format("drop database %s cascade", DEFAULT_DB));
+    protected void afterEach() throws Exception {
+        if (cluster != null) {
+            cluster.after();
+            cluster = null;
+        }
+        if (admin != null) {
+            admin.close();
+            admin = null;
+        }
+        if (conn != null) {
+            conn.close();
+            conn = null;
+        }
+    }
+
+    // init table environment from savepointPath
+    private StreamTableEnvironment initTableEnvironment(@Nullable String savepointPath) {
+        org.apache.flink.configuration.Configuration conf =
+                new org.apache.flink.configuration.Configuration();
+        if (savepointPath != null) {
+            conf.setString("execution.savepoint.path", savepointPath);
+        }
+        StreamExecutionEnvironment execEnv =
+                StreamExecutionEnvironment.getExecutionEnvironment(conf);
+        execEnv.setParallelism(1);
+        execEnv.enableCheckpointing(1000);
+        StreamTableEnvironment tEnv =
+                StreamTableEnvironment.create(execEnv, EnvironmentSettings.inStreamingMode());
+        String bootstrapServers = String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
+        // crate catalog using sql
+        tEnv.executeSql(
+                String.format(
+                        "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
+                        CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
+        tEnv.executeSql("use catalog " + CATALOG_NAME);
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+        tEnv.executeSql("create database if not exists " + DEFAULT_DB);
+        tEnv.useDatabase(DEFAULT_DB);
+
+        return tEnv;
     }
 
     /** Deletes rows from a primary key table using the proper delete API. */
@@ -198,23 +240,40 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
     }
 
     @Test
-    public void testChangelogVirtualTableWithNonPrimaryKeyTable() {
-        // Create a non-primary key table (log table)
+    public void testChangelogVirtualTableWithLogTable() throws Exception {
+        // Create a log table (no primary key) with 1 bucket for predictable offsets
         tEnv.executeSql(
                 "CREATE TABLE events ("
                         + "  event_id INT,"
-                        + "  event_type STRING,"
-                        + "  event_time TIMESTAMP"
-                        + ")");
+                        + "  event_type STRING"
+                        + ") WITH ('bucket.num' = '1')");
 
-        // Attempt to query changelog virtual table should fail
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "events");
+
+        // Query the changelog virtual table
         String query = "SELECT * FROM events$changelog";
+        CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
 
-        // The error message is wrapped in a CatalogException, so we check for the root cause
-        assertThatThrownBy(() -> tEnv.executeSql(query).await())
-                .hasRootCauseMessage(
-                        "Virtual $changelog tables are only supported for primary key tables. "
-                                + "Table test_changelog_db.events does not have a primary key.");
+        // Insert data into log table - log tables only have APPEND_ONLY (+A) change type
+        CLOCK.advanceTime(Duration.ofMillis(1000));
+        writeRows(conn, tablePath, Arrays.asList(row(1, "click"), row(2, "view")), true);
+
+        // Collect and validate - log table changelog should have +A change type
+        List<String> results = collectRowsWithTimeout(rowIter, 2, false);
+        assertThat(results).hasSize(2);
+
+        // Format: +I[_change_type, _log_offset, _commit_timestamp, event_id, event_type]
+        // Log tables use insert (append-only) change type
+        assertThat(results.get(0)).isEqualTo("+I[insert, 0, 1970-01-01T00:00:01Z, 1, click]");
+        assertThat(results.get(1)).isEqualTo("+I[insert, 1, 1970-01-01T00:00:01Z, 2, view]");
+
+        // Insert more data with new timestamp
+        CLOCK.advanceTime(Duration.ofMillis(1000));
+        writeRows(conn, tablePath, Arrays.asList(row(3, "purchase")), true);
+
+        List<String> moreResults = collectRowsWithTimeout(rowIter, 1, true);
+        assertThat(moreResults.get(0))
+                .isEqualTo("+I[insert, 2, 1970-01-01T00:00:02Z, 3, purchase]");
     }
 
     @Test
@@ -239,7 +298,7 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
         CLOCK.advanceTime(Duration.ofMillis(100));
         writeRows(conn, tablePath, Arrays.asList(row(1, "Item-1", 100L, "Desc-1")), false);
         List<String> insertResult = collectRowsWithTimeout(rowIter, 1, false);
-        assertThat(insertResult.get(0)).isEqualTo("+I[+I, 1, Item-1]");
+        assertThat(insertResult.get(0)).isEqualTo("+I[insert, 1, Item-1]");
 
         // Test UPDATE
         CLOCK.advanceTime(Duration.ofMillis(100));
@@ -249,15 +308,15 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
                 Arrays.asList(row(1, "Item-1-Updated", 150L, "Desc-1-Updated")),
                 false);
         List<String> updateResults = collectRowsWithTimeout(rowIter, 2, false);
-        assertThat(updateResults.get(0)).isEqualTo("+I[-U, 1, Item-1]");
-        assertThat(updateResults.get(1)).isEqualTo("+I[+U, 1, Item-1-Updated]");
+        assertThat(updateResults.get(0)).isEqualTo("+I[update_before, 1, Item-1]");
+        assertThat(updateResults.get(1)).isEqualTo("+I[update_after, 1, Item-1-Updated]");
 
         // Test DELETE
         CLOCK.advanceTime(Duration.ofMillis(100));
         deleteRows(
                 conn, tablePath, Arrays.asList(row(1, "Item-1-Updated", 150L, "Desc-1-Updated")));
         List<String> deleteResult = collectRowsWithTimeout(rowIter, 1, true);
-        assertThat(deleteResult.get(0)).isEqualTo("+I[-D, 1, Item-1-Updated]");
+        assertThat(deleteResult.get(0)).isEqualTo("+I[delete, 1, Item-1-Updated]");
     }
 
     @Test
@@ -289,20 +348,20 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
 
         // With ManualClock and 1 bucket, we can assert exact row values
         // Format: +I[_change_type, _log_offset, _commit_timestamp, id, name, amount]
-        assertThat(results.get(0)).isEqualTo("+I[+I, 0, 1970-01-01T00:00:01Z, 1, Item-1, 100]");
-        assertThat(results.get(1)).isEqualTo("+I[+I, 1, 1970-01-01T00:00:01Z, 2, Item-2, 200]");
+        assertThat(results.get(0)).isEqualTo("+I[insert, 0, 1970-01-01T00:00:01Z, 1, Item-1, 100]");
+        assertThat(results.get(1)).isEqualTo("+I[insert, 1, 1970-01-01T00:00:01Z, 2, Item-2, 200]");
 
         // Test UPDATE operation with new timestamp
         CLOCK.advanceTime(Duration.ofMillis(1000));
         writeRows(conn, tablePath, Arrays.asList(row(1, "Item-1-Updated", 150L)), false);
 
-        // Collect update records (should get -U and +U)
+        // Collect update records (should get update_before and update_after)
         List<String> updateResults = collectRowsWithTimeout(rowIter, 2, false);
         assertThat(updateResults).hasSize(2);
         assertThat(updateResults.get(0))
-                .isEqualTo("+I[-U, 2, 1970-01-01T00:00:02Z, 1, Item-1, 100]");
+                .isEqualTo("+I[update_before, 2, 1970-01-01T00:00:02Z, 1, Item-1, 100]");
         assertThat(updateResults.get(1))
-                .isEqualTo("+I[+U, 3, 1970-01-01T00:00:02Z, 1, Item-1-Updated, 150]");
+                .isEqualTo("+I[update_after, 3, 1970-01-01T00:00:02Z, 1, Item-1-Updated, 150]");
 
         // Test DELETE operation with new timestamp
         CLOCK.advanceTime(Duration.ofMillis(1000));
@@ -312,7 +371,7 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
         List<String> deleteResult = collectRowsWithTimeout(rowIter, 1, true);
         assertThat(deleteResult).hasSize(1);
         assertThat(deleteResult.get(0))
-                .isEqualTo("+I[-D, 4, 1970-01-01T00:00:03Z, 2, Item-2, 200]");
+                .isEqualTo("+I[delete, 4, 1970-01-01T00:00:03Z, 2, Item-2, 200]");
     }
 
     @Test
@@ -346,23 +405,10 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
         assertThat(earliestResults).hasSize(5);
         // All should be INSERT change types
         for (String result : earliestResults) {
-            assertThat(result).startsWith("+I[+I,");
+            assertThat(result).startsWith("+I[insert,");
         }
 
-        // 2. Test scan.startup.mode='latest' - should only read new records after subscription
-        String optionsLatest = " /*+ OPTIONS('scan.startup.mode' = 'latest') */";
-        String queryLatest =
-                "SELECT _change_type, id, name FROM startup_mode_test$changelog" + optionsLatest;
-        CloseableIterator<Row> rowIterLatest = tEnv.executeSql(queryLatest).collect();
-
-        // Write new data after subscribing with 'latest'
-        CLOCK.advanceTime(Duration.ofMillis(100));
-        writeRows(conn, tablePath, Arrays.asList(row(6, "v6")), false);
-        List<String> latestResults = collectRowsWithTimeout(rowIterLatest, 1, true);
-        assertThat(latestResults).hasSize(1);
-        assertThat(latestResults.get(0)).isEqualTo("+I[+I, 6, v6]");
-
-        // 3. Test scan.startup.mode='timestamp' - should read records from specific timestamp
+        // 2. Test scan.startup.mode='timestamp' - should read records from specific timestamp
         // read between batch1 and batch2
         String optionsTimestamp =
                 " /*+ OPTIONS('scan.startup.mode' = 'timestamp', 'scan.startup.timestamp' = '150') */";
@@ -372,9 +418,76 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
         assertThat(timestampResults).hasSize(2);
         // Should contain records from batch2 only
         assertThat(timestampResults)
-                .containsExactlyInAnyOrder(
-                        "+I[+I, 3, 1970-01-01T00:00:00.200Z, 4, v4]",
-                        "+I[+I, 4, 1970-01-01T00:00:00.200Z, 5, v5]");
+                .containsExactly(
+                        "+I[insert, 3, 1970-01-01T00:00:00.200Z, 4, v4]",
+                        "+I[insert, 4, 1970-01-01T00:00:00.200Z, 5, v5]");
+    }
+
+    @Test
+    public void testChangelogWithLatestScanStartupMode() throws Exception {
+        // Create source and result tables
+        tEnv.executeSql(
+                "CREATE TABLE source_table ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING,"
+                        + "  PRIMARY KEY (id) NOT ENFORCED"
+                        + ") WITH ('bucket.num' = '1')");
+
+        tEnv.executeSql(
+                "CREATE TABLE result_table ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING,"
+                        + "  PRIMARY KEY (id) NOT ENFORCED"
+                        + ")");
+
+        TablePath sourcePath = TablePath.of(DEFAULT_DB, "source_table");
+
+        // Write first batch of data.
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        writeRows(conn, sourcePath, Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3")), false);
+
+        // Pre-populate the result table with some existing records.
+        String optionsLatest = "/*+ OPTIONS('scan.startup.mode' = 'latest') */";
+        TableResult insertResult =
+                tEnv.executeSql(
+                        "INSERT INTO result_table SELECT id, name FROM source_table$changelog "
+                                + optionsLatest);
+
+        // Wait for at least one checkpoint to complete before creating savepoint
+        waitForCheckpoint(insertResult.getJobClient().get().getJobID());
+
+        CloseableIterator<Row> rowIterLatest =
+                tEnv.executeSql("SELECT * FROM result_table").collect();
+
+        // now, stop the job with save point
+        String savepointPath =
+                insertResult
+                        .getJobClient()
+                        .get()
+                        .stopWithSavepoint(
+                                false,
+                                savepointDir.getAbsolutePath(),
+                                SavepointFormatType.CANONICAL)
+                        .get(60, TimeUnit.SECONDS);
+
+        // Init env with savepoint Path
+        tEnv = initTableEnvironment(savepointPath);
+        insertResult =
+                tEnv.executeSql(
+                        "INSERT INTO result_table SELECT id, name FROM source_table$changelog "
+                                + optionsLatest);
+
+        // Write the third batch of data, ensure to get the lastest value
+        CLOCK.advanceTime(Duration.ofMillis(100));
+        writeRows(conn, sourcePath, Arrays.asList(row(4, "v4"), row(5, "v5")), false);
+
+        // Should contain records from the third batch only
+        List<String> latestResults = collectRowsWithTimeout(rowIterLatest, 2, true);
+        assertThat(latestResults).hasSize(2);
+        assertThat(latestResults).containsExactly("+I[4, v4]", "+I[5, v5]");
+
+        // Cleanup job
+        insertResult.getJobClient().get().cancel().get();
     }
 
     @Test
@@ -404,16 +517,53 @@ abstract class ChangelogVirtualTableITCase extends AbstractTestBase {
         // Collect initial inserts
         List<String> results = collectRowsWithTimeout(rowIter, 3, false);
         assertThat(results)
-                .containsExactlyInAnyOrder(
-                        "+I[+I, 1, Item-1, us]", "+I[+I, 2, Item-2, us]", "+I[+I, 3, Item-3, eu]");
+                .containsExactly(
+                        "+I[insert, 1, Item-1, us]",
+                        "+I[insert, 2, Item-2, us]",
+                        "+I[insert, 3, Item-3, eu]");
 
         // Update a record in a specific partition
         CLOCK.advanceTime(Duration.ofMillis(100));
         tEnv.executeSql("INSERT INTO partitioned_test VALUES (1, 'Item-1-Updated', 'us')").await();
         List<String> updateResults = collectRowsWithTimeout(rowIter, 2, false);
         assertThat(updateResults)
-                .containsExactly("+I[-U, 1, Item-1, us]", "+I[+U, 1, Item-1-Updated, us]");
+                .containsExactly(
+                        "+I[update_before, 1, Item-1, us]",
+                        "+I[update_after, 1, Item-1-Updated, us]");
 
         rowIter.close();
+    }
+
+    private static org.apache.flink.configuration.Configuration getFileBasedCheckpointsConfig(
+            File savepointDir) {
+        return getFileBasedCheckpointsConfig(savepointDir.toURI().toString());
+    }
+
+    private static org.apache.flink.configuration.Configuration getFileBasedCheckpointsConfig(
+            final String savepointDir) {
+        final org.apache.flink.configuration.Configuration config =
+                new org.apache.flink.configuration.Configuration();
+        config.set(StateBackendOptions.STATE_BACKEND, "hashmap");
+        config.set(CheckpointingOptions.CHECKPOINTS_DIRECTORY, checkpointDir.toURI().toString());
+        config.set(CheckpointingOptions.FS_SMALL_FILE_THRESHOLD, MemorySize.ZERO);
+        config.set(CheckpointingOptions.SAVEPOINT_DIRECTORY, savepointDir);
+        return config;
+    }
+
+    protected static void waitForCheckpoint(JobID jobId) {
+        String jobIdStr = jobId.toHexString();
+        waitUntil(
+                () -> {
+                    File jobCheckpointDir = new File(checkpointDir, jobIdStr);
+                    if (!jobCheckpointDir.exists()) {
+                        return false;
+                    }
+                    File[] checkpoints =
+                            jobCheckpointDir.listFiles(
+                                    f -> f.isDirectory() && f.getName().startsWith("chk-"));
+                    return checkpoints != null && checkpoints.length > 0;
+                },
+                Duration.ofSeconds(60),
+                "Timeout waiting for checkpoint for job " + jobIdStr);
     }
 }

@@ -23,14 +23,20 @@ import org.apache.fluss.rpc.messages.StopReplicaRequest;
 /** The data to stop replica for request {@link StopReplicaRequest}. */
 public class StopReplicaData {
     private final TableBucket tableBucket;
-    private final boolean delete;
+    private final boolean deleteLocal;
+    private final boolean deleteRemote;
     private final int coordinatorEpoch;
     private final int leaderEpoch;
 
     public StopReplicaData(
-            TableBucket tableBucket, boolean delete, int coordinatorEpoch, int leaderEpoch) {
+            TableBucket tableBucket,
+            boolean deleteLocal,
+            boolean deleteRemote,
+            int coordinatorEpoch,
+            int leaderEpoch) {
         this.tableBucket = tableBucket;
-        this.delete = delete;
+        this.deleteLocal = deleteLocal;
+        this.deleteRemote = deleteRemote;
         this.coordinatorEpoch = coordinatorEpoch;
         this.leaderEpoch = leaderEpoch;
     }
@@ -39,8 +45,12 @@ public class StopReplicaData {
         return tableBucket;
     }
 
-    public boolean isDelete() {
-        return delete;
+    public boolean isDeleteLocal() {
+        return deleteLocal;
+    }
+
+    public boolean isDeleteRemote() {
+        return deleteRemote;
     }
 
     public int getCoordinatorEpoch() {

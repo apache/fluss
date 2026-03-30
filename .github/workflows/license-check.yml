@@ -32,10 +32,10 @@ jobs:
       MVN_VALIDATION_DIR: "/tmp/fluss-validation-deployment"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           java-version: 11
           distribution: 'temurin'

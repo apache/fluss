@@ -20,12 +20,15 @@ package org.apache.fluss.server.zk.data;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.security.acl.ResourceType;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableJsonSerde;
+import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
+import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadataJsonSerde;
+import org.apache.fluss.server.zk.data.producer.ProducerOffsets;
+import org.apache.fluss.server.zk.data.producer.ProducerOffsetsJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -232,12 +235,13 @@ public final class ZkData {
             return PartitionsZNode.path(tablePath) + "/" + partitionName;
         }
 
-        public static byte[] encode(TablePartition partition) {
-            return partition.toJsonBytes();
+        public static byte[] encode(PartitionRegistration partitionRegistration) {
+            return JsonSerdeUtils.writeValueAsBytes(
+                    partitionRegistration, PartitionRegistrationJsonSerde.INSTANCE);
         }
 
-        public static TablePartition decode(byte[] json) {
-            return TablePartition.fromJsonBytes(json);
+        public static PartitionRegistration decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, PartitionRegistrationJsonSerde.INSTANCE);
         }
     }
 
@@ -838,6 +842,104 @@ public final class ZkData {
 
         public static RebalanceTask decode(byte[] json) {
             return JsonSerdeUtils.readValue(json, RebalanceTaskJsonSerde.INSTANCE);
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // ZNodes under "/producers/"
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * The znode for producers. This is the root node for all producer offset snapshots. The znode
+     * path is:
+     *
+     * <p>/producers
+     */
+    public static final class ProducersZNode {
+        public static String path() {
+            return "/producers";
+        }
+    }
+
+    /**
+     * The znode for a specific producer's offset snapshot. The znode path is:
+     *
+     * <p>/producers/[producerId]
+     *
+     * <p>This znode stores {@link ProducerOffsets} which contains:
+     *
+     * <ul>
+     *   <li>expiration_time: TTL for automatic cleanup
+     *   <li>tables: List of table offset metadata with paths to remote offset files
+     * </ul>
+     *
+     * <p>The actual offset data is stored in remote storage (e.g., OSS/S3) and referenced by the
+     * file paths in the metadata.
+     */
+    public static final class ProducerIdZNode {
+        /**
+         * Returns the ZK path for the producer snapshot znode.
+         *
+         * @param producerId the producer ID (typically Flink job ID)
+         * @return the ZK path
+         */
+        public static String path(String producerId) {
+            return ProducersZNode.path() + "/" + producerId;
+        }
+
+        /**
+         * Encodes a ProducerOffsets to JSON bytes for storage in ZK.
+         *
+         * @param producerOffsets the ProducerOffsets to encode
+         * @return the encoded bytes
+         */
+        public static byte[] encode(ProducerOffsets producerOffsets) {
+            return JsonSerdeUtils.writeValueAsBytes(
+                    producerOffsets, ProducerOffsetsJsonSerde.INSTANCE);
+        }
+
+        /**
+         * Decodes JSON bytes from ZK to a ProducerOffsets.
+         *
+         * @param json the JSON bytes from ZK
+         * @return the decoded ProducerOffsets
+         */
+        public static ProducerOffsets decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, ProducerOffsetsJsonSerde.INSTANCE);
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // ZNodes for Consumers.
+    // ------------------------------------------------------------------------------------------
+
+    /** The root znode for leases. It will record all the info of fluss leases. */
+    public static final class LeasesNode {
+        public static String path() {
+            return "/leases";
+        }
+    }
+
+    /** The root znode for kv snapshot leases. */
+    public static final class KvSnapshotLeasesZNode {
+        public static String path() {
+            return LeasesNode.path() + "/kv_snapshot";
+        }
+    }
+
+    /** The znode for kv snapshot lease zk data. */
+    public static final class KvSnapshotLeaseZNode {
+        public static String path(String leaseId) {
+            return KvSnapshotLeasesZNode.path() + "/" + leaseId;
+        }
+
+        public static byte[] encode(KvSnapshotLeaseMetadata kvSnapshotLeaseMetadata) {
+            return JsonSerdeUtils.writeValueAsBytes(
+                    kvSnapshotLeaseMetadata, KvSnapshotLeaseMetadataJsonSerde.INSTANCE);
+        }
+
+        public static KvSnapshotLeaseMetadata decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, KvSnapshotLeaseMetadataJsonSerde.INSTANCE);
         }
     }
 }

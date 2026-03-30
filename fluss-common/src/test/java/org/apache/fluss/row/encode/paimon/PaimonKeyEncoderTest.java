@@ -84,7 +84,7 @@ class PaimonKeyEncoderTest {
         writer.writeTimestampNtz(TimestampNtz.fromMillis(1698235273182L), 1);
         writer.writeTimestampNtz(TimestampNtz.fromMillis(1698235273182L), 5);
         writer.writeTimestampLtz(TimestampLtz.fromEpochMillis(1698235273182L, 45678), 1);
-        writer.setNullAt(18);
+        writer.writeTimestampLtz(TimestampLtz.fromEpochMillis(1698235273182L, 123456), 6);
         indexedRow.pointTo(writer.segment(), 0, writer.position());
         return indexedRow;
     }
@@ -118,7 +118,7 @@ class PaimonKeyEncoderTest {
         binaryRowWriter.writeTimestamp(15, Timestamp.fromEpochMillis(1698235273182L), 1);
         binaryRowWriter.writeTimestamp(16, Timestamp.fromEpochMillis(1698235273182L), 5);
         binaryRowWriter.writeTimestamp(17, Timestamp.fromEpochMillis(1698235273182L, 45678), 1);
-        binaryRowWriter.setNullAt(18);
+        binaryRowWriter.writeTimestamp(18, Timestamp.fromEpochMillis(1698235273182L, 123456), 6);
         binaryRowWriter.complete();
         return binaryRow;
     }

@@ -58,6 +58,7 @@ public class FlinkLookupFunction extends LookupFunction {
     private final RowType flinkRowType;
     private final LookupNormalizer lookupNormalizer;
     @Nullable private final int[] projection;
+    private final boolean insertIfNotExists;
 
     private transient FlussRowToFlinkRowConverter flussRowToFlinkRowConverter;
     private transient Connection connection;
@@ -71,12 +72,14 @@ public class FlinkLookupFunction extends LookupFunction {
             TablePath tablePath,
             RowType flinkRowType,
             LookupNormalizer lookupNormalizer,
-            @Nullable int[] projection) {
+            @Nullable int[] projection,
+            boolean insertIfNotExists) {
         this.flussConfig = flussConfig;
         this.tablePath = tablePath;
         this.flinkRowType = flinkRowType;
         this.lookupNormalizer = lookupNormalizer;
         this.projection = projection;
+        this.insertIfNotExists = insertIfNotExists;
     }
 
     @Override
@@ -109,6 +112,8 @@ public class FlinkLookupFunction extends LookupFunction {
             int[] lookupKeyIndexes = lookupNormalizer.getLookupKeyIndexes();
             RowType lookupKeyRowType = FlinkUtils.projectRowType(flinkRowType, lookupKeyIndexes);
             lookup = lookup.lookupBy(lookupKeyRowType.getFieldNames());
+        } else if (insertIfNotExists) {
+            lookup = lookup.enableInsertIfNotExists();
         }
         lookuper = lookup.createLookuper();
 

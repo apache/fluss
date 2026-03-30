@@ -108,8 +108,7 @@ class LakeEnableTableITCase extends ClientToServerITCaseBase {
                 .cause()
                 .isInstanceOf(InvalidAlterTableException.class)
                 .hasMessageContaining(
-                        "The option 'table.datalake.enabled' cannot be altered for tables that were"
-                                + " created before the Fluss cluster enabled datalake.");
+                        "The following options cannot be altered for tables that were created before the Fluss cluster enabled datalake: 'table.datalake.enabled'.");
     }
 
     @Test

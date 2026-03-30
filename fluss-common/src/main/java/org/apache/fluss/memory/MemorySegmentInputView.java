@@ -103,6 +103,24 @@ public class MemorySegmentInputView implements InputView {
         return Double.longBitsToDouble(readLong());
     }
 
+    /**
+     * Skips over the given number of bytes by advancing the position pointer directly, without
+     * reading the data byte-by-byte.
+     *
+     * @param n the number of bytes to skip
+     * @throws EOFException if there are not enough bytes remaining
+     */
+    public void skipBytes(int n) throws EOFException {
+        if (n < 0) {
+            throw new IllegalArgumentException("Number of bytes to skip may not be negative.");
+        }
+        if (this.position <= this.end - n) {
+            this.position += n;
+        } else {
+            throw new EOFException();
+        }
+    }
+
     @Override
     public void readFully(byte[] b) throws IOException {
         readFully(b, 0, b.length);

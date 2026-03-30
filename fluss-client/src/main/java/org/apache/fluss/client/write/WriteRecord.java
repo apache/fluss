@@ -27,6 +27,7 @@ import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.row.indexed.IndexedRow;
+import org.apache.fluss.rpc.protocol.MergeMode;
 
 import javax.annotation.Nullable;
 
@@ -52,6 +53,27 @@ public final class WriteRecord {
             byte[] bucketKey,
             WriteFormat writeFormat,
             @Nullable int[] targetColumns) {
+        return forUpsert(
+                tableInfo,
+                tablePath,
+                row,
+                key,
+                bucketKey,
+                writeFormat,
+                targetColumns,
+                MergeMode.DEFAULT);
+    }
+
+    /** Create a write record for upsert operation with merge mode control. */
+    public static WriteRecord forUpsert(
+            TableInfo tableInfo,
+            PhysicalTablePath tablePath,
+            BinaryRow row,
+            byte[] key,
+            byte[] bucketKey,
+            WriteFormat writeFormat,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode) {
         checkNotNull(row, "row must not be null");
         checkNotNull(key, "key must not be null");
         checkNotNull(bucketKey, "bucketKey must not be null");
@@ -65,7 +87,8 @@ public final class WriteRecord {
                 row,
                 writeFormat,
                 targetColumns,
-                estimatedSizeInBytes);
+                estimatedSizeInBytes,
+                mergeMode);
     }
 
     /** Create a write record for delete operation and partial-delete update. */
@@ -76,6 +99,25 @@ public final class WriteRecord {
             byte[] bucketKey,
             WriteFormat writeFormat,
             @Nullable int[] targetColumns) {
+        return forDelete(
+                tableInfo,
+                tablePath,
+                key,
+                bucketKey,
+                writeFormat,
+                targetColumns,
+                MergeMode.DEFAULT);
+    }
+
+    /** Create a write record for delete operation with merge mode control. */
+    public static WriteRecord forDelete(
+            TableInfo tableInfo,
+            PhysicalTablePath tablePath,
+            byte[] key,
+            byte[] bucketKey,
+            WriteFormat writeFormat,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode) {
         checkNotNull(key, "key must not be null");
         checkNotNull(bucketKey, "key must not be null");
         checkArgument(writeFormat.isKv(), "writeFormat must be a KV format");
@@ -88,7 +130,8 @@ public final class WriteRecord {
                 null,
                 writeFormat,
                 targetColumns,
-                estimatedSizeInBytes);
+                estimatedSizeInBytes,
+                mergeMode);
     }
 
     /** Create a write record for append operation for indexed format. */
@@ -108,7 +151,8 @@ public final class WriteRecord {
                 row,
                 WriteFormat.INDEXED_LOG,
                 null,
-                estimatedSizeInBytes);
+                estimatedSizeInBytes,
+                MergeMode.DEFAULT);
     }
 
     /** Creates a write record for append operation for Arrow format. */
@@ -129,7 +173,8 @@ public final class WriteRecord {
                 row,
                 WriteFormat.ARROW_LOG,
                 null,
-                estimatedSizeInBytes);
+                estimatedSizeInBytes,
+                MergeMode.DEFAULT);
     }
 
     /** Creates a write record for append operation for Compacted format. */
@@ -149,7 +194,8 @@ public final class WriteRecord {
                 row,
                 WriteFormat.COMPACTED_LOG,
                 null,
-                estimatedSizeInBytes);
+                estimatedSizeInBytes,
+                MergeMode.DEFAULT);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -166,6 +212,16 @@ public final class WriteRecord {
     private final int estimatedSizeInBytes;
     private final TableInfo tableInfo;
 
+    /**
+     * The merge mode for this record. This controls how the server handles data merging.
+     *
+     * <ul>
+     *   <li>DEFAULT: Normal merge through server-side merge engine
+     *   <li>OVERWRITE: Bypass merge engine, directly replace values (for undo recovery)
+     * </ul>
+     */
+    private final MergeMode mergeMode;
+
     private WriteRecord(
             TableInfo tableInfo,
             PhysicalTablePath physicalTablePath,
@@ -174,7 +230,8 @@ public final class WriteRecord {
             @Nullable InternalRow row,
             WriteFormat writeFormat,
             @Nullable int[] targetColumns,
-            int estimatedSizeInBytes) {
+            int estimatedSizeInBytes,
+            MergeMode mergeMode) {
         this.tableInfo = tableInfo;
         this.physicalTablePath = physicalTablePath;
         this.key = key;
@@ -183,6 +240,7 @@ public final class WriteRecord {
         this.writeFormat = writeFormat;
         this.targetColumns = targetColumns;
         this.estimatedSizeInBytes = estimatedSizeInBytes;
+        this.mergeMode = mergeMode;
     }
 
     public PhysicalTablePath getPhysicalTablePath() {
@@ -212,6 +270,15 @@ public final class WriteRecord {
 
     public WriteFormat getWriteFormat() {
         return writeFormat;
+    }
+
+    /**
+     * Get the merge mode for this record.
+     *
+     * @return the merge mode
+     */
+    public MergeMode getMergeMode() {
+        return mergeMode;
     }
 
     /**

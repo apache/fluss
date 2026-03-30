@@ -27,6 +27,7 @@ import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.metadata.AggFunction;
+import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
@@ -120,36 +121,36 @@ public class TableDescriptorValidation {
     }
 
     public static void validateAlterTableProperties(
-            TableInfo currentTable, Set<String> tableKeysToChange, Set<String> customKeysToChange) {
+            TableInfo currentTable, Set<String> tableKeysToChange) {
         TableConfig currentConfig = currentTable.getTableConfig();
-        tableKeysToChange.forEach(
-                k -> {
-                    if (isTableStorageConfig(k) && !isAlterableTableOption(k)) {
-                        throw new InvalidAlterTableException(
-                                "The option '" + k + "' is not supported to alter yet.");
-                    }
 
-                    if (!currentConfig.getDataLakeFormat().isPresent()
-                            && ConfigOptions.TABLE_DATALAKE_ENABLED.key().equals(k)) {
-                        throw new InvalidAlterTableException(
-                                String.format(
-                                        "The option '%s' cannot be altered for tables that were"
-                                                + " created before the Fluss cluster enabled datalake.",
-                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
-                    }
-                });
+        List<String> unsupportedKeys =
+                tableKeysToChange.stream()
+                        .filter(k -> isTableStorageConfig(k) && !isAlterableTableOption(k))
+                        .collect(Collectors.toList());
+        if (!unsupportedKeys.isEmpty()) {
+            throw new InvalidAlterTableException(
+                    String.format(
+                            "The following options are not supported to alter yet: %s.",
+                            unsupportedKeys.stream()
+                                    .map(k -> "'" + k + "'")
+                                    .collect(Collectors.joining(", "))));
+        }
 
-        if (currentConfig.isDataLakeEnabled() && currentConfig.getDataLakeFormat().isPresent()) {
-            String format = currentConfig.getDataLakeFormat().get().toString();
-            customKeysToChange.forEach(
-                    k -> {
-                        if (k.startsWith(format + ".")) {
-                            throw new InvalidConfigException(
-                                    String.format(
-                                            "Property '%s' is not supported to alter which is for datalake table.",
-                                            k));
-                        }
-                    });
+        if (!currentConfig.getDataLakeFormat().isPresent()) {
+            List<String> datalakeKeys =
+                    tableKeysToChange.stream()
+                            .filter(k -> k.startsWith("table.datalake."))
+                            .collect(Collectors.toList());
+            if (!datalakeKeys.isEmpty()) {
+                throw new InvalidAlterTableException(
+                        String.format(
+                                "The following options cannot be altered for tables that were"
+                                        + " created before the Fluss cluster enabled datalake: %s.",
+                                datalakeKeys.stream()
+                                        .map(k -> "'" + k + "'")
+                                        .collect(Collectors.joining(", "))));
+            }
         }
     }
 
@@ -302,6 +303,16 @@ public class TableDescriptorValidation {
                                     versionColumn.get(), columnType));
                 }
             } else if (mergeEngine == MergeEngineType.AGGREGATION) {
+                // Check aggregate merge engine with WAL changelog image
+                ChangelogImage changelogImage = tableConf.get(ConfigOptions.TABLE_CHANGELOG_IMAGE);
+                if (changelogImage == ChangelogImage.WAL) {
+                    throw new InvalidConfigException(
+                            String.format(
+                                    "Table with 'AGGREGATION' merge engine does not support 'WAL' changelog image mode. "
+                                            + "Aggregation merge engine tables require FULL changelog image mode "
+                                            + "for correct UNDO recovery. Please set '%s' to 'FULL' or remove the setting.",
+                                    ConfigOptions.TABLE_CHANGELOG_IMAGE.key()));
+                }
                 // Validate aggregation function parameters for aggregation merge engine
                 validateAggregationFunctionParameters(schema);
             }
@@ -311,11 +322,13 @@ public class TableDescriptorValidation {
     /**
      * Validates aggregation function parameters in the schema.
      *
-     * <p>This method delegates to {@link AggFunction#validate()} to ensure all parameters are valid
+     * <p>This method delegates to {@link AggFunction#validateParameters()} to ensure all parameters
+     * are valid and {@link AggFunction#validateDataType(DataType)} to ensure data type are valid
      * according to the function's requirements.
      *
      * @param schema the schema to validate
-     * @throws InvalidConfigException if any aggregation function has invalid parameters
+     * @throws InvalidConfigException if any aggregation function has invalid parameters or data
+     *     types
      */
     private static void validateAggregationFunctionParameters(Schema schema) {
         // Get primary key columns for early exit
@@ -332,9 +345,11 @@ public class TableDescriptorValidation {
                 continue;
             }
 
-            // Validate aggregation function parameters
+            // Validate aggregation function parameters and data type
             try {
-                aggFunctionOpt.get().validate();
+                AggFunction aggFunction = aggFunctionOpt.get();
+                aggFunction.validateParameters();
+                aggFunction.validateDataType(column.getDataType());
             } catch (IllegalArgumentException e) {
                 throw new InvalidConfigException(
                         String.format(

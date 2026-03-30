@@ -33,7 +33,7 @@ mkdir fluss-quickstart-flink
 cd fluss-quickstart-flink
 ```
 
-2. Create a `lib` directory and download the required jar files. You can adjust the Flink version as needed. Please make sure to download the compatible versions of [fluss-flink connector jar](/downloads) and [flink-connector-faker](https://github.com/knaufk/flink-faker/releases)
+2. Create a `lib` directory and download the required jar files. You can adjust the Flink version as needed. Please make sure to download the compatible versions of [fluss-flink connector jar](/downloads), [fluss-fs-s3 jar](/downloads), and [flink-connector-faker](https://github.com/knaufk/flink-faker/releases)
 
 ```shell
 export FLINK_VERSION="1.20"
@@ -41,26 +41,58 @@ export FLINK_VERSION="1.20"
 
 ```shell
 mkdir lib
-wget -O lib/flink-faker-0.5.3.jar https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar
-wget -O "lib/fluss-flink-${FLINK_VERSION}-$FLUSS_DOCKER_VERSION$.jar" "https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-${FLINK_VERSION}/$FLUSS_DOCKER_VERSION$/fluss-flink-${FLINK_VERSION}-$FLUSS_DOCKER_VERSION$.jar"
+curl -fL -o lib/flink-faker-0.5.3.jar https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar
+curl -fL -o "lib/fluss-flink-${FLINK_VERSION}-$FLUSS_VERSION$.jar" "$FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-${FLINK_VERSION}/$FLUSS_VERSION$/fluss-flink-${FLINK_VERSION}-$FLUSS_VERSION$.jar"
+curl -fL -o "lib/fluss-fs-s3-$FLUSS_VERSION$.jar" "$FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-fs-s3/$FLUSS_VERSION$/fluss-fs-s3-$FLUSS_VERSION$.jar"
 ```
 
 3. Create a `docker-compose.yml` file with the following content:
 
 ```yaml
 services:
+  #begin RustFS (S3-compatible storage)
+  rustfs:
+    image: rustfs/rustfs:1.0.0-alpha.83
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - RUSTFS_ACCESS_KEY=rustfsadmin
+      - RUSTFS_SECRET_KEY=rustfsadmin
+      - RUSTFS_CONSOLE_ENABLE=true
+    volumes:
+      - rustfs-data:/data
+    command: /data
+  rustfs-init:
+    image: minio/mc
+    depends_on:
+      - rustfs
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set rustfs http://rustfs:9000 rustfsadmin rustfsadmin; do
+        echo 'Waiting for RustFS...';
+        sleep 1;
+      done;
+      mc mb --ignore-existing rustfs/fluss;
+      "
+  #end
   #begin Fluss cluster
   coordinator-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: coordinatorServer
     depends_on:
       - zookeeper
+      - rustfs-init
     environment:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
         bind.listeners: FLUSS://coordinator-server:9123
-        remote.data.dir: /tmp/fluss/remote-data
+        remote.data.dir: s3://fluss/remote-data
+        s3.endpoint: http://rustfs:9000
+        s3.access-key: rustfsadmin
+        s3.secret-key: rustfsadmin
+        s3.path-style-access: true
   tablet-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
@@ -72,7 +104,11 @@ services:
         zookeeper.address: zookeeper:2181
         bind.listeners: FLUSS://tablet-server:9123
         data.dir: /tmp/fluss/data
-        remote.data.dir: /tmp/fluss/remote-data
+        remote.data.dir: s3://fluss/remote-data
+        s3.endpoint: http://rustfs:9000
+        s3.access-key: rustfsadmin
+        s3.secret-key: rustfsadmin
+        s3.path-style-access: true
         kv.snapshot.interval: 0s
   zookeeper:
     restart: always
@@ -112,33 +148,42 @@ services:
       - |
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
-        rest.address: jobmanager    
+        rest.address: jobmanager
     entrypoint: ["sh", "-c", "cp -v /tmp/lib/*.jar /opt/flink/lib && exec /docker-entrypoint.sh bin/sql-client.sh"]
     volumes:
       - ./lib:/tmp/lib
   #end
+
+volumes:
+  rustfs-data:
 ```
 
 The Docker Compose environment consists of the following containers:
+- **RustFS:** an S3-compatible object storage for tiered storage. You can access the RustFS console at http://localhost:9001 with credentials `rustfsadmin/rustfsadmin`. An init container (`rustfs-init`) automatically creates the `fluss` bucket on startup.
 - **Fluss Cluster:** a Fluss `CoordinatorServer`, a Fluss `TabletServer` and a `ZooKeeper` server.
+   - Credentials are configured directly with `s3.access-key` and `s3.secret-key`. Production systems should use CredentialsProvider chain specific to cloud environments.
 - **Flink Cluster**: a Flink `JobManager`, a Flink `TaskManager`, and a Flink SQL client container to execute queries.
 
-3. To start all containers, run:
+:::tip
+[RustFS](https://github.com/rustfs/rustfs) is used as replacement for S3 in this quickstart example, for your production setup you may want to configure this to use cloud file system. See [here](/maintenance/filesystems/overview.md) for information on how to setup cloud file systems
+:::
+
+4. To start all containers, run:
 ```shell
 docker compose up -d
 ```
 This command automatically starts all the containers defined in the Docker Compose configuration in detached mode.
 
-Run 
+Run
 ```shell
 docker compose ps
 ```
 to check whether all containers are running properly.
 
-You can also visit http://localhost:8083/ to see if Flink is running normally.
+5. Verify the setup. You can visit http://localhost:8083/ to see if Flink is running normally. The S3 bucket for Fluss tiered storage is automatically created by the `rustfs-init` service. You can access the RustFS console at http://localhost:9001 with credentials `rustfsadmin/rustfsadmin` to view the `fluss` bucket.
 
 :::note
-- If you want to additionally use an observability stack, follow one of the provided quickstart guides [here](maintenance/observability/quickstart.md) and then continue with this guide.
+- If you want to additionally use an observability stack, follow one of the provided quickstart guides [here](/docs/maintenance/observability/quickstart.md) and then continue with this guide.
 - All the following commands involving `docker compose` should be executed in the created working directory that contains the `docker-compose.yml` file.
 :::
 
@@ -352,14 +397,33 @@ SELECT * FROM enriched_orders LIMIT 2;
 |  10715776 |        2 |      924.43 | 2024-11-04 |         medium | Clerk3 | Rita Booke | (925) 775-0717 |       172.39 |       FURNITURE |      UNITED |
 +-----------+----------+-------------+------------+----------------+--------+------------+----------------+--------------+-----------------+-------------+
 ```
-If you are interested in a specific customer, you can retrieve their details by performing a lookup on the `cust_key`. 
+
+To quickly get the total number of rows in a table, you can use `COUNT(*)`:
+```sql  title="Flink SQL"
+-- count total rows in the table
+SELECT COUNT(*) FROM enriched_orders;
+```
+
+**Sample Output**
+```
++--------+
+| EXPR$0 |
++--------+
+|   200  |
++--------+
+```
+
+You can execute this `COUNT(*)` query multiple times. Because Fluss ingests data continuously in real time, the result will reflect the latest row count and may increase with each execution, but the max count value should be `10000` as the total number of the `source_order` source is `10000` rows.
+The query should return very quickly, as Fluss maintains table-level statistics that enable efficient aggregation without scanning the entire dataset.
+
+If you are interested in a specific customer, you can retrieve their details by performing a lookup on the `cust_key`.
 
 ```sql title="Flink SQL"
 -- lookup by primary key
 SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 ```
 **Sample Output**
-```shell
+```
 +----------+---------------+--------------+------------+---------+------------+
 | cust_key |          name |        phone | nation_key | acctbal | mktsegment |
 +----------+---------------+--------------+------------+---------+------------+
@@ -398,6 +462,17 @@ The following SQL query should return an empty result.
 ```sql title="Flink SQL"
 SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 ```
+
+### Quitting Sql Client
+
+The following command allows you to quit Flink SQL Client.
+```sql title="Flink SQL"
+quit;
+```
+
+### Remote Storage
+
+You can visit http://localhost:9001/ and sign in with `rustfsadmin` / `rustfsadmin` to view the files stored on remote storage.
 
 ## Clean up
 After finishing the tutorial, run `exit` to exit Flink SQL CLI Container and then run 

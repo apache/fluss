@@ -171,6 +171,9 @@ public final class AggFunctions {
      */
     public static final String DEFAULT_LISTAGG_DELIMITER = ",";
 
+    /** Parameter name for delimiter used in LISTAGG and STRING_AGG functions. */
+    public static final String PARAM_DELIMITER = "delimiter";
+
     /**
      * Creates a LISTAGG aggregation function with default comma delimiter.
      *

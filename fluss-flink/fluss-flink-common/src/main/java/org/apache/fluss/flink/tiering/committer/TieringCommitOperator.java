@@ -28,7 +28,9 @@ import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.source.TableBucketWriteResult;
 import org.apache.fluss.flink.tiering.source.TieringSource;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
+import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.committer.TieringStats;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.metadata.TableBucket;
@@ -93,6 +95,22 @@ public class TieringCommitOperator<WriteResult, Committable>
     private final Map<Long, List<TableBucketWriteResult<WriteResult>>>
             collectedTableBucketWriteResults;
 
+    /**
+     * The result of one table's commit round, holding the lake committable (nullable for empty
+     * commits where no data was written) and the associated tiering statistics.
+     */
+    private final class CommitResult {
+        /** The lake committable, or {@code null} if nothing was written in this round. */
+        @Nullable final Committable committable;
+        /** Per-table tiering statistics collected during this round. */
+        @Nullable final TieringStats stats;
+
+        CommitResult(@Nullable Committable committable, @Nullable TieringStats stats) {
+            this.committable = committable;
+            this.stats = stats;
+        }
+    }
+
     public TieringCommitOperator(
             StreamOperatorParameters<CommittableMessage<Committable>> parameters,
             Configuration flussConf,
@@ -134,18 +152,20 @@ public class TieringCommitOperator<WriteResult, Committable>
 
         if (committableWriteResults != null) {
             try {
-                Committable committable =
+                CommitResult commitResult =
                         commitWriteResults(
                                 tableId,
                                 tableBucketWriteResult.tablePath(),
                                 committableWriteResults);
-                // only emit when committable is not-null
-                if (committable != null) {
-                    output.collect(new StreamRecord<>(new CommittableMessage<>(committable)));
+                // only emit downstream when actual data was written
+                if (commitResult.committable != null) {
+                    output.collect(
+                            new StreamRecord<>(new CommittableMessage<>(commitResult.committable)));
                 }
                 // notify that the table id has been finished tier
                 operatorEventGateway.sendEventToCoordinator(
-                        new SourceEventWrapper(new FinishedTieringEvent(tableId)));
+                        new SourceEventWrapper(
+                                new FinishedTieringEvent(tableId, commitResult.stats)));
             } catch (Exception e) {
                 // if any exception happens, send to source coordinator to mark it as failed
                 operatorEventGateway.sendEventToCoordinator(
@@ -161,24 +181,31 @@ public class TieringCommitOperator<WriteResult, Committable>
         }
     }
 
-    @Nullable
-    private Committable commitWriteResults(
+    /**
+     * Commits the collected write results for one table to the lake and Fluss.
+     *
+     * <p>Always returns a non-null {@link CommitResult}. When all buckets produced no data (empty
+     * commit), {@link CommitResult#committable} is {@code null} and stats are {@link
+     * TieringStats#UNKNOWN}.
+     */
+    private CommitResult commitWriteResults(
             long tableId,
             TablePath tablePath,
             List<TableBucketWriteResult<WriteResult>> committableWriteResults)
             throws Exception {
-        // filter out non-null write result
-        committableWriteResults =
+        // filter down to buckets that actually produced data
+        List<TableBucketWriteResult<WriteResult>> nonEmptyResults =
                 committableWriteResults.stream()
-                        .filter(
-                                writeResultTableBucketWriteResult ->
-                                        writeResultTableBucketWriteResult.writeResult() != null)
+                        .filter(r -> r.writeResult() != null)
                         .collect(Collectors.toList());
 
-        // empty, means all write result is null, which is a empty commit,
-        // return null to skip the empty commit
-        if (committableWriteResults.isEmpty()) {
-            return null;
+        // all buckets were empty — nothing to commit to the lake
+        if (nonEmptyResults.isEmpty()) {
+            LOG.info(
+                    "Commit tiering write results is empty for table {}, table path {}",
+                    tableId,
+                    tablePath);
+            return new CommitResult(null, null);
         }
 
         // Check if the table was dropped and recreated during tiering.
@@ -197,15 +224,15 @@ public class TieringCommitOperator<WriteResult, Committable>
         try (LakeCommitter<WriteResult, Committable> lakeCommitter =
                 lakeTieringFactory.createLakeCommitter(
                         new TieringCommitterInitContext(
-                                tablePath, currentTableInfo, lakeTieringConfig))) {
+                                tablePath, currentTableInfo, lakeTieringConfig, flussConfig))) {
             List<WriteResult> writeResults =
-                    committableWriteResults.stream()
+                    nonEmptyResults.stream()
                             .map(TableBucketWriteResult::writeResult)
                             .collect(Collectors.toList());
 
             Map<TableBucket, Long> logEndOffsets = new HashMap<>();
             Map<TableBucket, Long> logMaxTieredTimestamps = new HashMap<>();
-            for (TableBucketWriteResult<WriteResult> writeResult : committableWriteResults) {
+            for (TableBucketWriteResult<WriteResult> writeResult : nonEmptyResults) {
                 TableBucket tableBucket = writeResult.tableBucket();
                 logEndOffsets.put(tableBucket, writeResult.logEndOffset());
                 logMaxTieredTimestamps.put(tableBucket, writeResult.maxTimestamp());
@@ -225,23 +252,25 @@ public class TieringCommitOperator<WriteResult, Committable>
                             : flussCurrentLakeSnapshot.getSnapshotId());
 
             // get the lake bucket offsets file storing the log end offsets
-            String lakeBucketOffsetsFile =
+            String lakeBucketTieredOffsetsFile =
                     flussTableLakeSnapshotCommitter.prepareLakeSnapshot(
                             tableId, tablePath, logEndOffsets);
 
             // record the lake snapshot bucket offsets file to snapshot property
-            long committedSnapshotId =
-                    lakeCommitter.commit(
-                            committable,
-                            Collections.singletonMap(
-                                    FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, lakeBucketOffsetsFile));
+            Map<String, String> snapshotProperties =
+                    Collections.singletonMap(
+                            FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, lakeBucketTieredOffsetsFile);
+            LakeCommitResult lakeCommitResult =
+                    lakeCommitter.commit(committable, snapshotProperties);
+            // commit to fluss
             flussTableLakeSnapshotCommitter.commit(
                     tableId,
-                    committedSnapshotId,
-                    lakeBucketOffsetsFile,
+                    tablePath,
+                    lakeCommitResult,
+                    lakeBucketTieredOffsetsFile,
                     logEndOffsets,
                     logMaxTieredTimestamps);
-            return committable;
+            return new CommitResult(committable, lakeCommitResult.getTieringStats());
         }
     }
 
@@ -312,11 +341,14 @@ public class TieringCommitOperator<WriteResult, Committable>
                     tableId,
                     missingCommittedSnapshot.getLakeSnapshotId(),
                     lakeSnapshotOffsetPath,
+                    // don't care readable snapshot and offsets,
+                    null,
                     // use empty log offsets, log max timestamp, since we can't know that
                     // in last tiering, it doesn't matter for they are just used to
                     // report metrics
                     Collections.emptyMap(),
-                    Collections.emptyMap());
+                    Collections.emptyMap(),
+                    LakeCommitResult.KEEP_ALL_PREVIOUS);
             // abort this committable to delete the written files
             lakeCommitter.abort(committable);
             throw new IllegalStateException(

@@ -20,7 +20,6 @@ package org.apache.fluss.server.kv.snapshot;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 
 import org.junit.jupiter.api.AfterEach;
@@ -36,6 +35,7 @@ import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.RunnableFuture;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators.getOnlyElement;
@@ -127,6 +127,43 @@ class PeriodicSnapshotManagerTest {
                 .hasMessage(exceptionMessage);
     }
 
+    @Test
+    void testDynamicSnapshotInterval() {
+        long initialInterval = 10_000L;
+        long updatedInterval = 5_000L;
+        AtomicLong currentInterval = new AtomicLong(initialInterval);
+
+        periodicSnapshotManager =
+                new PeriodicSnapshotManager(
+                        tableBucket,
+                        NopSnapshotTarget.INSTANCE,
+                        currentInterval::get,
+                        asyncSnapshotExecutorService,
+                        scheduledExecutorService);
+        periodicSnapshotManager.start();
+
+        // Trigger the initial task; NopTarget returns empty, so scheduleNextSnapshot() is
+        // called with the current supplier value (initialInterval = 10000ms).
+        scheduledExecutorService.triggerNonPeriodicScheduledTasks();
+        assertThat(
+                        getOnlyElement(scheduledExecutorService.getAllScheduledTasks().iterator())
+                                .getDelay(MILLISECONDS))
+                .as("next snapshot should be scheduled with the initial interval")
+                .isGreaterThan(updatedInterval)
+                .isLessThanOrEqualTo(initialInterval);
+
+        // Update snapshot interval to 5000ms via the supplier.
+        currentInterval.set(updatedInterval);
+
+        // Trigger again; scheduleNextSnapshot() should now use updatedInterval (5000ms).
+        scheduledExecutorService.triggerNonPeriodicScheduledTasks();
+        assertThat(
+                        getOnlyElement(scheduledExecutorService.getAllScheduledTasks().iterator())
+                                .getDelay(MILLISECONDS))
+                .as("next snapshot should be scheduled with the updated interval")
+                .isLessThanOrEqualTo(updatedInterval);
+    }
+
     private void checkOnlyOneScheduledTasks() {
         assertThat(
                         getOnlyElement(scheduledExecutorService.getAllScheduledTasks().iterator())
@@ -150,8 +187,7 @@ class PeriodicSnapshotManagerTest {
                 target,
                 periodicMaterializeDelay,
                 asyncSnapshotExecutorService,
-                scheduledExecutorService,
-                TestingMetricGroups.BUCKET_METRICS);
+                scheduledExecutorService);
     }
 
     private static class NopSnapshotTarget implements PeriodicSnapshotManager.SnapshotTarget {
@@ -223,8 +259,8 @@ class PeriodicSnapshotManagerTest {
                                 if (exceptionMessage != null) {
                                     throw new FlussRuntimeException(exceptionMessage);
                                 } else {
-                                    final long logOffset = 0;
-                                    return new SnapshotResult(null, snapshotPath, logOffset);
+                                    return new SnapshotResult(
+                                            null, snapshotPath, new TabletState(0, null, null));
                                 }
                             });
             int snapshotId = 1;

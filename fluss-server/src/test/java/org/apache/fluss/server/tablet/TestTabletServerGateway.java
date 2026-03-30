@@ -36,14 +36,16 @@ import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
+import org.apache.fluss.rpc.messages.GetLakeSnapshotRequest;
+import org.apache.fluss.rpc.messages.GetLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
-import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotRequest;
-import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.GetTableInfoRequest;
 import org.apache.fluss.rpc.messages.GetTableInfoResponse;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
 import org.apache.fluss.rpc.messages.GetTableSchemaResponse;
+import org.apache.fluss.rpc.messages.GetTableStatsRequest;
+import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.LimitScanRequest;
@@ -157,9 +159,9 @@ public class TestTabletServerGateway implements TabletServerGateway {
     }
 
     @Override
-    public CompletableFuture<GetLatestLakeSnapshotResponse> getLatestLakeSnapshot(
-            GetLatestLakeSnapshotRequest request) {
-        throw new UnsupportedOperationException();
+    public CompletableFuture<GetLakeSnapshotResponse> getLakeSnapshot(
+            GetLakeSnapshotRequest request) {
+        return null;
     }
 
     @Override
@@ -201,6 +203,11 @@ public class TestTabletServerGateway implements TabletServerGateway {
 
     @Override
     public CompletableFuture<LimitScanResponse> limitScan(LimitScanRequest request) {
+        return null;
+    }
+
+    @Override
+    public CompletableFuture<GetTableStatsResponse> getTableStats(GetTableStatsRequest request) {
         return null;
     }
 

@@ -38,6 +38,7 @@ import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.io.Closeable;
@@ -69,6 +70,7 @@ public class RemoteLogManager implements Closeable {
     public static final String RLM_SCHEDULED_THREAD_PREFIX = "fluss-remote-log-manager-thread-pool";
 
     private final long taskInterval;
+    private final int maxUploadSegmentsPerTask;
     private final RemoteLogIndexCache remoteLogIndexCache;
     private final RemoteLogStorage remoteLogStorage;
     private final CoordinatorGateway coordinatorGateway;
@@ -117,6 +119,8 @@ public class RemoteLogManager implements Closeable {
                         remoteLogStorage,
                         dataDir);
         this.taskInterval = conf.get(ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION).toMillis();
+        this.maxUploadSegmentsPerTask =
+                conf.getInt(ConfigOptions.REMOTE_LOG_TASK_MAX_UPLOAD_SEGMENTS);
         this.rlManagerScheduledThreadPool = scheduledExecutor;
         this.clock = clock;
     }
@@ -289,7 +293,8 @@ public class RemoteLogManager implements Closeable {
                                     remoteLog,
                                     remoteLogStorage,
                                     coordinatorGateway,
-                                    clock);
+                                    clock,
+                                    maxUploadSegmentsPerTask);
                     LOG.info(
                             "Created a new remote log task for table-bucket{}: {} and getting scheduled",
                             tableBucket,
@@ -305,7 +310,7 @@ public class RemoteLogManager implements Closeable {
     }
 
     @VisibleForTesting
-    RemoteLogTablet remoteLogTablet(TableBucket tableBucket) {
+    public RemoteLogTablet remoteLogTablet(TableBucket tableBucket) {
         RemoteLogTablet remoteLog = remoteLogs.get(tableBucket);
         if (remoteLog == null) {
             throw new IllegalStateException(
@@ -386,5 +391,11 @@ public class RemoteLogManager implements Closeable {
     @VisibleForTesting
     public RemoteLogIndexCache getRemoteLogIndexCache() {
         return remoteLogIndexCache;
+    }
+
+    @VisibleForTesting
+    @Nullable
+    TaskWithFuture getTaskWithFuture(TableBucket tableBucket) {
+        return rlmTasks.get(tableBucket);
     }
 }

@@ -691,7 +691,7 @@ public class FlinkConversions {
         // Parse and add aggregation function if needed
         if (parseAggFunction) {
             Optional<AggFunction> aggFunction =
-                    FlinkAggFunctionParser.parseAggFunction(columnName, tableConf);
+                    FlinkAggFunctionParser.parseAggFunction(columnName, flussDataType, tableConf);
             if (aggFunction.isPresent()) {
                 schemaBuilder.column(columnName, flussDataType, aggFunction.get());
             } else {
@@ -709,6 +709,10 @@ public class FlinkConversions {
             Configuration allProperties, Map<String, String> flussTableProperties) {
         Map<String, String> customProperties = new HashMap<>(allProperties.toMap());
         customProperties.keySet().removeAll(flussTableProperties.keySet());
+        // Remove bucket key and bucket num which is stored as table distribution rather than custom
+        // properties.
+        customProperties.remove(BUCKET_KEY.key());
+        customProperties.remove(BUCKET_NUMBER.key());
         return customProperties;
     }
 }

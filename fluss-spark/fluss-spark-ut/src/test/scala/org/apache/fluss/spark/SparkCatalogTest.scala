@@ -17,6 +17,8 @@
 
 package org.apache.fluss.spark
 
+import org.apache.fluss.config.ConfigOptions
+import org.apache.fluss.exception.InvalidAlterTableException
 import org.apache.fluss.metadata._
 import org.apache.fluss.types.{DataTypes, RowType}
 
@@ -24,10 +26,15 @@ import org.apache.spark.sql.{AnalysisException, Row}
 import org.apache.spark.sql.catalyst.analysis.PartitionsAlreadyExistException
 import org.apache.spark.sql.connector.catalog.Identifier
 import org.assertj.core.api.Assertions.{assertThat, assertThatList}
+import org.scalatest.matchers.should.Matchers.{a, convertToAnyShouldWrapper}
+
+import java.util.concurrent.ExecutionException
 
 import scala.collection.JavaConverters._
 
 class SparkCatalogTest extends FlussSparkTestBase {
+
+  protected def lakeFormat: Option[DataLakeFormat] = None
 
   test("Catalog: namespaces") {
     // Always a default database 'fluss'.
@@ -190,6 +197,53 @@ class SparkCatalogTest extends FlussSparkTestBase {
 
     admin.dropDatabase(dbName, true, true).get()
     checkAnswer(sql("SHOW DATABASES"), Row(DEFAULT_DATABASE) :: Nil)
+  }
+
+  protected def modifyTablePropertiesWithCheck(): Unit = {
+    withTable("t") {
+      sql(
+        s"CREATE TABLE $DEFAULT_DATABASE.t (id int, name string) TBLPROPERTIES('key1' = 'value1', '${SparkConnectorOptions.BUCKET_NUMBER.key()}' = 3)")
+      var flussTable = admin.getTableInfo(createTablePath("t")).get()
+      assertResult(flussTable.getNumBuckets, "check bucket num")(3)
+      val expectTableProperties = if (lakeFormat.isDefined) {
+        Map(
+          ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1",
+          ConfigOptions.TABLE_DATALAKE_FORMAT.key() -> lakeFormat.get.toString)
+      } else {
+        Map(ConfigOptions.TABLE_REPLICATION_FACTOR.key() -> "1")
+      }
+      assertResult(expectTableProperties, "check table properties")(
+        flussTable.getProperties.toMap.asScala)
+      assert(
+        flussTable.getCustomProperties.toMap.asScala.getOrElse("key1", "non-exists") == "value1")
+
+      sql("ALTER TABLE t SET TBLPROPERTIES('key1' = 'value2', 'key2' = 'value2')")
+      flussTable = admin.getTableInfo(createTablePath("t")).get()
+      assertResult(expectTableProperties, "check table properties")(
+        flussTable.getProperties.toMap.asScala)
+      assert(
+        flussTable.getCustomProperties.toMap.asScala.getOrElse("key1", "non-exists") == "value2")
+      assert(
+        flussTable.getCustomProperties.toMap.asScala.getOrElse("key2", "non-exists") == "value2")
+
+      sql("ALTER TABLE t UNSET TBLPROPERTIES('key1', 'key2')")
+      flussTable = admin.getTableInfo(createTablePath("t")).get()
+      assert(!flussTable.getCustomProperties.toMap.asScala.contains("key1"))
+      assert(!flussTable.getCustomProperties.toMap.asScala.contains("key2"))
+
+      // no error if unset not-exists key
+      sql("ALTER TABLE t UNSET TBLPROPERTIES('key1')")
+
+      // Most table properties with prefix of 'table.' are not allowed to be modified.
+      intercept[ExecutionException] {
+        sql(
+          s"ALTER TABLE t SET TBLPROPERTIES('${ConfigOptions.TABLE_REPLICATION_FACTOR.key()}' = '2')")
+      }.getCause.shouldBe(a[InvalidAlterTableException])
+    }
+  }
+
+  test("Catalog: set/remove table properties") {
+    modifyTablePropertiesWithCheck()
   }
 
   test("Partition: show partitions") {

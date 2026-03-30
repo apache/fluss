@@ -26,5 +26,5 @@ public enum ActionType {
      * Move leadership of a leader from a source tabletServer to a follower of the same replica
      * residing in a destination tabletServer.
      */
-    LEADERSHIP_MOVEMENT;
+    LEADERSHIP_MOVEMENT
 }

@@ -20,10 +20,13 @@ package org.apache.fluss.server.replica;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
+import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -39,7 +42,10 @@ import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.TestingSchemaGetter;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
+import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.LimitScanResultForBucket;
@@ -50,6 +56,7 @@ import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.entity.PutKvResultForBucket;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
@@ -89,10 +96,15 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.apache.fluss.record.LogRecordReadContext.createArrowReadContext;
 import static org.apache.fluss.record.TestData.ANOTHER_DATA1;
 import static org.apache.fluss.record.TestData.DATA1;
@@ -106,7 +118,12 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
+import static org.apache.fluss.record.TestData.DATA3_ROW_TYPE;
+import static org.apache.fluss.record.TestData.DATA3_SCHEMA_PK_AUTO_INC;
+import static org.apache.fluss.record.TestData.DATA3_TABLE_ID_PK_AUTO_INC;
+import static org.apache.fluss.record.TestData.DATA3_TABLE_PATH_PK_AUTO_INC;
 import static org.apache.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.record.TestData.EXPECTED_LOG_RESULTS_FOR_DATA_1_WITH_PK;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
@@ -133,6 +150,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link ReplicaManager}. */
 class ReplicaManagerTest extends ReplicaTestBase {
+
+    private static final short PUT_KV_VERSION = 1;
+    private static final short LOOKUP_KV_VERSION = 1;
+    private static final short PREFIX_LOOKUP_KV_VERSION = 1;
 
     @Test
     void testProduceLog() throws Exception {
@@ -474,6 +495,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 1,
                 Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
                 null,
+                MergeMode.DEFAULT,
+                PUT_KV_VERSION,
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 8));
 
@@ -486,6 +509,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         Collections.singletonMap(
                                                 tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
                                         null,
+                                        MergeMode.DEFAULT,
+                                        PUT_KV_VERSION,
                                         (result) -> {
                                             // do nothing.
                                         }))
@@ -500,6 +525,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 1,
                 Collections.singletonMap(unknownTb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
                 null,
+                MergeMode.DEFAULT,
+                PUT_KV_VERSION,
                 future::complete);
         assertThat(future.get())
                 .containsOnly(
@@ -534,6 +561,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         genKvRecordBatchWithWriterId(
                                 data1, DATA1_KEY_TYPE, DATA1_ROW_TYPE, 100L, 0)),
                 null,
+                MergeMode.DEFAULT,
+                PUT_KV_VERSION,
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 5));
 
@@ -578,6 +607,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         genKvRecordBatchWithWriterId(
                                 data2, DATA1_KEY_TYPE, DATA1_ROW_TYPE, 100L, 3)),
                 null,
+                MergeMode.DEFAULT,
+                PUT_KV_VERSION,
                 future::complete);
         PutKvResultForBucket putKvResultForBucket = future.get().get(0);
         assertThat(putKvResultForBucket.getErrorCode())
@@ -618,6 +649,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         genKvRecordBatchWithWriterId(
                                 data3, DATA1_KEY_TYPE, DATA1_ROW_TYPE, 100L, 1)),
                 null,
+                MergeMode.DEFAULT,
+                PUT_KV_VERSION,
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 8));
 
@@ -666,6 +699,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                     1,
                     Collections.singletonMap(tb, genKvRecordBatch(deleteList)),
                     null,
+                    MergeMode.DEFAULT,
+                    PUT_KV_VERSION,
                     future::complete);
             assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, i + 1));
         }
@@ -677,6 +712,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 1,
                 Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
                 null,
+                MergeMode.DEFAULT,
+                PUT_KV_VERSION,
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 18));
 
@@ -737,6 +774,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 1,
                 Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
                 null,
+                MergeMode.DEFAULT,
+                PUT_KV_VERSION,
                 future1::complete);
         assertThat(future1.get()).containsOnly(new PutKvResultForBucket(tb, 8));
 
@@ -756,6 +795,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
         makeLogTableAsLeader(tb2.getBucket());
         replicaManager.lookups(
                 Collections.singletonMap(tb2, Collections.singletonList(key1Bytes)),
+                LOOKUP_KV_VERSION,
                 (lookupResultForBuckets) -> {
                     LookupResultForBucket lookupResultForBucket = lookupResultForBuckets.get(tb2);
                     assertThat(lookupResultForBucket.failed()).isTrue();
@@ -764,6 +804,270 @@ class ReplicaManagerTest extends ReplicaTestBase {
                     assertThat(apiError.message())
                             .isEqualTo("the primary key table not exists for %s", tb2);
                 });
+    }
+
+    @Test
+    void testLookupWithInsertIfNotExists() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb.getBucket());
+
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(DATA1_ROW_TYPE, new int[] {0});
+
+        // Scenario 1: All keys missing - should insert and return new values
+        byte[] key100 = keyEncoder.encodeKey(row(new Object[] {100}));
+        byte[] key200 = keyEncoder.encodeKey(row(new Object[] {200}));
+
+        List<byte[]> inserted = lookupWithInsert(tb, Arrays.asList(key100, key200)).lookupValues();
+        assertThat(inserted).hasSize(2).allMatch(Objects::nonNull);
+        verifyLookup(tb, key100, inserted.get(0));
+        verifyLookup(tb, key200, inserted.get(1));
+
+        // Verify that corresponding 2 log records were created
+        FetchLogResultForBucket logResult = fetchLog(tb, 0L);
+        assertThat(logResult.getHighWatermark()).isEqualTo(2L);
+        LogRecords records = logResult.records();
+        TestingSchemaGetter schemaGetter =
+                new TestingSchemaGetter(DEFAULT_SCHEMA_ID, DATA1_SCHEMA_PK);
+        List<Object[]> expected = Arrays.asList(new Object[] {100, null}, new Object[] {200, null});
+        assertLogRecordsEquals(DATA1_ROW_TYPE, records, expected, ChangeType.INSERT, schemaGetter);
+
+        // Scenario 2: All keys exist - should return existing values without modification
+        List<byte[]> existing = lookupWithInsert(tb, Arrays.asList(key100, key200)).lookupValues();
+        assertThat(existing).containsExactlyElementsOf(inserted);
+
+        // Verify that no new log records were created
+        logResult = fetchLog(tb, 0L);
+        assertThat(logResult.getHighWatermark()).isEqualTo(2L);
+
+        // Scenario 3: Mixed - key100 exists, key300 missing
+        byte[] key300 = keyEncoder.encodeKey(row(new Object[] {300}));
+        List<byte[]> mixed = lookupWithInsert(tb, Arrays.asList(key100, key300)).lookupValues();
+        assertThat(mixed.get(0)).isEqualTo(inserted.get(0)); // existing
+        assertThat(mixed.get(1)).isNotNull(); // newly inserted
+        verifyLookup(tb, key300, mixed.get(1));
+
+        // Verify that only one new log record was created for key300
+        logResult = fetchLog(tb, 2L);
+        assertThat(logResult.getHighWatermark()).isEqualTo(3L);
+        records = logResult.records();
+        expected = Collections.singletonList(new Object[] {300, null});
+        assertLogRecordsEquals(DATA1_ROW_TYPE, records, expected, ChangeType.INSERT, schemaGetter);
+    }
+
+    @Test
+    void testLookupWithInsertIfNotExistsAutoIncrement() throws Exception {
+        TableBucket tb = new TableBucket(DATA3_TABLE_ID_PK_AUTO_INC, 1);
+        makeKvTableAsLeader(
+                DATA3_TABLE_ID_PK_AUTO_INC, DATA3_TABLE_PATH_PK_AUTO_INC, tb.getBucket());
+
+        // Encode only the key field 'a' (index 0) - decoder returns only key fields, not full row
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(DATA3_ROW_TYPE, new int[] {0});
+
+        // Lookup missing keys - should insert with auto-generated values for column 'c'
+        byte[] key1 = keyEncoder.encodeKey(row(new Object[] {100}));
+        byte[] key2 = keyEncoder.encodeKey(row(new Object[] {200}));
+
+        List<byte[]> inserted = lookupWithInsert(tb, Arrays.asList(key1, key2)).lookupValues();
+        assertThat(inserted).hasSize(2).allMatch(Objects::nonNull);
+
+        // Decode values to verify auto-increment column values
+        TestingSchemaGetter schemaGetter =
+                new TestingSchemaGetter(DEFAULT_SCHEMA_ID, DATA3_SCHEMA_PK_AUTO_INC);
+        ValueDecoder valueDecoder = new ValueDecoder(schemaGetter, KvFormat.COMPACTED);
+
+        InternalRow row1 = valueDecoder.decodeValue(inserted.get(0)).row;
+        InternalRow row2 = valueDecoder.decodeValue(inserted.get(1)).row;
+
+        // Auto-increment values should be sequential
+        assertThat(row1.getLong(2)).isEqualTo(1L);
+        assertThat(row2.getLong(2)).isEqualTo(2L);
+
+        // Lookup existing keys - should return same values without modification
+        List<byte[]> existing = lookupWithInsert(tb, Arrays.asList(key1, key2)).lookupValues();
+        assertThat(existing).containsExactlyElementsOf(inserted);
+
+        // Mixed scenario - key1 exists, key3 missing
+        byte[] key3 = keyEncoder.encodeKey(row(new Object[] {300}));
+        List<byte[]> mixed = lookupWithInsert(tb, Arrays.asList(key1, key3)).lookupValues();
+        assertThat(mixed.get(0)).isEqualTo(inserted.get(0)); // existing unchanged
+
+        InternalRow row3 = valueDecoder.decodeValue(mixed.get(1)).row;
+        assertThat(row3.getLong(2)).isEqualTo(3L); // continues sequence
+
+        FetchLogResultForBucket logResult = fetchLog(tb, 0L);
+        assertThat(logResult.getHighWatermark()).isEqualTo(3L);
+        LogRecords records = logResult.records();
+        List<Object[]> expected =
+                Arrays.asList(
+                        new Object[] {100, null, 1L},
+                        new Object[] {200, null, 2L},
+                        new Object[] {300, null, 3L});
+        TestingSchemaGetter schemaGetter2 =
+                new TestingSchemaGetter(DEFAULT_SCHEMA_ID, DATA3_SCHEMA_PK_AUTO_INC);
+        assertLogRecordsEquals(DATA3_ROW_TYPE, records, expected, ChangeType.INSERT, schemaGetter2);
+    }
+
+    @Test
+    void testConcurrentLookupWithInsertIfNotExistsAutoIncrement() throws Exception {
+        TableBucket tb = new TableBucket(DATA3_TABLE_ID_PK_AUTO_INC, 1);
+        makeKvTableAsLeader(
+                DATA3_TABLE_ID_PK_AUTO_INC, DATA3_TABLE_PATH_PK_AUTO_INC, tb.getBucket());
+
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(DATA3_ROW_TYPE, new int[] {0});
+
+        // Create keys that all threads will look up
+        byte[] key100 = keyEncoder.encodeKey(row(new Object[] {100}));
+        byte[] key200 = keyEncoder.encodeKey(row(new Object[] {200}));
+        byte[] key300 = keyEncoder.encodeKey(row(new Object[] {300}));
+        List<byte[]> keys = Arrays.asList(key100, key200, key300);
+
+        int numThreads = 3;
+        ExecutorService executor = Executors.newFixedThreadPool(numThreads);
+        CountDownLatch startLatch = new CountDownLatch(1);
+        CountDownLatch doneLatch = new CountDownLatch(numThreads);
+
+        // Store results from each thread
+        @SuppressWarnings("unchecked")
+        List<byte[]>[] threadResults = new List[numThreads];
+
+        for (int i = 0; i < numThreads; i++) {
+            final int threadIndex = i;
+            executor.submit(
+                    () -> {
+                        try {
+                            // Wait for all threads to be ready
+                            startLatch.await();
+                            // Perform concurrent lookupWithInsert
+                            LookupResultForBucket result = lookupWithInsert(tb, keys);
+                            threadResults[threadIndex] = result.lookupValues();
+                        } catch (Exception e) {
+                            throw new RuntimeException(e);
+                        } finally {
+                            doneLatch.countDown();
+                        }
+                    });
+        }
+
+        // Start all threads simultaneously
+        startLatch.countDown();
+        // Wait for all threads to complete
+        assertThat(doneLatch.await(30, TimeUnit.SECONDS)).isTrue();
+        executor.shutdown();
+
+        // Verify all threads received non-null values
+        for (int i = 0; i < numThreads; i++) {
+            assertThat(threadResults[i])
+                    .as("Thread %d results should not be null", i)
+                    .isNotNull()
+                    .hasSize(3)
+                    .allMatch(Objects::nonNull);
+        }
+
+        // Verify all threads received the same values for each key (consistency check)
+        for (int keyIndex = 0; keyIndex < 3; keyIndex++) {
+            byte[] referenceValue = threadResults[0].get(keyIndex);
+            for (int threadIndex = 1; threadIndex < numThreads; threadIndex++) {
+                assertThat(threadResults[threadIndex].get(keyIndex))
+                        .as(
+                                "Thread %d should have same value as thread 0 for key index %d",
+                                threadIndex, keyIndex)
+                        .isEqualTo(referenceValue);
+            }
+        }
+
+        // Verify auto-increment values are sequential and unique
+        TestingSchemaGetter schemaGetter =
+                new TestingSchemaGetter(DEFAULT_SCHEMA_ID, DATA3_SCHEMA_PK_AUTO_INC);
+        ValueDecoder valueDecoder = new ValueDecoder(schemaGetter, KvFormat.COMPACTED);
+
+        Set<Long> autoIncrementValues = new HashSet<>();
+        for (byte[] value : threadResults[0]) {
+            InternalRow row = valueDecoder.decodeValue(value).row;
+            autoIncrementValues.add(row.getLong(2));
+        }
+
+        // Should have exactly 3 unique auto-increment values
+        assertThat(autoIncrementValues).hasSize(3);
+
+        // Values should be 1, 2, 3 (in any order due to concurrency)
+        assertThat(autoIncrementValues).containsExactlyInAnyOrder(1L, 2L, 3L);
+
+        // Verify exactly 3 changelog entries were written (one per unique key)
+        FetchLogResultForBucket logResult = fetchLog(tb, 0L);
+        // Only the first upsert for a given primary key generates changelog records. Subsequent
+        // upserts on the same primary key produce empty batches, but still increment the log
+        // offset. As a result, the High Watermark may exceed 3 due to these empty batches advancing
+        // the offset.
+        assertThat(logResult.getHighWatermark()).isBetween(3L, 15L);
+        // Verify log records contain the expected keys with INSERT change type
+        LogRecords records = logResult.records();
+        List<Object[]> expected =
+                Arrays.asList(
+                        new Object[] {100, null, 1L},
+                        new Object[] {200, null, 2L},
+                        new Object[] {300, null, 3L});
+        // only 3 INSERT changelogs generated, the rest are empty batches
+        assertLogRecordsEquals(DATA3_ROW_TYPE, records, expected, ChangeType.INSERT, schemaGetter);
+    }
+
+    @Test
+    void testLookupWithInsertIfNotExistsMultiBucket() throws Exception {
+        TableBucket tb0 = new TableBucket(DATA1_TABLE_ID_PK, 0);
+        TableBucket tb1 = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb0.getBucket());
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb1.getBucket());
+
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(DATA1_ROW_TYPE, new int[] {0});
+        byte[] key0 = keyEncoder.encodeKey(row(new Object[] {0}));
+        byte[] key1 = keyEncoder.encodeKey(row(new Object[] {1}));
+
+        verifyLookup(tb0, key0, null);
+        verifyLookup(tb1, key1, null);
+
+        Map<TableBucket, List<byte[]>> requestMap = new HashMap<>();
+        requestMap.put(tb0, Collections.singletonList(key0));
+        requestMap.put(tb1, Collections.singletonList(key1));
+
+        // Insert missing keys across buckets
+        CompletableFuture<Map<TableBucket, LookupResultForBucket>> future =
+                new CompletableFuture<>();
+        replicaManager.lookups(true, 20000, 1, requestMap, LOOKUP_KV_VERSION, future::complete);
+        Map<TableBucket, LookupResultForBucket> inserted = future.get(5, TimeUnit.SECONDS);
+
+        byte[] value0 = inserted.get(tb0).lookupValues().get(0);
+        byte[] value1 = inserted.get(tb1).lookupValues().get(0);
+
+        // Verify inserted values via lookup
+        verifyLookup(tb0, key0, value0);
+        verifyLookup(tb1, key1, value1);
+    }
+
+    private LookupResultForBucket lookupWithInsert(TableBucket tb, List<byte[]> keys)
+            throws Exception {
+        CompletableFuture<Map<TableBucket, LookupResultForBucket>> future =
+                new CompletableFuture<>();
+        replicaManager.lookups(
+                true,
+                20000,
+                1,
+                Collections.singletonMap(tb, keys),
+                LOOKUP_KV_VERSION,
+                future::complete);
+        LookupResultForBucket result = future.get(5, TimeUnit.SECONDS).get(tb);
+        assertThat(result.failed()).isFalse();
+        return result;
+    }
+
+    private FetchLogResultForBucket fetchLog(TableBucket tb, long fetchOffset) throws Exception {
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future =
+                new CompletableFuture<>();
+        replicaManager.fetchLogRecords(
+                buildFetchParams(-1, Integer.MAX_VALUE),
+                Collections.singletonMap(
+                        tb, new FetchReqInfo(tb.getTableId(), fetchOffset, Integer.MAX_VALUE)),
+                null,
+                future::complete);
+        return future.get().get(tb);
     }
 
     @Test
@@ -807,6 +1111,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 1,
                 Collections.singletonMap(tb, genKvRecordBatch(keyType, rowType, data1)),
                 null,
+                MergeMode.DEFAULT,
+                PUT_KV_VERSION,
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 4));
         // second prefix lookup in table, prefix key = (1, "a").
@@ -854,6 +1160,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
         makeLogTableAsLeader(tb3, false);
         replicaManager.prefixLookups(
                 Collections.singletonMap(tb3, Collections.singletonList(prefixKey2Bytes)),
+                PREFIX_LOOKUP_KV_VERSION,
                 (prefixLookupResultForBuckets) -> {
                     PrefixLookupResultForBucket lookupResultForBucket =
                             prefixLookupResultForBuckets.get(tb3);
@@ -885,6 +1192,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 1,
                 Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
                 null,
+                MergeMode.DEFAULT,
+                PUT_KV_VERSION,
                 future1::complete);
         assertThat(future1.get()).containsOnly(new PutKvResultForBucket(tb, 8));
 
@@ -1125,6 +1434,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 -1,
                 Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
                 null,
+                MergeMode.DEFAULT,
+                PUT_KV_VERSION,
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 8));
     }
@@ -1213,7 +1524,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
         replicaManager.stopReplicas(
                 INITIAL_COORDINATOR_EPOCH,
                 Collections.singletonList(
-                        new StopReplicaData(tb, true, INITIAL_COORDINATOR_EPOCH, 1)),
+                        new StopReplicaData(tb, true, true, INITIAL_COORDINATOR_EPOCH, 1)),
                 future1::complete);
         assertThat(future1.get()).containsOnly(new StopReplicaResultForBucket(tb));
         ReplicaManager.HostedReplica hostedReplica = replicaManager.getReplica(tb);
@@ -1244,7 +1555,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
         replicaManager.stopReplicas(
                 INITIAL_COORDINATOR_EPOCH,
                 Collections.singletonList(
-                        new StopReplicaData(tb, true, INITIAL_COORDINATOR_EPOCH, 1)),
+                        new StopReplicaData(tb, true, true, INITIAL_COORDINATOR_EPOCH, 1)),
                 future1::complete);
         assertThat(future1.get())
                 .containsOnly(
@@ -1293,6 +1604,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                                             Collections.singletonList(
                                                                     Tuple2.of(key, value)))),
                                             null,
+                                            MergeMode.DEFAULT,
+                                            PUT_KV_VERSION,
                                             future::complete);
                                 } catch (Exception e) {
                                     throw new RuntimeException(e);
@@ -1373,6 +1686,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 -1,
                 entriesPerBucket,
                 null,
+                MergeMode.DEFAULT,
+                PUT_KV_VERSION,
                 writeResultForBuckets -> {
                     // do nothing
                 });
@@ -1411,6 +1726,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 -1,
                 entriesPerBucket,
                 null,
+                MergeMode.DEFAULT,
+                PUT_KV_VERSION,
                 writeResultForBuckets -> {
                     // do nothing
                 });
@@ -1587,6 +1904,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         nonePartitionTableId,
                         1,
                         DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis());
         TableInfo partitionTableInfo =
@@ -1595,6 +1913,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         partitionTableId,
                         1,
                         DATA1_PARTITIONED_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis());
         TableMetadata tableMetadata1 =
@@ -1619,11 +1938,15 @@ class ReplicaManagerTest extends ReplicaTestBase {
         // register table to zk.
         zkClient.registerTable(
                 nonePartitionTablePath,
-                TableRegistration.newTable(nonePartitionTableId, DATA1_TABLE_DESCRIPTOR));
+                TableRegistration.newTable(
+                        nonePartitionTableId, DEFAULT_REMOTE_DATA_DIR, DATA1_TABLE_DESCRIPTOR));
         zkClient.registerFirstSchema(nonePartitionTablePath, DATA1_TABLE_DESCRIPTOR.getSchema());
         zkClient.registerTable(
                 partitionTablePath,
-                TableRegistration.newTable(partitionTableId, DATA1_PARTITIONED_TABLE_DESCRIPTOR));
+                TableRegistration.newTable(
+                        partitionTableId,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        DATA1_PARTITIONED_TABLE_DESCRIPTOR));
         zkClient.registerFirstSchema(
                 partitionTablePath, DATA1_PARTITIONED_TABLE_DESCRIPTOR.getSchema());
 
@@ -1662,6 +1985,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                                 DELETED_TABLE_ID, // mark as deleted.
                                                 1,
                                                 DATA1_TABLE_DESCRIPTOR,
+                                                DEFAULT_REMOTE_DATA_DIR,
                                                 System.currentTimeMillis(),
                                                 System.currentTimeMillis()),
                                         Collections.emptyList())),
@@ -1749,6 +2073,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         tableId,
                         1,
                         DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis());
         TableBucket tableBucket1 = new TableBucket(tableId, 1);
@@ -1823,7 +2148,13 @@ class ReplicaManagerTest extends ReplicaTestBase {
         CompletableFuture<List<PutKvResultForBucket>> writeFuture = new CompletableFuture<>();
         // put kv record batch for every bucket
         replicaManager.putRecordsToKv(
-                300000, -1, kvRecordBatchPerBucket, null, writeFuture::complete);
+                300000,
+                -1,
+                kvRecordBatchPerBucket,
+                null,
+                MergeMode.DEFAULT,
+                PUT_KV_VERSION,
+                writeFuture::complete);
         // wait the write ack
         writeFuture.get();
     }
@@ -1865,7 +2196,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
 
         CompletableFuture<Map<TableBucket, PrefixLookupResultForBucket>> future =
                 new CompletableFuture<>();
-        replicaManager.prefixLookups(entriesPerBucket, future::complete);
+        replicaManager.prefixLookups(entriesPerBucket, PREFIX_LOOKUP_KV_VERSION, future::complete);
         Map<TableBucket, PrefixLookupResultForBucket> prefixResult = future.get();
         assertThat(prefixResult.size()).isEqualTo(1);
         PrefixLookupResultForBucket resultForBucket = prefixResult.get(tb);
@@ -1880,6 +2211,94 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 assertThat(prefixValueList.get(j)).isEqualTo(expectedValueList.get(j));
             }
         }
+    }
+
+    @Test
+    void testKvFormatV2TableRejectV0Client() throws Exception {
+        // Test that old client version (version 0) is rejected for new format tables
+        // with non-default bucket key. This is because new tables use CompactedKeyEncoder
+        // which is incompatible with old clients that expect lake's encoder.
+        TablePath tablePath = TablePath.of("test_db", "new_format_table");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("c", DataTypes.STRING())
+                        .primaryKey("a", "b")
+                        .build();
+        RowType rowType = schema.getRowType();
+        RowType keyType =
+                DataTypes.ROW(
+                        new DataField("a", DataTypes.INT()),
+                        new DataField("b", DataTypes.STRING()));
+
+        // Create table with:
+        // 1. kv format version 2 (new format)
+        // 2. non-default bucket key (a is subset of pk (a, b))
+        // 3. data lake format (paimon)
+        Map<String, String> properties = new HashMap<>();
+        properties.put(
+                ConfigOptions.TABLE_KV_FORMAT_VERSION.key(), String.valueOf(KV_FORMAT_VERSION_2));
+        properties.put(ConfigOptions.TABLE_DATALAKE_FORMAT.key(), DataLakeFormat.PAIMON.toString());
+        long tableId =
+                registerTableInZkClient(
+                        tablePath,
+                        schema,
+                        2998232L,
+                        Collections.singletonList("a"), // bucket key is subset of pk
+                        properties);
+        TableBucket tb = new TableBucket(tableId, 0);
+        makeKvTableAsLeader(tableId, tablePath, tb.getBucket());
+
+        List<Tuple2<Object[], Object[]>> data =
+                Collections.singletonList(
+                        Tuple2.of(new Object[] {1, "a"}, new Object[] {1, "a", "value1"}));
+
+        // Test putKvRecords with old client version (version 0) - should fail
+        short oldClientVersion = 0;
+        CompletableFuture<List<PutKvResultForBucket>> putFuture = new CompletableFuture<>();
+        replicaManager.putRecordsToKv(
+                20000,
+                1,
+                Collections.singletonMap(tb, genKvRecordBatch(keyType, rowType, data)),
+                null,
+                MergeMode.DEFAULT,
+                oldClientVersion,
+                putFuture::complete);
+        PutKvResultForBucket putResult = putFuture.get().get(0);
+        assertThat(putResult.failed()).isTrue();
+        assertThat(putResult.getErrorCode()).isEqualTo(Errors.UNSUPPORTED_VERSION.code());
+        assertThat(putResult.getErrorMessage()).contains("Client API version 0 is not supported");
+
+        // Test lookups with old client version (version 0) - should fail
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(rowType, new int[] {0, 1});
+        byte[] keyBytes = keyEncoder.encodeKey(row(1, "a"));
+        CompletableFuture<Map<TableBucket, LookupResultForBucket>> lookupFuture =
+                new CompletableFuture<>();
+        replicaManager.lookups(
+                Collections.singletonMap(tb, Collections.singletonList(keyBytes)),
+                oldClientVersion,
+                lookupFuture::complete);
+        LookupResultForBucket lookupResult = lookupFuture.get().get(tb);
+        assertThat(lookupResult.failed()).isTrue();
+        assertThat(lookupResult.getErrorCode()).isEqualTo(Errors.UNSUPPORTED_VERSION.code());
+        assertThat(lookupResult.getErrorMessage())
+                .contains("Client API version 0 is not supported");
+
+        // Test prefixLookups with old client version (version 0) - should fail
+        CompactedKeyEncoder prefixKeyEncoder = new CompactedKeyEncoder(rowType, new int[] {0});
+        byte[] prefixKeyBytes = prefixKeyEncoder.encodeKey(row(1));
+        CompletableFuture<Map<TableBucket, PrefixLookupResultForBucket>> prefixFuture =
+                new CompletableFuture<>();
+        replicaManager.prefixLookups(
+                Collections.singletonMap(tb, Collections.singletonList(prefixKeyBytes)),
+                oldClientVersion,
+                prefixFuture::complete);
+        PrefixLookupResultForBucket prefixResult = prefixFuture.get().get(tb);
+        assertThat(prefixResult.failed()).isTrue();
+        assertThat(prefixResult.getError().error()).isEqualTo(Errors.UNSUPPORTED_VERSION);
+        assertThat(prefixResult.getError().message())
+                .contains("Client API version 0 is not supported");
     }
 
     private ClusterMetadata buildClusterMetadata(

@@ -10,6 +10,13 @@ sidebar_position: 1
 [Apache Paimon](https://paimon.apache.org/) innovatively combines a lake format with an LSM (Log-Structured Merge-tree) structure, bringing efficient updates into the lake architecture. 
 To integrate Fluss with Paimon, you must enable lakehouse storage and configure Paimon as the lakehouse storage. For more details, see [Enable Lakehouse Storage](maintenance/tiered-storage/lakehouse-storage.md#enable-lakehouse-storage).
 
+## Version Compatibility
+
+| Use Case        | Required/Tested Versions                           |
+|-----------------|----------------------------------------------------|
+| Tiering Service | Paimon **1.3** (required)                          |
+| Union Read      | Paimon 1.1, 1.2, 1.3 (tested and verified to work) |
+
 ## Configure Paimon as LakeHouse Storage
 
 For general guidance on configuring Paimon as the lakehouse storage, you can refer to [Lakehouse Storage](maintenance/tiered-storage/lakehouse-storage.md) documentation. When starting the tiering service, make sure to use Paimon-specific configurations as parameters.
@@ -73,7 +80,7 @@ You can choose between two views of the table:
 #### Read Data Only in Paimon
 
 ##### Prerequisites
-Download the [paimon-flink.jar](https://paimon.apache.org/docs/1.3/) that matches your Flink version, and place it in the `FLINK_HOME/lib` directory
+Download the [paimon-flink.jar](https://paimon.apache.org/docs/$PAIMON_VERSION_SHORT$/project/download/) that matches your Flink version, and place it in the `FLINK_HOME/lib` directory
 
 ##### Read Paimon Data
 To read only data stored in Paimon, use the `$lake` suffix in the table name. The following example demonstrates this:
@@ -92,12 +99,12 @@ SELECT * FROM orders$lake$snapshots;
 
 When you specify the `$lake` suffix in a query, the table behaves like a standard Paimon table and inherits all its capabilities.  
 This allows you to take full advantage of Flink's query support and optimizations on Paimon, such as querying system tables, time travel, and more.  
-For further information, refer to Paimon's [SQL Query documentation](https://paimon.apache.org/docs/1.3/flink/sql-query/#sql-query).
+For further information, refer to Paimon's [SQL Query documentation](https://paimon.apache.org/docs/$PAIMON_VERSION_SHORT$/flink/sql-query/#sql-query).
 
 #### Union Read of Data in Fluss and Paimon
 
 ##### Prerequisites
-Download the [fluss-lake-paimon-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-paimon/$FLUSS_VERSION$/fluss-lake-paimon-$FLUSS_VERSION$.jar), and place it into `${FLINK_HOME}/lib`.
+Download the [fluss-lake-paimon-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-paimon/$FLUSS_VERSION$/fluss-lake-paimon-$FLUSS_VERSION$.jar) and [paimon-bundle-$PAIMON_VERSION$.jar](https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-bundle/$PAIMON_VERSION$/paimon-bundle-$PAIMON_VERSION$.jar), and place it into `${FLINK_HOME}/lib`.
 
 ##### Union Read
 To read the full dataset, which includes both Fluss (fresh) and Paimon (historical) data, simply query the table without any suffix. The following example illustrates this:
@@ -125,7 +132,7 @@ Key behavior for data retention:
 
 ### Reading with other Engines
 
-Since the data tiered to Paimon from Fluss is stored as a standard Paimon table, you can use any engine that supports Paimon to read it. Below is an example using [StarRocks](https://paimon.apache.org/docs/1.3/ecosystem/starrocks/):
+Since the data tiered to Paimon from Fluss is stored as a standard Paimon table, you can use any engine that supports Paimon to read it. Below is an example using [StarRocks](https://paimon.apache.org/docs/$PAIMON_VERSION_SHORT$/ecosystem/starrocks/):
 
 First, create a Paimon catalog in StarRocks:
 

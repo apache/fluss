@@ -65,9 +65,11 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PAIMON_UNSETTABLE_OPTIONS;
@@ -777,14 +779,52 @@ class LakeEnabledTableCreateITCase {
                 "c1,c2",
                 BUCKET_NUM);
 
-        // test alter paimon properties, should throw exception
-        tableChanges = Collections.singletonList(TableChange.set("paimon.bucket", "10"));
-        List<TableChange> finalTableChanges = tableChanges;
-        assertThatThrownBy(() -> admin.alterTable(tablePath, finalTableChanges, false).get())
-                .cause()
-                .isInstanceOf(InvalidConfigException.class)
-                .hasMessage(
-                        "Property 'paimon.bucket' is not supported to alter which is for datalake table.");
+        // test alter unchangeable paimon properties, should throw exception
+        Set<String> unchangeableProperties = new HashSet<>();
+        unchangeableProperties.addAll(PAIMON_UNSETTABLE_OPTIONS);
+        unchangeableProperties.addAll(CoreOptions.IMMUTABLE_OPTIONS);
+        for (String property : unchangeableProperties) {
+            tableChanges =
+                    Collections.singletonList(TableChange.set("paimon." + property, "value"));
+            List<TableChange> finalTableChanges = tableChanges;
+            assertThatThrownBy(() -> admin.alterTable(tablePath, finalTableChanges, false).get())
+                    .cause()
+                    .isInstanceOf(InvalidConfigException.class)
+                    .hasMessage(String.format("The Paimon option %s cannot be changed.", property));
+        }
+
+        // test alter changeable paimon properties, should be ok
+        tableChanges =
+                Arrays.asList(
+                        TableChange.set("paimon.partition.timestamp-formatter", "yyyyMMdd"),
+                        TableChange.set("paimon.partition.timestamp-pattern", "$ds"));
+        admin.alterTable(tablePath, tableChanges, false).get();
+        paimonTable = paimonCatalog.getTable(Identifier.create(DATABASE, tablePath.getTableName()));
+        customProperties.put("paimon.partition.timestamp-formatter", "yyyyMMdd");
+        customProperties.put("paimon.partition.timestamp-pattern", "$ds");
+        tableDescriptor =
+                tableDescriptor.withProperties(tableDescriptor.getProperties(), customProperties);
+        verifyPaimonTable(
+                paimonTable,
+                tableDescriptor,
+                RowType.of(
+                        new DataType[] {
+                            org.apache.paimon.types.DataTypes.INT(),
+                            org.apache.paimon.types.DataTypes.STRING(),
+                            // for __bucket, __offset, __timestamp
+                            org.apache.paimon.types.DataTypes.INT(),
+                            org.apache.paimon.types.DataTypes.BIGINT(),
+                            org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS()
+                        },
+                        new String[] {
+                            "c1",
+                            "c2",
+                            BUCKET_COLUMN_NAME,
+                            OFFSET_COLUMN_NAME,
+                            TIMESTAMP_COLUMN_NAME
+                        }),
+                "c1,c2",
+                BUCKET_NUM);
 
         // test alter table if lake table not exists
         paimonCatalog.dropTable(Identifier.create(DATABASE, tablePath.getTableName()), true);
@@ -992,6 +1032,29 @@ class LakeEnabledTableCreateITCase {
                 .get();
         assertThat(admin.getTableInfo(tablePath).get().getTableConfig().isDataLakeEnabled())
                 .isTrue();
+    }
+
+    @Test
+    void testCreatePaimonDvTableWithNonStringPartitionColumn() throws Exception {
+        TablePath tablePath = TablePath.of(DATABASE, "invalid_dv_table");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .column("c3", DataTypes.INT())
+                                        .primaryKey("c1", "c3")
+                                        .build())
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property("paimon.deletion-vectors.enabled", "true")
+                        .partitionedBy("c3")
+                        .build();
+
+        assertThatThrownBy(() -> admin.createTable(tablePath, tableDescriptor, false).get())
+                .rootCause()
+                .hasMessageContaining(
+                        "Only support String type as partitioned key when 'deletion-vectors.enabled' is set to true for paimon, found 'c3' is not String type.");
     }
 
     private void verifyPaimonTable(

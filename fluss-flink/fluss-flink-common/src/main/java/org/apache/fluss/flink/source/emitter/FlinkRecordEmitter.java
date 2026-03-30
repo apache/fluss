@@ -73,8 +73,20 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
             }
             processAndEmitRecord(scanRecord, sourceOutput);
         } else if (splitState.isLogSplitState()) {
-            splitState.asLogSplitState().setNextOffset(recordAndPosition.record().logOffset() + 1);
-            processAndEmitRecord(recordAndPosition.record(), sourceOutput);
+            // Attempt to process and emit the record.
+            // For $binlog, this returns true only when a complete row (or the final part of
+            // a split) is emitted.
+            boolean emitted = processAndEmitRecord(recordAndPosition.record(), sourceOutput);
+
+            if (emitted) {
+                // Only advance the offset in state if the record was successfully emitted.
+                // This ensures that if a crash occurs mid-update (between BEFORE and AFTER),
+                // the source will re-read the same log offset upon recovery,
+                // allowing the BinlogDeserializationSchema to correctly reconstruct the state.
+                splitState
+                        .asLogSplitState()
+                        .setNextOffset(recordAndPosition.record().logOffset() + 1);
+            }
         } else if (splitState.isLakeSplit()) {
             if (lakeRecordRecordEmitter == null) {
                 lakeRecordRecordEmitter = new LakeRecordRecordEmitter<>(this::processAndEmitRecord);
@@ -85,7 +97,13 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
         }
     }
 
-    private void processAndEmitRecord(ScanRecord scanRecord, SourceOutput<OUT> sourceOutput) {
+    /**
+     * Processes and emits a record.
+     *
+     * @return true if a record was emitted, false if deserialize returned null (e.g., for $binlog
+     *     UPDATE_BEFORE records that are buffered pending their UPDATE_AFTER pair)
+     */
+    private boolean processAndEmitRecord(ScanRecord scanRecord, SourceOutput<OUT> sourceOutput) {
         OUT record;
         try {
             record = deserializationSchema.deserialize(scanRecord);
@@ -102,6 +120,8 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
             } else {
                 sourceOutput.collect(record);
             }
+            return true;
         }
+        return false;
     }
 }

@@ -17,11 +17,13 @@
 
 package org.apache.fluss.lake.lance.utils;
 
+import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.BigIntType;
 import org.apache.fluss.types.BinaryType;
 import org.apache.fluss.types.BooleanType;
 import org.apache.fluss.types.BytesType;
 import org.apache.fluss.types.CharType;
+import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DateType;
 import org.apache.fluss.types.DecimalType;
@@ -44,8 +46,13 @@ import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.arrow.vector.types.pojo.Schema;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
+
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
  * Utilities for converting Fluss RowType to non-shaded Arrow Schema. This is needed because Lance
@@ -53,19 +60,81 @@ import java.util.stream.Collectors;
  */
 public class LanceArrowUtils {
 
+    /** Property suffix for configuring a fixed-size list Arrow type on array columns. */
+    public static final String FIXED_SIZE_LIST_SIZE_SUFFIX = ".arrow.fixed-size-list.size";
+
     /** Returns the non-shaded Arrow schema of the specified Fluss RowType. */
     public static Schema toArrowSchema(RowType rowType) {
+        return toArrowSchema(rowType, Collections.emptyMap());
+    }
+
+    /**
+     * Returns the non-shaded Arrow schema of the specified Fluss RowType, using table properties to
+     * determine whether array columns should use FixedSizeList instead of List.
+     *
+     * <p>When a table property {@code <column>.arrow.fixed-size-list.size} is set, the
+     * corresponding ARRAY column will be emitted as {@code FixedSizeList<element>(size)} instead of
+     * {@code List<element>}.
+     */
+    public static Schema toArrowSchema(RowType rowType, Map<String, String> tableProperties) {
         List<Field> fields =
                 rowType.getFields().stream()
-                        .map(f -> toArrowField(f.getName(), f.getType()))
+                        .map(f -> toArrowField(f.getName(), f.getType(), tableProperties))
                         .collect(Collectors.toList());
         return new Schema(fields);
     }
 
-    private static Field toArrowField(String fieldName, DataType logicalType) {
-        FieldType fieldType =
-                new FieldType(logicalType.isNullable(), toArrowType(logicalType), null);
-        return new Field(fieldName, fieldType, null);
+    private static Field toArrowField(
+            String fieldName, DataType logicalType, Map<String, String> tableProperties) {
+        checkArgument(
+                !fieldName.contains("."),
+                "Column name '%s' must not contain periods. "
+                        + "Lance does not support field names with periods.",
+                fieldName);
+        ArrowType arrowType;
+        if (logicalType instanceof ArrayType && tableProperties != null) {
+            String sizeStr = tableProperties.get(fieldName + FIXED_SIZE_LIST_SIZE_SUFFIX);
+            if (sizeStr != null) {
+                int listSize;
+                try {
+                    listSize = Integer.parseInt(sizeStr);
+                } catch (NumberFormatException e) {
+                    throw new IllegalArgumentException(
+                            String.format(
+                                    "Invalid value '%s' for property '%s', expected a positive integer.",
+                                    sizeStr, fieldName + FIXED_SIZE_LIST_SIZE_SUFFIX),
+                            e);
+                }
+
+                checkArgument(
+                        listSize > 0,
+                        "Invalid value '%s' for property '%s'. Expected a positive integer.",
+                        sizeStr,
+                        fieldName + FIXED_SIZE_LIST_SIZE_SUFFIX);
+                arrowType = new ArrowType.FixedSizeList(listSize);
+            } else {
+                arrowType = toArrowType(logicalType);
+            }
+        } else {
+            arrowType = toArrowType(logicalType);
+        }
+        FieldType fieldType = new FieldType(logicalType.isNullable(), arrowType, null);
+        List<Field> children = null;
+        if (logicalType instanceof ArrayType) {
+            children =
+                    Collections.singletonList(
+                            toArrowField(
+                                    "element",
+                                    ((ArrayType) logicalType).getElementType(),
+                                    tableProperties));
+        } else if (logicalType instanceof RowType) {
+            RowType rowType = (RowType) logicalType;
+            children = new ArrayList<>(rowType.getFieldCount());
+            for (DataField field : rowType.getFields()) {
+                children.add(toArrowField(field.getName(), field.getType(), tableProperties));
+            }
+        }
+        return new Field(fieldName, fieldType, children);
     }
 
     private static ArrowType toArrowType(DataType dataType) {
@@ -129,6 +198,10 @@ public class LanceArrowUtils {
             } else {
                 return new ArrowType.Timestamp(TimeUnit.NANOSECOND, null);
             }
+        } else if (dataType instanceof ArrayType) {
+            return ArrowType.List.INSTANCE;
+        } else if (dataType instanceof RowType) {
+            return ArrowType.Struct.INSTANCE;
         } else {
             throw new UnsupportedOperationException(
                     String.format(

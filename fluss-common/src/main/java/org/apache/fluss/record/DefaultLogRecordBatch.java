@@ -18,6 +18,7 @@
 package org.apache.fluss.record;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.exception.CorruptMessageException;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.LogFormat;
@@ -33,19 +34,23 @@ import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.MurmurHashUtils;
 import org.apache.fluss.utils.crc.Crc32C;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import javax.annotation.Nullable;
 
 import java.nio.ByteBuffer;
 import java.util.NoSuchElementException;
+import java.util.Optional;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.BASE_OFFSET_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.COMMIT_TIMESTAMP_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V2;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_OVERHEAD;
 import static org.apache.fluss.record.LogRecordBatchFormat.MAGIC_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_LEADER_EPOCH;
-import static org.apache.fluss.record.LogRecordBatchFormat.arrowChangeTypeOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.attributeOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.batchSequenceOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.crcOffset;
@@ -54,6 +59,8 @@ import static org.apache.fluss.record.LogRecordBatchFormat.leaderEpochOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordsCountOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.schemaIdOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.statisticsDataOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.statisticsLengthOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.writeClientIdOffset;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
@@ -69,6 +76,7 @@ import static org.apache.fluss.record.LogRecordBatchFormat.writeClientIdOffset;
  * <ul>
  *   <li>V0 => {@link LogRecordBatchFormat#LOG_MAGIC_VALUE_V0}
  *   <li>V1 => {@link LogRecordBatchFormat#LOG_MAGIC_VALUE_V1}
+ *   <li>V2 => {@link LogRecordBatchFormat#LOG_MAGIC_VALUE_V2}
  * </ul>
  *
  * @since 0.1
@@ -76,16 +84,23 @@ import static org.apache.fluss.record.LogRecordBatchFormat.writeClientIdOffset;
 // TODO rename to MemoryLogRecordBatch
 @PublicEvolving
 public class DefaultLogRecordBatch implements LogRecordBatch {
+    private static final Logger LOG = LoggerFactory.getLogger(DefaultLogRecordBatch.class);
+
     public static final byte APPEND_ONLY_FLAG_MASK = 0x01;
 
     private MemorySegment segment;
     private int position;
     private byte magic;
 
+    // Cache for statistics to avoid repeated parsing
+    private Optional<LogRecordBatchStatistics> cachedStatistics = null;
+
     public void pointTo(MemorySegment segment, int position) {
         this.segment = segment;
         this.position = position;
         this.magic = segment.get(position + MAGIC_OFFSET);
+        // Reset cache when pointing to new memory segment
+        this.cachedStatistics = null;
     }
 
     public void setBaseLogOffset(long baseLogOffset) {
@@ -107,7 +122,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     }
 
     public void setLeaderEpoch(int leaderEpoch) {
-        if (magic >= LOG_MAGIC_VALUE_V1) {
+        if (magic >= LOG_MAGIC_VALUE_V2) {
             segment.putInt(position + leaderEpochOffset(magic), leaderEpoch);
         } else {
             throw new UnsupportedOperationException(
@@ -127,7 +142,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
     @Override
     public int leaderEpoch() {
-        if (magic >= LOG_MAGIC_VALUE_V1) {
+        if (magic >= LOG_MAGIC_VALUE_V2) {
             return segment.getInt(position + leaderEpochOffset(magic));
         } else {
             return NO_LEADER_EPOCH;
@@ -211,6 +226,13 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         return segment.getInt(position + recordsCountOffset(magic));
     }
 
+    public int getStatisticsLength() {
+        if (magic < LOG_MAGIC_VALUE_V1) {
+            return 0;
+        }
+        return segment.getInt(position + statisticsLengthOffset(magic));
+    }
+
     @Override
     public CloseableIterator<LogRecord> records(ReadContext context) {
         if (getRecordCount() == 0) {
@@ -265,7 +287,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             RowType rowType, @Nullable ProjectedRow outputProjection, long timestamp) {
         DataType[] fieldTypes = rowType.getChildren().toArray(new DataType[0]);
         return new LogRecordIterator() {
-            int position = DefaultLogRecordBatch.this.position + recordBatchHeaderSize(magic);
+            int position = DefaultLogRecordBatch.this.position + recordsDataOffset();
             int rowId = 0;
 
             @Override
@@ -301,7 +323,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             RowType rowType, long timestamp) {
         DataType[] fieldTypes = rowType.getChildren().toArray(new DataType[0]);
         return new LogRecordIterator() {
-            int position = DefaultLogRecordBatch.this.position + recordBatchHeaderSize(magic);
+            int position = DefaultLogRecordBatch.this.position + recordsDataOffset();
             int rowId = 0;
 
             @Override
@@ -331,12 +353,12 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             BufferAllocator allocator,
             long timestamp) {
         boolean isAppendOnly = (attributes() & APPEND_ONLY_FLAG_MASK) > 0;
+        int recordsDataOffset = recordsDataOffset();
         if (isAppendOnly) {
             // append only batch, no change type vector,
             // the start of the arrow data is the beginning of the batch records
-            int recordBatchHeaderSize = recordBatchHeaderSize(magic);
-            int arrowOffset = position + recordBatchHeaderSize;
-            int arrowLength = sizeInBytes() - recordBatchHeaderSize;
+            int arrowOffset = position + recordsDataOffset;
+            int arrowLength = sizeInBytes() - recordsDataOffset;
             ArrowReader reader =
                     ArrowUtils.createArrowReader(
                             segment, arrowOffset, arrowLength, root, allocator, rowType);
@@ -349,12 +371,11 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         } else {
             // with change type, decode the change type vector first,
             // the arrow data starts after the change type vector
-            int changeTypeOffset = position + arrowChangeTypeOffset(magic);
+            int changeTypeOffset = position + recordsDataOffset;
             ChangeTypeVector changeTypeVector =
                     new ChangeTypeVector(segment, changeTypeOffset, getRecordCount());
             int arrowOffset = changeTypeOffset + changeTypeVector.sizeInBytes();
-            int arrowLength =
-                    sizeInBytes() - arrowChangeTypeOffset(magic) - changeTypeVector.sizeInBytes();
+            int arrowLength = sizeInBytes() - recordsDataOffset - changeTypeVector.sizeInBytes();
             ArrowReader reader =
                     ArrowUtils.createArrowReader(
                             segment, arrowOffset, arrowLength, root, allocator, rowType);
@@ -467,5 +488,74 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         public void remove() {
             throw new UnsupportedOperationException();
         }
+    }
+
+    @Override
+    public Optional<LogRecordBatchStatistics> getStatistics(ReadContext context) {
+        if (context == null) {
+            return Optional.empty();
+        }
+
+        if (cachedStatistics != null) {
+            return cachedStatistics;
+        }
+
+        cachedStatistics = parseStatistics(context);
+        return cachedStatistics;
+    }
+
+    private Optional<LogRecordBatchStatistics> parseStatistics(ReadContext context) {
+        try {
+            if (magic < LOG_MAGIC_VALUE_V1) {
+                return Optional.empty();
+            }
+
+            int statisticsLength = segment.getInt(position + statisticsLengthOffset(magic));
+            if (statisticsLength == 0) {
+                return Optional.empty();
+            }
+
+            RowType rowType = context.getRowType(schemaId());
+            if (rowType == null) {
+                LOG.debug("Skipping statistics parsing: schema {} not found", schemaId());
+                return Optional.empty();
+            }
+
+            int statsDataOffset = statisticsDataOffset(magic);
+            LogRecordBatchStatistics statistics =
+                    LogRecordBatchStatisticsParser.parseStatistics(
+                            segment, position + statsDataOffset, rowType, schemaId());
+            return Optional.ofNullable(statistics);
+        } catch (Exception e) {
+            LOG.warn("Failed to parse statistics", e);
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Get the offset where records data starts, relative to the batch start. For V1+, records start
+     * after the fixed header + statistics data. For V0, records start right after the header.
+     */
+    private int recordsDataOffset() {
+        int headerSize = recordBatchHeaderSize(magic);
+        if (magic >= LOG_MAGIC_VALUE_V1) {
+            int statsLength = segment.getInt(position + statisticsLengthOffset(magic));
+            return headerSize + statsLength;
+        }
+        return headerSize;
+    }
+
+    // -----------------------------------------------------------------------
+    // Methods for testing only
+    // -----------------------------------------------------------------------
+
+    @VisibleForTesting
+    MemorySegment segment() {
+        return segment;
+    }
+
+    @VisibleForTesting
+    int position() {
+        return position;
     }
 }

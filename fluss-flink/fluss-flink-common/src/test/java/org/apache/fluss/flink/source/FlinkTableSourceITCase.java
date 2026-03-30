@@ -28,6 +28,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.utils.clock.ManualClock;
 
 import org.apache.commons.lang3.RandomUtils;
@@ -58,6 +59,8 @@ import javax.annotation.Nullable;
 
 import java.time.Duration;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -77,6 +80,7 @@ import static org.apache.fluss.flink.utils.FlinkTestBase.writeRows;
 import static org.apache.fluss.flink.utils.FlinkTestBase.writeRowsToPartition;
 import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -352,6 +356,71 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
+    @Test
+    void testPkTableReadWithKvSnapshotLease() throws Exception {
+        tEnv.executeSql(
+                "create table pk_table_with_kv_snapshot_lease (a int not null primary key not enforced, b varchar)");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "pk_table_with_kv_snapshot_lease");
+
+        List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
+
+        // write records
+        writeRows(conn, tablePath, rows, false);
+
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
+
+        // enable checkpoint to make sure the kv snapshot lease will be cleared.
+        execEnv.enableCheckpointing(100);
+
+        List<String> expectedRows = Arrays.asList("+I[1, v1]", "+I[2, v2]", "+I[3, v3]");
+        org.apache.flink.util.CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from pk_table_with_kv_snapshot_lease").collect();
+        assertResultsIgnoreOrder(rowIter, expectedRows, false);
+
+        // now, we put rows to the table again, should read the log
+        expectedRows =
+                Arrays.asList(
+                        "-U[1, v1]",
+                        "+U[1, v1]",
+                        "-U[2, v2]",
+                        "+U[2, v2]",
+                        "-U[3, v3]",
+                        "+U[3, v3]");
+        writeRows(conn, tablePath, rows, false);
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+
+        // check lease will be dropped after job finished.
+        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        retry(
+                Duration.ofMinutes(1),
+                () -> assertThat(zkClient.getKvSnapshotLeasesList().isEmpty()).isTrue());
+    }
+
+    @Test
+    void testReadWithKvSnapshotLeaseNoCheckpoint() throws Exception {
+        tEnv.executeSql(
+                "create table pk_table_with_kv_snapshot_lease2 (a int not null primary key not enforced, b varchar)");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "pk_table_with_kv_snapshot_lease2");
+
+        List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
+
+        // write records
+        writeRows(conn, tablePath, rows, false);
+
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
+
+        List<String> expectedRows = Arrays.asList("+I[1, v1]", "+I[2, v2]", "+I[3, v3]");
+        org.apache.flink.util.CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from pk_table_with_kv_snapshot_lease2").collect();
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+
+        // check lease will be dropped after job finished.
+        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        retry(
+                Duration.ofMinutes(1),
+                () -> assertThat(zkClient.getKvSnapshotLeasesList().isEmpty()).isTrue());
+    }
+
     // -------------------------------------------------------------------------------------
     // Fluss scan start mode tests
     // -------------------------------------------------------------------------------------
@@ -608,12 +677,19 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                                         tableName))
                         .collect();
         assertResultsIgnoreOrder(rowIter, expectedRowValues, false);
+        String partition1 =
+                LocalDateTime.now().minusYears(1).format(DateTimeFormatter.ofPattern("yyyy"));
+        String partition2 =
+                LocalDateTime.now().minusYears(2).format(DateTimeFormatter.ofPattern("yyyy"));
 
         // then create some new partitions, and write rows to the new partitions
-        tEnv.executeSql(String.format("alter table %s add partition (c = '2000')", tableName));
-        tEnv.executeSql(String.format("alter table %s add partition (c = '2001')", tableName));
+        tEnv.executeSql(
+                String.format("alter table %s add partition (c = '%s')", tableName, partition1));
+        tEnv.executeSql(
+                String.format("alter table %s add partition (c = '%s')", tableName, partition2));
         // write data to the new partitions
-        expectedRowValues = writeRowsToPartition(conn, tablePath, Arrays.asList("2000", "2001"));
+        expectedRowValues =
+                writeRowsToPartition(conn, tablePath, Arrays.asList(partition1, partition2));
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
     }
 
@@ -964,6 +1040,86 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 .cause()
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessage("Full lookup caching is not supported yet.");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testLookupInsertIfNotExists(boolean async) throws Exception {
+        // use single parallelism to make result ordering stable
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+
+        String uidMappingTable = String.format("uid_mapping_%s", async ? "async" : "sync");
+        // Create uid_mapping table: uid (STRING, PK), uid_int32 (INT, auto-increment)
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + " uid varchar not null,"
+                                + " uid_int32 int,"
+                                + " primary key (uid) NOT ENFORCED"
+                                + ") with ('auto-increment.fields' = 'uid_int32', 'bucket.num' = '1')",
+                        uidMappingTable));
+
+        // Create ods_table as a Flink temporary source table
+        List<Row> odsData =
+                Arrays.asList(
+                        Row.of("CN", "Beijing", "Haidian", "2025-01-01", "user_a"),
+                        Row.of("CN", "Shanghai", "Pudong", "2025-01-02", "user_b"),
+                        Row.of("US", "California", "LA", "2025-01-03", "user_a"),
+                        Row.of("JP", "Tokyo", "Shibuya", "2025-01-04", "user_c"));
+
+        Schema odsSchema =
+                Schema.newBuilder()
+                        .column("country", DataTypes.STRING())
+                        .column("prov", DataTypes.STRING())
+                        .column("city", DataTypes.STRING())
+                        .column("ymd", DataTypes.STRING())
+                        .column("uid", DataTypes.STRING())
+                        .columnByExpression("proctime", "PROCTIME()")
+                        .build();
+        RowTypeInfo odsTypeInfo =
+                new RowTypeInfo(
+                        new TypeInformation[] {
+                            Types.STRING, Types.STRING, Types.STRING, Types.STRING, Types.STRING
+                        },
+                        new String[] {"country", "prov", "city", "ymd", "uid"});
+        DataStream<Row> odsDs = execEnv.fromCollection(odsData).returns(odsTypeInfo);
+        tEnv.dropTemporaryView("ods_src");
+        tEnv.createTemporaryView("ods_src", tEnv.fromDataStream(odsDs, odsSchema));
+
+        // Perform lookup join with insertIfNotExists hint
+        String lookupAsyncOption = async ? "'lookup.async' = 'true'" : "'lookup.async' = 'false'";
+        String joinQuery =
+                String.format(
+                        "SELECT ods.country, ods.prov, ods.city, ods.ymd, ods.uid, dim.uid_int32 "
+                                + "FROM ods_src AS ods "
+                                + "JOIN %s /*+ OPTIONS('lookup.insert-if-not-exists' = 'true', %s) */ "
+                                + "FOR SYSTEM_TIME AS OF ods.proctime AS dim "
+                                + "ON dim.uid = ods.uid",
+                        uidMappingTable, lookupAsyncOption);
+
+        CloseableIterator<Row> joinResult = tEnv.executeSql(joinQuery).collect();
+
+        // user_a appears twice, user_b and user_c appear once each
+        // With insertIfNotExists, uid_mapping should auto-create entries:
+        // user_a -> uid_int32=1, user_b -> uid_int32=2, user_a (2nd) reuses uid_int32=1,
+        // user_c -> uid_int32=3
+        List<String> expectedJoinResults =
+                Arrays.asList(
+                        "+I[CN, Beijing, Haidian, 2025-01-01, user_a, 1]",
+                        "+I[CN, Shanghai, Pudong, 2025-01-02, user_b, 2]",
+                        "+I[US, California, LA, 2025-01-03, user_a, 1]",
+                        "+I[JP, Tokyo, Shibuya, 2025-01-04, user_c, 3]");
+        assertResultsIgnoreOrder(joinResult, expectedJoinResults, true);
+
+        // Verify uid_mapping table has the correct data
+        List<String> expectedUidMappingResults =
+                Arrays.asList("+I[user_a, 1]", "+I[user_b, 2]", "+I[user_c, 3]");
+        assertQueryResultExactOrder(
+                tEnv,
+                String.format(
+                        "SELECT uid, uid_int32 FROM %s /*+ OPTIONS('scan.startup.mode' = 'earliest') */",
+                        uidMappingTable),
+                expectedUidMappingResults);
     }
 
     @Test

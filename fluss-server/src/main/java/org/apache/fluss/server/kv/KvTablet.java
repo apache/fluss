@@ -22,6 +22,7 @@ import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.DeletionDisabledException;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.memory.MemorySegmentPool;
@@ -45,6 +46,8 @@ import org.apache.fluss.row.PaddingRow;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.row.arrow.ArrowWriterProvider;
 import org.apache.fluss.row.encode.ValueDecoder;
+import org.apache.fluss.rpc.protocol.MergeMode;
+import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementUpdater;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
@@ -58,6 +61,7 @@ import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.kv.snapshot.KvFileHandleAndLocalPath;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataUploader;
 import org.apache.fluss.server.kv.snapshot.RocksIncrementalSnapshot;
+import org.apache.fluss.server.kv.snapshot.TabletState;
 import org.apache.fluss.server.kv.wal.ArrowWalBuilder;
 import org.apache.fluss.server.kv.wal.CompactedWalBuilder;
 import org.apache.fluss.server.kv.wal.IndexWalBuilder;
@@ -95,6 +99,7 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 @ThreadSafe
 public final class KvTablet {
     private static final Logger LOG = LoggerFactory.getLogger(KvTablet.class);
+    private static final long ROW_COUNT_DISABLED = -1;
 
     private final PhysicalTablePath physicalPath;
     private final TableBucket tableBucket;
@@ -115,6 +120,9 @@ public final class KvTablet {
     private final KvFormat kvFormat;
     // defines how to merge rows on the same primary key
     private final RowMerger rowMerger;
+    // Pre-created DefaultRowMerger for OVERWRITE mode (undo recovery scenarios)
+    // This avoids creating a new instance on every putAsLeader call
+    private final RowMerger overwriteRowMerger;
     private final ArrowCompressionInfo arrowCompressionInfo;
     private final AutoIncrementManager autoIncrementManager;
 
@@ -131,6 +139,8 @@ public final class KvTablet {
      * flushed into kv.
      */
     private volatile long flushedLogOffset = 0;
+
+    private volatile long rowCount;
 
     @GuardedBy("kvLock")
     private volatile boolean isClosed = false;
@@ -166,11 +176,16 @@ public final class KvTablet {
         this.memorySegmentPool = memorySegmentPool;
         this.kvFormat = kvFormat;
         this.rowMerger = rowMerger;
+        // Pre-create DefaultRowMerger for OVERWRITE mode to avoid creating new instances
+        // on every putAsLeader call. Used for undo recovery scenarios.
+        this.overwriteRowMerger = new DefaultRowMerger(kvFormat, DeleteBehavior.ALLOW);
         this.arrowCompressionInfo = arrowCompressionInfo;
         this.schemaGetter = schemaGetter;
         this.changelogImage = changelogImage;
         this.rocksDBStatistics = rocksDBStatistics;
         this.autoIncrementManager = autoIncrementManager;
+        // disable row count for WAL image mode.
+        this.rowCount = changelogImage == ChangelogImage.WAL ? ROW_COUNT_DISABLED : 0L;
     }
 
     public static KvTablet create(
@@ -246,6 +261,14 @@ public final class KvTablet {
         return physicalPath.getTablePath();
     }
 
+    public long getAutoIncrementCacheSize() {
+        return autoIncrementManager.getAutoIncrementCacheSize();
+    }
+
+    public void updateAutoIncrementIDRange(AutoIncIDRange newRange) {
+        autoIncrementManager.updateIDRange(newRange);
+    }
+
     @Nullable
     public String getPartitionName() {
         return physicalPath.getPartitionName();
@@ -269,8 +292,52 @@ public final class KvTablet {
         this.flushedLogOffset = flushedLogOffset;
     }
 
-    public long getFlushedLogOffset() {
-        return flushedLogOffset;
+    void setRowCount(long rowCount) {
+        this.rowCount = rowCount;
+    }
+
+    // row_count is volatile, so it's safe to read without lock
+    public long getRowCount() {
+        if (rowCount == ROW_COUNT_DISABLED) {
+            throw new InvalidTableException(
+                    String.format(
+                            "Row count is disabled for this table '%s'. This usually happens when the table is"
+                                    + "created before v0.9 or the changelog image is set to WAL, "
+                                    + "as maintaining row count in WAL mode is costly and not necessary for most use cases. "
+                                    + "If you want to enable row count, please set changelog image to FULL.",
+                            getTablePath()));
+        }
+        return rowCount;
+    }
+
+    /**
+     * Get the current state of the tablet, including the log offset, row count and auto-increment
+     * ID range. This is used for snapshot and recovery to capture the state of the tablet at a
+     * specific log offset.
+     *
+     * <p>Note: this method must be called under the kvLock to ensure the consistency between the
+     * returned state and the log offset.
+     */
+    @GuardedBy("kvLock")
+    public TabletState getTabletState() {
+        return new TabletState(
+                flushedLogOffset,
+                rowCount == ROW_COUNT_DISABLED ? null : rowCount,
+                autoIncrementManager.getCurrentIDRanges());
+    }
+
+    /**
+     * Put the KvRecordBatch into the kv storage with default DEFAULT mode.
+     *
+     * <p>This is a convenience method that calls {@link #putAsLeader(KvRecordBatch, int[],
+     * MergeMode)} with {@link MergeMode#DEFAULT}.
+     *
+     * @param kvRecords the kv records to put into
+     * @param targetColumns the target columns to put, null if put all columns
+     */
+    public LogAppendInfo putAsLeader(KvRecordBatch kvRecords, @Nullable int[] targetColumns)
+            throws Exception {
+        return putAsLeader(kvRecords, targetColumns, MergeMode.DEFAULT);
     }
 
     /**
@@ -292,8 +359,10 @@ public final class KvTablet {
      *
      * @param kvRecords the kv records to put into
      * @param targetColumns the target columns to put, null if put all columns
+     * @param mergeMode the merge mode (DEFAULT or OVERWRITE)
      */
-    public LogAppendInfo putAsLeader(KvRecordBatch kvRecords, @Nullable int[] targetColumns)
+    public LogAppendInfo putAsLeader(
+            KvRecordBatch kvRecords, @Nullable int[] targetColumns, MergeMode mergeMode)
             throws Exception {
         return inWriteLock(
                 kvLock,
@@ -305,12 +374,23 @@ public final class KvTablet {
                     short latestSchemaId = (short) schemaInfo.getSchemaId();
                     validateSchemaId(kvRecords.schemaId(), latestSchemaId);
 
-                    // we only support ADD COLUMN, so targetColumns is fine to be used directly
-                    RowMerger currentMerger =
-                            rowMerger.configureTargetColumns(
-                                    targetColumns, latestSchemaId, latestSchema);
                     AutoIncrementUpdater currentAutoIncrementUpdater =
                             autoIncrementManager.getUpdaterForSchema(kvFormat, latestSchemaId);
+
+                    // Validate targetColumns doesn't contain auto-increment column
+                    currentAutoIncrementUpdater.validateTargetColumns(targetColumns);
+
+                    // Determine the row merger based on mergeMode:
+                    // - DEFAULT: Use the configured merge engine (rowMerger)
+                    // - OVERWRITE: Bypass merge engine, use pre-created overwriteRowMerger
+                    //   to directly replace values (for undo recovery scenarios)
+                    // We only support ADD COLUMN, so targetColumns is fine to be used directly.
+                    RowMerger currentMerger =
+                            (mergeMode == MergeMode.OVERWRITE)
+                                    ? overwriteRowMerger.configureTargetColumns(
+                                            targetColumns, latestSchemaId, latestSchema)
+                                    : rowMerger.configureTargetColumns(
+                                            targetColumns, latestSchemaId, latestSchema);
 
                     RowType latestRowType = latestSchema.getRowType();
                     WalBuilder walBuilder = createWalBuilder(latestSchemaId, latestRowType);
@@ -524,7 +604,7 @@ public final class KvTablet {
             throws Exception {
         BinaryValue newValue = autoIncrementUpdater.updateAutoIncrementColumns(currentValue);
         walBuilder.append(ChangeType.INSERT, latestSchemaRow.replaceRow(newValue.row));
-        kvPreWriteBuffer.put(key, newValue.encodeValue(), logOffset);
+        kvPreWriteBuffer.insert(key, newValue.encodeValue(), logOffset);
         return logOffset + 1;
     }
 
@@ -538,12 +618,12 @@ public final class KvTablet {
             throws Exception {
         if (changelogImage == ChangelogImage.WAL) {
             walBuilder.append(ChangeType.UPDATE_AFTER, latestSchemaRow.replaceRow(newValue.row));
-            kvPreWriteBuffer.put(key, newValue.encodeValue(), logOffset);
+            kvPreWriteBuffer.update(key, newValue.encodeValue(), logOffset);
             return logOffset + 1;
         } else {
             walBuilder.append(ChangeType.UPDATE_BEFORE, latestSchemaRow.replaceRow(oldValue.row));
             walBuilder.append(ChangeType.UPDATE_AFTER, latestSchemaRow.replaceRow(newValue.row));
-            kvPreWriteBuffer.put(key, newValue.encodeValue(), logOffset + 1);
+            kvPreWriteBuffer.update(key, newValue.encodeValue(), logOffset + 1);
             return logOffset + 2;
         }
     }
@@ -598,8 +678,13 @@ public final class KvTablet {
                                 tableBucket);
                     } else {
                         try {
-                            kvPreWriteBuffer.flush(exclusiveUpToLogOffset);
+                            int rowCountDiff = kvPreWriteBuffer.flush(exclusiveUpToLogOffset);
                             flushedLogOffset = exclusiveUpToLogOffset;
+                            if (rowCount != ROW_COUNT_DISABLED) {
+                                // row count is enabled, we update the row count after flush.
+                                long currentRowCount = rowCount;
+                                rowCount = currentRowCount + rowCountDiff;
+                            }
                         } catch (Throwable t) {
                             fatalErrorHandler.onFatalError(
                                     new KvStorageException("Failed to flush kv pre-write buffer."));
@@ -609,12 +694,18 @@ public final class KvTablet {
     }
 
     /** put key,value,logOffset into pre-write buffer directly. */
-    void putToPreWriteBuffer(byte[] key, @Nullable byte[] value, long logOffset) {
+    void putToPreWriteBuffer(
+            ChangeType changeType, byte[] key, @Nullable byte[] value, long logOffset) {
         KvPreWriteBuffer.Key wrapKey = KvPreWriteBuffer.Key.of(key);
-        if (value == null) {
+        if (changeType == ChangeType.DELETE && value == null) {
             kvPreWriteBuffer.delete(wrapKey, logOffset);
+        } else if (changeType == ChangeType.INSERT) {
+            kvPreWriteBuffer.insert(wrapKey, value, logOffset);
+        } else if (changeType == ChangeType.UPDATE_AFTER) {
+            kvPreWriteBuffer.update(wrapKey, value, logOffset);
         } else {
-            kvPreWriteBuffer.put(wrapKey, value, logOffset);
+            throw new IllegalArgumentException(
+                    "Unsupported change type for putToPreWriteBuffer: " + changeType);
         }
     }
 

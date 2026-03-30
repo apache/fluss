@@ -41,11 +41,18 @@ public abstract class TieringSplit implements SourceSplit {
     // the total number of splits in one round of tiering
     protected final int numberOfSplits;
 
+    /**
+     * Indicates whether to skip tiering data for this split in the current round of tiering. When
+     * set to true, the split will not be processed and tiering for the split will be skipped.
+     */
+    protected boolean skipCurrentRound;
+
     public TieringSplit(
             TablePath tablePath,
             TableBucket tableBucket,
             @Nullable String partitionName,
-            int numberOfSplits) {
+            int numberOfSplits,
+            boolean skipCurrentRound) {
         this.tablePath = tablePath;
         this.tableBucket = tableBucket;
         this.partitionName = partitionName;
@@ -55,6 +62,7 @@ public abstract class TieringSplit implements SourceSplit {
                     "Partition name and partition id must be both null or both not null.");
         }
         this.numberOfSplits = numberOfSplits;
+        this.skipCurrentRound = skipCurrentRound;
     }
 
     /** Checks whether this split is a primary key table split to tier. */
@@ -70,6 +78,23 @@ public abstract class TieringSplit implements SourceSplit {
     /** Checks whether this split is a log split to tier. */
     public final boolean isTieringLogSplit() {
         return getClass() == TieringLogSplit.class;
+    }
+
+    /**
+     * Marks this split to skip reading data in the current round. Once called, the split will not
+     * be processed and data reading will be skipped.
+     */
+    public void skipCurrentRound() {
+        this.skipCurrentRound = true;
+    }
+
+    /**
+     * Returns whether this split should skip tiering data in the current round of tiering.
+     *
+     * @return true if the split should skip tiering data, false otherwise
+     */
+    public boolean shouldSkipCurrentRound() {
+        return skipCurrentRound;
     }
 
     /** Casts this split into a {@link TieringLogSplit}. */
@@ -128,11 +153,13 @@ public abstract class TieringSplit implements SourceSplit {
         return Objects.equals(tablePath, that.tablePath)
                 && Objects.equals(tableBucket, that.tableBucket)
                 && Objects.equals(partitionName, that.partitionName)
-                && numberOfSplits == that.numberOfSplits;
+                && numberOfSplits == that.numberOfSplits
+                && skipCurrentRound == that.skipCurrentRound;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tablePath, tableBucket, partitionName, numberOfSplits);
+        return Objects.hash(
+                tablePath, tableBucket, partitionName, numberOfSplits, skipCurrentRound);
     }
 }

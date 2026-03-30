@@ -46,7 +46,7 @@ import java.util.List;
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static org.apache.fluss.compression.ArrowCompressionInfo.NO_COMPRESSION;
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
-import static org.apache.fluss.record.LogRecordBatchFormat.arrowChangeTypeOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.row.BinaryString.fromString;
@@ -200,13 +200,13 @@ class ArrowReaderWriterTest {
             // skip arrow batch header.
             int size =
                     writer.serializeToOutputView(
-                            pagedOutputView, arrowChangeTypeOffset(CURRENT_LOG_MAGIC_VALUE));
+                            pagedOutputView, recordBatchHeaderSize(CURRENT_LOG_MAGIC_VALUE));
             int heapMemorySize = Math.max(size, writer.estimatedSizeInBytes());
             MemorySegment segment = MemorySegment.allocateHeapMemory(heapMemorySize);
 
             assertThat(pagedOutputView.getWrittenSegments().size()).isEqualTo(1);
             MemorySegment firstSegment = pagedOutputView.getCurrentSegment();
-            firstSegment.copyTo(arrowChangeTypeOffset(CURRENT_LOG_MAGIC_VALUE), segment, 0, size);
+            firstSegment.copyTo(recordBatchHeaderSize(CURRENT_LOG_MAGIC_VALUE), segment, 0, size);
 
             ArrowReader reader =
                     ArrowUtils.createArrowReader(segment, 0, size, root, allocator, rowType);
@@ -313,14 +313,14 @@ class ArrowReaderWriterTest {
                     new ManagedPagedOutputView(new TestingMemorySegmentPool(64 * 1024));
             int size =
                     writer.serializeToOutputView(
-                            pagedOutputView, arrowChangeTypeOffset(CURRENT_LOG_MAGIC_VALUE));
+                            pagedOutputView, recordBatchHeaderSize(CURRENT_LOG_MAGIC_VALUE));
             assertThat(size).isGreaterThan(0);
 
             // Verify the data can be read back correctly
             int heapMemorySize = Math.max(size, writer.estimatedSizeInBytes());
             MemorySegment segment = MemorySegment.allocateHeapMemory(heapMemorySize);
             MemorySegment firstSegment = pagedOutputView.getCurrentSegment();
-            firstSegment.copyTo(arrowChangeTypeOffset(CURRENT_LOG_MAGIC_VALUE), segment, 0, size);
+            firstSegment.copyTo(recordBatchHeaderSize(CURRENT_LOG_MAGIC_VALUE), segment, 0, size);
 
             ArrowReader reader =
                     ArrowUtils.createArrowReader(segment, 0, size, root, allocator, rowType);
@@ -381,14 +381,14 @@ class ArrowReaderWriterTest {
                     new ManagedPagedOutputView(new TestingMemorySegmentPool(64 * 1024));
             int size =
                     writer.serializeToOutputView(
-                            pagedOutputView, arrowChangeTypeOffset(CURRENT_LOG_MAGIC_VALUE));
+                            pagedOutputView, recordBatchHeaderSize(CURRENT_LOG_MAGIC_VALUE));
             assertThat(size).isGreaterThan(0);
 
             // Verify the data can be read back correctly
             int heapMemorySize = Math.max(size, writer.estimatedSizeInBytes());
             MemorySegment segment = MemorySegment.allocateHeapMemory(heapMemorySize);
             MemorySegment firstSegment = pagedOutputView.getCurrentSegment();
-            firstSegment.copyTo(arrowChangeTypeOffset(CURRENT_LOG_MAGIC_VALUE), segment, 0, size);
+            firstSegment.copyTo(recordBatchHeaderSize(CURRENT_LOG_MAGIC_VALUE), segment, 0, size);
 
             ArrowReader reader =
                     ArrowUtils.createArrowReader(segment, 0, size, root, allocator, rowType);

@@ -23,7 +23,7 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss-spark</artifactId>
-        <version>0.9-SNAPSHOT</version>
+        <version>0.10-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-spark-common_${scala.binary.version}</artifactId>
@@ -41,10 +41,34 @@
             <artifactId>spark-catalyst_${scala.binary.version}</artifactId>
             <version>${spark.version}</version>
         </dependency>
+
+        <dependency>
+            <groupId>org.antlr</groupId>
+            <artifactId>antlr4-runtime</artifactId>
+            <version>4.9.3</version>
+        </dependency>
     </dependencies>
 
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.antlr</groupId>
+                <artifactId>antlr4-maven-plugin</artifactId>
+                <version>4.9.3</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>antlr4</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <visitor>true</visitor>
+                    <listener>true</listener>
+                    <sourceDirectory>src/main/antlr4</sourceDirectory>
+                </configuration>
+            </plugin>
+
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
@@ -65,6 +89,19 @@
                         </configuration>
                     </execution>
                 </executions>
+            </plugin>
+
+            <!-- Configure Javadoc to limit source scanning to only the main Scala source directory.
+                 This excludes ANTLR4 generated code from target/generated-sources/antlr4 which causes issues with release=8 config.
+                 Without this exclusion, the javadoc plugin scans generated parser files and fails with
+                 "No source files for package org.apache.spark.sql.catalyst.parser" error because the generated code is incompatible with release=8.
+                 This causes build failure and blocks release builds. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-javadoc-plugin</artifactId>
+                <configuration>
+                    <sourcepath>${basedir}/src/main/scala</sourcepath>
+                </configuration>
             </plugin>
         </plugins>
     </build>

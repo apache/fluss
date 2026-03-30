@@ -62,6 +62,31 @@ public final class DataTypeChecks {
         return that.accept(new DataTypeEqualsWithFieldId(original));
     }
 
+    /**
+     * Check if the given data type is supported for statistics collection. Uses a whitelist
+     * approach to ensure only types with meaningful statistical properties are included.
+     *
+     * @param dataType the data type to check
+     * @return true if the data type is supported for statistics, false otherwise
+     */
+    public static boolean isSupportedStatisticsType(DataType dataType) {
+        return dataType.isAnyOf(
+                DataTypeRoot.BOOLEAN,
+                DataTypeRoot.TINYINT,
+                DataTypeRoot.SMALLINT,
+                DataTypeRoot.INTEGER,
+                DataTypeRoot.BIGINT,
+                DataTypeRoot.FLOAT,
+                DataTypeRoot.DOUBLE,
+                DataTypeRoot.STRING,
+                DataTypeRoot.CHAR,
+                DataTypeRoot.DECIMAL,
+                DataTypeRoot.DATE,
+                DataTypeRoot.TIME_WITHOUT_TIME_ZONE,
+                DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE,
+                DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE);
+    }
+
     private DataTypeChecks() {
         // no instantiation
     }

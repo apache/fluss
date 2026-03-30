@@ -178,6 +178,93 @@ public class FlinkLanceTieringTestBase {
         return createTable(tablePath, tableBuilder.build());
     }
 
+    protected long createLogTableWithAllArrayTypes(TablePath tablePath) throws Exception {
+        Schema.Builder schemaBuilder =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("tags", DataTypes.ARRAY(DataTypes.STRING()))
+                        .column("scores", DataTypes.ARRAY(DataTypes.INT()))
+                        .column("embedding", DataTypes.ARRAY(DataTypes.FLOAT()));
+
+        TableDescriptor.Builder tableBuilder =
+                TableDescriptor.builder()
+                        .distributedBy(1, "a")
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+
+        tableBuilder.schema(schemaBuilder.build());
+        return createTable(tablePath, tableBuilder.build());
+    }
+
+    protected long createLogTableWithNestedRowType(TablePath tablePath) throws Exception {
+        Schema.Builder schemaBuilder =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column(
+                                "address",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("city", DataTypes.STRING()),
+                                        DataTypes.FIELD("zip", DataTypes.INT())));
+
+        TableDescriptor.Builder tableBuilder =
+                TableDescriptor.builder()
+                        .distributedBy(1, "id")
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+
+        tableBuilder.schema(schemaBuilder.build());
+        return createTable(tablePath, tableBuilder.build());
+    }
+
+    protected long createLogTableWithNestedRowOfRowType(TablePath tablePath) throws Exception {
+        Schema.Builder schemaBuilder =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column(
+                                "contact",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("phone", DataTypes.STRING()),
+                                        DataTypes.FIELD(
+                                                "address",
+                                                DataTypes.ROW(
+                                                        DataTypes.FIELD("city", DataTypes.STRING()),
+                                                        DataTypes.FIELD("zip", DataTypes.INT())))));
+
+        TableDescriptor.Builder tableBuilder =
+                TableDescriptor.builder()
+                        .distributedBy(1, "id")
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+
+        tableBuilder.schema(schemaBuilder.build());
+        return createTable(tablePath, tableBuilder.build());
+    }
+
+    protected long createLogTableWithArrayOfRowType(TablePath tablePath) throws Exception {
+        Schema.Builder schemaBuilder =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column(
+                                "items",
+                                DataTypes.ARRAY(
+                                        DataTypes.ROW(
+                                                DataTypes.FIELD("item_name", DataTypes.STRING()),
+                                                DataTypes.FIELD("quantity", DataTypes.INT()))));
+
+        TableDescriptor.Builder tableBuilder =
+                TableDescriptor.builder()
+                        .distributedBy(1, "id")
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+
+        tableBuilder.schema(schemaBuilder.build());
+        return createTable(tablePath, tableBuilder.build());
+    }
+
     protected void writeRows(TablePath tablePath, List<InternalRow> rows, boolean append)
             throws Exception {
         try (Table table = conn.getTable(tablePath)) {

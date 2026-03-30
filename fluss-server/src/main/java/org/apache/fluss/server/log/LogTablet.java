@@ -100,7 +100,7 @@ public final class LogTablet {
     private final Scheduler scheduler;
     private final ScheduledFuture<?> writerExpireCheck;
     private final LogFormat logFormat;
-    private final int tieredLogLocalSegments;
+    private volatile int tieredLogLocalSegments;
     private final Clock clock;
     private final boolean isChangeLog;
 
@@ -231,6 +231,10 @@ public final class LogTablet {
 
     public TableBucket getTableBucket() {
         return localLog.getTableBucket();
+    }
+
+    public long getRowCount() {
+        return getHighWatermark() - logStartOffset();
     }
 
     public long getHighWatermark() {
@@ -524,6 +528,14 @@ public final class LogTablet {
 
     public void updateIsDataLakeEnabled(boolean isDataLakeEnabled) {
         this.isDataLakeEnabled = isDataLakeEnabled;
+    }
+
+    public void updateTieredLogLocalSegments(int tieredLogLocalSegments) {
+        this.tieredLogLocalSegments = tieredLogLocalSegments;
+    }
+
+    public int getTieredLogLocalSegments() {
+        return tieredLogLocalSegments;
     }
 
     public void updateLakeTableSnapshotId(long snapshotId) {

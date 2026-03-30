@@ -25,6 +25,7 @@ import org.apache.fluss.metadata.TableBucket;
 
 import javax.annotation.Nullable;
 
+import java.io.IOException;
 import java.util.List;
 
 /**
@@ -88,4 +89,7 @@ public interface Scan {
      * #limit(int)} and only support for Primary Key Tables.
      */
     BatchScanner createBatchScanner(TableBucket tableBucket, long snapshotId);
+
+    /** Creates a {@link BatchScanner} to read current data in the given table for this scan. */
+    BatchScanner createBatchScanner() throws IOException;
 }

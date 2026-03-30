@@ -22,7 +22,6 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.rpc.RpcClient;
@@ -33,17 +32,21 @@ import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.ServerBase;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.authorizer.AuthorizerLoader;
+import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metrics.ServerMetricUtils;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
+import org.apache.fluss.server.metrics.group.LakeTieringMetricGroup;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperUtils;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.ExecutorUtils;
+import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
@@ -62,6 +65,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+
+import static org.apache.fluss.config.FlussConfigUtils.validateCoordinatorConfigs;
 
 /**
  * Coordinator server implementation. The coordinator server is responsible to:
@@ -85,6 +90,7 @@ public class CoordinatorServer extends ServerBase {
     private final CompletableFuture<Result> terminationFuture;
 
     private final AtomicBoolean isShutDown = new AtomicBoolean(false);
+    private final Clock clock;
 
     @GuardedBy("lock")
     private String serverId;
@@ -141,10 +147,18 @@ public class CoordinatorServer extends ServerBase {
     @GuardedBy("lock")
     private LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
 
+    @GuardedBy("lock")
+    private KvSnapshotLeaseManager kvSnapshotLeaseManager;
+
     public CoordinatorServer(Configuration conf) {
+        this(conf, SystemClock.getInstance());
+    }
+
+    public CoordinatorServer(Configuration conf, Clock clock) {
         super(conf);
-        validateConfigs(conf);
+        validateCoordinatorConfigs(conf);
         this.terminationFuture = new CompletableFuture<>();
+        this.clock = clock;
     }
 
     public static void main(String[] args) {
@@ -188,7 +202,9 @@ public class CoordinatorServer extends ServerBase {
                 authorizer.startup();
             }
 
-            this.lakeTableTieringManager = new LakeTableTieringManager();
+            this.lakeTableTieringManager =
+                    new LakeTableTieringManager(
+                            new LakeTieringMetricGroup(metricRegistry, serverMetricGroup));
 
             MetadataManager metadataManager =
                     new MetadataManager(zkClient, conf, lakeCatalogDynamicLoader);
@@ -196,6 +212,18 @@ public class CoordinatorServer extends ServerBase {
                     Executors.newFixedThreadPool(
                             conf.get(ConfigOptions.SERVER_IO_POOL_SIZE),
                             new ExecutorThreadFactory("coordinator-io"));
+
+            // Initialize and start the kv snapshot lease manager
+            this.kvSnapshotLeaseManager =
+                    new KvSnapshotLeaseManager(
+                            conf.get(ConfigOptions.KV_SNAPSHOT_LEASE_EXPIRATION_CHECK_INTERVAL)
+                                    .toMillis(),
+                            zkClient,
+                            conf.getString(ConfigOptions.REMOTE_DATA_DIR),
+                            clock,
+                            serverMetricGroup);
+            kvSnapshotLeaseManager.start();
+
             this.coordinatorService =
                     new CoordinatorService(
                             conf,
@@ -208,7 +236,8 @@ public class CoordinatorServer extends ServerBase {
                             lakeCatalogDynamicLoader,
                             lakeTableTieringManager,
                             dynamicConfigManager,
-                            ioExecutor);
+                            ioExecutor,
+                            kvSnapshotLeaseManager);
 
             this.rpcServer =
                     RpcServer.create(
@@ -250,7 +279,8 @@ public class CoordinatorServer extends ServerBase {
                             serverMetricGroup,
                             conf,
                             ioExecutor,
-                            metadataManager);
+                            metadataManager,
+                            kvSnapshotLeaseManager);
             coordinatorEventProcessor.startup();
 
             createDefaultDatabase();
@@ -333,7 +363,12 @@ public class CoordinatorServer extends ServerBase {
         }
     }
 
-    private CoordinatorEventProcessor getCoordinatorEventProcessor() {
+    /**
+     * Get the coordinator event processor. Don't call this method directly as the coordinator event
+     * processor is single threaded model.
+     */
+    @VisibleForTesting
+    public CoordinatorEventProcessor getCoordinatorEventProcessor() {
         if (coordinatorEventProcessor != null) {
             return coordinatorEventProcessor;
         } else {
@@ -444,6 +479,11 @@ public class CoordinatorServer extends ServerBase {
                 if (lakeCatalogDynamicLoader != null) {
                     lakeCatalogDynamicLoader.close();
                 }
+
+                if (kvSnapshotLeaseManager != null) {
+                    kvSnapshotLeaseManager.close();
+                }
+
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }
@@ -512,32 +552,5 @@ public class CoordinatorServer extends ServerBase {
     @VisibleForTesting
     public RebalanceManager getRebalanceManager() {
         return coordinatorEventProcessor.getRebalanceManager();
-    }
-
-    private static void validateConfigs(Configuration conf) {
-        if (conf.get(ConfigOptions.DEFAULT_REPLICATION_FACTOR) < 1) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be greater than or equal 1.",
-                            ConfigOptions.DEFAULT_REPLICATION_FACTOR.key()));
-        }
-        if (conf.get(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS) < 1) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be greater than or equal 1.",
-                            ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS.key()));
-        }
-
-        if (conf.get(ConfigOptions.SERVER_IO_POOL_SIZE) < 1) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be greater than or equal 1.",
-                            ConfigOptions.SERVER_IO_POOL_SIZE.key()));
-        }
-
-        if (conf.get(ConfigOptions.REMOTE_DATA_DIR) == null) {
-            throw new IllegalConfigurationException(
-                    String.format("Configuration %s must be set.", ConfigOptions.REMOTE_DATA_DIR));
-        }
     }
 }

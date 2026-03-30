@@ -52,6 +52,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
 
     private final BucketingFunction bucketingFunction;
     private final int numBuckets;
+    private final boolean insertIfNotExists;
 
     /** a getter to extract partition from lookup key row, null when it's not a partitioned. */
     private @Nullable final PartitionGetter partitionGetter;
@@ -60,25 +61,31 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
             TableInfo tableInfo,
             SchemaGetter schemaGetter,
             MetadataUpdater metadataUpdater,
-            LookupClient lookupClient) {
+            LookupClient lookupClient,
+            boolean insertIfNotExists) {
         super(tableInfo, metadataUpdater, lookupClient, schemaGetter);
         checkArgument(
                 tableInfo.hasPrimaryKey(),
                 "Log table %s doesn't support lookup",
                 tableInfo.getTablePath());
         this.numBuckets = tableInfo.getNumBuckets();
+        this.insertIfNotExists = insertIfNotExists;
 
         // the row type of the input lookup row
         RowType lookupRowType = tableInfo.getRowType().project(tableInfo.getPrimaryKeys());
         DataLakeFormat lakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
-
-        // the encoded primary key is the physical primary key
         this.primaryKeyEncoder =
-                KeyEncoder.of(lookupRowType, tableInfo.getPhysicalPrimaryKeys(), lakeFormat);
+                KeyEncoder.ofPrimaryKeyEncoder(
+                        lookupRowType,
+                        tableInfo.getPhysicalPrimaryKeys(),
+                        tableInfo.getTableConfig(),
+                        tableInfo.isDefaultBucketKey());
         this.bucketKeyEncoder =
                 tableInfo.isDefaultBucketKey()
                         ? primaryKeyEncoder
-                        : KeyEncoder.of(lookupRowType, tableInfo.getBucketKeys(), lakeFormat);
+                        : KeyEncoder.ofBucketKeyEncoder(
+                                lookupRowType, tableInfo.getBucketKeys(), lakeFormat);
+
         this.bucketingFunction = BucketingFunction.of(lakeFormat);
 
         this.partitionGetter =
@@ -114,7 +121,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
         CompletableFuture<LookupResult> lookupFuture = new CompletableFuture<>();
         lookupClient
-                .lookup(tableInfo.getTablePath(), tableBucket, pkBytes)
+                .lookup(tableInfo.getTablePath(), tableBucket, pkBytes, insertIfNotExists)
                 .whenComplete(
                         (result, error) -> {
                             if (error != null) {

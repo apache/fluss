@@ -136,7 +136,8 @@ public class ArrowLogWriteBatchTest {
                                 DATA1_ROW_TYPE,
                                 DEFAULT_COMPRESSION),
                         new PreAllocatedPagedOutputView(memorySegmentList),
-                        System.currentTimeMillis());
+                        System.currentTimeMillis(),
+                        null);
         assertThat(arrowLogWriteBatch.pooledMemorySegments()).isEqualTo(memorySegmentList);
 
         int count = 0;
@@ -210,7 +211,8 @@ public class ArrowLogWriteBatchTest {
                             DATA1_TABLE_INFO.getSchemaId(),
                             arrowWriter,
                             new PreAllocatedPagedOutputView(memorySegmentList),
-                            System.currentTimeMillis());
+                            System.currentTimeMillis(),
+                            null);
 
             int recordCount = 0;
             while (arrowLogWriteBatch.tryAppend(
@@ -253,7 +255,7 @@ public class ArrowLogWriteBatchTest {
             CompletableFuture<Void> future = new CompletableFuture<>();
             arrowLogWriteBatch.tryAppend(
                     createWriteRecord(row(i, "a" + i)),
-                    exception -> {
+                    (bucket, offset, exception) -> {
                         if (exception != null) {
                             future.completeExceptionally(exception);
                         } else {
@@ -310,11 +312,12 @@ public class ArrowLogWriteBatchTest {
                         DATA1_ROW_TYPE,
                         DEFAULT_COMPRESSION),
                 new UnmanagedPagedOutputView(128),
-                System.currentTimeMillis());
+                System.currentTimeMillis(),
+                null);
     }
 
     private WriteCallback newWriteCallback() {
-        return exception -> {
+        return (bucket, offset, exception) -> {
             if (exception != null) {
                 throw new RuntimeException(exception);
             }

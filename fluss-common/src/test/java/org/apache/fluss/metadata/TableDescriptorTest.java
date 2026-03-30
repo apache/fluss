@@ -23,6 +23,7 @@ import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -321,7 +322,7 @@ class TableDescriptorTest {
     @Test
     void testInvalidListaggParameterEmptyDelimiter() {
         // LISTAGG with empty delimiter - should fail
-        assertThatThrownBy(() -> AggFunctions.LISTAGG("").validate())
+        assertThatThrownBy(() -> AggFunctions.LISTAGG("").validateParameters())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must be a non-empty string");
     }
@@ -332,7 +333,8 @@ class TableDescriptorTest {
         Map<String, String> params = new HashMap<>();
         params.put("unknown_param", "value");
 
-        assertThatThrownBy(() -> AggFunctions.of(AggFunctionType.LISTAGG, params).validate())
+        assertThatThrownBy(
+                        () -> AggFunctions.of(AggFunctionType.LISTAGG, params).validateParameters())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("unknown_param")
                 .hasMessageContaining("not supported");
@@ -344,9 +346,46 @@ class TableDescriptorTest {
         Map<String, String> params = new HashMap<>();
         params.put("some_param", "value");
 
-        assertThatThrownBy(() -> AggFunctions.of(AggFunctionType.SUM, params).validate())
+        assertThatThrownBy(() -> AggFunctions.of(AggFunctionType.SUM, params).validateParameters())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("some_param")
                 .hasMessageContaining("not supported");
+    }
+
+    @Test
+    void testValidateAggFunctionWithDataType() {
+        Map<String, String> params = new HashMap<>();
+
+        // invalid case
+        assertThatThrownBy(
+                        () ->
+                                AggFunctions.of(AggFunctionType.BOOL_AND, params)
+                                        .validateDataType(DataTypes.STRING()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("column must be part of")
+                .hasMessageContaining(
+                        Arrays.deepToString(AggFunctionType.BOOL_AND.getSupportedDataTypeRoots()));
+
+        assertThatThrownBy(
+                        () ->
+                                AggFunctions.of(AggFunctionType.SUM, params)
+                                        .validateDataType(DataTypes.STRING()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("column must be part of")
+                .hasMessageContaining(
+                        Arrays.deepToString(AggFunctionType.SUM.getSupportedDataTypeRoots()));
+
+        assertThatThrownBy(
+                        () ->
+                                AggFunctions.of(AggFunctionType.MAX, params)
+                                        .validateDataType(DataTypes.BOOLEAN()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("column must be part of")
+                .hasMessageContaining(
+                        Arrays.deepToString(AggFunctionType.MAX.getSupportedDataTypeRoots()));
+
+        // valid case
+        AggFunctions.of(AggFunctionType.LAST_VALUE, params).validateDataType(DataTypes.STRING());
+        AggFunctions.of(AggFunctionType.LISTAGG, params).validateDataType(DataTypes.STRING());
     }
 }

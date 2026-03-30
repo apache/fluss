@@ -36,7 +36,14 @@ trait FlussInputPartition extends InputPartition {
  * @param tableBucket
  *   the table bucket to read from
  */
-case class FlussAppendInputPartition(tableBucket: TableBucket) extends FlussInputPartition
+case class FlussAppendInputPartition(tableBucket: TableBucket, startOffset: Long, stopOffset: Long)
+  extends FlussInputPartition {
+  override def toString: String = {
+    s"FlussAppendInputPartition{tableId=${tableBucket.getTableId}, bucketId=${tableBucket.getBucket}," +
+      s" partitionId=${tableBucket.getPartitionId}" +
+      s" logStartOffset=$startOffset, logStopOffset=$stopOffset"
+  }
+}
 
 /**
  * Represents an input partition for reading data from a primary key table bucket. This partition
@@ -56,4 +63,10 @@ case class FlussUpsertInputPartition(
     snapshotId: Long,
     logStartingOffset: Long,
     logStoppingOffset: Long)
-  extends FlussInputPartition
+  extends FlussInputPartition {
+  override def toString: String = {
+    s"FlussUpsertInputPartition{tableId=${tableBucket.getTableId}, bucketId=${tableBucket.getBucket}," +
+      s" partitionId=${tableBucket.getPartitionId}, snapshotId=$snapshotId," +
+      s" logStartOffset=$logStartingOffset, logStopOffset=$logStoppingOffset"
+  }
+}

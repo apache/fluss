@@ -56,6 +56,7 @@ public class RemoteLogTestBase extends ReplicaTestBase {
 
         conf.set(ConfigOptions.REMOTE_LOG_INDEX_FILE_CACHE_SIZE, MemorySize.parse("1mb"));
         conf.set(ConfigOptions.REMOTE_FS_WRITE_BUFFER_SIZE, MemorySize.parse("10b"));
+        conf.setInt(ConfigOptions.REMOTE_LOG_TASK_MAX_UPLOAD_SEGMENTS, Integer.MAX_VALUE);
         return conf;
     }
 

@@ -17,7 +17,10 @@
 
 package org.apache.fluss.lake.iceberg.source;
 
+import org.apache.fluss.lake.iceberg.FlussDataTypeToIcebergDataType;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.BigIntType;
 import org.apache.fluss.types.BinaryType;
@@ -31,12 +34,16 @@ import org.apache.fluss.types.DoubleType;
 import org.apache.fluss.types.FloatType;
 import org.apache.fluss.types.IntType;
 import org.apache.fluss.types.LocalZonedTimestampType;
+import org.apache.fluss.types.MapType;
+import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.SmallIntType;
 import org.apache.fluss.types.StringType;
 import org.apache.fluss.types.TimeType;
 import org.apache.fluss.types.TimestampType;
 import org.apache.fluss.types.TinyIntType;
 import org.apache.fluss.utils.DateTimeUtils;
+
+import org.apache.iceberg.types.Types;
 
 import java.nio.ByteBuffer;
 import java.time.Instant;
@@ -104,6 +111,21 @@ public class FlussArrayAsIcebergList extends AbstractList<Object> {
                     ? null
                     : new FlussArrayAsIcebergList(
                             innerArray, ((ArrayType) elementType).getElementType());
+        } else if (elementType instanceof MapType) {
+            MapType mapType = (MapType) elementType;
+            InternalMap internalMap = flussArray.getMap(index);
+            return internalMap == null
+                    ? null
+                    : new FlussMapAsIcebergMap(
+                            internalMap, mapType.getKeyType(), mapType.getValueType());
+        } else if (elementType instanceof RowType) {
+            RowType rowType = (RowType) elementType;
+            InternalRow internalRow = flussArray.getRow(index, rowType.getFieldCount());
+            Types.StructType nestedStructType =
+                    (Types.StructType) rowType.accept(FlussDataTypeToIcebergDataType.INSTANCE);
+            return internalRow == null
+                    ? null
+                    : new FlussRowAsIcebergRecord(nestedStructType, rowType, internalRow);
         } else {
             throw new UnsupportedOperationException(
                     "Unsupported array element type conversion for Fluss type: "

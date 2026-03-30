@@ -25,11 +25,9 @@ import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplitState;
 import org.apache.fluss.flink.source.testutils.Order;
 import org.apache.fluss.flink.source.testutils.OrderDeserializationSchema;
-import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.flink.utils.FlussRowToFlinkRowConverter;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
@@ -47,11 +45,11 @@ import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for {@link FlinkRecordEmitter} with RowData output type. */
-public class FlinkRecordEmitterTest extends FlinkTestBase {
+public class FlinkRecordEmitterTest {
     @Test
     void testEmitRowDataRecordWithHybridSplitInSnapshotPhase() throws Exception {
         // Setup
-        long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+        long tableId = 1L;
 
         TableBucket bucket0 = new TableBucket(tableId, 0);
 
@@ -103,13 +101,7 @@ public class FlinkRecordEmitterTest extends FlinkTestBase {
                         .column("address", DataTypes.STRING())
                         .build();
 
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(tableSchema)
-                        .distributedBy(DEFAULT_BUCKET_NUM, "orderId")
-                        .build();
-
-        long tableId = createTable(DEFAULT_TABLE_PATH, tableDescriptor);
+        long tableId = 1L;
 
         TableBucket bucket0 = new TableBucket(tableId, 0);
 

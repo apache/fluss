@@ -86,8 +86,19 @@ public class ChangelogRowConverter implements RecordToFlinkRowConverter {
 
     /** Converts a Fluss ChangeType to its string representation for the changelog virtual table. */
     private String convertChangeTypeToString(ChangeType changeType) {
-        // Use the short string representation from ChangeType
-        return changeType.shortString();
+        switch (changeType) {
+            case APPEND_ONLY:
+            case INSERT:
+                return "insert";
+            case UPDATE_BEFORE:
+                return "update_before";
+            case UPDATE_AFTER:
+                return "update_after";
+            case DELETE:
+                return "delete";
+            default:
+                throw new IllegalArgumentException("Unknown change type: " + changeType);
+        }
     }
 
     /**
@@ -103,7 +114,7 @@ public class ChangelogRowConverter implements RecordToFlinkRowConverter {
         // Add metadata columns first (using centralized constants from TableDescriptor)
         fields.add(
                 new org.apache.flink.table.types.logical.RowType.RowField(
-                        TableDescriptor.CHANGE_TYPE_COLUMN, new VarCharType(false, 2)));
+                        TableDescriptor.CHANGE_TYPE_COLUMN, new VarCharType(false, 13)));
         fields.add(
                 new org.apache.flink.table.types.logical.RowType.RowField(
                         TableDescriptor.LOG_OFFSET_COLUMN, new BigIntType(false)));

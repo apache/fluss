@@ -83,6 +83,7 @@ public class CoordinatorRequestBatch {
     private static final Schema EMPTY_SCHEMA = Schema.newBuilder().build();
     private static final TableDescriptor EMPTY_TABLE_DESCRIPTOR =
             TableDescriptor.builder().schema(EMPTY_SCHEMA).distributedBy(0).build();
+    private static final String EMPTY_REMOTE_DATA_DIR = "";
 
     // a map from tablet server to notify the leader and isr for each bucket.
     private final Map<Integer, Map<TableBucket, PbNotifyLeaderAndIsrReqForBucket>>
@@ -240,7 +241,8 @@ public class CoordinatorRequestBatch {
     public void addStopReplicaRequestForTabletServers(
             Set<Integer> tabletServers,
             TableBucket tableBucket,
-            boolean isDelete,
+            boolean deleteLocal,
+            boolean deleteRemote,
             int leaderEpoch) {
         tabletServers.stream()
                 .filter(s -> s >= 0)
@@ -250,12 +252,18 @@ public class CoordinatorRequestBatch {
                                     stopReplicaRequestMap.computeIfAbsent(id, k -> new HashMap<>());
                             // reduce delete flag, if it has been marked as deleted,
                             // we will set it as delete replica
-                            boolean alreadyDelete =
+                            boolean alreadyDeleteLocal =
                                     stopBucketReplica.get(tableBucket) != null
                                             && stopBucketReplica.get(tableBucket).isDelete();
+                            boolean alreadyDeleteRemote =
+                                    stopBucketReplica.get(tableBucket) != null
+                                            && stopBucketReplica.get(tableBucket).isDeleteRemote();
                             PbStopReplicaReqForBucket protoStopReplicaForBucket =
                                     makeStopBucketReplica(
-                                            tableBucket, alreadyDelete || isDelete, leaderEpoch);
+                                            tableBucket,
+                                            alreadyDeleteLocal || deleteLocal,
+                                            alreadyDeleteRemote || deleteRemote,
+                                            leaderEpoch);
                             stopBucketReplica.put(tableBucket, protoStopReplicaForBucket);
                         });
     }
@@ -269,11 +277,11 @@ public class CoordinatorRequestBatch {
      *       none-partitioned table
      *   <li>case3: Table create and bucketAssignment don't generated, case will happen for new
      *       created partitioned table
-     *   <li>case4: Table is queued for deletion, in this case we will set a empty tableBucket set
+     *   <li>case4: Table is queued for deletion, in this case we will set an empty tableBucket set
      *       and tableId set to {@link TableMetadata#DELETED_TABLE_ID} to avoid send unless info to
      *       tabletServer
      *   <li>case5: Partition create and bucketAssignment of this partition generated.
-     *   <li>case6: Partition is queued for deletion, in this case we will set a empty tableBucket
+     *   <li>case6: Partition is queued for deletion, in this case we will set an empty tableBucket
      *       set and partitionId set to {@link PartitionMetadata#DELETED_PARTITION_ID } to avoid
      *       send unless info to tabletServer
      *   <li>case7: Leader and isr is changed for these input tableBuckets
@@ -447,7 +455,7 @@ public class CoordinatorRequestBatch {
             // we collect the buckets whose replica is to be deleted
             Set<TableBucket> deletedReplicaBuckets =
                     stopReplicas.values().stream()
-                            .filter(PbStopReplicaReqForBucket::isDelete)
+                            .filter(pbBucket -> pbBucket.isDelete() && pbBucket.isDeleteRemote())
                             .map(t -> toTableBucket(t.getTableBucket()))
                             .collect(Collectors.toSet());
 
@@ -687,7 +695,13 @@ public class CoordinatorRequestBatch {
         if (tableInfo == null) {
             if (tableQueuedForDeletion) {
                 return TableInfo.of(
-                        DELETED_TABLE_PATH, tableId, 0, EMPTY_TABLE_DESCRIPTOR, -1L, -1L);
+                        DELETED_TABLE_PATH,
+                        tableId,
+                        0,
+                        EMPTY_TABLE_DESCRIPTOR,
+                        EMPTY_REMOTE_DATA_DIR,
+                        -1L,
+                        -1L);
             } else {
                 // it may happen that the table is dropped, but the partition still exists
                 // when coordinator restarts, it won't consider it as deleted table,
@@ -703,6 +717,7 @@ public class CoordinatorRequestBatch {
                             DELETED_TABLE_ID,
                             0,
                             EMPTY_TABLE_DESCRIPTOR,
+                            EMPTY_REMOTE_DATA_DIR,
                             -1L,
                             -1L)
                     : tableInfo;

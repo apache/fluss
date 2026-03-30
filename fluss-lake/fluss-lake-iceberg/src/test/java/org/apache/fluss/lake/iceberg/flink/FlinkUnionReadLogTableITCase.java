@@ -23,7 +23,9 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
@@ -49,6 +51,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -126,12 +129,12 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
             // check filter push down
             assertThat(plan)
                     .contains("TableSourceScan(")
-                    .contains("LogicalFilter(condition=[=($16, _UTF-16LE'" + partition + "'")
+                    .contains("LogicalFilter(condition=[=($17, _UTF-16LE'" + partition + "'")
                     .contains("filter=[=(p, _UTF-16LE'" + partition + "'");
 
             List<Row> expectedFiltered =
                     writtenRows.stream()
-                            .filter(r -> partition.equals(r.getField(16)))
+                            .filter(r -> partition.equals(r.getField(17)))
                             .collect(Collectors.toList());
 
             List<Row> actualFiltered =
@@ -300,7 +303,8 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
                                 "f_row",
                                 DataTypes.ROW(
                                         DataTypes.FIELD("f_nested_int", DataTypes.INT()),
-                                        DataTypes.FIELD("f_nested_string", DataTypes.STRING())));
+                                        DataTypes.FIELD("f_nested_string", DataTypes.STRING())))
+                        .column("f_map", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()));
 
         TableDescriptor.Builder tableBuilder =
                 TableDescriptor.builder()
@@ -330,6 +334,17 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         List<InternalRow> rows = new ArrayList<>();
         List<Row> flinkRows = new ArrayList<>();
         for (int i = 0; i < rowCount; i++) {
+            // Map for Fluss InternalRow
+            Map<Object, Object> mapData = new HashMap<>();
+            mapData.put(BinaryString.fromString("key1"), 100 + i);
+            mapData.put(BinaryString.fromString("key2"), 200 + i);
+            GenericMap map = new GenericMap(mapData);
+
+            // Map for FlinkRow
+            Map<String, Integer> flinkMap = new HashMap<>();
+            flinkMap.put("key1", 100 + i);
+            flinkMap.put("key2", 200 + i);
+
             if (partition == null) {
                 rows.add(
                         row(
@@ -348,7 +363,8 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
                                 TimestampNtz.fromMillis(1698235273501L),
                                 TimestampNtz.fromMillis(1698235273501L, 8000),
                                 new byte[] {5, 6, 7, 8},
-                                row(10, "nested_string")));
+                                row(10, "nested_string"),
+                                map));
 
                 flinkRows.add(
                         Row.of(
@@ -371,7 +387,8 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
                                                 ZoneId.of("UTC"))
                                         .plusNanos(8000),
                                 new byte[] {5, 6, 7, 8},
-                                Row.of(10, "nested_string")));
+                                Row.of(10, "nested_string"),
+                                flinkMap));
             } else {
                 rows.add(
                         row(
@@ -391,6 +408,7 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
                                 TimestampNtz.fromMillis(1698235273501L, 8000),
                                 new byte[] {5, 6, 7, 8},
                                 row(10, "nested_string"),
+                                map,
                                 partition));
 
                 flinkRows.add(
@@ -415,6 +433,7 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
                                         .plusNanos(8000),
                                 new byte[] {5, 6, 7, 8},
                                 Row.of(10, "nested_string"),
+                                flinkMap,
                                 partition));
             }
         }

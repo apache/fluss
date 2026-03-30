@@ -20,6 +20,7 @@ package org.apache.fluss.server.zk;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.CuratorEvent;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException.Code;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
 
 import java.util.List;
 import java.util.Optional;
@@ -56,6 +57,18 @@ public abstract class ZkAsyncResponse {
         if (resultCode != Code.OK) {
             throw KeeperException.create(resultCode, path);
         }
+    }
+
+    /** Returns a string representation of the error message, or empty string if none. */
+    public String getErrorMessage() {
+        return resultException()
+                .map(e -> e.getClass().getSimpleName() + ": " + e.getMessage())
+                .orElse("");
+    }
+
+    /** Returns true if the response indicates an error. */
+    public boolean hasError() {
+        return resultCode != Code.OK;
     }
 
     // -------------------------------------------------------------------------------------------
@@ -98,6 +111,25 @@ public abstract class ZkAsyncResponse {
         public static ZkGetChildrenResponse create(CuratorEvent event) {
             return new ZkGetChildrenResponse(
                     event.getPath(), Code.get(event.getResultCode()), event.getChildren());
+        }
+    }
+
+    /** The response for ZooKeeper checkExists async operation. */
+    public static class ZkCheckExistsResponse extends ZkAsyncResponse {
+        private final Stat stat;
+
+        public ZkCheckExistsResponse(String path, KeeperException.Code resultCode, Stat stat) {
+            super(path, resultCode);
+            this.stat = stat;
+        }
+
+        public Stat getStat() {
+            return stat;
+        }
+
+        public static ZkCheckExistsResponse create(CuratorEvent event) {
+            return new ZkCheckExistsResponse(
+                    event.getPath(), Code.get(event.getResultCode()), event.getStat());
         }
     }
 }

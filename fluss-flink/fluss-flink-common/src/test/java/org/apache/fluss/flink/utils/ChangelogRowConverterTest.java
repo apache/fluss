@@ -65,7 +65,7 @@ class ChangelogRowConverterTest {
         assertThat(result.getRowKind()).isEqualTo(RowKind.INSERT);
 
         // Verify metadata columns
-        assertThat(result.getString(0)).isEqualTo(StringData.fromString("+I"));
+        assertThat(result.getString(0)).isEqualTo(StringData.fromString("insert"));
         assertThat(result.getLong(1)).isEqualTo(100L); // log offset
         assertThat(result.getTimestamp(2, 3)).isNotNull(); // commit timestamp
 
@@ -88,7 +88,7 @@ class ChangelogRowConverterTest {
         assertThat(result.getRowKind()).isEqualTo(RowKind.INSERT);
 
         // Verify change type metadata
-        assertThat(result.getString(0)).isEqualTo(StringData.fromString("-U"));
+        assertThat(result.getString(0)).isEqualTo(StringData.fromString("update_before"));
         assertThat(result.getLong(1)).isEqualTo(200L);
 
         // Verify physical columns
@@ -103,7 +103,7 @@ class ChangelogRowConverterTest {
 
         RowData result = converter.convert(record);
 
-        assertThat(result.getString(0)).isEqualTo(StringData.fromString("+U"));
+        assertThat(result.getString(0)).isEqualTo(StringData.fromString("update_after"));
         assertThat(result.getLong(1)).isEqualTo(201L);
         assertThat(result.getInt(3)).isEqualTo(2);
         assertThat(result.getString(4).toString()).isEqualTo("Bob");
@@ -116,7 +116,7 @@ class ChangelogRowConverterTest {
 
         RowData result = converter.convert(record);
 
-        assertThat(result.getString(0)).isEqualTo(StringData.fromString("-D"));
+        assertThat(result.getString(0)).isEqualTo(StringData.fromString("delete"));
         assertThat(result.getLong(1)).isEqualTo(300L);
         assertThat(result.getInt(3)).isEqualTo(3);
         assertThat(result.getString(4).toString()).isEqualTo("Charlie");
@@ -151,7 +151,7 @@ class ChangelogRowConverterTest {
                         converter
                                 .convert(createLogRecord(ChangeType.INSERT, 1L, 1, "Test", 100L))
                                 .getString(0))
-                .isEqualTo(StringData.fromString("+I"));
+                .isEqualTo(StringData.fromString("insert"));
 
         assertThat(
                         converter
@@ -159,7 +159,7 @@ class ChangelogRowConverterTest {
                                         createLogRecord(
                                                 ChangeType.UPDATE_BEFORE, 2L, 1, "Test", 100L))
                                 .getString(0))
-                .isEqualTo(StringData.fromString("-U"));
+                .isEqualTo(StringData.fromString("update_before"));
 
         assertThat(
                         converter
@@ -167,13 +167,13 @@ class ChangelogRowConverterTest {
                                         createLogRecord(
                                                 ChangeType.UPDATE_AFTER, 3L, 1, "Test", 100L))
                                 .getString(0))
-                .isEqualTo(StringData.fromString("+U"));
+                .isEqualTo(StringData.fromString("update_after"));
 
         assertThat(
                         converter
                                 .convert(createLogRecord(ChangeType.DELETE, 4L, 1, "Test", 100L))
                                 .getString(0))
-                .isEqualTo(StringData.fromString("-D"));
+                .isEqualTo(StringData.fromString("delete"));
 
         // For log tables (append-only)
         assertThat(
@@ -182,7 +182,7 @@ class ChangelogRowConverterTest {
                                         createLogRecord(
                                                 ChangeType.APPEND_ONLY, 5L, 1, "Test", 100L))
                                 .getString(0))
-                .isEqualTo(StringData.fromString("+A"));
+                .isEqualTo(StringData.fromString("insert"));
     }
 
     private LogRecord createLogRecord(

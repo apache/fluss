@@ -18,6 +18,7 @@
 
 package org.apache.fluss.lake.iceberg.source;
 
+import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalRow;
 
 import org.apache.iceberg.Schema;
@@ -29,9 +30,14 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.apache.iceberg.types.Types.NestedField.optional;
 import static org.apache.iceberg.types.Types.NestedField.required;
@@ -80,10 +86,24 @@ class IcebergRecordAsFlussRowTest {
                                                                 18,
                                                                 "subfield2",
                                                                 Types.IntegerType.get()))))),
-                        // System columns
-                        required(19, "__bucket", Types.IntegerType.get()),
-                        required(20, "__offset", Types.LongType.get()),
-                        required(21, "__timestamp", Types.TimestampType.withZone()));
+                        optional(
+                                19,
+                                "map_field",
+                                Types.MapType.ofOptional(
+                                        20, 21, Types.StringType.get(), Types.IntegerType.get())),
+                        optional(25, "date_field", Types.DateType.get()),
+                        optional(26, "time_field", Types.TimeType.get()),
+                        optional(
+                                27,
+                                "date_array",
+                                Types.ListType.ofOptional(28, Types.DateType.get())),
+                        optional(
+                                29,
+                                "time_array",
+                                Types.ListType.ofOptional(30, Types.TimeType.get())),
+                        required(22, "__bucket", Types.IntegerType.get()),
+                        required(23, "__offset", Types.LongType.get()),
+                        required(24, "__timestamp", Types.TimestampType.withZone()));
 
         record = GenericRecord.create(schema);
     }
@@ -100,8 +120,7 @@ class IcebergRecordAsFlussRowTest {
 
         icebergRecordAsFlussRow.replaceIcebergRecord(record);
 
-        // Should return count excluding system columns (3 system columns)
-        assertThat(icebergRecordAsFlussRow.getFieldCount()).isEqualTo(14);
+        assertThat(icebergRecordAsFlussRow.getFieldCount()).isEqualTo(19);
     }
 
     @Test
@@ -163,8 +182,33 @@ class IcebergRecordAsFlussRowTest {
         assertThat(icebergRecordAsFlussRow.getChar(12, 10).toString())
                 .isEqualTo("Hello"); // char_data
 
-        // Test field count (excluding system columns)
-        assertThat(icebergRecordAsFlussRow.getFieldCount()).isEqualTo(14);
+        assertThat(icebergRecordAsFlussRow.getFieldCount()).isEqualTo(19);
+    }
+
+    @Test
+    void testGetIntWithLocalDateAndLocalTime() {
+        LocalDate date = LocalDate.of(2020, 6, 15);
+        LocalTime time = LocalTime.of(14, 30, 0);
+
+        record.setField("id", 1L);
+        record.setField("date_field", date);
+        record.setField("time_field", time);
+        record.setField("date_array", Arrays.asList(date));
+        record.setField("time_array", Arrays.asList(time));
+        record.setField("__bucket", 1);
+        record.setField("__offset", 100L);
+        record.setField("__timestamp", OffsetDateTime.now(ZoneOffset.UTC));
+
+        icebergRecordAsFlussRow.replaceIcebergRecord(record);
+
+        assertThat(icebergRecordAsFlussRow.getInt(15)).isEqualTo((int) date.toEpochDay());
+        assertThat(icebergRecordAsFlussRow.getInt(16))
+                .isEqualTo((int) time.toNanoOfDay() / 1_000_000);
+
+        InternalArray dateArray = icebergRecordAsFlussRow.getArray(17);
+        InternalArray timeArray = icebergRecordAsFlussRow.getArray(18);
+        assertThat(dateArray.getInt(0)).isEqualTo((int) date.toEpochDay());
+        assertThat(timeArray.getInt(0)).isEqualTo((int) time.toNanoOfDay() / 1_000_000);
     }
 
     @Test
@@ -194,5 +238,48 @@ class IcebergRecordAsFlussRowTest {
         assertThat(deepNestedRow).isNotNull();
         assertThat(deepNestedRow.getString(0).toString()).isEqualTo(subfield1Value);
         assertThat(deepNestedRow.getInt(1)).isEqualTo(subfield2Value);
+    }
+
+    @Test
+    void testMapType() {
+        // Create a simple map with String keys and Integer values
+        Map<String, Integer> mapData = new HashMap<>();
+        mapData.put("key1", 100);
+        mapData.put("key2", 200);
+        mapData.put("key3", 300);
+
+        record.setField("id", 1L);
+        record.setField("map_field", mapData);
+        // System columns
+        record.setField("__bucket", 1);
+        record.setField("__offset", 100L);
+        record.setField("__timestamp", OffsetDateTime.now(ZoneOffset.UTC));
+
+        icebergRecordAsFlussRow.replaceIcebergRecord(record);
+
+        // Test map retrieval - map_field is at index 14
+        org.apache.fluss.row.InternalMap internalMap = icebergRecordAsFlussRow.getMap(14);
+        assertThat(internalMap).isNotNull();
+        assertThat(internalMap.size()).isEqualTo(3);
+
+        // Verify map contents by iterating through keys and values
+        org.apache.fluss.row.InternalArray keyArray = internalMap.keyArray();
+        org.apache.fluss.row.InternalArray valueArray = internalMap.valueArray();
+
+        Map<String, Integer> resultMap = new HashMap<>();
+        for (int i = 0; i < internalMap.size(); i++) {
+            String key = keyArray.getString(i).toString();
+            int value = valueArray.getInt(i);
+            resultMap.put(key, value);
+        }
+
+        assertThat(resultMap).containsEntry("key1", 100);
+        assertThat(resultMap).containsEntry("key2", 200);
+        assertThat(resultMap).containsEntry("key3", 300);
+
+        // Test null map
+        record.setField("map_field", null);
+        icebergRecordAsFlussRow.replaceIcebergRecord(record);
+        assertThat(icebergRecordAsFlussRow.isNullAt(14)).isTrue();
     }
 }

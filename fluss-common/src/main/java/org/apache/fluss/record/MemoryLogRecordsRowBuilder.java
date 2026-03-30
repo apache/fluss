@@ -28,7 +28,7 @@ import java.io.IOException;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.BASE_OFFSET_LENGTH;
 import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_LENGTH;
-import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V2;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_LEADER_EPOCH;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
@@ -196,7 +196,7 @@ public abstract class MemoryLogRecordsRowBuilder<T> implements AutoCloseable {
         outputView.writeLong(0);
 
         // write empty leaderEpoch which will be overridden on server side
-        if (magic >= LOG_MAGIC_VALUE_V1) {
+        if (magic >= LOG_MAGIC_VALUE_V2) {
             outputView.writeInt(NO_LEADER_EPOCH);
         }
 

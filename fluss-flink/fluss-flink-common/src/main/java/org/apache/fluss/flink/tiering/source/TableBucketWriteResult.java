@@ -53,7 +53,7 @@ public class TableBucketWriteResult<WriteResult> implements Serializable {
     private final long maxTimestamp;
 
     // the total number of write results in one round of tiering,
-    // used for downstream commiter operator to determine when all write results
+    // used for downstream committer operator to determine when all write results
     // for the round of tiering is finished
     private final int numberOfWriteResults;
 

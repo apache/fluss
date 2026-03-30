@@ -24,7 +24,7 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss-lake</artifactId>
-        <version>0.9-SNAPSHOT</version>
+        <version>0.10-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-lake-iceberg</artifactId>
@@ -318,12 +318,24 @@
                                     <include>*:*</include>
                                 </includes>
                             </artifactSet>
+                            <relocations>
+                                <relocation>
+                                    <pattern>com.fasterxml.jackson</pattern>
+                                    <shadedPattern>org.apache.iceberg.shaded.com.fasterxml.jackson</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.parquet</pattern>
+                                    <shadedPattern>org.apache.iceberg.shaded.org.apache.parquet</shadedPattern>
+                                </relocation>
+                            </relocations>
                             <filters>
                                 <filter>
                                     <artifact>*</artifact>
                                     <excludes>
                                         <exclude>LICENSE</exclude>
                                         <exclude>NOTICE</exclude>
+                                        <exclude>META-INF/versions/21/**</exclude>
+                                        <exclude>META-INF/versions/17/**</exclude>
                                     </excludes>
                                 </filter>
                             </filters>

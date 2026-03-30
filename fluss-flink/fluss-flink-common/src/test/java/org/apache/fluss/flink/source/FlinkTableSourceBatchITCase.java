@@ -20,6 +20,7 @@ package org.apache.fluss.flink.source;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.metadata.TablePath;
 
@@ -352,7 +353,57 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
-    void testCountPushDown(boolean partitionTable) throws Exception {
+    void testCountPushDownForPkTable(boolean partitionTable) throws Exception {
+        String tableName =
+                partitionTable
+                        ? prepareSourceTable(new String[] {"id", "dt"}, "dt")
+                        : prepareSourceTable(new String[] {"id"}, null);
+        // normal scan
+        String query = String.format("SELECT COUNT(*) FROM %s", tableName);
+        assertThat(tEnv.explainSql(query))
+                .contains(
+                        "aggregates=[grouping=[], aggFunctions=[Count1AggFunction()]]]], fields=[count1$0]");
+        CloseableIterator<Row> iterRows = tEnv.executeSql(query).collect();
+        List<String> collected = collectRowsWithTimeout(iterRows, 1);
+        List<String> expected = Collections.singletonList("+I[5]");
+        assertThat(collected).isEqualTo(expected);
+
+        // test not push down grouping count.
+        assertThatThrownBy(
+                        () ->
+                                tEnv.explainSql(
+                                                String.format(
+                                                        "SELECT COUNT(*) FROM %s group by id",
+                                                        tableName))
+                                        .wait())
+                .hasMessageContaining(
+                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+    }
+
+    @Test
+    void testCountPushDownWithWALMode() throws Exception {
+        String tableName = "test_count_table_with_wal";
+        tEnv.executeSql(
+                        String.format(
+                                "create table %s ("
+                                        + "  id int not null,"
+                                        + "  address varchar,"
+                                        + "  name varchar,"
+                                        + "  primary key (id) NOT ENFORCED)"
+                                        + " with ('bucket.num' = '4', 'table.changelog.image' = 'wal')",
+                                tableName))
+                .await();
+        // normal scan
+        String query = String.format("SELECT COUNT(*) FROM %s", tableName);
+        assertThatThrownBy(() -> tEnv.executeSql(query))
+                .hasRootCauseInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(
+                        "Row count is disabled for this table 'defaultdb.test_count_table_with_wal'.");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testCountPushDownForLogTable(boolean partitionTable) throws Exception {
         String tableName = partitionTable ? preparePartitionedLogTable() : prepareLogTable();
         int expectedRows = partitionTable ? 10 : 5;
         // normal scan
@@ -372,18 +423,6 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                                 String.format(
                                                         "SELECT COUNT(*) FROM %s group by id",
                                                         tableName))
-                                        .wait())
-                .hasMessageContaining(
-                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
-
-        // test not support primary key now
-        String primaryTableName = prepareSourceTable(new String[] {"id"}, null);
-        assertThatThrownBy(
-                        () ->
-                                tEnv.explainSql(
-                                                String.format(
-                                                        "SELECT COUNT(*) FROM %s ",
-                                                        primaryTableName))
                                         .wait())
                 .hasMessageContaining(
                         "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");

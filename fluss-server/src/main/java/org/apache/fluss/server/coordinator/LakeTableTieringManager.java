@@ -21,9 +21,14 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.exception.FencedTieringEpochException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.lake.committer.TieringStats;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.Counter;
+import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.server.entity.LakeTieringTableInfo;
+import org.apache.fluss.server.metrics.group.LakeTieringMetricGroup;
 import org.apache.fluss.server.utils.timer.DefaultTimer;
 import org.apache.fluss.server.utils.timer.Timer;
 import org.apache.fluss.server.utils.timer.TimerTask;
@@ -50,10 +55,12 @@ import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.ToLongFunction;
 
-import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
+import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
+import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 
 /**
  * A manager to manage the tables to be tiered.
@@ -82,20 +89,22 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
  * └──┬──┘ └──┬───┘
  *    ▼       ▼
  *  ┌──────────┐ (lake freshness > tiering interval)
- *  │Scheduled ├──────┐
- *  └──────────┘      ▼
- *       ▲        ┌───────┐ (assign to tier service)  ┌───────┐
- *       |        |Pending├──────────────────────────►|Tiering├─┐
- *       |        └───────┘                           └───┬───┘ │
- *       |            ▲                 ┌─────────────────┘     │
- *       |            |                 | (timeout or failure)  | (finished)
- *       |            |                 ▼                       ▼
- *       |            |  (retry)   ┌─────────┐             ┌────────┐
- *       |            └────────────│ Failed  │             │ Tiered │
- *       |                         └─────────┘             └────┬───┘
- *       |                                                      |
- *       └──────────────────────────────────────────────────────┘
- *                   (ready for next round of tiering)
+ *  │Scheduled ├─────┐
+ *  └─────▲────┘     │
+ *        │      ┌───▼───┐ (assign to tier service)  ┌───────┐
+ *        │      |Pending├──────────────────────────►│Tiering├─┐
+ *        │      └───▲───┘                           └───┬───┘ │
+ *        │          │                 ┌─────────────────┘     │
+ *        │          │                 │ (timeout or failure)  │ (finished)
+ *        │          │                 ▼                       ▼
+ *        │          │  (retry)   ┌─────────┐             ┌────────┐
+ *        │          │◀───────────│ Failed  │             │ Tiered │
+ *        │          │            └─────────┘             └─┬───┬──┘
+ *        │          │                                      │   │
+ *        │          │           (force finished)           │   │
+ *        │          └─────────────────────────────────────-┘   │
+ *        │                     (ready for next round)          │
+ *        └─────────────────────────────────────────────────────┘
  * }</pre>
  */
 public class LakeTableTieringManager implements AutoCloseable {
@@ -123,8 +132,14 @@ public class LakeTableTieringManager implements AutoCloseable {
     // cache table_id -> table tiering epoch
     private final Map<Long, Long> tableTierEpoch;
 
-    // table_id -> the last timestamp of tiered lake snapshot
-    private final Map<Long, Long> tableLastTieredTime;
+    // table_id -> result snapshot of the last completed tiering round
+    private final Map<Long, LastTieringResult> lastTieringResult;
+
+    // table_id -> the tiering failure counter
+    private final Map<Long, Counter> tableFailureCounters;
+
+    // table_id -> start time (ms) of the currently in-progress tiering round
+    private final Map<Long, Long> currentTieringStartTime;
 
     // the live tables that are tiering,
     // from table_id -> last heartbeat time by the tiering service
@@ -133,21 +148,25 @@ public class LakeTableTieringManager implements AutoCloseable {
     // table_id -> delayed tiering task
     private final Map<Long, DelayedTiering> delayedTieringByTableId;
 
-    private final Lock lock = new ReentrantLock();
+    private final ReadWriteLock lock = new ReentrantReadWriteLock(true);
 
-    public LakeTableTieringManager() {
+    private final LakeTieringMetricGroup tieringMetricGroup;
+
+    public LakeTableTieringManager(LakeTieringMetricGroup lakeTieringMetricGroup) {
         this(
                 new DefaultTimer("delay lake tiering", 1_000, 20),
                 Executors.newSingleThreadScheduledExecutor(
                         new ExecutorThreadFactory("fluss-lake-tiering-timeout-checker")),
-                SystemClock.getInstance());
+                SystemClock.getInstance(),
+                lakeTieringMetricGroup);
     }
 
     @VisibleForTesting
     protected LakeTableTieringManager(
             Timer lakeTieringScheduleTimer,
             ScheduledExecutorService lakeTieringServiceTimeoutChecker,
-            Clock clock) {
+            Clock clock,
+            LakeTieringMetricGroup lakeTieringMetricGroup) {
         this.lakeTieringScheduleTimer = lakeTieringScheduleTimer;
         this.lakeTieringServiceTimeoutChecker = lakeTieringServiceTimeoutChecker;
         this.clock = clock;
@@ -161,12 +180,25 @@ public class LakeTableTieringManager implements AutoCloseable {
         this.lakeTieringServiceTimeoutChecker.scheduleWithFixedDelay(
                 this::checkTieringServiceTimeout, 0, 15, TimeUnit.SECONDS);
         this.tableTierEpoch = new HashMap<>();
-        this.tableLastTieredTime = new HashMap<>();
+        this.lastTieringResult = new HashMap<>();
         this.delayedTieringByTableId = new HashMap<>();
+        this.tableFailureCounters = new HashMap<>();
+        this.currentTieringStartTime = new HashMap<>();
+        this.tieringMetricGroup = lakeTieringMetricGroup;
+        registerMetrics();
+    }
+
+    private void registerMetrics() {
+        tieringMetricGroup.gauge(
+                MetricNames.LAKE_TIERING_PENDING_TABLES_COUNT,
+                () -> inReadLock(lock, pendingTieringTables::size));
+        tieringMetricGroup.gauge(
+                MetricNames.LAKE_TIERING_RUNNING_TABLES_COUNT,
+                () -> inReadLock(lock, liveTieringTableIds::size));
     }
 
     public void initWithLakeTables(List<Tuple2<TableInfo, Long>> tableInfoWithTieredTime) {
-        inLock(
+        inWriteLock(
                 lock,
                 () -> {
                     for (Tuple2<TableInfo, Long> tableInfoAndLastLakeTime :
@@ -182,7 +214,7 @@ public class LakeTableTieringManager implements AutoCloseable {
     }
 
     public void addNewLakeTable(TableInfo tableInfo) {
-        inLock(
+        inWriteLock(
                 lock,
                 () -> {
                     registerLakeTable(tableInfo, clock.milliseconds());
@@ -198,14 +230,18 @@ public class LakeTableTieringManager implements AutoCloseable {
         tablePaths.put(tableId, tableInfo.getTablePath());
         tableLakeFreshness.put(
                 tableId, tableInfo.getTableConfig().getDataLakeFreshness().toMillis());
-        tableLastTieredTime.put(tableId, lastTieredTime);
+        lastTieringResult.put(tableId, LastTieringResult.initial(lastTieredTime));
         tableTierEpoch.put(tableId, 0L);
+
+        // register table-level metrics
+        registerTableMetrics(tableId, tableInfo.getTablePath());
     }
 
+    @GuardedBy("lock")
     private void scheduleTableTiering(long tableId) {
         Long freshnessInterval = tableLakeFreshness.get(tableId);
-        Long lastTieredTime = tableLastTieredTime.get(tableId);
-        if (freshnessInterval == null || lastTieredTime == null) {
+        LastTieringResult lastResult = lastTieringResult.get(tableId);
+        if (freshnessInterval == null || lastResult == null) {
             // the table has been dropped, return directly
             return;
         }
@@ -214,7 +250,7 @@ public class LakeTableTieringManager implements AutoCloseable {
         if (existingDelayedTiering != null) {
             existingDelayedTiering.cancel();
         }
-        long delayMs = freshnessInterval - (clock.milliseconds() - lastTieredTime);
+        long delayMs = freshnessInterval - (clock.milliseconds() - lastResult.tieredTime);
         // if the delayMs is < 0, the DelayedTiering will be triggered at once without
         // adding into timing wheel.
         DelayedTiering delayedTiering = new DelayedTiering(tableId, delayMs);
@@ -222,13 +258,67 @@ public class LakeTableTieringManager implements AutoCloseable {
         lakeTieringScheduleTimer.add(delayedTiering);
     }
 
+    private void registerTableMetrics(long tableId, TablePath tablePath) {
+        // create table-level metric group
+        MetricGroup tableMetricGroup =
+                tieringMetricGroup.addTableLakeTieringMetricGroup(tableId, tablePath);
+
+        // tierLag: milliseconds since last successful tiering
+        tableMetricGroup.gauge(
+                MetricNames.LAKE_TIERING_TABLE_TIER_LAG,
+                () ->
+                        inReadLock(
+                                lock,
+                                () -> {
+                                    LastTieringResult r = lastTieringResult.get(tableId);
+                                    return r != null ? clock.milliseconds() - r.tieredTime : -1L;
+                                }));
+
+        // tierDuration: duration of last tiering job
+        tableMetricGroup.gauge(
+                MetricNames.LAKE_TIERING_TABLE_TIER_DURATION,
+                () -> inReadLock(lock, () -> getLastResultField(tableId, r -> r.tierDuration)));
+
+        // failuresTotal: total failure count for this table
+        Counter failuresCounter =
+                tableMetricGroup.counter(MetricNames.LAKE_TIERING_TABLE_FAILURES_TOTAL);
+        tableFailureCounters.put(tableId, failuresCounter);
+
+        // fileSize: cumulative total file size of the lake table after the last tiering
+        tableMetricGroup.gauge(
+                MetricNames.LAKE_TIERING_TABLE_FILE_SIZE,
+                () -> inReadLock(lock, () -> getLastResultField(tableId, r -> r.fileSize)));
+
+        // recordCount: cumulative total record count of the lake table after the last tiering
+        tableMetricGroup.gauge(
+                MetricNames.LAKE_TIERING_TABLE_RECORD_COUNT,
+                () -> inReadLock(lock, () -> getLastResultField(tableId, r -> r.recordCount)));
+    }
+
+    /**
+     * Returns the value of a single field from the {@link LastTieringResult} for the given table,
+     * or {@code -1} if the table has no completed tiering result (e.g. not yet tiered or already
+     * removed).
+     *
+     * <p>Must be called under {@link #lock} (read or write).
+     */
+    @GuardedBy("lock")
+    long getLastResultField(long tableId, ToLongFunction<LastTieringResult> fieldExtractor) {
+        LastTieringResult r = lastTieringResult.get(tableId);
+        return r != null ? fieldExtractor.applyAsLong(r) : -1L;
+    }
+
     public void removeLakeTable(long tableId) {
-        inLock(
+        inWriteLock(
                 lock,
                 () -> {
                     tablePaths.remove(tableId);
                     tableLakeFreshness.remove(tableId);
-                    tableLastTieredTime.remove(tableId);
+                    lastTieringResult.remove(tableId);
+                    currentTieringStartTime.remove(tableId);
+                    tableFailureCounters.remove(tableId);
+                    // close and remove the metric group to unregister metrics
+                    tieringMetricGroup.removeTableLakeTieringMetricGroup(tableId);
                     tieringStates.remove(tableId);
                     liveTieringTableIds.remove(tableId);
                     tableTierEpoch.remove(tableId);
@@ -248,7 +338,7 @@ public class LakeTableTieringManager implements AutoCloseable {
      * @param newFreshnessMs the new freshness interval in milliseconds
      */
     public void updateTableLakeFreshness(long tableId, long newFreshnessMs) {
-        inLock(
+        inWriteLock(
                 lock,
                 () -> {
                     Long currentFreshness = tableLakeFreshness.get(tableId);
@@ -284,7 +374,7 @@ public class LakeTableTieringManager implements AutoCloseable {
 
     @VisibleForTesting
     protected void checkTieringServiceTimeout() {
-        inLock(
+        inWriteLock(
                 lock,
                 () -> {
                     long currentTime = clock.milliseconds();
@@ -311,11 +401,11 @@ public class LakeTableTieringManager implements AutoCloseable {
 
     @Nullable
     public LakeTieringTableInfo requestTable() {
-        return inLock(
+        return inWriteLock(
                 lock,
                 () -> {
                     Long tableId = pendingTieringTables.poll();
-                    // no any pending table, return directly
+                    // now no any pending table, return directly
                     if (tableId == null) {
                         return null;
                     }
@@ -330,20 +420,55 @@ public class LakeTableTieringManager implements AutoCloseable {
                 });
     }
 
-    public void finishTableTiering(long tableId, long tieredEpoch) {
-        inLock(
+    public void finishTableTiering(
+            long tableId, long tieredEpoch, boolean isForceFinished, TieringStats stats) {
+        inWriteLock(
                 lock,
                 () -> {
                     validateTieringServiceRequest(tableId, tieredEpoch);
+                    updateTableTieringResult(tableId, stats);
                     // to tiered state firstly
                     doHandleStateChange(tableId, TieringState.Tiered);
-                    // then to scheduled state to enable other tiering service can pick it
-                    doHandleStateChange(tableId, TieringState.Scheduled);
+                    if (isForceFinished) {
+                        // add to pending again since it's forced to finish
+                        doHandleStateChange(tableId, TieringState.Pending);
+                    } else {
+                        // then to scheduled state to enable other tiering service can pick it
+                        doHandleStateChange(tableId, TieringState.Scheduled);
+                    }
                 });
     }
 
+    @GuardedBy("lock")
+    private void updateTableTieringResult(long tableId, TieringStats stats) {
+        Long startTime = currentTieringStartTime.get(tableId);
+        long now = clock.milliseconds();
+        long duration = startTime != null ? now - startTime : -1L;
+        if (stats.isAvailableStats()) {
+            lastTieringResult.put(
+                    tableId,
+                    new LastTieringResult(
+                            now,
+                            duration,
+                            stats.getFileSize() != null ? stats.getFileSize() : -1L,
+                            stats.getRecordCount() != null ? stats.getRecordCount() : -1L));
+        } else {
+            lastTieringResult.compute(
+                    tableId,
+                    (k, prev) -> {
+                        if (prev == null) {
+                            throw new IllegalStateException(
+                                    "Last tiering result not found for table " + tableId);
+                        } else {
+                            return new LastTieringResult(
+                                    now, duration, prev.fileSize, prev.recordCount);
+                        }
+                    });
+        }
+    }
+
     public void reportTieringFail(long tableId, long tieringEpoch) {
-        inLock(
+        inWriteLock(
                 lock,
                 () -> {
                     validateTieringServiceRequest(tableId, tieringEpoch);
@@ -355,7 +480,7 @@ public class LakeTableTieringManager implements AutoCloseable {
     }
 
     public void renewTieringHeartbeat(long tableId, long tieringEpoch) {
-        inLock(
+        inWriteLock(
                 lock,
                 () -> {
                     validateTieringServiceRequest(tableId, tieringEpoch);
@@ -420,7 +545,17 @@ public class LakeTableTieringManager implements AutoCloseable {
      * <p>Tiering -> Failed
      *
      * <p>-- When the tiering service timeout to report heartbeat or report failure for the table,
-     * do: transmit to Tiered state
+     * do: transmit to Failed state
+     *
+     * <p>Tiered -> Pending
+     *
+     * <p>-- When the tiering is force finished due to exceeding the specified tiering duration, do:
+     * transmit to Pending state to enable immediate re-tiering
+     *
+     * <p>Tiered -> Scheduled
+     *
+     * <p>-- When the tiering is normally finished, do: transmit to Scheduled state to wait for the
+     * next round of tiering
      */
     private void doHandleStateChange(long tableId, TieringState targetState) {
         TieringState currentState = tieringStates.get(tableId);
@@ -447,13 +582,19 @@ public class LakeTableTieringManager implements AutoCloseable {
                 break;
             case Tiering:
                 liveTieringTableIds.put(tableId, clock.milliseconds());
+                currentTieringStartTime.put(tableId, clock.milliseconds());
                 break;
             case Tiered:
-                tableLastTieredTime.put(tableId, clock.milliseconds());
                 liveTieringTableIds.remove(tableId);
+                currentTieringStartTime.remove(tableId);
                 break;
             case Failed:
+                Counter counter = tableFailureCounters.get(tableId);
+                if (counter != null) {
+                    counter.inc();
+                }
                 liveTieringTableIds.remove(tableId);
+                currentTieringStartTime.remove(tableId);
                 // do nothing
                 break;
         }
@@ -479,7 +620,7 @@ public class LakeTableTieringManager implements AutoCloseable {
                 "Successfully changed tiering state for table {} from {} to {}.",
                 tableId,
                 fromState,
-                fromState);
+                toState);
     }
 
     @Override
@@ -501,6 +642,7 @@ public class LakeTableTieringManager implements AutoCloseable {
         }
 
         lakeTieringScheduleTimer.shutdown();
+        tieringMetricGroup.close();
     }
 
     private class DelayedTiering extends TimerTask {
@@ -514,7 +656,7 @@ public class LakeTableTieringManager implements AutoCloseable {
 
         @Override
         public void run() {
-            inLock(
+            inWriteLock(
                     lock,
                     () -> {
                         // to pending state
@@ -541,7 +683,8 @@ public class LakeTableTieringManager implements AutoCloseable {
         }
     }
 
-    private enum TieringState {
+    @VisibleForTesting
+    enum TieringState {
         // When a new lake table is created, the state will be New
         New {
             @Override
@@ -570,7 +713,7 @@ public class LakeTableTieringManager implements AutoCloseable {
         Pending {
             @Override
             public Set<TieringState> validPreviousStates() {
-                return EnumSet.of(Scheduled, Failed);
+                return EnumSet.of(Scheduled, Failed, Tiered);
             }
         },
         // When one tiering service is tiering the table, the state will be Tiering
@@ -597,5 +740,89 @@ public class LakeTableTieringManager implements AutoCloseable {
         };
 
         abstract Set<TieringState> validPreviousStates();
+    }
+
+    /**
+     * Immutable snapshot of the statistics collected at the end of one completed tiering round.
+     * Written atomically when a table transitions to {@link TieringState#Tiered}.
+     */
+    @VisibleForTesting
+    static class LastTieringResult {
+
+        /** Timestamp (ms) when this tiering round completed. */
+        final long tieredTime;
+
+        /** Wall-clock duration (ms) of this tiering round; {@code -1} if unknown. */
+        final long tierDuration;
+
+        /**
+         * Cumulative total file size (bytes) of the lake table after this round; {@code -1} if not
+         * reported by the lake implementation (converted from {@code null} in {@link
+         * TieringStats}).
+         */
+        final long fileSize;
+
+        /**
+         * Cumulative total record count of the lake table after this round; {@code -1} if not
+         * reported by the lake implementation (converted from {@code null} in {@link
+         * TieringStats}).
+         */
+        final long recordCount;
+
+        LastTieringResult(long tieredTime, long tierDuration, long fileSize, long recordCount) {
+            this.tieredTime = tieredTime;
+            this.tierDuration = tierDuration;
+            this.fileSize = fileSize;
+            this.recordCount = recordCount;
+        }
+
+        /**
+         * Creates the initial placeholder used when a table is first registered. Only {@code
+         * tieredTime} is meaningful; all other stats are {@code -1} until the first round
+         * completes.
+         */
+        static LastTieringResult initial(long tieredTime) {
+            return new LastTieringResult(tieredTime, -1L, -1L, -1L);
+        }
+    }
+
+    @VisibleForTesting
+    int getPendingTablesCount() {
+        return inReadLock(lock, pendingTieringTables::size);
+    }
+
+    @VisibleForTesting
+    int getRunningTablesCount() {
+        return inReadLock(lock, liveTieringTableIds::size);
+    }
+
+    @VisibleForTesting
+    Long getTableLastSuccessTime(long tableId) {
+        return inReadLock(
+                lock,
+                () -> {
+                    LastTieringResult r = lastTieringResult.get(tableId);
+                    return r != null ? r.tieredTime : null;
+                });
+    }
+
+    @VisibleForTesting
+    Long getTableFailureCount(long tableId) {
+        return inReadLock(
+                lock,
+                () -> {
+                    Counter c = tableFailureCounters.get(tableId);
+                    return c != null ? c.getCount() : 0L;
+                });
+    }
+
+    @VisibleForTesting
+    TieringState getTableState(long tableId) {
+        return inReadLock(lock, () -> tieringStates.get(tableId));
+    }
+
+    @VisibleForTesting
+    long getLastTieringResultField(long tableId, ToLongFunction<LastTieringResult> fieldExtractor) {
+        return inReadLock(lock, () -> getLastResultField(tableId, fieldExtractor));
     }
 }

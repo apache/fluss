@@ -25,6 +25,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.FsPathAndFileName;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.utils.ExceptionUtils;
@@ -151,6 +152,7 @@ public class RemoteLogDownloader implements Closeable {
             return;
         }
 
+        TableBucket tableBucket = request.getTableBucket();
         try {
             // 1. cleanup the finished logs first to free up disk space
             cleanupRemoteLogs();
@@ -167,8 +169,9 @@ public class RemoteLogDownloader implements Closeable {
                             (bytes, throwable) -> {
                                 if (throwable != null) {
                                     LOG.error(
-                                            "Failed to download remote log segment file {}.",
+                                            "Failed to download remote log segment file {} for table bucket {}.",
                                             fsPathAndFileName.getFileName(),
+                                            tableBucket,
                                             ExceptionUtils.stripExecutionException(throwable));
                                     // release the semaphore for the failed request
                                     prefetchSemaphore.release();
@@ -178,8 +181,10 @@ public class RemoteLogDownloader implements Closeable {
                                     scannerMetricGroup.remoteFetchErrorCount().inc();
                                 } else {
                                     LOG.info(
-                                            "Successfully downloaded remote log segment file {} to local cost {} ms.",
+                                            "Successfully downloaded remote log segment file {} to local for "
+                                                    + "table bucket {} cost {} ms.",
                                             fsPathAndFileName.getFileName(),
+                                            tableBucket,
                                             System.currentTimeMillis() - startTime);
                                     File localFile =
                                             new File(
@@ -195,7 +200,7 @@ public class RemoteLogDownloader implements Closeable {
             segmentsToFetch.add(request);
             scannerMetricGroup.remoteFetchErrorCount().inc();
             // log the error and continue instead of shutdown the download thread
-            LOG.error("Failed to download remote log segment.", t);
+            LOG.error("Failed to download remote log segment for table bucket {}.", tableBucket, t);
         }
     }
 
@@ -299,6 +304,10 @@ public class RemoteLogDownloader implements Closeable {
 
         public FsPathAndFileName getFsPathAndFileName() {
             return RemoteLogDownloader.getFsPathAndFileName(remoteLogTabletDir, segment);
+        }
+
+        public TableBucket getTableBucket() {
+            return segment.tableBucket();
         }
 
         @Override

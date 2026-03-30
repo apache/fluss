@@ -24,7 +24,7 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss-flink</artifactId>
-        <version>0.9-SNAPSHOT</version>
+        <version>0.10-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-flink-1.19</artifactId>
@@ -33,7 +33,7 @@
 
     <properties>
         <flink.major.version>1.19</flink.major.version>
-        <flink.minor.version>1.19.2</flink.minor.version>
+        <flink.minor.version>1.19.3</flink.minor.version>
     </properties>
 
     <dependencies>

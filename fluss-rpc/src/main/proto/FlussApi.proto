@@ -40,6 +40,7 @@ message ApiVersionsRequest {
 
 message ApiVersionsResponse {
   repeated PbApiVersion api_versions = 1;
+  optional int32 server_type = 2;
 }
 
 // get schema request and response
@@ -61,6 +62,17 @@ message CreateDatabaseRequest {
 }
 
 message CreateDatabaseResponse {
+}
+
+// alter database request and response
+message AlterDatabaseRequest {
+  required string database_name = 1;
+  required bool ignore_if_not_exists = 2;
+  repeated PbAlterConfig config_changes = 3;
+  optional string comment = 4;
+}
+
+message AlterDatabaseResponse {
 }
 
 // get table request and response
@@ -93,9 +105,12 @@ message DatabaseExistsResponse {
 
 // list databases request and response
 message ListDatabasesRequest {
+  optional bool include_summary = 1;
 }
+
 message ListDatabasesResponse {
   repeated string database_name = 1;
+  repeated PbDatabaseSummary database_summary = 2;
 }
 
 // create table request and response
@@ -135,6 +150,7 @@ message GetTableInfoResponse {
   required bytes table_json = 3;
   required int64 created_time = 4;
   required int64 modified_time = 5;
+  optional string remote_data_dir = 6;
 }
 
 // list tables request and response
@@ -219,6 +235,11 @@ message FetchLogResponse {
   repeated PbFetchLogRespForTable tables_resp = 1;
 }
 
+// Aggregation mode constants for write operations (using int32 instead of enum for proto3 compatibility)
+// AGG_MODE_AGGREGATE = 0: Data is aggregated through server-side merge engine (default)
+// AGG_MODE_OVERWRITE = 1: Bypass merge engine, directly replace values (for undo recovery)
+// AGG_MODE_LOCAL_AGGREGATE = 2: Client-side local aggregation (reserved for future implementation)
+
 // put kv request and response
 message PutKvRequest {
   required int32 acks = 1;
@@ -228,6 +249,9 @@ message PutKvRequest {
   // if empty, means write all columns
   repeated int32 target_columns = 4 [packed = true];
   repeated PbPutKvReqForBucket buckets_req = 5;
+  // Aggregation mode for this request (see AGG_MODE_* constants above)
+  // 0 = AGGREGATE (default), 1 = OVERWRITE, 2 = LOCAL_AGGREGATE (not yet supported)
+  optional int32 agg_mode = 6;
 }
 
 message PutKvResponse {
@@ -238,6 +262,9 @@ message PutKvResponse {
 message LookupRequest {
   required int64 table_id = 1;
   repeated PbLookupReqForBucket buckets_req = 2;
+  optional bool insert_if_not_exists = 3;
+  optional int32 acks = 4;
+  optional int32 timeout_ms = 5;
 }
 
 message LookupResponse {
@@ -272,6 +299,21 @@ message LimitScanResponse{
   optional bytes records = 4;
 }
 
+
+// Get table statistics request and response.
+// Sent to TabletServer to get per-bucket statistics.
+message GetTableStatsRequest {
+  required int64 table_id = 1;
+  repeated PbTableStatsReqForBucket buckets_req = 2;
+  // Column indexes for column-level stats (e.g., ndv, sum).
+  // If empty, column stats are not collected.
+  // Reserved for future use.
+  repeated int32 target_columns = 3 [packed = true];
+}
+
+message GetTableStatsResponse {
+  repeated PbTableStatsRespForBucket buckets_resp = 1;
+}
 
 // notify bucket leader and isr request
 message NotifyLeaderAndIsrRequest {
@@ -364,11 +406,36 @@ message GetKvSnapshotMetadataResponse {
   repeated PbRemotePathAndLocalFile snapshot_files = 2;
 }
 
-message GetLatestLakeSnapshotRequest {
-  required PbTablePath table_path = 1;
+message AcquireKvSnapshotLeaseRequest {
+  required string lease_id = 1;
+  required int64 lease_duration_ms = 2;
+  repeated PbKvSnapshotLeaseForTable snapshots_to_lease = 3;
 }
 
-message GetLatestLakeSnapshotResponse {
+message AcquireKvSnapshotLeaseResponse {
+  repeated PbKvSnapshotLeaseForTable unavailable_snapshots = 1;
+}
+
+message ReleaseKvSnapshotLeaseRequest {
+  required string lease_id = 1;
+  repeated PbTableBucket buckets_to_release = 2;
+}
+
+message ReleaseKvSnapshotLeaseResponse {}
+
+message DropKvSnapshotLeaseRequest {
+  required string lease_id = 1;
+}
+
+message DropKvSnapshotLeaseResponse {}
+
+message GetLakeSnapshotRequest {
+  required PbTablePath table_path = 1;
+  optional int64 snapshot_id = 2; // If not set, returns the latest snapshot
+  optional bool readable = 3; // If true, returns the latest readable snapshot
+}
+
+message GetLakeSnapshotResponse {
   required int64 table_id = 1;
   required int64 snapshotId = 2;
   repeated PbLakeSnapshotForBucket bucket_snapshots = 3;
@@ -451,6 +518,11 @@ message NotifyRemoteLogOffsetsResponse {
 
 message PrepareLakeTableSnapshotRequest {
   repeated PbTableOffsets bucket_offsets = 1;
+  // If true, ignore previous table offsets and do not merge with existing lake table offsets.
+  // If false (default), the system will merge the provided bucket offsets with the previous
+  // lake table offsets to ensure continuity. This is useful when you want to replace all offsets
+  // instead of merging with existing ones.
+  optional bool ignore_previous_table_offsets = 2;
 }
 
 message PrepareLakeTableSnapshotResponse {
@@ -540,6 +612,12 @@ message LakeTieringHeartbeatRequest {
   repeated PbHeartbeatReqForTable failed_tables = 3;
   // whether to request a table
   optional bool request_table = 4;
+  // Table IDs that were force finished due to reaching the maximum tiering duration.
+  // When a table's tiering operation exceeds the max duration (data lake freshness),
+  // it will be force finished to prevent it from blocking other tables' tiering operations.
+  // These table IDs must also appear in finished_tables. The coordinator uses this field to
+  // distinguish between normally finished tables and force finished tables.
+  repeated int64 force_finished_tables = 5;
 }
 
 message LakeTieringHeartbeatResponse {
@@ -617,6 +695,41 @@ message CancelRebalanceRequest {
 message CancelRebalanceResponse {
 }
 
+// ------------------------------------------------------------------------------------------
+// Producer Offset Management
+// ------------------------------------------------------------------------------------------
+
+// Register producer offsets request and response
+message RegisterProducerOffsetsRequest {
+  required string producer_id = 1;
+  repeated PbProducerTableOffsets table_offsets = 2;
+  optional int64 ttl_ms = 3;
+}
+
+message RegisterProducerOffsetsResponse {
+  // Result of registration: 0 = CREATED (new snapshot), 1 = ALREADY_EXISTS (snapshot existed)
+  optional int32 result = 1;
+}
+
+// Get producer offsets request and response
+message GetProducerOffsetsRequest {
+  required string producer_id = 1;
+}
+
+message GetProducerOffsetsResponse {
+  optional string producer_id = 1;
+  optional int64 expiration_time = 2;
+  repeated PbProducerTableOffsets table_offsets = 3;
+}
+
+// Delete producer offsets request and response
+message DeleteProducerOffsetsRequest {
+  required string producer_id = 1;
+}
+
+message DeleteProducerOffsetsResponse {
+}
+
 
 
 // --------------- Inner classes ----------------
@@ -661,6 +774,7 @@ message PbTableMetadata {
   repeated PbBucketMetadata bucket_metadata = 5;
   required int64 created_time = 6;
   required int64 modified_time = 7;
+  optional string remote_data_dir = 8;
 
   // TODO add a new filed 'deleted_table' to indicate this table is deleted in UpdateMetadataRequest.
   // trace by: https://github.com/apache/fluss/issues/981
@@ -738,6 +852,9 @@ message PbPutKvRespForBucket {
   required int32 bucket_id = 2;
   optional int32 error_code = 3;
   optional string error_message = 4;
+  // the log end offset (LEO) of the changelog after this write
+  // this is the offset of the next record to be written, used for exactly-once semantics
+  optional int64 log_end_offset = 5;
 }
 
 message PbLookupReqForBucket {
@@ -844,7 +961,13 @@ message PbNotifyLeaderAndIsrRespForBucket {
 message PbStopReplicaReqForBucket {
   required PbTableBucket table_bucket = 1;
   required int32 leader_epoch = 2;
+  // delete means remove local replica data (i.e., data stored on the current node).
   required bool delete = 3;
+  // deleteRemote means remove remote replica data (e.g., data in object storage) and was introduced in v0.9.
+  // For backward compatibility, if a request does not include the deleteRemote flag, the system treats delete as
+  // deleteRemote (i.e., it falls back to remote deletion). This ensures older CoordinatorServer continues to function
+  // correctly with newer TabletServers.
+  optional bool deleteRemote = 4;
 }
 
 message PbStopReplicaRespForBucket {
@@ -896,6 +1019,7 @@ message PbRemoteLogSegment {
 message PbPartitionInfo {
   required int64 partition_id = 1;
   required PbPartitionSpec partition_spec = 2;
+  optional string remote_data_dir = 3;
 }
 
 message PbPartitionSpec {
@@ -953,6 +1077,16 @@ message PbHeartbeatReqForTable {
   required int32 coordinator_epoch = 2;
   // the tiering epoch when the table is assigned to be tiering service
   required int64 tiering_epoch = 3;
+  // stats for the last tiering round; only set for finished_tables in LakeTieringHeartbeatRequest
+  optional PbLakeTieringStats lake_tiering_stats = 4;
+}
+
+// Stats reported by the tiering service when a table finishes a tiering round.
+message PbLakeTieringStats {
+  // cumulative total file size (bytes) of the lake table after tiering
+  optional int64 file_size = 1;
+  // cumulative total record count of the lake table after tiering
+  optional int64 record_count = 2;
 }
 
 message PbHeartbeatRespForTable {
@@ -1024,6 +1158,10 @@ message PbLakeTableSnapshotMetadata {
   required int64 snapshot_id = 2;
   required string tiered_bucket_offsets_file_path = 3;
   optional string readable_bucket_offsets_file_path = 4;
+  // Snapshot retention policy: The earliest snapshot ID to retain.
+  // 1. If set, the system will keep all snapshots in the range [earliest_snapshot_id_to_keep, current_snapshot_id].
+  // 2. If not set, the system defaults to a "Single Snapshot Retention" policy, keeping only the snapshot specified in this request.
+  optional int64 earliest_snapshot_id_to_keep = 5;
 }
 
 message PbLakeTableSnapshotInfo {
@@ -1062,4 +1200,124 @@ message PbBucketOffset {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   optional int64 log_end_offset = 4;
+}
+
+// Helper message for table offsets in producer offsets (without table_path)
+message PbProducerTableOffsets {
+  required int64 table_id = 1;
+  repeated PbBucketOffset bucket_offsets = 2;
+}
+
+message PbDatabaseSummary {
+  required string database_name = 1;
+  required int64 created_time = 2;
+  required int32 table_count = 3;
+}
+
+message PbKvSnapshotLeaseForTable {
+  required int64 table_id = 1;
+  repeated PbKvSnapshotLeaseForBucket bucket_snapshots = 2;
+}
+
+message PbKvSnapshotLeaseForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  required int64 snapshot_id = 3;
+}
+
+message PbTableStatsReqForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+}
+
+message PbTableStatsRespForBucket {
+  optional int32 error_code = 1;
+  optional string error_message = 2;
+  optional int64 partition_id = 3;
+  required int32 bucket_id = 4;
+
+  // --- Table-level stats ---
+  // The number of rows in this bucket.
+  // For KV tables: the number of unique keys (live rows).
+  // For Log tables: total number of log records (highWatermark - logStartOffset).
+  // Absent if row count is not available (e.g., WAL changelog mode or legacy tables).
+  optional int64 row_count = 5;
+
+  // --- data size stats (future) ---
+  // The data size in bytes of this bucket.
+  // For KV tables: the size of the KV store.
+  // For Log tables: the size of the log segments.
+  // Reserved for future use.
+  // optional int64 data_size_bytes = 6;
+
+  // --- Column-level stats (future) ---
+  // Per-column statistics, keyed by column index.
+  // Only populated when target_columns is specified in the request.
+  // repeated PbColumnStats column_stats = 10;
+}
+
+/**
+* Definition of predicate system related message
+*/
+
+// PbPredicateType constants (using int32 instead of enum for proto3 compatibility)
+// LEAF = 0, COMPOUND = 1
+
+// Represents a predicate that can be serialized and transmitted across
+// languages
+message PbPredicate {
+  // See PbPredicateType constants: LEAF = 0, COMPOUND = 1
+  required int32 type = 1;
+  optional PbLeafPredicate leaf = 2;
+  optional PbCompoundPredicate compound = 3;
+}
+
+// Represents a leaf predicate that compares a field with literals
+message PbLeafPredicate {
+  // The function to apply (see PbLeafFunction constants: EQUAL=0 ... NOT_IN=12)
+  required int32 function = 1;
+  // The schema field id of the referenced top-level field
+  required int32 field_id = 2;
+  // The literals to compare with
+  repeated PbLiteralValue literals = 3;
+}
+
+// Represents a compound predicate that combines multiple predicates
+message PbCompoundPredicate {
+  // The function to apply (see PbCompoundFunction constants: AND=0, OR=1)
+  required int32 function = 1;
+  // The child predicates
+  repeated PbPredicate children = 2;
+}
+
+// PbLeafFunction constants (using int32 instead of enum for proto3 compatibility)
+// EQUAL=0, NOT_EQUAL=1, LESS_THAN=2, LESS_OR_EQUAL=3, GREATER_THAN=4,
+// GREATER_OR_EQUAL=5, IS_NULL=6, IS_NOT_NULL=7, STARTS_WITH=8, CONTAINS=9,
+// END_WITH=10, IN=11, NOT_IN=12
+
+// PbCompoundFunction constants (using int32 instead of enum for proto3 compatibility)
+// AND=0, OR=1
+
+// PbDataTypeRoot constants (using int32 instead of enum for proto3 compatibility)
+// BOOLEAN=0, TINYINT=1, SMALLINT=2, INT=3, BIGINT=4, FLOAT=5, DOUBLE=6,
+// CHAR=7, VARCHAR=8, DECIMAL=9, DATE=10, TIME_WITHOUT_TIME_ZONE=11,
+// TIMESTAMP_WITHOUT_TIME_ZONE=12, TIMESTAMP_WITH_LOCAL_TIME_ZONE=13,
+// BINARY=14, BYTES=15
+
+// Represents a literal value
+message PbLiteralValue {
+  // See PbDataTypeRoot constants: indicates which value field is populated
+  required int32 literal_type = 1;
+  required bool is_null = 2;
+  optional bool boolean_value = 3;
+  optional int32 int_value = 4;
+  optional int64 bigint_value = 5;
+  optional float float_value = 6;
+  optional double double_value = 7;
+  optional string string_value = 8;
+  optional bytes binary_value = 9;
+  optional int64 decimal_value = 10;   // Serialized decimal (compact mode)
+  optional int64 timestamp_millis_value = 11;      // Epoch millis
+  optional int32 timestamp_nano_of_millis_value = 12; // Nano of millis
+  optional bytes decimal_bytes = 13;   // Serialized decimal (non-compact mode)
 }

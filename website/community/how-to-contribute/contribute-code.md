@@ -28,7 +28,7 @@ Create an issue and reach consensus.
 
 ### Implement
 
-Implement the change according to the Code Style and Quality(refer to the [Flink doc](https://flink.apache.org/how-to-contribute/code-style-and-quality-preamble/) Guide and the approach agreed upon in the issue.
+Implement the change according to the Code Style and Quality (refer to the [Flink doc](https://flink.apache.org/how-to-contribute/code-style-and-quality-preamble/) Guide and the approach agreed upon in the issue).
 
 1. Only start working on the implementation if there is consensus on the approach (e.g. you are assigned to the ticket)
 2. If you are newer, can refer to [ide setup](/community/dev/ide-setup) to setup a Fluss dev environment.

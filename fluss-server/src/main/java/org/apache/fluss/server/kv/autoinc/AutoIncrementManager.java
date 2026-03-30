@@ -27,9 +27,11 @@ import org.apache.fluss.metadata.TablePath;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.time.Duration;
+import java.util.Collections;
 import java.util.List;
 
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -43,6 +45,7 @@ public class AutoIncrementManager {
     // No-op implementation that returns the input unchanged.
     public static final AutoIncrementUpdater NO_OP_UPDATER = rowValue -> rowValue;
 
+    private final long autoIncrementCacheSize;
     private final SchemaGetter schemaGetter;
     private final Cache<Integer, AutoIncrementUpdater> autoIncrementUpdaterCache;
     private final int autoIncrementColumnId;
@@ -53,12 +56,8 @@ public class AutoIncrementManager {
             TablePath tablePath,
             TableConfig tableConf,
             SequenceGeneratorFactory seqGeneratorFactory) {
-        this.autoIncrementUpdaterCache =
-                Caffeine.newBuilder()
-                        .maximumSize(5)
-                        .expireAfterAccess(Duration.ofMinutes(5))
-                        .build();
         this.schemaGetter = schemaGetter;
+        this.autoIncrementCacheSize = tableConf.getAutoIncrementCacheSize();
         int schemaId = schemaGetter.getLatestSchemaInfo().getSchemaId();
         Schema schema = schemaGetter.getSchema(schemaId);
         List<String> autoIncrementColumnNames = schema.getAutoIncrementColumnNames();
@@ -73,18 +72,51 @@ public class AutoIncrementManager {
             autoIncrementColumnId = autoIncrementColumn.getColumnId();
             sequenceGenerator =
                     seqGeneratorFactory.createSequenceGenerator(
-                            tablePath, autoIncrementColumn, tableConf.getAutoIncrementCacheSize());
+                            tablePath, autoIncrementColumn, autoIncrementCacheSize);
+            autoIncrementUpdaterCache =
+                    Caffeine.newBuilder()
+                            .maximumSize(5)
+                            .expireAfterAccess(Duration.ofMinutes(5))
+                            .build();
         } else {
             autoIncrementColumnId = -1;
             sequenceGenerator = null;
+            autoIncrementUpdaterCache = null;
         }
     }
 
     // Supports removing or reordering columns; does NOT support adding an auto-increment column to
     // an existing table.
     public AutoIncrementUpdater getUpdaterForSchema(KvFormat kvFormat, int latestSchemaId) {
-        return autoIncrementUpdaterCache.get(
-                latestSchemaId, k -> createAutoIncrementUpdater(kvFormat, k));
+        if (autoIncrementColumnId == -1) {
+            // return no-op updater directly if there is no auto-increment column
+            return NO_OP_UPDATER;
+        } else {
+            return autoIncrementUpdaterCache.get(
+                    latestSchemaId, k -> createAutoIncrementUpdater(kvFormat, k));
+        }
+    }
+
+    @Nullable
+    public List<AutoIncIDRange> getCurrentIDRanges() {
+        if (autoIncrementColumnId == -1) {
+            return null;
+        } else {
+            return Collections.singletonList(sequenceGenerator.currentSequenceRange());
+        }
+    }
+
+    public void updateIDRange(AutoIncIDRange newRange) {
+        if (autoIncrementColumnId != -1) {
+            sequenceGenerator.updateSequenceRange(newRange);
+        } else {
+            throw new IllegalStateException(
+                    "Cannot update ID range for a table without auto-increment column.");
+        }
+    }
+
+    public long getAutoIncrementCacheSize() {
+        return autoIncrementCacheSize;
     }
 
     private AutoIncrementUpdater createAutoIncrementUpdater(KvFormat kvFormat, int schemaId) {

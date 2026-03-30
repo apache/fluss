@@ -46,6 +46,7 @@ abstract class AbstractSparkTable(val admin: Admin, val tableInfo: TableInfo) ex
     Set(
       TableCapability.BATCH_READ,
       TableCapability.BATCH_WRITE,
+      TableCapability.MICRO_BATCH_READ,
       TableCapability.STREAMING_WRITE
     ).asJava
   }

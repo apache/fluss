@@ -65,7 +65,8 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
                         flinkRowType,
                         createPrimaryKeyLookupNormalizer(new int[] {0}, flinkRowType),
                         // no projection when job compiling, new column added after that.
-                        null);
+                        null,
+                        false);
 
         ListOutputCollector collector = new ListOutputCollector();
         lookupFunction.setCollector(collector);
@@ -104,7 +105,8 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
                         flinkRowType,
                         createPrimaryKeyLookupNormalizer(new int[] {0}, flinkRowType),
                         // no projection when job compiling, new column added after that.
-                        null);
+                        null,
+                        false);
         asyncLookupFunction.open(null);
 
         int[] rowKeys = new int[] {0, 1, 2, 3, 4, 3, 0};
@@ -156,7 +158,8 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
                         tablePath,
                         flinkRowType,
                         createPrimaryKeyLookupNormalizer(new int[] {0}, flinkRowType),
-                        new int[] {1, 0});
+                        new int[] {1, 0},
+                        false);
 
         ListOutputCollector collector = new ListOutputCollector();
         lookupFunction.setCollector(collector);
@@ -202,7 +205,8 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
                         tablePath,
                         flinkRowType,
                         createPrimaryKeyLookupNormalizer(new int[] {0}, flinkRowType),
-                        null);
+                        null,
+                        false);
         collector = new ListOutputCollector();
         lookupFunction.setCollector(collector);
         lookupFunction.open(null);

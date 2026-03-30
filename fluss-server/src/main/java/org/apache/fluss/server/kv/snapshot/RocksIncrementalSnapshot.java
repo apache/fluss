@@ -98,11 +98,11 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
     public SnapshotResultSupplier asyncSnapshot(
             NativeRocksDBSnapshotResources snapshotResources,
             long snapshotId,
-            long logOffset,
+            TabletState tabletState,
             @Nonnull SnapshotLocation snapshotLocation) {
         return new RocksDBIncrementalSnapshotOperation(
                 snapshotId,
-                logOffset,
+                tabletState,
                 snapshotLocation,
                 snapshotResources.previousSnapshot,
                 snapshotResources.snapshotDirectory);
@@ -185,7 +185,7 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
         private final File localSnapshotDirectory;
 
         private final long snapshotId;
-        private final long logOffset;
+        private final TabletState tabletState;
 
         /** The target snapshot location and factory that creates the output streams to DFS. */
         @Nonnull private final SnapshotLocation snapshotLocation;
@@ -194,12 +194,12 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
 
         public RocksDBIncrementalSnapshotOperation(
                 long snapshotId,
-                long logOffset,
+                TabletState tabletState,
                 @Nonnull SnapshotLocation snapshotLocation,
                 PreviousSnapshot previousSnapshot,
                 File localSnapshotDirectory) {
             this.snapshotId = snapshotId;
-            this.logOffset = logOffset;
+            this.tabletState = tabletState;
             this.snapshotLocation = snapshotLocation;
             this.previousSnapshot = previousSnapshot;
             this.localSnapshotDirectory = localSnapshotDirectory;
@@ -223,7 +223,7 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
                 final KvSnapshotHandle kvSnapshotHandle =
                         new KvSnapshotHandle(sstFiles, miscFiles, snapshotIncrementalSize);
                 return new SnapshotResult(
-                        kvSnapshotHandle, snapshotLocation.getSnapshotDirectory(), logOffset);
+                        kvSnapshotHandle, snapshotLocation.getSnapshotDirectory(), tabletState);
             } finally {
                 if (!completed) {
                     cleanupIncompleteSnapshot(tmpResourcesRegistry);

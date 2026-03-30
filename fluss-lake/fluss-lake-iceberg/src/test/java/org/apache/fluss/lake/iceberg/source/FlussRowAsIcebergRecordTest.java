@@ -20,6 +20,7 @@ package org.apache.fluss.lake.iceberg.source;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericMap;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -335,13 +336,24 @@ class FlussRowAsIcebergRecordTest {
                                                 "ids",
                                                 Types.ListType.ofRequired(
                                                         10, Types.IntegerType.get())))),
+                        // array of row (ARRAY<ROW<type STRING, value STRING>>)
+                        Types.NestedField.required(
+                                11,
+                                "contacts",
+                                Types.ListType.ofRequired(
+                                        12,
+                                        Types.StructType.of(
+                                                Types.NestedField.required(
+                                                        13, "type", Types.StringType.get()),
+                                                Types.NestedField.required(
+                                                        14, "value", Types.StringType.get())))),
                         // nullable row
                         Types.NestedField.optional(
-                                11,
+                                15,
                                 "nullable_row",
                                 Types.StructType.of(
                                         Types.NestedField.required(
-                                                12, "id", Types.IntegerType.get()))));
+                                                16, "id", Types.IntegerType.get()))));
 
         RowType flussRowType =
                 RowType.of(
@@ -359,10 +371,15 @@ class FlussRowAsIcebergRecordTest {
                                                 DataTypes.FIELD("flag", DataTypes.BOOLEAN())))),
                         // row_with array
                         DataTypes.ROW(DataTypes.FIELD("ids", DataTypes.ARRAY(DataTypes.INT()))),
+                        // array of row
+                        DataTypes.ARRAY(
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("type", DataTypes.STRING()),
+                                        DataTypes.FIELD("value", DataTypes.STRING()))),
                         // nullable row
                         DataTypes.ROW(DataTypes.FIELD("id", DataTypes.INT())));
 
-        GenericRow genericRow = new GenericRow(4);
+        GenericRow genericRow = new GenericRow(5);
 
         // Simple Row
         GenericRow simpleRow = new GenericRow(2);
@@ -384,8 +401,17 @@ class FlussRowAsIcebergRecordTest {
         rowWithArray.setField(0, new GenericArray(new int[] {1, 2, 3}));
         genericRow.setField(2, rowWithArray);
 
+        // Array of Row
+        GenericRow contact1 = new GenericRow(2);
+        contact1.setField(0, BinaryString.fromString("email"));
+        contact1.setField(1, BinaryString.fromString("user@example.com"));
+        GenericRow contact2 = new GenericRow(2);
+        contact2.setField(0, BinaryString.fromString("phone"));
+        contact2.setField(1, BinaryString.fromString("123-456-7890"));
+        genericRow.setField(3, new GenericArray(new Object[] {contact1, contact2}));
+
         // Nullable Row
-        genericRow.setField(3, null);
+        genericRow.setField(4, null);
 
         FlussRowAsIcebergRecord record = new FlussRowAsIcebergRecord(structType, flussRowType);
         record.internalRow = genericRow;
@@ -410,7 +436,167 @@ class FlussRowAsIcebergRecordTest {
         assertThat(ids.get(1)).isEqualTo(2);
         assertThat(ids.get(2)).isEqualTo(3);
 
+        // Verify Array of Row (ARRAY<ROW<type STRING, value STRING>>)
+        List<?> contacts = (List<?>) record.get(3);
+        assertThat(contacts).isNotNull();
+        assertThat(contacts).hasSize(2);
+        Record icebergContact1 = (Record) contacts.get(0);
+        assertThat(icebergContact1.get(0)).isEqualTo("email");
+        assertThat(icebergContact1.get(1)).isEqualTo("user@example.com");
+        Record icebergContact2 = (Record) contacts.get(1);
+        assertThat(icebergContact2.get(0)).isEqualTo("phone");
+        assertThat(icebergContact2.get(1)).isEqualTo("123-456-7890");
+
         // Verify Nullable Row
+        assertThat(record.get(4)).isNull();
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void testMapType() {
+        Types.StructType structType =
+                Types.StructType.of(
+                        // simple map
+                        Types.NestedField.required(
+                                0,
+                                "simple_map",
+                                Types.MapType.ofRequired(
+                                        1, 2, Types.StringType.get(), Types.IntegerType.get())),
+                        // nested map
+                        Types.NestedField.required(
+                                3,
+                                "nested_map",
+                                Types.MapType.ofRequired(
+                                        4,
+                                        5,
+                                        Types.StringType.get(),
+                                        Types.MapType.ofRequired(
+                                                6,
+                                                7,
+                                                Types.StringType.get(),
+                                                Types.IntegerType.get()))),
+                        // map in array
+                        Types.NestedField.required(
+                                8,
+                                "map_array",
+                                Types.ListType.ofRequired(
+                                        9,
+                                        Types.MapType.ofRequired(
+                                                10,
+                                                11,
+                                                Types.StringType.get(),
+                                                Types.IntegerType.get()))),
+                        // nullable map
+                        Types.NestedField.optional(
+                                12,
+                                "nullable_map",
+                                Types.MapType.ofRequired(
+                                        13, 14, Types.StringType.get(), Types.IntegerType.get())));
+
+        RowType flussRowType =
+                RowType.of(
+                        // simple map
+                        DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()),
+                        // nested map
+                        DataTypes.MAP(
+                                DataTypes.STRING(),
+                                DataTypes.MAP(DataTypes.STRING(), DataTypes.INT())),
+                        // map in array
+                        DataTypes.ARRAY(DataTypes.MAP(DataTypes.STRING(), DataTypes.INT())),
+                        // nullable map
+                        DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()));
+
+        GenericRow genericRow = new GenericRow(4);
+
+        // Simple Map
+        GenericMap simpleMap =
+                new GenericMap(
+                        new java.util.HashMap<Object, Object>() {
+                            {
+                                put(BinaryString.fromString("key1"), 100);
+                                put(BinaryString.fromString("key2"), 200);
+                            }
+                        });
+        genericRow.setField(0, simpleMap);
+
+        // Nested Map
+        GenericMap innerMap1 =
+                new GenericMap(
+                        new java.util.HashMap<Object, Object>() {
+                            {
+                                put(BinaryString.fromString("inner_a"), 1);
+                                put(BinaryString.fromString("inner_b"), 2);
+                            }
+                        });
+        GenericMap innerMap2 =
+                new GenericMap(
+                        new java.util.HashMap<Object, Object>() {
+                            {
+                                put(BinaryString.fromString("inner_c"), 3);
+                            }
+                        });
+        GenericMap nestedMap =
+                new GenericMap(
+                        new java.util.HashMap<Object, Object>() {
+                            {
+                                put(BinaryString.fromString("outer_1"), innerMap1);
+                                put(BinaryString.fromString("outer_2"), innerMap2);
+                            }
+                        });
+        genericRow.setField(1, nestedMap);
+
+        // Map in Array
+        GenericMap arrayMap1 =
+                new GenericMap(
+                        new java.util.HashMap<Object, Object>() {
+                            {
+                                put(BinaryString.fromString("a"), 10);
+                            }
+                        });
+        GenericMap arrayMap2 =
+                new GenericMap(
+                        new java.util.HashMap<Object, Object>() {
+                            {
+                                put(BinaryString.fromString("b"), 20);
+                            }
+                        });
+        genericRow.setField(2, new GenericArray(new Object[] {arrayMap1, arrayMap2}));
+
+        // Nullable Map
+        genericRow.setField(3, null);
+
+        FlussRowAsIcebergRecord record = new FlussRowAsIcebergRecord(structType, flussRowType);
+        record.internalRow = genericRow;
+
+        // Verify Simple Map
+        java.util.Map<Object, Object> simpleMapResult =
+                (java.util.Map<Object, Object>) record.get(0);
+        assertThat(simpleMapResult).isNotNull();
+        assertThat(simpleMapResult).containsEntry("key1", 100).containsEntry("key2", 200);
+
+        // Verify Nested Map
+        java.util.Map<Object, Object> nestedMapResult =
+                (java.util.Map<Object, Object>) record.get(1);
+        assertThat(nestedMapResult).isNotNull();
+        assertThat(nestedMapResult).hasSize(2);
+        java.util.Map<Object, Object> inner1 =
+                (java.util.Map<Object, Object>) nestedMapResult.get("outer_1");
+        assertThat(inner1).containsEntry("inner_a", 1).containsEntry("inner_b", 2);
+        java.util.Map<Object, Object> inner2 =
+                (java.util.Map<Object, Object>) nestedMapResult.get("outer_2");
+        assertThat(inner2).containsEntry("inner_c", 3);
+
+        // Verify Map in Array
+        List<?> mapArrayResult = (List<?>) record.get(2);
+        assertThat(mapArrayResult).hasSize(2);
+        java.util.Map<Object, Object> firstArrayMap =
+                (java.util.Map<Object, Object>) mapArrayResult.get(0);
+        assertThat(firstArrayMap).containsEntry("a", 10);
+        java.util.Map<Object, Object> secondArrayMap =
+                (java.util.Map<Object, Object>) mapArrayResult.get(1);
+        assertThat(secondArrayMap).containsEntry("b", 20);
+
+        // Verify Nullable Map
         assertThat(record.get(3)).isNull();
     }
 }

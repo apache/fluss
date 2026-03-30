@@ -20,10 +20,12 @@ package org.apache.fluss.server.log.remote;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.RemoteStorageException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.remote.RemoteLogSegment;
 
 import java.io.IOException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * A testing implementation of {@link org.apache.fluss.server.log.remote.RemoteLogStorage} which can
@@ -33,9 +35,31 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
 
     public final AtomicBoolean writeManifestFail = new AtomicBoolean(false);
 
+    /**
+     * When set to a non-negative value N, the first N calls to {@link #copyLogSegmentFiles} will
+     * succeed and the (N+1)th call will throw a {@link RemoteStorageException}. A negative value
+     * (default) disables this failure injection.
+     */
+    public final AtomicInteger copySegmentFailAfterNCopies = new AtomicInteger(-1);
+
+    private final AtomicInteger copySegmentCount = new AtomicInteger(0);
+
     public TestingRemoteLogStorage(Configuration conf, ExecutorService ioExecutor)
             throws IOException {
         super(conf, ioExecutor);
+    }
+
+    @Override
+    public void copyLogSegmentFiles(
+            RemoteLogSegment remoteLogSegment, LogSegmentFiles logSegmentFiles)
+            throws RemoteStorageException {
+        int failAfter = copySegmentFailAfterNCopies.get();
+        if (failAfter >= 0 && copySegmentCount.get() >= failAfter) {
+            throw new RemoteStorageException(
+                    "Simulated copy failure after " + failAfter + " successful copies");
+        }
+        super.copyLogSegmentFiles(remoteLogSegment, logSegmentFiles);
+        copySegmentCount.incrementAndGet();
     }
 
     @Override

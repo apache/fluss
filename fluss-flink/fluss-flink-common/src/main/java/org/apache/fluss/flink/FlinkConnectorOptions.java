@@ -31,6 +31,7 @@ import org.apache.flink.table.catalog.IntervalFreshness;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
+import java.util.UUID;
 
 import static org.apache.flink.configuration.description.TextElement.text;
 
@@ -76,6 +77,24 @@ public class FlinkConnectorOptions {
                             "A list of host/port pairs to use for establishing the initial connection to the Fluss cluster. "
                                     + "The list should be in the form host1:port1,host2:port2,....");
 
+    public static final ConfigOption<String> SCAN_KV_SNAPSHOT_LEASE_ID =
+            ConfigOptions.key("scan.kv.snapshot.lease.id")
+                    .stringType()
+                    .defaultValue(String.valueOf(UUID.randomUUID()))
+                    .withDescription(
+                            "The lease ID used to protect acquired KV snapshots from deletion. If specified, "
+                                    + "the snapshots will be retained until either the consumer finishes "
+                                    + "processing all of them or the lease duration expires. By default, "
+                                    + "this value is set to a randomly generated UUID string if not explicitly provided.");
+
+    public static final ConfigOption<Duration> SCAN_KV_SNAPSHOT_LEASE_DURATION =
+            ConfigOptions.key("scan.kv.snapshot.lease.duration")
+                    .durationType()
+                    .defaultValue(Duration.ofDays(1))
+                    .withDescription(
+                            "The time period how long to wait before expiring the kv snapshot lease to "
+                                    + "avoid kv snapshot blocking to delete.");
+
     // --------------------------------------------------------------------------------------------
     // Lookup specific options
     // --------------------------------------------------------------------------------------------
@@ -85,6 +104,16 @@ public class FlinkConnectorOptions {
                     .booleanType()
                     .defaultValue(true)
                     .withDescription("Whether to set async lookup. Default is true.");
+
+    public static final ConfigOption<Boolean> LOOKUP_INSERT_IF_NOT_EXISTS =
+            ConfigOptions.key("lookup.insert-if-not-exists")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to enable insert-if-not-exists behavior for the lookup operation. "
+                                    + "When enabled, if a lookup does not find a matching row, a new row will be inserted "
+                                    + "with the lookup key values. This feature cannot be used with PREFIX_LOOKUP type. "
+                                    + "Default is false.");
 
     // --------------------------------------------------------------------------------------------
     // Scan specific options
@@ -126,6 +155,15 @@ public class FlinkConnectorOptions {
                     .booleanType()
                     .defaultValue(false)
                     .withDescription("Whether to ignore retract（-U/-D) record.");
+
+    public static final ConfigOption<String> SINK_PRODUCER_ID =
+            ConfigOptions.key("sink.producer-id")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The producer ID for undo recovery. If not set, defaults to the Flink job ID. "
+                                    + "This option is useful for testing or when you need to maintain the same producer ID "
+                                    + "across different job submissions.");
 
     @Deprecated
     public static final ConfigOption<Boolean> SINK_BUCKET_SHUFFLE =
@@ -245,7 +283,13 @@ public class FlinkConnectorOptions {
                     .withDescription(
                             "The serialized base64 bytes of refresh handler of materialized table.");
 
-    // ------------------------------------------------------------------------------------------
+    /** Internal option to indicate whether the base table is partitioned for $binlog sources. */
+    public static final ConfigOption<Boolean> INTERNAL_BINLOG_IS_PARTITIONED =
+            ConfigOptions.key("_internal.binlog.is-partitioned")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Internal option: indicates whether the base table is partitioned for $binlog virtual tables. Not part of public API.");
 
     /** Startup mode for the fluss scanner, see {@link #SCAN_STARTUP_MODE}. */
     public enum ScanStartupMode implements DescribedEnum {

@@ -19,9 +19,11 @@ package org.apache.fluss.server.kv.snapshot;
 
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
 import org.apache.fluss.utils.json.JsonSerdeTestBase;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 /** Test for {@link org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde}. */
@@ -55,14 +57,18 @@ class CompletedSnapshotJsonSerdeTest extends JsonSerdeTestBase<CompletedSnapshot
                         1,
                         new FsPath("oss://bucket/snapshot"),
                         new KvSnapshotHandle(sharedFileHandles, privateFileHandles, 5),
-                        10);
+                        10,
+                        null,
+                        null);
         CompletedSnapshot completedSnapshot2 =
                 new CompletedSnapshot(
                         new TableBucket(1, 10L, 1),
                         1,
                         new FsPath("oss://bucket/snapshot"),
                         new KvSnapshotHandle(sharedFileHandles, privateFileHandles, 5),
-                        10);
+                        10,
+                        1234L,
+                        Collections.singletonList(new AutoIncIDRange(2, 10000, 20000)));
         return new CompletedSnapshot[] {completedSnapshot1, completedSnapshot2};
     }
 
@@ -88,7 +94,7 @@ class CompletedSnapshotJsonSerdeTest extends JsonSerdeTestBase<CompletedSnapshot
                     + "{\"kv_file_handle\":{\"path\":\"oss://bucket/snapshot/shared/t2.sst\",\"size\":2},\"local_path\":\"localPath2\"}],"
                     + "\"private_file_handles\":[{\"kv_file_handle\":{\"path\":\"oss://bucket/snapshot/snapshot1/t3\",\"size\":3},\"local_path\":\"localPath3\"},"
                     + "{\"kv_file_handle\":{\"path\":\"oss://bucket/snapshot/snapshot1/t4\",\"size\":4},\"local_path\":\"localPath4\"}],"
-                    + "\"snapshot_incremental_size\":5},\"log_offset\":10}"
+                    + "\"snapshot_incremental_size\":5},\"log_offset\":10,\"row_count\":1234,\"auto_inc_id_range\":[{\"column_id\":2,\"start\":10000,\"end\":20000}]}"
         };
     }
 }

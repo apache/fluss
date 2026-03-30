@@ -31,6 +31,7 @@ import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.NotEnoughReplicasException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -45,12 +46,14 @@ import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.SequenceIDCounter;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvRecoverHelper;
 import org.apache.fluss.server.kv.KvTablet;
+import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import org.apache.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -120,6 +123,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -151,7 +155,7 @@ public final class Replica {
     /** A closeable registry to register all registered {@link Closeable}s. */
     private final CloseableRegistry closeableRegistry;
 
-    private final int minInSyncReplicas;
+    private final IntSupplier minInSyncReplicasSupplier;
     private final ServerMetadataCache metadataCache;
     private final FatalErrorHandler fatalErrorHandler;
     private final BucketMetricGroup bucketMetricGroup;
@@ -167,6 +171,7 @@ public final class Replica {
     private final AdjustIsrManager adjustIsrManager;
 
     private final SchemaGetter schemaGetter;
+    private final TableInfo tableInfo;
     private final TableConfig tableConfig;
     // logFormat and arrowCompressionInfo are used in hot-path, so cache them here.
     private final LogFormat logFormat;
@@ -208,7 +213,7 @@ public final class Replica {
             LogManager logManager,
             @Nullable KvManager kvManager,
             long replicaMaxLagTime,
-            int minInSyncReplicas,
+            IntSupplier minInSyncReplicasSupplier,
             int localTabletServerId,
             OffsetCheckpointFile.LazyOffsetCheckpoints lazyHighWatermarkCheckpoint,
             DelayedOperationManager<DelayedWrite<?>> delayedWriteManager,
@@ -227,7 +232,7 @@ public final class Replica {
         this.kvManager = kvManager;
         this.metadataCache = metadataCache;
         this.replicaMaxLagTime = replicaMaxLagTime;
-        this.minInSyncReplicas = minInSyncReplicas;
+        this.minInSyncReplicasSupplier = minInSyncReplicasSupplier;
         this.localTabletServerId = localTabletServerId;
         this.delayedWriteManager = delayedWriteManager;
         this.delayedFetchLogManager = delayedFetchLogManager;
@@ -240,6 +245,7 @@ public final class Replica {
                         tableInfo.getTableId(),
                         tableInfo.getSchemaId(),
                         tableInfo.getSchema());
+        this.tableInfo = tableInfo;
         this.tableConfig = tableInfo.getTableConfig();
         this.logFormat = tableConfig.getLogFormat();
         this.arrowCompressionInfo = tableConfig.getArrowCompressionInfo();
@@ -303,6 +309,10 @@ public final class Replica {
         return coordinatorEpoch;
     }
 
+    public TableInfo getTableInfo() {
+        return tableInfo;
+    }
+
     public @Nullable Integer getLeaderId() {
         return leaderReplicaIdOpt.get();
     }
@@ -364,7 +374,7 @@ public final class Replica {
     }
 
     public boolean isAtMinIsr() {
-        return isLeader() && isrState.isr().size() == minInSyncReplicas;
+        return isLeader() && isrState.isr().size() == minInSyncReplicasSupplier.getAsInt();
     }
 
     public BucketMetricGroup bucketMetrics() {
@@ -586,6 +596,27 @@ public final class Replica {
                 isDataLakeEnabled);
     }
 
+    /**
+     * Update the number of log segments to retain in local storage. This method is called when the
+     * table configuration is altered.
+     *
+     * @param tieredLogLocalSegments the new number of segments to retain locally
+     */
+    public void updateTieredLogLocalSegments(int tieredLogLocalSegments) {
+        int oldValue = logTablet.getTieredLogLocalSegments();
+        if (oldValue == tieredLogLocalSegments) {
+            return;
+        }
+
+        logTablet.updateTieredLogLocalSegments(tieredLogLocalSegments);
+
+        LOG.info(
+                "Replica for {} tieredLogLocalSegments changed from {} to {}",
+                tableBucket,
+                oldValue,
+                tieredLogLocalSegments);
+    }
+
     private void createKv() {
         try {
             // create a closeable registry for the closable related to kv
@@ -669,6 +700,8 @@ public final class Replica {
         long restoreStartOffset = 0;
         Optional<CompletedSnapshot> optCompletedSnapshot = getLatestSnapshot(tableBucket);
         try {
+            Long rowCount;
+            AutoIncIDRange autoIncIDRange;
             if (optCompletedSnapshot.isPresent()) {
                 LOG.info(
                         "Use snapshot {} to restore kv tablet for {} of table {}.",
@@ -686,6 +719,9 @@ public final class Replica {
 
                 checkNotNull(kvTablet, "kv tablet should not be null.");
                 restoreStartOffset = completedSnapshot.getLogOffset();
+                rowCount = completedSnapshot.getRowCount();
+                // currently, we only support one auto-increment column.
+                autoIncIDRange = completedSnapshot.getFirstAutoIncIDRange();
             } else {
                 LOG.info(
                         "No snapshot found for {} of {}, restore from log.",
@@ -703,10 +739,19 @@ public final class Replica {
                                 schemaGetter,
                                 tableConfig,
                                 arrowCompressionInfo);
+
+                // we don't support rowCount
+                rowCount = tableConfig.getChangelogImage() == ChangelogImage.WAL ? null : 0L;
+                // TODO: it is possible that this is a recovered kv tablet without kv snapshot but
+                //  with changelogs, in this case, the kv tablet should also have the
+                //  autoIncIDRange, we may need to get it from the changelog in the future.
+                //  but currently, we set it to null for simplification, as the auto-inc id
+                //  will be fetched from zk if not exist in local.
+                autoIncIDRange = null;
             }
 
             logTablet.updateMinRetainOffset(restoreStartOffset);
-            recoverKvTablet(restoreStartOffset);
+            recoverKvTablet(restoreStartOffset, rowCount, autoIncIDRange);
         } catch (Exception e) {
             throw new KvStorageException(
                     String.format(
@@ -772,14 +817,16 @@ public final class Replica {
         return Optional.empty();
     }
 
-    private void recoverKvTablet(long startRecoverLogOffset) {
+    private void recoverKvTablet(
+            long startRecoverLogOffset,
+            @Nullable Long rowCount,
+            @Nullable AutoIncIDRange autoIncIDRange) {
         long start = clock.milliseconds();
         checkNotNull(kvTablet, "kv tablet should not be null.");
         try {
             KvRecoverHelper.KvRecoverContext recoverContext =
                     new KvRecoverHelper.KvRecoverContext(
                             getTablePath(),
-                            tableBucket,
                             snapshotContext.getZooKeeperClient(),
                             snapshotContext.maxFetchLogSizeInRecoverKv());
             KvRecoverHelper kvRecoverHelper =
@@ -787,6 +834,8 @@ public final class Replica {
                             kvTablet,
                             logTablet,
                             startRecoverLogOffset,
+                            rowCount,
+                            autoIncIDRange,
                             recoverContext,
                             tableConfig.getKvFormat(),
                             tableConfig.getLogFormat(),
@@ -872,7 +921,7 @@ public final class Replica {
                             snapshotContext.getAsyncOperationsThreadPool(),
                             closeableRegistryForKv,
                             snapshotIDCounter,
-                            kvTablet::getFlushedLogOffset,
+                            kvTablet::getTabletState,
                             logTablet::updateMinRetainOffset,
                             bucketLeaderEpochSupplier,
                             coordinatorEpochSupplier,
@@ -883,8 +932,7 @@ public final class Replica {
                             tableBucket,
                             kvTabletSnapshotTarget,
                             snapshotContext,
-                            kvTablet.getGuardedExecutor(),
-                            bucketMetricGroup);
+                            kvTablet.getGuardedExecutor());
             kvSnapshotManager.start();
             closeableRegistryForKv.registerCloseable(kvSnapshotManager);
         } catch (Exception e) {
@@ -940,7 +988,10 @@ public final class Replica {
     }
 
     public LogAppendInfo putRecordsToLeader(
-            KvRecordBatch kvRecords, @Nullable int[] targetColumns, int requiredAcks)
+            KvRecordBatch kvRecords,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode,
+            int requiredAcks)
             throws Exception {
         return inReadLock(
                 leaderIsrUpdateLock,
@@ -958,7 +1009,7 @@ public final class Replica {
                             kv, "KvTablet for the replica to put kv records shouldn't be null.");
                     LogAppendInfo logAppendInfo;
                     try {
-                        logAppendInfo = kv.putAsLeader(kvRecords, targetColumns);
+                        logAppendInfo = kv.putAsLeader(kvRecords, targetColumns, mergeMode);
                     } catch (IOException e) {
                         LOG.error("Error while putting records to {}", tableBucket, e);
                         fatalErrorHandler.onFatalError(e);
@@ -1315,7 +1366,7 @@ public final class Replica {
             }
 
             if (logTablet.getHighWatermark() >= requiredOffset) {
-                if (minInSyncReplicas <= curMaximalIsr.size()) {
+                if (minInSyncReplicasSupplier.getAsInt() <= curMaximalIsr.size()) {
                     return Tuple2.of(true, Errors.NONE);
                 } else {
                     return Tuple2.of(true, Errors.NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION);
@@ -1326,6 +1377,21 @@ public final class Replica {
         } else {
             return Tuple2.of(false, Errors.NOT_LEADER_OR_FOLLOWER);
         }
+    }
+
+    public long getRowCount() {
+        return inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    KvTablet kv = this.kvTablet;
+                    if (kv != null) {
+                        // return materialized row count for primary key table
+                        return kv.getRowCount();
+                    } else {
+                        // return log row count for non-primary key table
+                        return logTablet.getRowCount();
+                    }
+                });
     }
 
     public long getOffset(RemoteLogManager remoteLogManager, ListOffsetsParam listOffsetsParam)
@@ -1837,7 +1903,7 @@ public final class Replica {
 
     private void validateInSyncReplicaSize(int requiredAcks) {
         int inSyncSize = isrState.isr().size();
-        if (inSyncSize < minInSyncReplicas && requiredAcks == -1) {
+        if (inSyncSize < minInSyncReplicasSupplier.getAsInt() && requiredAcks == -1) {
             throw new NotEnoughReplicasException(
                     String.format(
                             "The size of the current ISR %s is insufficient to satisfy "
@@ -1852,7 +1918,7 @@ public final class Replica {
     }
 
     public boolean isUnderMinIsr() {
-        return isLeader() && isrState.isr().size() < minInSyncReplicas;
+        return isLeader() && isrState.isr().size() < minInSyncReplicasSupplier.getAsInt();
     }
 
     private LogTablet localLogOrThrow(boolean requireLeader) {

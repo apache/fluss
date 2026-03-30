@@ -36,6 +36,7 @@ public class BoundedSegmentSequenceGenerator implements SequenceGenerator {
 
     private final SequenceIDCounter sequenceIDCounter;
     private final TablePath tablePath;
+    private final int columnId;
     private final String columnName;
     private final long cacheSize;
     private final long maxAllowedValue;
@@ -44,16 +45,18 @@ public class BoundedSegmentSequenceGenerator implements SequenceGenerator {
 
     public BoundedSegmentSequenceGenerator(
             TablePath tablePath,
+            int columnId,
             String columnName,
             SequenceIDCounter sequenceIDCounter,
             long idCacheSize,
             long maxAllowedValue) {
         this.cacheSize = idCacheSize;
+        this.columnId = columnId;
         this.columnName = columnName;
         this.tablePath = tablePath;
         this.sequenceIDCounter = sequenceIDCounter;
-        this.segment = IdSegment.EMPTY;
         this.maxAllowedValue = maxAllowedValue;
+        this.segment = IdSegment.EMPTY;
     }
 
     private void fetchSegment() {
@@ -91,6 +94,22 @@ public class BoundedSegmentSequenceGenerator implements SequenceGenerator {
                             columnName, maxAllowedValue));
         }
         return id;
+    }
+
+    @Override
+    public AutoIncIDRange currentSequenceRange() {
+        return new AutoIncIDRange(columnId, segment.current, segment.end);
+    }
+
+    @Override
+    public void updateSequenceRange(AutoIncIDRange newRange) {
+        if (newRange.getColumnId() != columnId) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Column ID mismatch when updating sequence range. Expected column ID: %d, but got: %d.",
+                            columnId, newRange.getColumnId()));
+        }
+        this.segment = new IdSegment(newRange.getStart(), newRange.getEnd());
     }
 
     private static class IdSegment {

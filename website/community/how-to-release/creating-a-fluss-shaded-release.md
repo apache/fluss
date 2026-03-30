@@ -288,7 +288,7 @@ The Apache Fluss community has voted and approved the release of
 Apache Fluss Shaded 1.0-incubating (rc3). We now kindly request the IPMC
 members to review and vote for this release.
 
-Apache Fluss (Incubating) - A streaming storage built for real-time analytics which can serve as the real-time data layer for Lakehouse architectures.
+Apache Fluss (Incubating) - A streaming storage built for real-time analytics & AI which can serve as the real-time data layer for Lakehouse architectures.
 
 Fluss community vote thread:
 * https://lists.apache.org/thread/<VOTE THREAD>

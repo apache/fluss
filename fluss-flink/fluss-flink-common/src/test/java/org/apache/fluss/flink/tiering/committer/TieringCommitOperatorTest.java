@@ -69,7 +69,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
     private StreamOperatorParameters<CommittableMessage<TestingCommittable>> parameters;
 
     @BeforeEach
-    void beforeEach() throws Exception {
+    public void beforeEach() throws Exception {
         mockOperatorEventGateway = new MockOperatorEventGateway();
         MockOperatorEventDispatcher mockOperatorEventDispatcher =
                 new MockOperatorEventDispatcher(mockOperatorEventGateway);

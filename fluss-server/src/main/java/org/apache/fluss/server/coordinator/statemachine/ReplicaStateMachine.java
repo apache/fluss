@@ -259,6 +259,7 @@ public class ReplicaStateMachine {
                                         Collections.singleton(replica.getReplica()),
                                         replica.getTableBucket(),
                                         false,
+                                        false,
                                         coordinatorContext.getBucketLeaderEpoch(
                                                 replica.getTableBucket())));
 
@@ -307,16 +308,35 @@ public class ReplicaStateMachine {
                         replica -> doStateChange(replica, ReplicaState.OfflineReplica));
 
                 break;
+            case ReplicaMigrationStarted:
+                validReplicas.forEach(
+                        replica -> doStateChange(replica, ReplicaState.ReplicaMigrationStarted));
+                validReplicas.forEach(
+                        tableBucketReplica -> {
+                            int replicaServer = tableBucketReplica.getReplica();
+                            // send stop replica request with deleteLocal = true and deleteRemote =
+                            // false indicates the replica is migrated.
+                            coordinatorRequestBatch.addStopReplicaRequestForTabletServers(
+                                    Collections.singleton(replicaServer),
+                                    tableBucketReplica.getTableBucket(),
+                                    true,
+                                    false,
+                                    coordinatorContext.getBucketLeaderEpoch(
+                                            tableBucketReplica.getTableBucket()));
+                        });
+                break;
             case ReplicaDeletionStarted:
                 validReplicas.forEach(
                         replica -> doStateChange(replica, ReplicaState.ReplicaDeletionStarted));
-                // send stop replica request with delete = true
+                // send stop replica request with deleteLocal = true and delete = true indicates the
+                // replica is deleted.
                 validReplicas.forEach(
                         tableBucketReplica -> {
                             int replicaServer = tableBucketReplica.getReplica();
                             coordinatorRequestBatch.addStopReplicaRequestForTabletServers(
                                     Collections.singleton(replicaServer),
                                     tableBucketReplica.getTableBucket(),
+                                    true,
                                     true,
                                     coordinatorContext.getBucketLeaderEpoch(
                                             tableBucketReplica.getTableBucket()));

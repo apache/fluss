@@ -85,6 +85,7 @@ public class FlinkTableSink
     private final List<String> bucketKeys;
     private final DistributionMode distributionMode;
     private final @Nullable DataLakeFormat lakeFormat;
+    @Nullable private final String producerId;
 
     private boolean appliedUpdates = false;
     @Nullable private GenericRow deleteRow;
@@ -102,7 +103,8 @@ public class FlinkTableSink
             DeleteBehavior tableDeleteBehavior,
             int numBucket,
             List<String> bucketKeys,
-            DistributionMode distributionMode) {
+            DistributionMode distributionMode,
+            @Nullable String producerId) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableRowType = tableRowType;
@@ -116,6 +118,7 @@ public class FlinkTableSink
         this.bucketKeys = bucketKeys;
         this.distributionMode = distributionMode;
         this.lakeFormat = lakeFormat;
+        this.producerId = producerId;
     }
 
     @Override
@@ -157,7 +160,7 @@ public class FlinkTableSink
                             "Fluss table sink does not support partial updates for table without primary key. Please make sure the "
                                     + "number of specified columns in INSERT INTO matches columns of the Fluss table.");
                 }
-                if (mergeEngineType != null) {
+                if (mergeEngineType != null && mergeEngineType != MergeEngineType.AGGREGATION) {
                     throw new ValidationException(
                             String.format(
                                     "Table %s uses the '%s' merge engine which does not support partial updates. Please make sure the "
@@ -204,6 +207,9 @@ public class FlinkTableSink
     }
 
     private FlinkSink<RowData> getFlinkSink(int[] targetColumnIndexes) {
+        // Enable undo recovery for aggregation tables
+        boolean enableUndoRecovery = mergeEngineType == MergeEngineType.AGGREGATION;
+
         FlinkSink.SinkWriterBuilder<? extends FlinkSinkWriter, RowData> flinkSinkWriterBuilder =
                 (primaryKeyIndexes.length > 0)
                         ? new FlinkSink.UpsertSinkWriterBuilder<>(
@@ -216,7 +222,9 @@ public class FlinkTableSink
                                 partitionKeys,
                                 lakeFormat,
                                 distributionMode,
-                                new RowDataSerializationSchema(false, sinkIgnoreDelete))
+                                new RowDataSerializationSchema(false, sinkIgnoreDelete),
+                                enableUndoRecovery,
+                                producerId)
                         : new FlinkSink.AppendSinkWriterBuilder<>(
                                 tablePath,
                                 flussConfig,
@@ -255,7 +263,8 @@ public class FlinkTableSink
                         tableDeleteBehavior,
                         numBucket,
                         bucketKeys,
-                        distributionMode);
+                        distributionMode,
+                        producerId);
         sink.appliedUpdates = appliedUpdates;
         sink.deleteRow = deleteRow;
         return sink;

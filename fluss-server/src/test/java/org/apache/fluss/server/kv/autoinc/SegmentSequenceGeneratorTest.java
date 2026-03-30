@@ -37,6 +37,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class SegmentSequenceGeneratorTest {
 
     private static final TablePath TABLE_PATH = new TablePath("test_db", "test_table");
+    private static final int COLUMN_ID = 1;
     private static final String COLUMN_NAME = "id";
     private static final long CACHE_SIZE = 100;
 
@@ -52,6 +53,7 @@ class SegmentSequenceGeneratorTest {
         BoundedSegmentSequenceGenerator generator =
                 new BoundedSegmentSequenceGenerator(
                         TABLE_PATH,
+                        COLUMN_ID,
                         COLUMN_NAME,
                         new TestingSequenceIDCounter(snapshotIdGenerator),
                         CACHE_SIZE,
@@ -77,6 +79,7 @@ class SegmentSequenceGeneratorTest {
                                 BoundedSegmentSequenceGenerator generator =
                                         new BoundedSegmentSequenceGenerator(
                                                 new TablePath("test_db", "table1"),
+                                                COLUMN_ID,
                                                 COLUMN_NAME,
                                                 new TestingSequenceIDCounter(snapshotIdGenerator),
                                                 CACHE_SIZE,
@@ -103,6 +106,7 @@ class SegmentSequenceGeneratorTest {
         BoundedSegmentSequenceGenerator generator =
                 new BoundedSegmentSequenceGenerator(
                         new TablePath("test_db", "table1"),
+                        COLUMN_ID,
                         COLUMN_NAME,
                         new TestingSequenceIDCounter(snapshotIdGenerator, 2),
                         CACHE_SIZE,
@@ -125,6 +129,7 @@ class SegmentSequenceGeneratorTest {
         BoundedSegmentSequenceGenerator generator =
                 new BoundedSegmentSequenceGenerator(
                         new TablePath("test_db", "table1"),
+                        COLUMN_ID,
                         COLUMN_NAME,
                         new TestingSequenceIDCounter(snapshotIdGenerator),
                         CACHE_SIZE,
@@ -143,5 +148,38 @@ class SegmentSequenceGeneratorTest {
                         String.format(
                                 "Reached maximum value of sequence \"<%s>\" (%d).",
                                 COLUMN_NAME, Integer.MAX_VALUE));
+    }
+
+    @Test
+    void testUpdateIDRange() {
+        BoundedSegmentSequenceGenerator generator =
+                new BoundedSegmentSequenceGenerator(
+                        TABLE_PATH,
+                        COLUMN_ID,
+                        COLUMN_NAME,
+                        new TestingSequenceIDCounter(snapshotIdGenerator),
+                        CACHE_SIZE,
+                        Long.MAX_VALUE);
+        for (long i = 1; i <= CACHE_SIZE; i++) {
+            assertThat(generator.nextVal()).isEqualTo(i);
+        }
+
+        assertThat(generator.currentSequenceRange())
+                .isEqualTo(new AutoIncIDRange(COLUMN_ID, 101, CACHE_SIZE));
+
+        // update the ID range to [1000, 1100]
+        generator.updateSequenceRange(new AutoIncIDRange(COLUMN_ID, 1000, 1100));
+
+        for (long i = 1000; i <= 1050; i++) {
+            assertThat(generator.nextVal()).isEqualTo(i);
+        }
+        assertThat(generator.currentSequenceRange())
+                .isEqualTo(new AutoIncIDRange(COLUMN_ID, 1051, 1100));
+
+        assertThatThrownBy(
+                        () -> generator.updateSequenceRange(new AutoIncIDRange(9999, 1000, 1100)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "Column ID mismatch when updating sequence range. Expected column ID: 1, but got: 9999.");
     }
 }

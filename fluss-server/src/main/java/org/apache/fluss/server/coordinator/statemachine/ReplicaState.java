@@ -27,7 +27,7 @@ public enum ReplicaState implements BaseState<ReplicaState> {
     NonExistentReplica {
         @Override
         public Set<ReplicaState> getValidPreviousStates() {
-            return EnumSet.of(ReplicaDeletionSuccessful);
+            return EnumSet.of(ReplicaMigrationStarted, ReplicaDeletionSuccessful);
         }
     },
     NewReplica {
@@ -46,6 +46,14 @@ public enum ReplicaState implements BaseState<ReplicaState> {
         @Override
         public Set<ReplicaState> getValidPreviousStates() {
             return EnumSet.of(NewReplica, OnlineReplica, OfflineReplica);
+        }
+    },
+    ReplicaMigrationStarted {
+        @Override
+        public Set<ReplicaState> getValidPreviousStates() {
+            // ReplicaMigrationStarted as a valid previous state since
+            // we will try to migrate the replica when migrate fail.
+            return EnumSet.of(OfflineReplica, ReplicaMigrationStarted);
         }
     },
     ReplicaDeletionStarted {

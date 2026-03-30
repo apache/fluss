@@ -44,6 +44,7 @@ import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.CreateTableRequest;
 import org.apache.fluss.rpc.messages.GetTableInfoResponse;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
@@ -60,6 +61,7 @@ import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DataTypes;
@@ -91,6 +93,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.config.ConfigOptions.CURRENT_KV_FORMAT_VERSION;
 import static org.apache.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newAlterTableRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newCreateDatabaseRequest;
@@ -289,7 +292,12 @@ class TableManagerITCase {
         GetTableInfoResponse response =
                 gateway.getTableInfo(newGetTableInfoRequest(tablePath)).get();
         TableDescriptor gottenTable = TableDescriptor.fromJsonBytes(response.getTableJson());
-        assertThat(gottenTable).isEqualTo(tableDescriptor.withReplicationFactor(1));
+        Map<String, String> properties = new HashMap<>(gottenTable.getProperties());
+        properties.put(
+                ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
+                String.valueOf(CURRENT_KV_FORMAT_VERSION));
+        assertThat(gottenTable)
+                .isEqualTo(tableDescriptor.withProperties(properties).withReplicationFactor(1));
 
         // alter table
         Map<String, String> setProperties = new HashMap<>();
@@ -334,13 +342,9 @@ class TableManagerITCase {
         assertThat(gottenSchema).isEqualTo(tableDescriptor.getSchema());
 
         // then create the table with same name again, should throw exception
-        assertThatThrownBy(
-                        () ->
-                                adminGateway
-                                        .createTable(
-                                                newCreateTableRequest(
-                                                        tablePath, tableDescriptor, false))
-                                        .get())
+        CreateTableRequest createTableRequest =
+                newCreateTableRequest(tablePath, tableDescriptor, false);
+        assertThatThrownBy(() -> adminGateway.createTable(createTableRequest).get())
                 .cause()
                 .isInstanceOf(TableAlreadyExistException.class)
                 .hasMessageContaining(String.format("Table %s already exists.", tablePath));
@@ -408,11 +412,11 @@ class TableManagerITCase {
         adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
 
         // wait until partition is created
-        Map<String, Long> partitions =
+        Map<String, PartitionRegistration> partitions =
                 waitValue(
                         () -> {
-                            Map<String, Long> gotPartitions =
-                                    zkClient.getPartitionNameAndIds(tablePath);
+                            Map<String, PartitionRegistration> gotPartitions =
+                                    zkClient.getPartitionRegistrations(tablePath);
                             if (!gotPartitions.isEmpty()) {
                                 return Optional.of(gotPartitions);
                             } else {
@@ -440,10 +444,12 @@ class TableManagerITCase {
                 .get();
 
         // verify the partition assignment is deleted
-        for (Long partitionId : partitions.values()) {
+        for (PartitionRegistration partition : partitions.values()) {
             retry(
                     Duration.ofMinutes(1),
-                    () -> assertThat(zkClient.getPartitionAssignment(partitionId)).isEmpty());
+                    () ->
+                            assertThat(zkClient.getPartitionAssignment(partition.getPartitionId()))
+                                    .isEmpty());
         }
 
         // make sure the auto partition manager won't create partitions for the new table
@@ -483,6 +489,13 @@ class TableManagerITCase {
         assertThat(metadataResponse.getTableMetadatasCount()).isEqualTo(1);
         PbTableMetadata tableMetadata = metadataResponse.getTableMetadataAt(0);
         assertThat(toTablePath(tableMetadata.getTablePath())).isEqualTo(tablePath);
+
+        Map<String, String> properties = new HashMap<>(tableDescriptor.getProperties());
+        properties.put(
+                ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
+                String.valueOf(CURRENT_KV_FORMAT_VERSION));
+        tableDescriptor = tableDescriptor.withProperties(properties);
+
         assertThat(TableDescriptor.fromJsonBytes(tableMetadata.getTableJson()))
                 .isEqualTo(tableDescriptor.withReplicationFactor(1));
 
@@ -701,6 +714,7 @@ class TableManagerITCase {
                         pbTableMetadata.getTableId(),
                         pbTableMetadata.getSchemaId(),
                         TableDescriptor.fromJsonBytes(pbTableMetadata.getTableJson()),
+                        pbTableMetadata.getRemoteDataDir(),
                         pbTableMetadata.getCreatedTime(),
                         pbTableMetadata.getModifiedTime());
         List<Schema.Column> columns = tableInfo.getSchema().getColumns();

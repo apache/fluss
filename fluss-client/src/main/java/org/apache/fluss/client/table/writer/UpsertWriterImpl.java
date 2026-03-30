@@ -20,7 +20,6 @@ package org.apache.fluss.client.table.writer;
 import org.apache.fluss.client.write.WriteFormat;
 import org.apache.fluss.client.write.WriteRecord;
 import org.apache.fluss.client.write.WriterClient;
-import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -31,6 +30,7 @@ import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.row.indexed.IndexedRow;
+import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
@@ -41,9 +41,8 @@ import java.util.concurrent.CompletableFuture;
 
 /** The writer to write data to the primary key table. */
 class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
-    private static final UpsertResult UPSERT_SUCCESS = new UpsertResult();
-    private static final DeleteResult DELETE_SUCCESS = new DeleteResult();
 
+    private final TableInfo tableInfo;
     private final KeyEncoder primaryKeyEncoder;
     private final @Nullable int[] targetColumns;
 
@@ -54,13 +53,24 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
     private final WriteFormat writeFormat;
     private final RowEncoder rowEncoder;
     private final FieldGetter[] fieldGetters;
-    private final TableInfo tableInfo;
+
+    /** The merge mode for this writer. This controls how the server handles data merging. */
+    private final MergeMode mergeMode;
 
     UpsertWriterImpl(
             TablePath tablePath,
             TableInfo tableInfo,
             @Nullable int[] partialUpdateColumns,
             WriterClient writerClient) {
+        this(tablePath, tableInfo, partialUpdateColumns, writerClient, MergeMode.DEFAULT);
+    }
+
+    UpsertWriterImpl(
+            TablePath tablePath,
+            TableInfo tableInfo,
+            @Nullable int[] partialUpdateColumns,
+            WriterClient writerClient,
+            MergeMode mergeMode) {
         super(tablePath, tableInfo, writerClient);
         RowType rowType = tableInfo.getRowType();
         sanityCheck(
@@ -70,20 +80,28 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                 partialUpdateColumns);
 
         this.targetColumns = partialUpdateColumns;
-        DataLakeFormat lakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
         // encode primary key using physical primary key
         this.primaryKeyEncoder =
-                KeyEncoder.of(rowType, tableInfo.getPhysicalPrimaryKeys(), lakeFormat);
+                KeyEncoder.ofPrimaryKeyEncoder(
+                        tableInfo.getRowType(),
+                        tableInfo.getPhysicalPrimaryKeys(),
+                        tableInfo.getTableConfig(),
+                        tableInfo.isDefaultBucketKey());
         this.bucketKeyEncoder =
                 tableInfo.isDefaultBucketKey()
                         ? primaryKeyEncoder
-                        : KeyEncoder.of(rowType, tableInfo.getBucketKeys(), lakeFormat);
+                        : KeyEncoder.ofBucketKeyEncoder(
+                                tableInfo.getRowType(),
+                                tableInfo.getBucketKeys(),
+                                tableInfo.getTableConfig().getDataLakeFormat().orElse(null));
 
         this.kvFormat = tableInfo.getTableConfig().getKvFormat();
         this.writeFormat = WriteFormat.fromKvFormat(this.kvFormat);
         this.rowEncoder = RowEncoder.create(kvFormat, rowType);
         this.fieldGetters = InternalRow.createFieldGetters(rowType);
+
         this.tableInfo = tableInfo;
+        this.mergeMode = mergeMode;
     }
 
     private static void sanityCheck(
@@ -153,8 +171,9 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
      * Inserts row into Fluss table if they do not already exist, or updates them if they do exist.
      *
      * @param row the row to upsert.
-     * @return A {@link CompletableFuture} that always returns null when complete normally.
+     * @return A {@link CompletableFuture} that returns upsert result with bucket and offset info.
      */
+    @Override
     public CompletableFuture<UpsertResult> upsert(InternalRow row) {
         checkFieldCount(row);
         byte[] key = primaryKeyEncoder.encodeKey(row);
@@ -168,8 +187,9 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                         key,
                         bucketKey,
                         writeFormat,
-                        targetColumns);
-        return send(record).thenApply(ignored -> UPSERT_SUCCESS);
+                        targetColumns,
+                        mergeMode);
+        return sendWithResult(record, UpsertResult::new);
     }
 
     /**
@@ -177,8 +197,9 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
      * key.
      *
      * @param row the row to delete.
-     * @return A {@link CompletableFuture} that always returns null when complete normally.
+     * @return A {@link CompletableFuture} that returns delete result with bucket and offset info.
      */
+    @Override
     public CompletableFuture<DeleteResult> delete(InternalRow row) {
         checkFieldCount(row);
         byte[] key = primaryKeyEncoder.encodeKey(row);
@@ -191,8 +212,9 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                         key,
                         bucketKey,
                         writeFormat,
-                        targetColumns);
-        return send(record).thenApply(ignored -> DELETE_SUCCESS);
+                        targetColumns,
+                        mergeMode);
+        return sendWithResult(record, DeleteResult::new);
     }
 
     private BinaryRow encodeRow(InternalRow row) {

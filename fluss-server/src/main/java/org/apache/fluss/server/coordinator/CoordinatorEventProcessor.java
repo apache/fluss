@@ -88,13 +88,14 @@ import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
 import org.apache.fluss.server.coordinator.event.TableRegistrationChangeEvent;
 import org.apache.fluss.server.coordinator.event.watcher.TableChangeWatcher;
 import org.apache.fluss.server.coordinator.event.watcher.TabletServerChangeWatcher;
+import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ControlledShutdownLeaderElection;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ReassignmentLeaderElection;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaStateMachine;
 import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
-import org.apache.fluss.server.entity.CommitLakeTableSnapshotData;
+import org.apache.fluss.server.entity.CommitLakeTableSnapshotsData;
 import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
 import org.apache.fluss.server.entity.DeleteReplicaResultForBucket;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
@@ -115,7 +116,6 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
-import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.types.Tuple2;
@@ -148,6 +148,7 @@ import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.Offl
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionStarted;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionSuccessful;
+import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaMigrationStarted;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeAdjustIsrResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListRebalanceProgressResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeRebalanceResponse;
@@ -177,7 +178,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final String internalListenerName;
     private final CoordinatorMetricGroup coordinatorMetricGroup;
     private final RebalanceManager rebalanceManager;
-
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private final LakeTableHelper lakeTableHelper;
 
@@ -191,7 +191,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
             CoordinatorMetricGroup coordinatorMetricGroup,
             Configuration conf,
             ExecutorService ioExecutor,
-            MetadataManager metadataManager) {
+            MetadataManager metadataManager,
+            KvSnapshotLeaseManager kvSnapshotLeaseManager) {
         this.zooKeeperClient = zooKeeperClient;
         this.serverMetadataCache = serverMetadataCache;
         this.coordinatorChannelManager = coordinatorChannelManager;
@@ -229,12 +230,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.coordinatorRequestBatch =
                 new CoordinatorRequestBatch(
                         coordinatorChannelManager, coordinatorEventManager, coordinatorContext);
+
         this.completedSnapshotStoreManager =
                 new CompletedSnapshotStoreManager(
                         conf.getInt(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS),
                         ioExecutor,
                         zooKeeperClient,
-                        coordinatorMetricGroup);
+                        coordinatorMetricGroup,
+                        kvSnapshotLeaseManager::snapshotLeaseExist);
         this.autoPartitionManager = autoPartitionManager;
         this.lakeTableTieringManager = lakeTableTieringManager;
         this.coordinatorMetricGroup = coordinatorMetricGroup;
@@ -713,6 +716,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         oldTableInfo.getNumBuckets(),
                         oldTableInfo.getProperties(),
                         oldTableInfo.getCustomProperties(),
+                        oldTableInfo.getRemoteDataDir(),
                         oldTableInfo.getComment().orElse(null),
                         oldTableInfo.getCreatedTime(),
                         System.currentTimeMillis()));
@@ -910,31 +914,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         coordinatorContext.retryDeleteAndSuccessDeleteReplicas(failDeletedReplicas);
 
         // transmit to deletion started for retry delete replicas
-        Set<TableBucketReplica> needRetryDeleteReplicas = new HashSet<>();
-        retryDeleteAndSuccessDeleteReplicas.f0.forEach(
-                (replica) -> {
-                    // For rebalance case. the replica state already set to null in method
-                    // stopRemovedReplicasOfReassignedBucket. so we need not reset it again.
-                    if (coordinatorContext.getReplicaState(replica) != null) {
-                        needRetryDeleteReplicas.add(replica);
-                    }
-                });
-        replicaStateMachine.handleStateChanges(needRetryDeleteReplicas, ReplicaDeletionStarted);
+        replicaStateMachine.handleStateChanges(
+                retryDeleteAndSuccessDeleteReplicas.f0, ReplicaDeletionStarted);
 
         // add all the replicas that considered as success delete to success deleted replicas
         successDeletedReplicas.addAll(retryDeleteAndSuccessDeleteReplicas.f1);
-
-        Set<TableBucketReplica> newSuccessDeleteReplicas = new HashSet<>();
-        successDeletedReplicas.forEach(
-                (replica) -> {
-                    // For rebalance case. the replica state already set to null in method
-                    // stopRemovedReplicasOfReassignedBucket. so we need not reset it again.
-                    if (coordinatorContext.getReplicaState(replica) != null) {
-                        newSuccessDeleteReplicas.add(replica);
-                    }
-                });
         // transmit to deletion successful for success deleted replicas
-        replicaStateMachine.handleStateChanges(newSuccessDeleteReplicas, ReplicaDeletionSuccessful);
+        replicaStateMachine.handleStateChanges(successDeletedReplicas, ReplicaDeletionSuccessful);
+
         // if any success deletion, we can resume
         if (!successDeletedReplicas.isEmpty()) {
             tableManager.resumeDeletions();
@@ -1019,7 +1006,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
             // it may happen during coordinator server initiation, the watcher watch a new tablet
             // server register event and put it to event manager, but after that, the coordinator
             // server read
-            // all tablet server nodes registered which contain the tablet server a; in this case,
+            // all tablet server nodes registered which contain the tablet server; in this case,
             // we can ignore it.
             return;
         }
@@ -1191,16 +1178,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
         List<Integer> serverIds = event.getServerIds();
         ServerTag serverTag = event.getServerTag();
 
-        // Verify that dose serverTag not exist for input serverIds. If the server tag does not
+        // Verify that does serverTag not exist for input serverIds. If the server tag does not
         // exist for any one of the tabletServers, throw an error and none of them will be removed
-        // form coordinatorContext and zk.
+        // from coordinatorContext and zk.
         Map<Integer, ServerInfo> liveTabletServers = coordinatorContext.getLiveTabletServers();
         for (Integer serverId : serverIds) {
             if (!liveTabletServers.containsKey(serverId)) {
-                throw new ServerNotExistException(
-                        String.format(
-                                "Server %s not exists when trying to removing server tag.",
-                                serverId));
+                // maybe tablet server not exists, still do remove server tag
+                LOG.info("Server {} not exists when trying to removing server tag.", serverId);
             }
 
             Optional<ServerTag> existServerTagOpt = coordinatorContext.getServerTag(serverId);
@@ -1354,8 +1339,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         if (planForBucket != null) {
             ReplicaReassignment reassignment =
                     ReplicaReassignment.build(
-                            coordinatorContext.getAssignment(tableBucket),
-                            planForBucket.getNewReplicas());
+                            planForBucket.getOriginReplicas(), planForBucket.getNewReplicas());
             try {
                 if (planForBucket.isLeaderChanged() && !reassignment.isBeingReassigned()) {
                     LeaderAndIsr leaderAndIsr = zooKeeperClient.getLeaderAndIsr(tableBucket).get();
@@ -1413,20 +1397,20 @@ public class CoordinatorEventProcessor implements EventProcessor {
      *
      * <ul>
      *   <li>B1. Move all replicas in AR to OnlineReplica state.
-     *   <li>B2. Set RS = TRS, AR = [], RR = [] in memory.
-     *   <li>B3. Send a LeaderAndIsr request with RS = TRS. This will prevent the leader from adding
-     *       any replica in TRS - ORS back in the isr. If the current leader is not in TRS or isn't
-     *       alive, we move the leader to a new replica in TRS. We may send the LeaderAndIsr to more
-     *       than the TRS replicas due to the way the partition state machine works (it reads
-     *       replicas from ZK)
-     *   <li>B4. Move all replicas in RR to OfflineReplica state. As part of OfflineReplica state
+     *   <li>B2. Send a LeaderAndIsr request with RS = ORS +TRS. This will make the origin leader
+     *       change to the new leader. this request will be sent to every tabletServer in ORS +TRS.
+     *   <li>B3. Set RS = TRS, AR = [], RR = [] in memory.
+     *   <li>Re-send LeaderAndIsr request with new leader and a new RS (using TRS) and same isr to
+     *       every tabletServer in TRS.
+     *   <li>B5. Move all replicas in RR to OfflineReplica state. As part of OfflineReplica state
      *       change, we shrink the isr to remove RR in ZooKeeper and send a LeaderAndIsr ONLY to the
      *       Leader to notify it of the shrunk isr. After that, we send a StopReplica (delete =
-     *       false) to the replicas in RR.
-     *   <li>B5. Move all replicas in RR to NonExistentReplica state. This will send a StopReplica
-     *       (delete = true) to he replicas in RR to physically delete the replicas on disk.
-     *   <li>B6. Update ZK with RS=TRS, AR=[], RR=[].
-     *   <li>B7. After electing leader, the replicas and isr information changes. So resend the
+     *       false and deleteRemote = false) to the replicas in RR.
+     *   <li>B6. Move all replicas in RR to ReplicaMigrationStarted state. This will send a
+     *       StopReplica (delete = true and deleteRemote = false) to the replicas in RR to
+     *       physically delete the replicas on disk but don't delete the data in remote storage.
+     *   <li>B7. Update ZK with RS=TRS, AR=[], RR=[].
+     *   <li>B8. After electing leader, the replicas and isr information changes. So resend the
      *       update metadata request to every tabletServer.
      *   <li>B8. Mark the ongoing rebalance task to finish.
      * </ul>
@@ -1491,17 +1475,22 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                             new TableBucketReplica(tableBucket, replica)),
                                     OnlineReplica));
             List<Integer> targetReplicas = reassignment.getTargetReplicas();
-            // B2. Set RS = TRS, AR = [], RR = [] in memory.
-            coordinatorContext.updateBucketReplicaAssignment(tableBucket, targetReplicas);
-            // B3. Send LeaderAndIsr request with a potential new leader (if current leader not in
-            // TRS) and a new RS (using TRS) and same isr to every tabletServer in ORS + TRS or TRS
+            // B2. Send LeaderAndIsr request with a potential new leader (if current leader not in
+            // TRS) and a new RS (using ORS + TRS) and same isr to every tabletServer in ORS + TRS
             maybeReassignedBucketLeaderIfRequired(tableBucket, targetReplicas);
-            // B4. replicas in RR -> Offline (force those replicas out of isr)
-            // B5. replicas in RR -> NonExistentReplica (force those replicas to be deleted)
+            // B3. Set RS = TRS, AR = [], RR = [] in memory.
+            coordinatorContext.updateBucketReplicaAssignment(tableBucket, targetReplicas);
+            // B4. Re-send LeaderAndIsr request with new leader and a new RS (using TRS) and same
+            // isr to every tabletServer in TRS.
+            updateBucketEpochAndSendRequest(tableBucket, targetReplicas);
+
+            // B5. replicas in RR -> Offline (force those replicas out of isr)
+            // B6. replicas in RR -> ReplicaMigrationStarted (force those replicas to be migration
+            // started)
             stopRemovedReplicasOfReassignedBucket(tableBucket, removingReplicas);
-            // B6. Update ZK with RS = TRS, AR = [], RR = [].
+            // B7. Update ZK with RS = TRS, AR = [], RR = [].
             updateReplicaAssignmentForBucket(tableBucket, targetReplicas);
-            // B7. After electing a leader in B3, the replicas and isr information changes, so
+            // B8. After electing a leader in B3, the replicas and isr information changes, so
             // resend the update metadata request to every tabletServer.
             updateTabletServerMetadataCache(
                     new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
@@ -1557,16 +1546,12 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
     private void stopRemovedReplicasOfReassignedBucket(
             TableBucket tableBucket, List<Integer> removingReplicas) {
-        Set<TableBucketReplica> replicasToBeDeleted = new HashSet<>();
+        Set<TableBucketReplica> replicasToBeMoved = new HashSet<>();
         removingReplicas.forEach(
-                replica -> replicasToBeDeleted.add(new TableBucketReplica(tableBucket, replica)));
-        replicaStateMachine.handleStateChanges(replicasToBeDeleted, OfflineReplica);
-        // send stop replica command to the old replicas.
-        replicaStateMachine.handleStateChanges(replicasToBeDeleted, ReplicaDeletionStarted);
-        // TODO: Eventually bucket reassignment could use a callback that does retries if deletion
-        // failed
-        replicaStateMachine.handleStateChanges(replicasToBeDeleted, ReplicaDeletionSuccessful);
-        replicaStateMachine.handleStateChanges(replicasToBeDeleted, NonExistentReplica);
+                replica -> replicasToBeMoved.add(new TableBucketReplica(tableBucket, replica)));
+        replicaStateMachine.handleStateChanges(replicasToBeMoved, OfflineReplica);
+        replicaStateMachine.handleStateChanges(replicasToBeMoved, ReplicaMigrationStarted);
+        replicaStateMachine.handleStateChanges(replicasToBeMoved, NonExistentReplica);
     }
 
     private void updateReplicaAssignmentForBucket(
@@ -1860,9 +1845,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private void tryProcessCommitLakeTableSnapshot(
             CommitLakeTableSnapshotEvent commitLakeTableSnapshotEvent,
             CompletableFuture<CommitLakeTableSnapshotResponse> callback) {
-        CommitLakeTableSnapshotData commitLakeTableSnapshotData =
-                commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotData();
-        if (commitLakeTableSnapshotData.getLakeTableSnapshotMetadatas().isEmpty()) {
+        CommitLakeTableSnapshotsData commitLakeTableSnapshotsData =
+                commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotsData();
+        if (commitLakeTableSnapshotsData.getLakeTableSnapshotMetadatas().isEmpty()) {
             handleCommitLakeTableSnapshotV1(commitLakeTableSnapshotEvent, callback);
         } else {
             handleCommitLakeTableSnapshotV2(commitLakeTableSnapshotEvent, callback);
@@ -1873,10 +1858,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
             CommitLakeTableSnapshotEvent commitLakeTableSnapshotEvent,
             CompletableFuture<CommitLakeTableSnapshotResponse> callback) {
         // commit the lake table snapshot asynchronously
-        CommitLakeTableSnapshotData commitLakeTableSnapshotData =
-                commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotData();
+        CommitLakeTableSnapshotsData commitLakeTableSnapshotsData =
+                commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotsData();
         Map<Long, LakeTableSnapshot> lakeTableSnapshots =
-                commitLakeTableSnapshotData.getLakeTableSnapshot();
+                commitLakeTableSnapshotsData.getLakeTableSnapshot();
         Map<Long, TablePath> tablePathById = new HashMap<>();
         for (Map.Entry<Long, LakeTableSnapshot> lakeTableSnapshotEntry :
                 lakeTableSnapshots.entrySet()) {
@@ -1920,17 +1905,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
                             }
                         }
 
-                        // remove failed tables
-                        Map<Long, LakeTableSnapshot> commitlakeTableSnapshots =
-                                commitLakeTableSnapshotData.getLakeTableSnapshot();
-                        commitlakeTableSnapshots.keySet().removeAll(failedTableIds);
-                        Map<Long, Map<TableBucket, Long>> tableMaxTieredTimestamps =
-                                commitLakeTableSnapshotData.getTableMaxTieredTimestamps();
-                        tableMaxTieredTimestamps.keySet().removeAll(failedTableIds);
-
-                        coordinatorEventManager.put(
-                                new NotifyLakeTableOffsetEvent(
-                                        commitlakeTableSnapshots, tableMaxTieredTimestamps));
+                        notifyLakeTableOffsets(
+                                commitLakeTableSnapshotsData.getLakeTableSnapshot(),
+                                commitLakeTableSnapshotsData.getTableMaxTieredTimestamps(),
+                                failedTableIds);
                         callback.complete(response);
                     } catch (Exception e) {
                         callback.completeExceptionally(e);
@@ -1938,45 +1916,60 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 });
     }
 
+    private void notifyLakeTableOffsets(
+            Map<Long, LakeTableSnapshot> committedLakeTableSnapshots,
+            Map<Long, Map<TableBucket, Long>> tableMaxTieredTimestamps,
+            Set<Long> failedTableIds) {
+        committedLakeTableSnapshots.keySet().removeAll(failedTableIds);
+        tableMaxTieredTimestamps.keySet().removeAll(failedTableIds);
+        if (!committedLakeTableSnapshots.isEmpty()) {
+            coordinatorEventManager.put(
+                    new NotifyLakeTableOffsetEvent(
+                            committedLakeTableSnapshots, tableMaxTieredTimestamps));
+        }
+    }
+
     private void handleCommitLakeTableSnapshotV2(
             CommitLakeTableSnapshotEvent commitLakeTableSnapshotEvent,
             CompletableFuture<CommitLakeTableSnapshotResponse> callback) {
-        CommitLakeTableSnapshotData commitLakeTableSnapshotData =
-                commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotData();
-        Map<Long, LakeTable.LakeSnapshotMetadata> lakeSnapshotMetadatas =
-                commitLakeTableSnapshotData.getLakeTableSnapshotMetadatas();
+        CommitLakeTableSnapshotsData commitLakeTableSnapshotsData =
+                commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotsData();
         ioExecutor.execute(
                 () -> {
                     try {
                         CommitLakeTableSnapshotResponse response =
                                 new CommitLakeTableSnapshotResponse();
                         Set<Long> failedTableIds = new HashSet<>();
-                        for (Map.Entry<Long, LakeTable.LakeSnapshotMetadata>
-                                lakeSnapshotMetadataEntry : lakeSnapshotMetadatas.entrySet()) {
+                        for (Map.Entry<Long, CommitLakeTableSnapshotsData.CommitLakeTableSnapshot>
+                                entry :
+                                        commitLakeTableSnapshotsData
+                                                .getCommitLakeTableSnapshotByTableId()
+                                                .entrySet()) {
                             PbCommitLakeTableSnapshotRespForTable tableResp =
                                     response.addTableResp();
-                            long tableId = lakeSnapshotMetadataEntry.getKey();
+                            long tableId = entry.getKey();
                             tableResp.setTableId(tableId);
                             try {
+                                CommitLakeTableSnapshotsData.CommitLakeTableSnapshot snapshot =
+                                        entry.getValue();
+                                if (snapshot.getLakeSnapshotMetadata() == null) {
+                                    throw new FlussRuntimeException(
+                                            "Lake snapshot metadata is null for table " + tableId);
+                                }
                                 lakeTableHelper.registerLakeTableSnapshotV2(
-                                        tableId, lakeSnapshotMetadataEntry.getValue());
+                                        tableId,
+                                        snapshot.getLakeSnapshotMetadata(),
+                                        snapshot.getEarliestSnapshotIDToKeep());
                             } catch (Exception e) {
                                 failedTableIds.add(tableId);
                                 ApiError error = ApiError.fromThrowable(e);
                                 tableResp.setError(error.error().code(), error.message());
                             }
                         }
-                        // remove failed tables
-                        Map<Long, LakeTableSnapshot> lakeTableSnapshots =
-                                commitLakeTableSnapshotData.getLakeTableSnapshot();
-                        lakeTableSnapshots.keySet().removeAll(failedTableIds);
-                        Map<Long, Map<TableBucket, Long>> tableMaxTieredTimestamps =
-                                commitLakeTableSnapshotData.getTableMaxTieredTimestamps();
-                        tableMaxTieredTimestamps.keySet().removeAll(failedTableIds);
-
-                        coordinatorEventManager.put(
-                                new NotifyLakeTableOffsetEvent(
-                                        lakeTableSnapshots, tableMaxTieredTimestamps));
+                        notifyLakeTableOffsets(
+                                commitLakeTableSnapshotsData.getLakeTableSnapshot(),
+                                commitLakeTableSnapshotsData.getTableMaxTieredTimestamps(),
+                                failedTableIds);
                         callback.complete(response);
                     } catch (Exception e) {
                         callback.completeExceptionally(e);

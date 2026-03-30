@@ -31,14 +31,16 @@ import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
+import org.apache.fluss.rpc.messages.GetLakeSnapshotRequest;
+import org.apache.fluss.rpc.messages.GetLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
-import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotRequest;
-import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.GetTableInfoRequest;
 import org.apache.fluss.rpc.messages.GetTableInfoResponse;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
 import org.apache.fluss.rpc.messages.GetTableSchemaResponse;
+import org.apache.fluss.rpc.messages.GetTableStatsRequest;
+import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.LimitScanRequest;
@@ -83,9 +85,10 @@ import java.util.concurrent.CompletableFuture;
 /** A testing implementation of the {@link TabletServerGateway} interface. */
 public class TestingTabletGatewayService extends TestingGatewayService
         implements TabletServerGateway {
+
     @Override
     public ServerType providerType() {
-        return null;
+        return ServerType.TABLET_SERVER;
     }
 
     @Override
@@ -132,6 +135,11 @@ public class TestingTabletGatewayService extends TestingGatewayService
 
     @Override
     public CompletableFuture<LimitScanResponse> limitScan(LimitScanRequest request) {
+        return null;
+    }
+
+    @Override
+    public CompletableFuture<GetTableStatsResponse> getTableStats(GetTableStatsRequest request) {
         return null;
     }
 
@@ -234,8 +242,8 @@ public class TestingTabletGatewayService extends TestingGatewayService
     }
 
     @Override
-    public CompletableFuture<GetLatestLakeSnapshotResponse> getLatestLakeSnapshot(
-            GetLatestLakeSnapshotRequest request) {
+    public CompletableFuture<GetLakeSnapshotResponse> getLakeSnapshot(
+            GetLakeSnapshotRequest request) {
         return null;
     }
 

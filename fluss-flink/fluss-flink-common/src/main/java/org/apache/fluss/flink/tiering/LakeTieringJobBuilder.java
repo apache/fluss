@@ -89,6 +89,7 @@ public class LakeTieringJobBuilder {
             tieringSourceBuilder.withPollTieringTableIntervalMs(
                     flussConfig.get(POLL_TIERING_TABLE_INTERVAL).toMillis());
         }
+
         TieringSource<?> tieringSource = tieringSourceBuilder.build();
         DataStreamSource<?> source =
                 env.fromSource(

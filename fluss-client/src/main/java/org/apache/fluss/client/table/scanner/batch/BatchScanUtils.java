@@ -89,7 +89,7 @@ public class BatchScanUtils {
                 throw new RuntimeException("Failed to close scanner", e);
             }
         }
-        return rows;
+        return rows.size() > limit ? rows.subList(0, limit) : rows;
     }
 
     /**

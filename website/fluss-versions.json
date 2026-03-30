@@ -1,10 +1,22 @@
 [
   {
     "versionName": "next",
-    "fullVersion": "0.9-SNAPSHOT",
-    "shortVersion": "0.9",
-    "dockerVersion": "0.9-SNAPSHOT",
+    "fullVersion": "0.10-SNAPSHOT",
+    "shortVersion": "0.10",
+    "dockerVersion": "0.10-SNAPSHOT",
+    "paimonVersion": "1.3.1",
+    "paimonVersionShort": "1.3",
     "released": false
+  },	
+  {
+    "versionName": "version-0.9",
+    "fullVersion": "0.9.0-incubating",
+    "shortVersion": "0.9",
+    "dockerVersion": "0.9.0-incubating",
+    "paimonVersion": "1.3.1",
+    "paimonVersionShort": "1.3",
+    "mavenRepoUrl": "https://repo1.maven.org/maven2",
+    "released": true
   },
   {
     "versionName": "version-0.8",

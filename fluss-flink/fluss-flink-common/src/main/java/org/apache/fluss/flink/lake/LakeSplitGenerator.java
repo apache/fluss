@@ -87,7 +87,7 @@ public class LakeSplitGenerator {
     public List<SourceSplitBase> generateHybridLakeFlussSplits() throws Exception {
         LakeSnapshot lakeSnapshotInfo;
         try {
-            lakeSnapshotInfo = flussAdmin.getLatestLakeSnapshot(tableInfo.getTablePath()).get();
+            lakeSnapshotInfo = flussAdmin.getReadableLakeSnapshot(tableInfo.getTablePath()).get();
         } catch (Exception exception) {
             if (ExceptionUtils.stripExecutionException(exception)
                     instanceof LakeTableSnapshotNotExistException) {
@@ -235,10 +235,15 @@ public class LakeSplitGenerator {
                 Long snapshotLogOffset = tableBucketSnapshotLogOffset.get(tableBucket);
                 Long stoppingOffset = bucketEndOffset.get(bucket);
                 if (snapshotLogOffset == null) {
-                    // no any data commit to this bucket, scan from fluss log
-                    splits.add(
-                            new LogSplit(
-                                    tableBucket, partitionName, EARLIEST_OFFSET, stoppingOffset));
+                    // no data committed to lake for this bucket, scan from fluss log
+                    if (stoppingOffset == NO_STOPPING_OFFSET || stoppingOffset > 0) {
+                        splits.add(
+                                new LogSplit(
+                                        tableBucket,
+                                        partitionName,
+                                        EARLIEST_OFFSET,
+                                        stoppingOffset));
+                    }
                 } else {
                     // need to read remain fluss log
                     if (stoppingOffset == NO_STOPPING_OFFSET

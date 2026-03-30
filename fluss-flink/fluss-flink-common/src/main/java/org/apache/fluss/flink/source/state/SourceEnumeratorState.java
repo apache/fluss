@@ -41,13 +41,18 @@ public class SourceEnumeratorState {
     // lake snapshot
     @Nullable private final List<SourceSplitBase> remainingHybridLakeFlussSplits;
 
+    // lease context for restore.
+    private final String leaseId;
+
     public SourceEnumeratorState(
             Set<TableBucket> assignedBuckets,
             Map<Long, String> assignedPartitions,
-            @Nullable List<SourceSplitBase> remainingHybridLakeFlussSplits) {
+            @Nullable List<SourceSplitBase> remainingHybridLakeFlussSplits,
+            String leaseId) {
         this.assignedBuckets = assignedBuckets;
         this.assignedPartitions = assignedPartitions;
         this.remainingHybridLakeFlussSplits = remainingHybridLakeFlussSplits;
+        this.leaseId = leaseId;
     }
 
     public Set<TableBucket> getAssignedBuckets() {
@@ -63,6 +68,10 @@ public class SourceEnumeratorState {
         return remainingHybridLakeFlussSplits;
     }
 
+    public String getLeaseId() {
+        return leaseId;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
@@ -75,7 +84,8 @@ public class SourceEnumeratorState {
         return Objects.equals(assignedBuckets, that.assignedBuckets)
                 && Objects.equals(assignedPartitions, that.assignedPartitions)
                 && Objects.equals(
-                        remainingHybridLakeFlussSplits, that.remainingHybridLakeFlussSplits);
+                        remainingHybridLakeFlussSplits, that.remainingHybridLakeFlussSplits)
+                && Objects.equals(leaseId, that.leaseId);
     }
 
     @Override
@@ -92,6 +102,8 @@ public class SourceEnumeratorState {
                 + assignedPartitions
                 + ", remainingHybridLakeFlussSplits="
                 + remainingHybridLakeFlussSplits
+                + ", leaseId="
+                + leaseId
                 + '}';
     }
 }

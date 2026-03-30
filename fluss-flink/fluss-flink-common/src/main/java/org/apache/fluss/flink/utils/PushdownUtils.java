@@ -22,21 +22,18 @@ import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.ListOffsetsResult;
 import org.apache.fluss.client.admin.OffsetSpec;
-import org.apache.fluss.client.admin.OffsetSpec.EarliestSpec;
-import org.apache.fluss.client.admin.OffsetSpec.LatestSpec;
 import org.apache.fluss.client.table.Table;
-import org.apache.fluss.client.table.scanner.Scan;
-import org.apache.fluss.client.table.scanner.batch.BatchScanUtils;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.flink.source.lookup.FlinkLookupFunction;
 import org.apache.fluss.flink.source.lookup.LookupNormalizer;
 import org.apache.fluss.metadata.PartitionInfo;
-import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metadata.TableStats;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.GenericRow;
@@ -75,7 +72,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import static org.apache.fluss.client.table.scanner.batch.BatchScanUtils.collectRows;
 import static org.apache.fluss.flink.source.lookup.LookupNormalizer.createPrimaryKeyLookupNormalizer;
+import static org.apache.fluss.utils.ExceptionUtils.findThrowable;
 
 /** Utilities for pushdown abilities. */
 public class PushdownUtils {
@@ -271,7 +270,8 @@ public class PushdownUtils {
                         tablePath,
                         sourceOutputType,
                         lookupNormalizer,
-                        projectedFields);
+                        projectedFields,
+                        false);
         try {
             // it's fine to pass null here, as we don't use it in it
             lookupFunction.open(null);
@@ -306,42 +306,12 @@ public class PushdownUtils {
         int limit = (int) limitRowNum;
         try (Connection connection = ConnectionFactory.createConnection(flussConfig);
                 Table table = connection.getTable(tablePath);
-                Admin flussAdmin = connection.getAdmin()) {
-            TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
-            int bucketCount = tableInfo.getNumBuckets();
-            List<TableBucket> tableBuckets;
-            if (tableInfo.isPartitioned()) {
-                List<PartitionInfo> partitionInfos = flussAdmin.listPartitionInfos(tablePath).get();
-                tableBuckets =
-                        partitionInfos.stream()
-                                .flatMap(
-                                        partitionInfo ->
-                                                IntStream.range(0, bucketCount)
-                                                        .mapToObj(
-                                                                bucketId ->
-                                                                        new TableBucket(
-                                                                                tableInfo
-                                                                                        .getTableId(),
-                                                                                partitionInfo
-                                                                                        .getPartitionId(),
-                                                                                bucketId)))
-                                .collect(Collectors.toList());
-            } else {
-                tableBuckets =
-                        IntStream.range(0, bucketCount)
-                                .mapToObj(
-                                        bucketId ->
-                                                new TableBucket(tableInfo.getTableId(), bucketId))
-                                .collect(Collectors.toList());
-            }
-
-            Scan scan = table.newScan().limit(limit).project(projectedFields);
-            List<BatchScanner> scanners =
-                    tableBuckets.stream()
-                            .map(scan::createBatchScanner)
-                            .collect(Collectors.toList());
-            List<InternalRow> scannedRows = BatchScanUtils.collectLimitedRows(scanners, limit);
-
+                BatchScanner batchScanner =
+                        table.newScan()
+                                .project(projectedFields)
+                                .limit(limit)
+                                .createBatchScanner()) {
+            List<InternalRow> scannedRows = collectRows(batchScanner);
             // convert fluss row into flink row
             List<RowData> flinkRows = new ArrayList<>();
             FlussRowToFlinkRowConverter flussRowToFlinkRowConverter =
@@ -364,32 +334,55 @@ public class PushdownUtils {
         }
     }
 
-    public static long countLogTable(TablePath tablePath, Configuration flussConfig) {
+    public static long countTable(TablePath tablePath, Configuration flussConfig) {
         try (Connection connection = ConnectionFactory.createConnection(flussConfig);
                 Admin flussAdmin = connection.getAdmin()) {
-            TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
-            int bucketCount = tableInfo.getNumBuckets();
-            Collection<Integer> buckets =
-                    IntStream.range(0, bucketCount).boxed().collect(Collectors.toList());
-            List<PartitionInfo> partitionInfos;
-            if (tableInfo.isPartitioned()) {
-                partitionInfos = flussAdmin.listPartitionInfos(tablePath).get();
-            } else {
-                partitionInfos = Collections.singletonList(null);
+            try {
+                TableStats tableStats = flussAdmin.getTableStats(tablePath).get();
+                return tableStats.getRowCount();
+            } catch (Exception e) {
+                if (findThrowable(e, UnsupportedVersionException.class).isPresent()) {
+                    // if the server doesn't support getTableStats, we fallback to countLogTable,
+                    // which is less efficient.
+                    return countLogTable(flussAdmin, tablePath);
+                } else {
+                    throw e;
+                }
             }
-
-            List<CompletableFuture<Long>> countFutureList =
-                    offsetLengthes(flussAdmin, tablePath, partitionInfos, buckets);
-            // wait for all the response
-            CompletableFuture.allOf(countFutureList.toArray(new CompletableFuture[0])).join();
-            long count = 0;
-            for (CompletableFuture<Long> countFuture : countFutureList) {
-                count += countFuture.get();
-            }
-            return count;
         } catch (Exception e) {
             throw new FlussRuntimeException(e);
         }
+    }
+
+    /**
+     * We keep this method for back compatibility for old clusters (< 0.9), but it's not efficient.
+     * We should use countTable instead in the future.
+     */
+    private static long countLogTable(Admin flussAdmin, TablePath tablePath) throws Exception {
+        TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
+        if (tableInfo.hasPrimaryKey()) {
+            throw new IllegalArgumentException(
+                    "The Fluss cluster doesn't support count(*) on primary key table yet. Please upgrade to newer version (≥ 0.9).");
+        }
+        int bucketCount = tableInfo.getNumBuckets();
+        Collection<Integer> buckets =
+                IntStream.range(0, bucketCount).boxed().collect(Collectors.toList());
+        List<PartitionInfo> partitionInfos;
+        if (tableInfo.isPartitioned()) {
+            partitionInfos = flussAdmin.listPartitionInfos(tablePath).get();
+        } else {
+            partitionInfos = Collections.singletonList(null);
+        }
+
+        List<CompletableFuture<Long>> countFutureList =
+                offsetLengthes(flussAdmin, tablePath, partitionInfos, buckets);
+        // wait for all the response
+        CompletableFuture.allOf(countFutureList.toArray(new CompletableFuture[0])).join();
+        long count = 0;
+        for (CompletableFuture<Long> countFuture : countFutureList) {
+            count += countFuture.get();
+        }
+        return count;
     }
 
     private static List<CompletableFuture<Long>> offsetLengthes(
@@ -401,9 +394,19 @@ public class PushdownUtils {
         for (@Nullable PartitionInfo info : partitionInfos) {
             String partitionName = info != null ? info.getPartitionName() : null;
             ListOffsetsResult earliestOffsets =
-                    listOffsets(flussAdmin, tablePath, buckets, new EarliestSpec(), partitionName);
+                    listOffsets(
+                            flussAdmin,
+                            tablePath,
+                            buckets,
+                            new OffsetSpec.EarliestSpec(),
+                            partitionName);
             ListOffsetsResult latestOffsets =
-                    listOffsets(flussAdmin, tablePath, buckets, new LatestSpec(), partitionName);
+                    listOffsets(
+                            flussAdmin,
+                            tablePath,
+                            buckets,
+                            new OffsetSpec.LatestSpec(),
+                            partitionName);
             CompletableFuture<Long> apply =
                     earliestOffsets
                             .all()

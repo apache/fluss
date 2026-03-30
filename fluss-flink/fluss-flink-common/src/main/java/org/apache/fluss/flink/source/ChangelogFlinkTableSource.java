@@ -20,6 +20,7 @@ package org.apache.fluss.flink.source;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.source.deserializer.ChangelogDeserializationSchema;
+import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -27,7 +28,6 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.types.RowType;
 
-import org.apache.flink.api.connector.source.Source;
 import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.connector.source.DynamicTableSource;
 import org.apache.flink.table.connector.source.ScanTableSource;
@@ -168,24 +168,9 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
                         new ChangelogDeserializationSchema(),
                         streaming,
                         partitionFilters,
-                        null); // Lake source not supported
+                        LeaseContext.DEFAULT); // Lake source not supported
 
-        if (!streaming) {
-            // Batch mode - changelog virtual tables read from log, not data lake
-            return new SourceProvider() {
-                @Override
-                public boolean isBounded() {
-                    return true;
-                }
-
-                @Override
-                public Source<RowData, ?, ?> createSource() {
-                    return source;
-                }
-            };
-        } else {
-            return SourceProvider.of(source);
-        }
+        return SourceProvider.of(source);
     }
 
     @Override

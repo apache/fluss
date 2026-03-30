@@ -31,15 +31,22 @@ import java.util.concurrent.CompletableFuture;
 public class LookupQuery extends AbstractLookupQuery<byte[]> {
 
     private final CompletableFuture<byte[]> future;
+    private final boolean insertIfNotExists;
 
     LookupQuery(TablePath tablePath, TableBucket tableBucket, byte[] key) {
+        this(tablePath, tableBucket, key, false);
+    }
+
+    LookupQuery(
+            TablePath tablePath, TableBucket tableBucket, byte[] key, boolean insertIfNotExists) {
         super(tablePath, tableBucket, key);
         this.future = new CompletableFuture<>();
+        this.insertIfNotExists = insertIfNotExists;
     }
 
     @Override
     public LookupType lookupType() {
-        return LookupType.LOOKUP;
+        return insertIfNotExists ? LookupType.LOOKUP_WITH_INSERT_IF_NOT_EXISTS : LookupType.LOOKUP;
     }
 
     @Override

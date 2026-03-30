@@ -54,7 +54,14 @@ trait WithFlussAdmin extends AutoCloseable {
     _flussConfig
   }
 
-  protected def admin: Admin = {
+  /**
+   * Gets the Fluss Admin client. This is a public accessor for procedures and other external
+   * components that need admin access.
+   *
+   * @return
+   *   the Admin instance
+   */
+  def admin: Admin = {
     Preconditions.checkNotNull(_admin, "Fluss Admin is not initialized.")
     _admin
   }

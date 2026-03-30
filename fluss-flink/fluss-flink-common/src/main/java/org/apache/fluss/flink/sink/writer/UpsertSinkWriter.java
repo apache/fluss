@@ -17,12 +17,15 @@
 
 package org.apache.fluss.flink.sink.writer;
 
+import org.apache.fluss.client.table.writer.DeleteResult;
 import org.apache.fluss.client.table.writer.TableWriter;
 import org.apache.fluss.client.table.writer.Upsert;
+import org.apache.fluss.client.table.writer.UpsertResult;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.row.OperationType;
 import org.apache.fluss.flink.sink.serializer.FlussSerializationSchema;
+import org.apache.fluss.flink.sink.undo.ProducerOffsetReporter;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 
@@ -40,13 +43,36 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
 
     private transient UpsertWriter upsertWriter;
 
+    /**
+     * Optional context for reporting offsets to the upstream UndoRecoveryOperator.
+     *
+     * <p>When provided (non-null), the writer will report offsets after each successful write
+     * operation. This is used when the UndoRecoveryOperator manages state for aggregation tables.
+     *
+     * <p>When null, offset reporting is skipped (for non-aggregation tables).
+     */
+    @Nullable private final ProducerOffsetReporter offsetReporter;
+
+    /**
+     * Creates a new UpsertSinkWriter with ProducerOffsetReporter for UndoRecoveryOperator
+     * integration.
+     *
+     * @param tablePath the path of the table to write to
+     * @param flussConfig the Fluss configuration
+     * @param tableRowType the row type of the table
+     * @param targetColumnIndexes optional column indexes for partial updates
+     * @param mailboxExecutor the mailbox executor for async operations
+     * @param flussSerializationSchema the serialization schema for input records
+     * @param offsetReporter optional reporter for reporting offsets to upstream operator
+     */
     public UpsertSinkWriter(
             TablePath tablePath,
             Configuration flussConfig,
             RowType tableRowType,
             @Nullable int[] targetColumnIndexes,
             MailboxExecutor mailboxExecutor,
-            FlussSerializationSchema<InputT> flussSerializationSchema) {
+            FlussSerializationSchema<InputT> flussSerializationSchema,
+            @Nullable ProducerOffsetReporter offsetReporter) {
         super(
                 tablePath,
                 flussConfig,
@@ -54,6 +80,7 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
                 targetColumnIndexes,
                 mailboxExecutor,
                 flussSerializationSchema);
+        this.offsetReporter = offsetReporter;
     }
 
     @Override
@@ -70,9 +97,31 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
     @Override
     CompletableFuture<?> writeRow(OperationType opType, InternalRow internalRow) {
         if (opType == OperationType.UPSERT) {
-            return upsertWriter.upsert(internalRow);
+            CompletableFuture<UpsertResult> future = upsertWriter.upsert(internalRow);
+            // Report offset to upstream UndoRecoveryOperator if reporter provided
+            if (offsetReporter != null) {
+                return future.thenAccept(
+                        result -> {
+                            if (result.getBucket() != null && result.getLogEndOffset() >= 0) {
+                                offsetReporter.reportOffset(
+                                        result.getBucket(), result.getLogEndOffset());
+                            }
+                        });
+            }
+            return future;
         } else if (opType == OperationType.DELETE) {
-            return upsertWriter.delete(internalRow);
+            CompletableFuture<DeleteResult> future = upsertWriter.delete(internalRow);
+            // Report offset to upstream UndoRecoveryOperator if reporter provided
+            if (offsetReporter != null) {
+                return future.thenAccept(
+                        result -> {
+                            if (result.getBucket() != null && result.getLogEndOffset() >= 0) {
+                                offsetReporter.reportOffset(
+                                        result.getBucket(), result.getLogEndOffset());
+                            }
+                        });
+            }
+            return future;
         } else {
             throw new UnsupportedOperationException("Unsupported operation type: " + opType);
         }

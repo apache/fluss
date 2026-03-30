@@ -26,12 +26,17 @@ import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 import org.apache.fluss.server.entity.FetchReqInfo;
+import org.apache.fluss.server.entity.StopReplicaData;
+import org.apache.fluss.server.entity.StopReplicaResultForBucket;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.replica.Replica;
+import org.apache.fluss.server.replica.ReplicaManager;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
@@ -40,8 +45,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH_PA_2024;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
@@ -497,8 +504,77 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         assertThatThrownBy(() -> remoteLogManager.relevantRemoteLogSegments(tb, 0L))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("RemoteLogTablet can't be found for table-bucket " + tb);
-        FsPath logTabletDir = remoteLogTabletDir(remoteLogDir(conf), DATA1_PHYSICAL_TABLE_PATH, tb);
+        FsPath logTabletDir =
+                remoteLogTabletDir(
+                        remoteLogDir(conf),
+                        partitionTable
+                                ? DATA1_PHYSICAL_TABLE_PATH_PA_2024
+                                : DATA1_PHYSICAL_TABLE_PATH,
+                        tb);
         assertThat(logTabletDir.getFileSystem().exists(logTabletDir)).isFalse();
+    }
+
+    @ParameterizedTest
+    @MethodSource("stopArgs")
+    void testStopReplicaDeleteRemoteLog(boolean partitionTable, boolean deleteRemote)
+            throws Exception {
+        TableBucket tb = makeTableBucket(partitionTable);
+        // Need to make leader by ReplicaManager.
+        makeLogTableAsLeader(tb, partitionTable);
+        LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+        // trigger RLMTask copy local log segment to remote and update metadata.
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        List<RemoteLogSegment> remoteLogSegmentList =
+                remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(remoteLogSegmentList.size()).isEqualTo(4);
+        assertThat(listRemoteLogFiles(tb))
+                .isEqualTo(
+                        remoteLogSegmentList.stream()
+                                .map(s -> s.remoteLogSegmentId().toString())
+                                .collect(Collectors.toSet()));
+        assertThat(remoteLogManager.getTaskWithFuture(tb)).isNotNull();
+
+        FsPath remoteLogTabletDir =
+                remoteLogTabletDir(
+                        remoteLogDir(conf),
+                        partitionTable
+                                ? DATA1_PHYSICAL_TABLE_PATH_PA_2024
+                                : DATA1_PHYSICAL_TABLE_PATH,
+                        tb);
+        assertThat(remoteLogTabletDir.getFileSystem().exists(remoteLogTabletDir)).isTrue();
+        assertThat(logTablet.getLogDir().exists()).isTrue();
+
+        // stop with delete = false, deleteRemote =false, local and remote log should be kept,
+        // remote log task will be removed.
+        CompletableFuture<List<StopReplicaResultForBucket>> future1 = new CompletableFuture<>();
+        replicaManager.stopReplicas(
+                0,
+                Collections.singletonList(new StopReplicaData(tb, false, false, 0, 0)),
+                future1::complete);
+        assertThat(future1.get()).containsOnly(new StopReplicaResultForBucket(tb));
+        ReplicaManager.HostedReplica hostedReplica = replicaManager.getReplica(tb);
+        assertThat(hostedReplica).isInstanceOf(ReplicaManager.OnlineReplica.class);
+        assertThat(remoteLogTabletDir.getFileSystem().exists(remoteLogTabletDir)).isTrue();
+        assertThat(remoteLogManager.getTaskWithFuture(tb)).isNull();
+
+        CompletableFuture<List<StopReplicaResultForBucket>> future2 = new CompletableFuture<>();
+        replicaManager.stopReplicas(
+                0,
+                Collections.singletonList(new StopReplicaData(tb, true, deleteRemote, 0, 0)),
+                future2::complete);
+        assertThat(future2.get()).containsOnly(new StopReplicaResultForBucket(tb));
+        hostedReplica = replicaManager.getReplica(tb);
+        assertThat(hostedReplica).isInstanceOf(ReplicaManager.NoneReplica.class);
+        assertThat(logTablet.getLogDir().exists()).isFalse();
+        if (!deleteRemote) {
+            // stop with delete = true, deleteRemote =false, local log should be deleted, remote log
+            // should be kept.
+            assertThat(remoteLogTabletDir.getFileSystem().exists(remoteLogTabletDir)).isTrue();
+        } else {
+            // stop with delete = true, deleteRemote =true, local and remote log should be deleted
+            assertThat(remoteLogTabletDir.getFileSystem().exists(remoteLogTabletDir)).isFalse();
+        }
     }
 
     @ParameterizedTest
@@ -529,6 +605,93 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
                 .isEqualTo(-1L);
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testAlterTableTieredLogLocalSegments(boolean partitionedTable) throws Exception {
+        // 1. Create table with initial config tieredLogLocalSegments = 2
+        long tableId =
+                registerTableInZkClient(
+                        DATA1_TABLE_PATH,
+                        DATA1_SCHEMA,
+                        200L,
+                        Collections.emptyList(),
+                        Collections.singletonMap(
+                                ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.key(), "2"));
+        TableBucket tb = makeTableBucket(tableId, partitionedTable);
+        makeLogTableAsLeader(tb, partitionedTable);
+
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
+
+        // Verify initial config
+        assertThat(logTablet.getTieredLogLocalSegments()).isEqualTo(2);
+
+        // 2. Generate 10 segments, upload 9 to remote (excluding active segment)
+        addMultiSegmentsToLogTablet(logTablet, 10);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        // Verify upload success
+        List<RemoteLogSegment> remoteSegments = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(remoteSegments).hasSize(9);
+
+        // Verify 2 local segments retained
+        assertThat(logTablet.getSegments()).hasSize(2);
+
+        // 3. Directly update config via Replica (simulating metadata propagation)
+        replica.updateTieredLogLocalSegments(5);
+
+        // Verify LogTablet internal state has been updated
+        assertThat(logTablet.getTieredLogLocalSegments()).isEqualTo(5);
+
+        // 4. Generate more segments and trigger cleanup, verify new config takes effect
+        addMultiSegmentsToLogTablet(logTablet, 10);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        // Should retain 5 local segments
+        assertThat(logTablet.getSegments()).hasSize(5);
+
+        // 5. Modify config to 3 again, verify multiple modifications work
+        replica.updateTieredLogLocalSegments(3);
+
+        // Verify LogTablet internal state updated again
+        assertThat(logTablet.getTieredLogLocalSegments()).isEqualTo(3);
+
+        // Generate more segments and verify new config takes effect
+        addMultiSegmentsToLogTablet(logTablet, 5);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        // Should retain 3 local segments
+        assertThat(logTablet.getSegments()).hasSize(3);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testCopySegmentPartialFailureCommitsSuccessfulOnes(boolean partitionTable)
+            throws Exception {
+        TableBucket tb = makeTableBucket(partitionTable);
+        // Need to make leader by ReplicaManager.
+        makeLogTableAsLeader(tb, partitionTable);
+        addMultiSegmentsToLogTablet(replicaManager.getReplicaOrException(tb).getLogTablet(), 5);
+        // 5 segments total, 4 candidates (1 active segment excluded).
+
+        // Inject failure: let the first 2 segment copies succeed, then fail on the 3rd.
+        remoteLogStorage.copySegmentFailAfterNCopies.set(2);
+
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        // Verify: The manifest should contain exactly 2 segments (the successfully copied ones).
+        RemoteLogTablet remoteLog = remoteLogManager.remoteLogTablet(tb);
+        List<RemoteLogSegment> manifestSegments = remoteLog.allRemoteLogSegments();
+        assertThat(manifestSegments).hasSize(2);
+
+        // Verify: Remote storage should contain exactly the 2 committed segment files.
+        assertThat(listRemoteLogFiles(tb))
+                .isEqualTo(
+                        manifestSegments.stream()
+                                .map(s -> s.remoteLogSegmentId().toString())
+                                .collect(Collectors.toSet()));
+    }
+
     private TableBucket makeTableBucket(boolean partitionTable) {
         return makeTableBucket(DATA1_TABLE_ID, partitionTable);
     }
@@ -539,5 +702,13 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         } else {
             return new TableBucket(tableId, 0);
         }
+    }
+
+    private static Stream<Arguments> stopArgs() {
+        return Stream.of(
+                Arguments.of(false, false),
+                Arguments.of(false, true),
+                Arguments.of(true, false),
+                Arguments.of(true, true));
     }
 }

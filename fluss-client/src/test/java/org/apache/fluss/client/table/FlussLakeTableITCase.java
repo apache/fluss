@@ -39,6 +39,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.TestData;
+import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.KeyEncoder;
@@ -192,23 +193,26 @@ class FlussLakeTableITCase {
         Set<InternalRow> allRows =
                 writtenRows.values().stream().flatMap(List::stream).collect(Collectors.toSet());
 
-        // init lookup columns
-        List<String> lookUpColumns;
-        if (isDefaultBucketKey) {
-            lookUpColumns = Arrays.asList("a", "c", "d");
-        } else {
-            lookUpColumns =
-                    isPartitioned ? Arrays.asList("a", "d") : Collections.singletonList("a");
-        }
-        List<InternalRow.FieldGetter> lookUpFieldGetter = new ArrayList<>(lookUpColumns.size());
-        for (int columnIndex : pkTableSchema.getColumnIndexes(lookUpColumns)) {
-            lookUpFieldGetter.add(
-                    InternalRow.createFieldGetter(
-                            pkTableSchema.getRowType().getTypeAt(columnIndex), columnIndex));
-        }
         // lookup
         try (Table table = conn.getTable(tablePath)) {
-            Lookuper lookuper = table.newLookup().lookupBy(lookUpColumns).createLookuper();
+            // init lookup columns
+            List<String> lookUpColumns;
+            Lookuper lookuper;
+            if (isDefaultBucketKey) {
+                lookUpColumns = Arrays.asList("a", "c", "d");
+                lookuper = table.newLookup().createLookuper();
+            } else {
+                lookUpColumns =
+                        isPartitioned ? Arrays.asList("a", "d") : Collections.singletonList("a");
+                lookuper = table.newLookup().lookupBy(lookUpColumns).createLookuper();
+            }
+            List<InternalRow.FieldGetter> lookUpFieldGetter = new ArrayList<>(lookUpColumns.size());
+            for (int columnIndex : pkTableSchema.getColumnIndexes(lookUpColumns)) {
+                lookUpFieldGetter.add(
+                        InternalRow.createFieldGetter(
+                                pkTableSchema.getRowType().getTypeAt(columnIndex), columnIndex));
+            }
+
             for (InternalRow row : allRows) {
                 GenericRow lookupKeyRow = new GenericRow(lookUpFieldGetter.size());
                 for (int i = 0; i < lookUpFieldGetter.size(); i++) {
@@ -265,8 +269,9 @@ class FlussLakeTableITCase {
         int rowNums = 30;
         boolean isPartitioned = tableDescriptor.isPartitioned();
         RowType rowType = tableDescriptor.getSchema().getRowType();
-        KeyEncoder keyEncoder =
-                KeyEncoder.of(rowType, tableDescriptor.getBucketKeys(), dataLakeFormat);
+        KeyEncoder bucketKeyEncoder =
+                KeyEncoder.ofBucketKeyEncoder(
+                        rowType, tableDescriptor.getBucketKeys(), dataLakeFormat);
         HashBucketAssigner bucketAssigner =
                 new HashBucketAssigner(DEFAULT_BUCKET_COUNT, BucketingFunction.of(dataLakeFormat));
         Map<String, Long> partitionIdByNames = null;
@@ -293,7 +298,8 @@ class FlussLakeTableITCase {
                                 new TableBucket(
                                         tableId,
                                         partitionIdByNames.get(partition),
-                                        bucketAssigner.assignBucket(keyEncoder.encodeKey(row)));
+                                        bucketAssigner.assignBucket(
+                                                bucketKeyEncoder.encodeKey(row)));
                         expectedRows
                                 .computeIfAbsent(assignedBucket, (k) -> new ArrayList<>())
                                 .add(row);
@@ -306,7 +312,7 @@ class FlussLakeTableITCase {
                     TableBucket assignedBucket =
                             new TableBucket(
                                     tableId,
-                                    bucketAssigner.assignBucket(keyEncoder.encodeKey(row)));
+                                    bucketAssigner.assignBucket(bucketKeyEncoder.encodeKey(row)));
                     expectedRows.computeIfAbsent(assignedBucket, (k) -> new ArrayList<>()).add(row);
                 }
             }
@@ -356,6 +362,62 @@ class FlussLakeTableITCase {
             ((AppendWriter) tableWriter).append(row);
         } else {
             ((UpsertWriter) tableWriter).upsert(row);
+        }
+    }
+
+    /**
+     * Test that for legacy version 1 tables, the key encoding still uses the Paimon encoder
+     *
+     * <p>This simulates the scenario where a table was created before the kv format version2. For
+     * such tables, the key encoding should use the Paimon (lake) encoder to maintain backward
+     * compatibility.
+     */
+    @Test
+    void testLegacyPKTableUsePaimonEncoder() throws Exception {
+        // Create a PK table with bucket key as subset of primary key
+        TablePath tablePath = TablePath.of("fluss", "test_legacy_pk_table");
+        Schema pkTableSchema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .column("c", DataTypes.STRING())
+                        .column("d", DataTypes.STRING())
+                        .primaryKey("a", "b", "c")
+                        .build();
+
+        // Create table with bucket key (a, b) - INT and STRING types
+        // which is subset of primary key (a, b, c)
+        TableDescriptor pkTable =
+                TableDescriptor.builder()
+                        .schema(pkTableSchema)
+                        .distributedBy(DEFAULT_BUCKET_COUNT, "a", "b")
+                        // set to version1 to mock legacy table
+                        .property(ConfigOptions.TABLE_KV_FORMAT_VERSION, 1)
+                        .build();
+        createTable(tablePath, pkTable, false);
+
+        // Verify the table still works by writing and looking up data
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter writer = table.newUpsert().createWriter();
+            writer.upsert(
+                            row(
+                                    1,
+                                    BinaryString.fromString("hellohello1"),
+                                    BinaryString.fromString("c1"),
+                                    BinaryString.fromString("d1")))
+                    .get();
+
+            // Lookup by bucket key (prefix lookup) with INT and STRING
+            Lookuper prefixLookuper =
+                    table.newLookup().lookupBy(Arrays.asList("a", "b")).createLookuper();
+            List<InternalRow> result =
+                    prefixLookuper.lookup(row(1, "hellohello1")).get().getRowList();
+
+            // The result should be empty because legacy tables use Paimon's key encoder.
+            // Paimon's encoded keys don't support prefix lookup. So an empty result here proves
+            // that the legacy table is correctly using Paimon's encoder instead of Fluss's
+            // CompactedKeyEncoder (which would support prefix lookup and return the row).
+            assertThat(result).isEmpty();
         }
     }
 }

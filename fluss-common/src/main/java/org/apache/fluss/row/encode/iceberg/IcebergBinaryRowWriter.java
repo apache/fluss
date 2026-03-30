@@ -196,6 +196,13 @@ class IcebergBinaryRowWriter {
 
             case BIGINT:
                 return (writer, value) -> writer.writeLong((long) value);
+
+            case FLOAT:
+                return (writer, value) -> writer.writeFloat((float) value);
+
+            case DOUBLE:
+                return (writer, value) -> writer.writeDouble((double) value);
+
                 // support for nanoseconds come check again after #1195 merge
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 return (writer, value) -> {
@@ -214,6 +221,14 @@ class IcebergBinaryRowWriter {
             case BINARY:
             case BYTES:
                 return (writer, value) -> writer.writeBytes((byte[]) value, true);
+
+            case ARRAY:
+                throw new IllegalArgumentException(
+                        "Array types cannot be used as bucket keys. Bucket keys must be scalar types.");
+
+            case MAP:
+                throw new IllegalArgumentException(
+                        "Map types cannot be used as bucket keys. Bucket keys must be scalar types.");
 
             default:
                 throw new IllegalArgumentException(

@@ -61,9 +61,9 @@ public class ReplicaDistributionGoal extends ReplicaDistributionAbstractGoal {
 
     // TODO configurable.
     /**
-     * The maximum allowed extent of unbalance for replica leader replica distribution. For example,
-     * 1.10 means the highest leader replica count of a server should not be 1.10x of average leader
-     * replica count of all alive tabletServers.
+     * The maximum allowed extent of unbalance for replica distribution. For example, 1.10 means the
+     * highest replica count of a server should not be 1.10x of average replica count of all alive
+     * tabletServers.
      */
     private static final Double REPLICA_COUNT_REBALANCE_THRESHOLD = 1.10d;
 

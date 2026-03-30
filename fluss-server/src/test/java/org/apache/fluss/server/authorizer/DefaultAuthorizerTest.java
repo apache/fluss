@@ -58,6 +58,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.security.acl.OperationType.ALTER;
 import static org.apache.fluss.security.acl.OperationType.CREATE;
 import static org.apache.fluss.security.acl.OperationType.DESCRIBE;
@@ -90,6 +91,7 @@ public class DefaultAuthorizerTest {
                 ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getConnectString());
         configuration.setString(ConfigOptions.SUPER_USERS, "USER:" + ROOT_USER);
         configuration.set(ConfigOptions.AUTHORIZER_ENABLED, true);
+        configuration.set(ConfigOptions.REMOTE_DATA_DIR, DEFAULT_REMOTE_DATA_DIR);
         zooKeeperClient = ZooKeeperUtils.startZookeeperClient(configuration, new NOPErrorHandler());
         authorizer =
                 (DefaultAuthorizer)

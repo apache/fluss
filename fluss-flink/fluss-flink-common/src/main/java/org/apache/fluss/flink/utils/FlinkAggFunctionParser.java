@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.metadata.AggFunction;
 import org.apache.fluss.metadata.AggFunctionType;
 import org.apache.fluss.metadata.AggFunctions;
+import org.apache.fluss.types.DataType;
 
 import org.apache.flink.configuration.Configuration;
 
@@ -59,7 +60,8 @@ public class FlinkAggFunctionParser {
      *
      * <p>Returns empty if no aggregation function is configured for this column.
      */
-    public static Optional<AggFunction> parseAggFunction(String columnName, Configuration options) {
+    public static Optional<AggFunction> parseAggFunction(
+            String columnName, DataType dataType, Configuration options) {
 
         // Check column-level configuration: fields.<column>.agg
         String columnFuncKey = AGG_PREFIX + columnName + AGG_SUFFIX;
@@ -75,7 +77,7 @@ public class FlinkAggFunctionParser {
         Map<String, String> params =
                 collectParameters(AGG_PREFIX + columnName + "." + funcName + ".", options);
 
-        return Optional.of(createAggFunction(type, params, columnName));
+        return Optional.of(createAggFunction(type, params, columnName, dataType));
     }
 
     /**
@@ -182,10 +184,14 @@ public class FlinkAggFunctionParser {
      * @param type the aggregation function type
      * @param params the function parameters (may be empty)
      * @param columnName the column name (used for error messages)
+     * @param dataType the column data type (use for validate)
      * @return the created aggregation function
      */
     private static AggFunction createAggFunction(
-            AggFunctionType type, Map<String, String> params, String columnName) {
+            AggFunctionType type,
+            Map<String, String> params,
+            String columnName,
+            DataType dataType) {
         // Use generic factory method to create aggregation function
         // This delegates parameter handling and validation to the underlying implementation
         AggFunction aggFunction =
@@ -193,7 +199,8 @@ public class FlinkAggFunctionParser {
 
         // Validate all parameters to ensure they are supported and valid
         try {
-            aggFunction.validate();
+            aggFunction.validateParameters();
+            aggFunction.validateDataType(dataType);
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException(
                     String.format(

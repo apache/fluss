@@ -30,9 +30,12 @@ import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
+import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
+import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -43,6 +46,7 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metadata.TableStats;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminGateway;
@@ -50,6 +54,7 @@ import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.AddServerTagRequest;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
+import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
@@ -57,16 +62,20 @@ import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
 import org.apache.fluss.rpc.messages.CreateTableRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
+import org.apache.fluss.rpc.messages.DeleteProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
 import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
+import org.apache.fluss.rpc.messages.GetLakeSnapshotRequest;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsRequest;
-import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotRequest;
+import org.apache.fluss.rpc.messages.GetProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetTableInfoRequest;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
+import org.apache.fluss.rpc.messages.GetTableStatsRequest;
+import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.ListAclsRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
@@ -79,6 +88,7 @@ import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbTablePath;
+import org.apache.fluss.rpc.messages.PbTableStatsRespForBucket;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
@@ -88,6 +98,7 @@ import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
 import org.apache.fluss.utils.MapUtils;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import javax.annotation.Nullable;
 
@@ -100,11 +111,14 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterDatabaseRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterTableRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeCreatePartitionRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeDropPartitionRequest;
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeGetTableStatsRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePbPartitionSpec;
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeRegisterProducerOffsetsRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.toConfigEntries;
 import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
@@ -243,6 +257,14 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
+    public CompletableFuture<List<DatabaseSummary>> listDatabaseSummaries() {
+        ListDatabasesRequest request = new ListDatabasesRequest().setIncludeSummary(true);
+        return readOnlyGateway
+                .listDatabases(request)
+                .thenApply(ClientRpcMessageUtils::toDatabaseSummaries);
+    }
+
+    @Override
     public CompletableFuture<Void> createTable(
             TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfExists) {
         tablePath.validate();
@@ -265,6 +287,15 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
+    public CompletableFuture<Void> alterDatabase(
+            String databaseName, List<DatabaseChange> databaseChanges, boolean ignoreIfNotExists) {
+        TablePath.validateDatabaseName(databaseName);
+        AlterDatabaseRequest request =
+                makeAlterDatabaseRequest(databaseName, databaseChanges, ignoreIfNotExists);
+        return gateway.alterDatabase(request).thenApply(r -> null);
+    }
+
+    @Override
     public CompletableFuture<TableInfo> getTableInfo(TablePath tablePath) {
         GetTableInfoRequest request = new GetTableInfoRequest();
         request.setTablePath()
@@ -279,6 +310,9 @@ public class FlussAdmin implements Admin {
                                         r.getTableId(),
                                         r.getSchemaId(),
                                         TableDescriptor.fromJsonBytes(r.getTableJson()),
+                                        // For backward compatibility, results returned by old
+                                        // clusters do not include the remote data dir
+                                        r.hasRemoteDataDir() ? r.getRemoteDataDir() : null,
                                         r.getCreatedTime(),
                                         r.getModifiedTime()));
     }
@@ -389,14 +423,44 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
+    public KvSnapshotLease createKvSnapshotLease(String leaseId, long leaseDurationMs) {
+        return new KvSnapshotLeaseImpl(leaseId, leaseDurationMs, gateway);
+    }
+
+    @Override
     public CompletableFuture<LakeSnapshot> getLatestLakeSnapshot(TablePath tablePath) {
-        GetLatestLakeSnapshotRequest request = new GetLatestLakeSnapshotRequest();
+        GetLakeSnapshotRequest request = new GetLakeSnapshotRequest();
         request.setTablePath()
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
 
         return readOnlyGateway
-                .getLatestLakeSnapshot(request)
+                .getLakeSnapshot(request)
+                .thenApply(ClientRpcMessageUtils::toLakeTableSnapshotInfo);
+    }
+
+    @Override
+    public CompletableFuture<LakeSnapshot> getLakeSnapshot(TablePath tablePath, long snapshotId) {
+        GetLakeSnapshotRequest request = new GetLakeSnapshotRequest();
+        request.setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        request.setSnapshotId(snapshotId);
+
+        return readOnlyGateway
+                .getLakeSnapshot(request)
+                .thenApply(ClientRpcMessageUtils::toLakeTableSnapshotInfo);
+    }
+
+    @Override
+    public CompletableFuture<LakeSnapshot> getReadableLakeSnapshot(TablePath tablePath) {
+        GetLakeSnapshotRequest request = new GetLakeSnapshotRequest();
+        request.setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        request.setReadable(true);
+        return readOnlyGateway
+                .getLakeSnapshot(request)
                 .thenApply(ClientRpcMessageUtils::toLakeTableSnapshotInfo);
     }
 
@@ -413,6 +477,47 @@ public class FlussAdmin implements Admin {
             Collection<Integer> buckets,
             OffsetSpec offsetSpec) {
         return listOffsets(PhysicalTablePath.of(tablePath, partitionName), buckets, offsetSpec);
+    }
+
+    @Override
+    public CompletableFuture<TableStats> getTableStats(TablePath tablePath) {
+        metadataUpdater.updateTableOrPartitionMetadata(tablePath, null);
+        TableInfo tableInfo = getTableInfo(tablePath).join();
+        try {
+            int bucketCount = tableInfo.getNumBuckets();
+            List<PartitionInfo> partitionInfos;
+            if (tableInfo.isPartitioned()) {
+                partitionInfos = listPartitionInfos(tablePath).get();
+            } else {
+                partitionInfos = Collections.singletonList(null);
+            }
+            // create all TableBuckets for each partition and bucket combination
+            Map<TableBucket, CompletableFuture<Long>> bucketToRowCountMap = new HashMap<>();
+            for (PartitionInfo partitionInfo : partitionInfos) {
+                for (int bucket = 0; bucket < bucketCount; bucket++) {
+                    TableBucket tb =
+                            new TableBucket(
+                                    tableInfo.getTableId(),
+                                    partitionInfo == null ? null : partitionInfo.getPartitionId(),
+                                    bucket);
+                    bucketToRowCountMap.put(tb, new CompletableFuture<>());
+                }
+            }
+            Map<Integer, GetTableStatsRequest> requestMap =
+                    prepareTableStatsRequests(
+                            metadataUpdater, bucketToRowCountMap.keySet(), tablePath);
+            sendTableStatsRequest(
+                    metadataUpdater, tableInfo.getTableId(), requestMap, bucketToRowCountMap);
+            return FutureUtils.combineAll(bucketToRowCountMap.values())
+                    .thenApply(
+                            counts -> {
+                                long totalRowCount = counts.stream().reduce(0L, Long::sum);
+                                return new TableStats(totalRowCount);
+                            });
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    String.format("Failed to get row count for the table '%s'.", tablePath), e);
+        }
     }
 
     private ListOffsetsResult listOffsets(
@@ -588,9 +693,114 @@ public class FlussAdmin implements Admin {
         return gateway.cancelRebalance(request).thenApply(r -> null);
     }
 
+    // ==================================================================================
+    // Producer Offset Management APIs (for Exactly-Once Semantics)
+    // ==================================================================================
+
+    @Override
+    public CompletableFuture<RegisterResult> registerProducerOffsets(
+            String producerId, Map<TableBucket, Long> offsets) {
+        checkNotNull(producerId, "producerId must not be null");
+        checkNotNull(offsets, "offsets must not be null");
+
+        return gateway.registerProducerOffsets(
+                        makeRegisterProducerOffsetsRequest(producerId, offsets))
+                .thenApply(
+                        response -> {
+                            int code =
+                                    response.hasResult()
+                                            ? response.getResult()
+                                            : RegisterResult.CREATED.getCode();
+                            return RegisterResult.fromCode(code);
+                        });
+    }
+
+    @Override
+    public CompletableFuture<ProducerOffsetsResult> getProducerOffsets(String producerId) {
+        checkNotNull(producerId, "producerId must not be null");
+
+        GetProducerOffsetsRequest request = new GetProducerOffsetsRequest();
+        request.setProducerId(producerId);
+
+        return gateway.getProducerOffsets(request)
+                .thenApply(ClientRpcMessageUtils::toProducerOffsetsResult);
+    }
+
+    @Override
+    public CompletableFuture<Void> deleteProducerOffsets(String producerId) {
+        checkNotNull(producerId, "producerId must not be null");
+
+        DeleteProducerOffsetsRequest request = new DeleteProducerOffsetsRequest();
+        request.setProducerId(producerId);
+
+        return gateway.deleteProducerOffsets(request).thenApply(r -> null);
+    }
+
     @Override
     public void close() {
         // nothing to do yet
+    }
+
+    private static Map<Integer, GetTableStatsRequest> prepareTableStatsRequests(
+            MetadataUpdater metadataUpdater, Collection<TableBucket> buckets, TablePath tablePath) {
+        Map<Integer, List<TableBucket>> nodeForBucketList = new HashMap<>();
+        for (TableBucket tb : buckets) {
+            int leader = metadataUpdater.leaderFor(tablePath, tb);
+            nodeForBucketList.computeIfAbsent(leader, k -> new ArrayList<>()).add(tb);
+        }
+
+        Map<Integer, GetTableStatsRequest> requests = new HashMap<>();
+        nodeForBucketList.forEach(
+                (leader, tbs) -> requests.put(leader, makeGetTableStatsRequest(tbs)));
+        return requests;
+    }
+
+    private static void sendTableStatsRequest(
+            MetadataUpdater metadataUpdater,
+            long tableId,
+            Map<Integer, GetTableStatsRequest> leaderToRequestMap,
+            Map<TableBucket, CompletableFuture<Long>> bucketToRowCountMap) {
+        leaderToRequestMap.forEach(
+                (leader, request) -> {
+                    TabletServerGateway gateway =
+                            metadataUpdater.newTabletServerClientForNode(leader);
+                    if (gateway == null) {
+                        throw new LeaderNotAvailableException(
+                                "Server " + leader + " is not found in metadata cache.");
+                    } else {
+                        gateway.getTableStats(request)
+                                .whenComplete(
+                                        (response, t) ->
+                                                handleTableStatsResponse(
+                                                        response, t, tableId, bucketToRowCountMap));
+                    }
+                });
+    }
+
+    private static void handleTableStatsResponse(
+            GetTableStatsResponse response,
+            Throwable t,
+            long tableId,
+            Map<TableBucket, CompletableFuture<Long>> bucketToRowCountMap) {
+        if (t != null) {
+            // fail all futures to fail fast
+            bucketToRowCountMap.values().forEach(f -> f.completeExceptionally(t));
+            return;
+        }
+        for (PbTableStatsRespForBucket resp : response.getBucketsRespsList()) {
+            TableBucket tb =
+                    new TableBucket(
+                            tableId,
+                            resp.hasPartitionId() ? resp.getPartitionId() : null,
+                            resp.getBucketId());
+            if (resp.hasErrorCode()) {
+                bucketToRowCountMap
+                        .get(tb)
+                        .completeExceptionally(ApiError.fromErrorMessage(resp).exception());
+            } else {
+                bucketToRowCountMap.get(tb).complete(resp.getRowCount());
+            }
+        }
     }
 
     private static Map<Integer, ListOffsetsRequest> prepareListOffsetsRequests(

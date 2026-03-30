@@ -21,6 +21,7 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.CharacterFilter;
+import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
@@ -33,6 +34,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 import static org.apache.fluss.metrics.utils.MetricGroupUtils.makeScope;
@@ -146,6 +148,9 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
 
             this.tablePath = tablePath;
             this.registry = registry;
+
+            // Register table-level metrics
+            registerTableMetrics();
         }
 
         @Override
@@ -199,6 +204,18 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
         public void removeBucketMetricGroup(TableBucket tb) {
             SimpleBucketMetricGroup metricGroup = buckets.remove(tb);
             metricGroup.close();
+        }
+
+        private void registerTableMetrics() {
+            gauge(MetricNames.BUCKET_COUNT, buckets::size);
+            gauge(
+                    MetricNames.PARTITION_COUNT,
+                    () ->
+                            buckets.keySet().stream()
+                                    .map(TableBucket::getPartitionId)
+                                    .filter(Objects::nonNull)
+                                    .distinct()
+                                    .count());
         }
     }
 

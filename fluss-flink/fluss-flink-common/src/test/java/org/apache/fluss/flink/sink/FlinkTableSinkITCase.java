@@ -29,6 +29,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.utils.types.Tuple2;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.api.common.typeinfo.Types;
@@ -1437,6 +1438,40 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
+    @Test
+    void testPartialUpdateOnAggregationMergeEngine() throws Exception {
+        tEnv.executeSql(
+                "create table agg_partial_update ("
+                        + "id int not null primary key not enforced, "
+                        + "sum_a int, "
+                        + "sum_b int"
+                        + ") with ("
+                        + "'table.merge-engine' = 'aggregation', "
+                        + "'fields.sum_a.agg' = 'sum', "
+                        + "'fields.sum_b.agg' = 'sum')");
+
+        // Full insert: all fields
+        tEnv.executeSql("INSERT INTO agg_partial_update VALUES (1, 100, 200)").await();
+
+        // Partial insert: only update sum_a
+        tEnv.executeSql("INSERT INTO agg_partial_update(id, sum_a) VALUES (1, 50)").await();
+
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql("SELECT * FROM agg_partial_update").collect();
+
+        List<String> expectedRows =
+                Arrays.asList("+I[1, 100, 200]", "-U[1, 100, 200]", "+U[1, 150, 200]");
+
+        assertResultsIgnoreOrder(rowIter, expectedRows, false);
+
+        // Partial insert on a new key (no prior full insert) — unspecified columns should be null
+        tEnv.executeSql("INSERT INTO agg_partial_update(id, sum_a) VALUES (2, 77)").await();
+
+        expectedRows = Arrays.asList("+I[2, 77, null]");
+
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+    }
+
     private InsertAndExpectValues rowsToInsertInto(Collection<String> partitions) {
         List<String> insertValues = new ArrayList<>();
         List<String> expectedValues = new ArrayList<>();
@@ -1671,6 +1706,102 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     }
 
     @Test
+    void testAutoIncrementWithTargetColumns() throws Exception {
+        // use single parallelism to make result ordering stable
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
+
+        String tableName = "auto_increment_pk_table";
+        // Create a table with auto increment column
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + " id int not null,"
+                                + " auto_increment_id bigint,"
+                                + " amount bigint,"
+                                + " primary key (id) not enforced"
+                                + ") with ('auto-increment.fields'='auto_increment_id')",
+                        tableName));
+
+        // Insert rows one by one to preserve auto-increment ID ordering.
+        // Partial-column INSERT ... VALUES is rewritten into a UNION ALL of Value Sources
+        // by Flink, whose runtime does not guarantee UNION ALL input ordering.
+        List<Tuple2<Integer, Integer>> inserts =
+                Arrays.asList(
+                        Tuple2.of(1, 100), Tuple2.of(2, 200), Tuple2.of(3, 150), Tuple2.of(4, 250));
+        for (Tuple2<Integer, Integer> record : inserts) {
+            tEnv.executeSql(
+                            String.format(
+                                    "INSERT INTO %s (id, amount) VALUES (%d, %d)",
+                                    tableName, record.f0, record.f1))
+                    .await();
+        }
+
+        // Update and insert more records
+        tEnv.executeSql(
+                        String.format(
+                                "INSERT INTO %s (id, amount) VALUES (3, 350), (5, 500)", tableName))
+                .await();
+
+        List<String> expectedResults =
+                Arrays.asList(
+                        "+I[1, 1, 100]",
+                        "+I[2, 2, 200]",
+                        "+I[3, 3, 150]",
+                        "+I[4, 4, 250]",
+                        "-U[3, 3, 150]",
+                        "+U[3, 3, 350]",
+                        "+I[5, 5, 500]");
+
+        // Collect results with timeout
+        assertQueryResultExactOrder(
+                tEnv,
+                String.format(
+                        "SELECT id, auto_increment_id, amount FROM %s /*+ OPTIONS('scan.startup.mode' = 'earliest') */",
+                        tableName),
+                expectedResults);
+
+        // verify invalid target columns that include auto-increment column
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "INSERT INTO %s (id, auto_increment_id) VALUES "
+                                                                + "(6, 10)",
+                                                        tableName))
+                                        .await())
+                .hasRootCauseInstanceOf(IllegalArgumentException.class)
+                .hasRootCauseMessage(
+                        "Explicitly specifying values for the auto increment column auto_increment_id is not allowed.");
+
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "INSERT INTO %s VALUES " + "(6, 10, 600)",
+                                                        tableName))
+                                        .await())
+                .hasRootCauseInstanceOf(IllegalArgumentException.class)
+                .hasRootCauseMessage(
+                        "This table has auto increment column [auto_increment_id]. "
+                                + "Explicitly specifying values for an auto increment column is not allowed. "
+                                + "Please specify non-auto-increment columns as target columns using partialUpdate first.");
+
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "INSERT INTO %s (id, amount, auto_increment_id) VALUES "
+                                                                + "(6, 600, 10)",
+                                                        tableName))
+                                        .await())
+                .hasRootCauseInstanceOf(IllegalArgumentException.class)
+                .hasRootCauseMessage(
+                        "This table has auto increment column [auto_increment_id]. "
+                                + "Explicitly specifying values for an auto increment column is not allowed. "
+                                + "Please specify non-auto-increment columns as target columns using partialUpdate first.");
+    }
+
+    @Test
     void testWalModeWithAutoIncrement() throws Exception {
         // use single parallelism to make result ordering stable
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 1);
@@ -1687,43 +1818,44 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                                 + ") with ('table.changelog.image' = 'wal', 'auto-increment.fields'='auto_increment_id')",
                         tableName));
 
-        // Insert initial data
-        tEnv.executeSql(
-                        String.format(
-                                "INSERT INTO %s (id, amount) VALUES "
-                                        + "(1, 100), "
-                                        + "(2, 200), "
-                                        + "(3, 150), "
-                                        + "(4, 250)",
-                                tableName))
-                .await();
+        // Insert rows one by one to preserve auto-increment ID ordering.
+        // Partial-column INSERT ... VALUES is rewritten into a UNION ALL of Value Sources
+        // by Flink, whose runtime does not guarantee UNION ALL input ordering.
+        List<Tuple2<Integer, Integer>> inserts =
+                Arrays.asList(
+                        Tuple2.of(1, 100), Tuple2.of(2, 200), Tuple2.of(3, 150), Tuple2.of(4, 250));
+        for (Tuple2<Integer, Integer> record : inserts) {
+            tEnv.executeSql(
+                            String.format(
+                                    "INSERT INTO %s (id, amount) VALUES (%d, %d)",
+                                    tableName, record.f0, record.f1))
+                    .await();
+        }
 
-        // Use batch mode to update and delete records
-
-        // Upsert data, not support update/delete rows in table with auto-inc column for now.
+        // Upsert data - these don't need sequential execution since auto increment IDs
+        // are already assigned from initial inserts above. Updates reuse existing IDs.
         // TODO: Support Batch Update
         tEnv.executeSql(
                         String.format(
-                                "INSERT INTO %s (id, amount) VALUES " + "(1, 120), " + "(3, 180)",
-                                tableName))
+                                "INSERT INTO %s (id, amount) VALUES (1, 120), (3, 180)", tableName))
                 .await();
 
         List<String> expectedResults =
                 Arrays.asList(
-                        "+I[1, 1, 100]",
-                        "+I[2, 2, 200]",
-                        "+I[3, 3, 150]",
-                        "+I[4, 4, 250]",
-                        "-U[1, 1, 100]",
-                        "+U[1, 1, 120]",
-                        "-U[3, 3, 150]",
-                        "+U[3, 3, 180]");
+                        "+I[insert, 1, 1, 100]",
+                        "+I[insert, 2, 2, 200]",
+                        "+I[insert, 3, 3, 150]",
+                        "+I[insert, 4, 4, 250]",
+                        "+I[update_after, 1, 1, 120]",
+                        "+I[update_after, 3, 3, 180]");
 
-        // Collect results with timeout
+        // Flink will generate ChangelogNormalize node to auto-complete the -U message,
+        // so we should read $changelog table to force read the raw underlying changelog
         assertQueryResultExactOrder(
                 tEnv,
                 String.format(
-                        "SELECT id, auto_increment_id, amount FROM %s /*+ OPTIONS('scan.startup.mode' = 'earliest') */",
+                        "SELECT _change_type, id, auto_increment_id, amount "
+                                + "FROM %s$changelog /*+ OPTIONS('scan.startup.mode' = 'earliest') */",
                         tableName),
                 expectedResults);
     }

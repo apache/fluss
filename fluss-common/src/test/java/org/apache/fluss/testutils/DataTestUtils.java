@@ -751,6 +751,20 @@ public class DataTestUtils {
     }
 
     public static void assertLogRecordsEquals(
+            RowType rowType,
+            LogRecords logRecords,
+            List<Object[]> expectedValue,
+            ChangeType expectedChangeType,
+            SchemaGetter schemaGetter) {
+        List<Tuple2<ChangeType, Object[]>> expectedValueWithRowKind =
+                expectedValue.stream()
+                        .map(val -> Tuple2.of(expectedChangeType, val))
+                        .collect(Collectors.toList());
+        assertLogRecordsEqualsWithRowKind(
+                DEFAULT_SCHEMA_ID, rowType, logRecords, expectedValueWithRowKind, schemaGetter);
+    }
+
+    public static void assertLogRecordsEquals(
             int schemaId,
             RowType rowType,
             LogRecords logRecords,

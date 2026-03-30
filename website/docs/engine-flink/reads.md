@@ -238,19 +238,28 @@ SELECT * FROM pk_table WHERE c_custkey = 1;
 ```
 
 ### Aggregations
-The Fluss source supports pushdown count aggregation for the log table in batch mode. It is useful to preview the total number of the log table;
+The Fluss source supports pushdown `COUNT(*)` aggregation in batch mode for both **Log Tables** and **Primary Key Tables**. This feature enables efficient row counting without scanning all records.
+
+#### Example for Log Table
 ```sql title="Flink SQL"
 -- Execute the flink job in batch mode for current session context
 SET 'execution.runtime-mode' = 'batch';
-```
-
-```sql title="Flink SQL"
 SET 'sql-client.execution.result-mode' = 'tableau';
-```
 
-```sql title="Flink SQL"
 SELECT COUNT(*) FROM log_table;
 ```
+
+#### Example for Primary Key Table
+```sql title="Flink SQL"
+SET 'execution.runtime-mode' = 'batch';
+SET 'sql-client.execution.result-mode' = 'tableau';
+
+SELECT COUNT(*) FROM pk_table;
+```
+
+:::note
+`COUNT(*)` pushdown for Primary Key Tables requires the table to use the default changelog mode (`'table.changelog.image' = 'FULL'`). Tables configured with `'table.changelog.image' = 'WAL'` do not support this feature.
+:::
 
 
 ## Read Options

@@ -294,8 +294,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="13"><strong>coordinator</strong></th>
-      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="8">-</td>
+       <th rowspan="24"><strong>coordinator</strong></th>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="9">-</td>
       <td>activeCoordinatorCount</td>
       <td>The number of active CoordinatorServer in this cluster.</td>
       <td>Gauge</td>
@@ -326,20 +326,30 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
     <tr>
+      <td>kvSnapshotLeaseCount</td>
+      <td>The total number of kv snapshot leases in this cluster.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>leasedKvSnapshotCount</td>
+      <td>The total number of leased kv snapshots in this cluster.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
       <td>replicasToDeleteCount</td>
       <td>The total number of replicas in the progress to be deleted in this cluster.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td rowspan="3">event</td>
+      <td>eventQueueSize</td>
+      <td>The number of events currently waiting to be processed in the coordinator event queue. This metric is labeled with <code>event_type</code> to distinguish between different types of coordinator events.</td>
       <td>Gauge</td>
     </tr>
     <tr>
       <td>eventQueueTimeMs</td>
       <td>The time that an event spent waiting in the queue to be processed.</td>
       <td>Histogram</td>
-    </tr>
-    <tr>
-      <td rowspan="2">event</td>
-      <td>eventQueueSize</td>
-      <td>The number of events currently waiting to be processed in the coordinator event queue. This metric is labeled with <code>event_type</code> to distinguish between different types of coordinator events.</td>
-      <td>Gauge</td>
     </tr>
     <tr>
       <td>eventProcessingTimeMs</td>
@@ -353,14 +363,62 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
      <tr>
+      <td rowspan="2">table</td>
+      <td>bucketCount</td>
+      <td>The number of buckets of each table.</td>
+      <td>Gauge</td>
+    </tr>
+     <tr>
+      <td>partitionCount</td>
+      <td>The number of partitions of each table.</td>
+      <td>Gauge</td>
+    </tr>
+     <tr>
       <td rowspan="2">table_bucket</td>
       <td>numKvSnapshots</td>
-      <td>number of kv snapshots of each table bucket.</td>
+      <td>The number of kv snapshots of each table bucket.</td>
       <td>Gauge</td>
     </tr>
      <tr>
       <td>allKvSnapshotSize</td>
-      <td>all kv snapshot size of each table bucket.</td>
+      <td>All kv snapshot size of each table bucket.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td rowspan="2">lakeTiering</td>
+      <td>pendingTablesCount</td>
+      <td>The number of tables waiting to be tiered.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>runningTablesCount</td>
+      <td>The number of tables currently being tiered.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td rowspan="5">lakeTiering_table</td>
+      <td>tierLag</td>
+      <td>Time in milliseconds since the last successful tiering operation for this table. For newly registered tables that have never completed a tiering round, the lag is measured from the time the table was registered.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>tierDuration</td>
+      <td>Duration in milliseconds of the last tiering operation for this table.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>failuresTotal</td>
+      <td>The total number of tiering failures for this table.</td>
+      <td>Counter</td>
+    </tr>
+    <tr>
+      <td>fileSize</td>
+      <td>Cumulative total file size (in bytes) of the lake table after the last tiering round. Returns -1 if no tiering has completed yet.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>recordCount</td>
+      <td>Cumulative total record count of the lake table after the last tiering round. Returns -1 if no tiering has completed yet.</td>
       <td>Gauge</td>
     </tr>
   </tbody>
@@ -948,7 +1006,50 @@ These metrics use Sum aggregation to show the total value across all tables in a
       <th rowspan="1"><strong>tabletserver</strong></th>
       <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="1">-</td>
       <td>rocksdbMemoryUsageTotal</td>
-      <td>Total memory usage across all RocksDB instances in this server (in bytes). This includes memory used by memtables, block cache, and other RocksDB internal structures.</td>
+      <td>Total memory usage across all RocksDB instances in this server (in bytes).</td>
+      <td>Gauge</td>
+    </tr>
+  </tbody>
+</table>
+
+#### Table-level RocksDB Memory Metrics (Sum Aggregation)
+
+<table class="table table-bordered">
+  <thead>
+    <tr>
+      <th class="text-left" style={{width: '30pt'}}>Scope</th>
+      <th class="text-left" style={{width: '150pt'}}>Infix</th>
+      <th class="text-left" style={{width: '80pt'}}>Metrics</th>
+      <th class="text-left" style={{width: '300pt'}}>Description</th>
+      <th class="text-left" style={{width: '40pt'}}>Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th rowspan="6"><strong>tabletserver</strong></th>
+      <td rowspan="6">table</td>
+      <td>rocksdbMemTableMemoryUsageTotal</td>
+      <td>Total memtable memory usage across all buckets of this table (in bytes).</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbMemTableUnFlushedMemoryUsageTotal</td>
+      <td>Total unflushed memtable memory usage across all buckets of this table (in bytes).</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbTableReadersMemoryUsageTotal</td>
+      <td>Total table readers (indexes and filters) memory usage across all buckets of this table (in bytes).</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbBlockCacheMemoryUsageTotal</td>
+      <td>Total block cache memory usage across all buckets of this table (in bytes).</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbBlockCachePinnedUsageTotal</td>
+      <td>Total pinned memory in block cache across all buckets of this table (in bytes).</td>
       <td>Gauge</td>
     </tr>
   </tbody>

@@ -23,7 +23,7 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss-spark</artifactId>
-        <version>0.9-SNAPSHOT</version>
+        <version>0.10-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-spark-3.5_${scala.binary.version}</artifactId>
@@ -115,7 +115,7 @@
                         <configuration>
                             <artifactSet>
                                 <includes combine.children="append">
-                                    <include>org.apache.fluss:fluss-spark-common</include>
+                                    <include>org.apache.fluss:fluss-spark-common_${scala.binary.version}</include>
                                     <include>org.apache.fluss:fluss-client</include>
                                 </includes>
                             </artifactSet>

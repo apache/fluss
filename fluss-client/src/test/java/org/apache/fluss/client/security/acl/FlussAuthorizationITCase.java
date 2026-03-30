@@ -22,6 +22,7 @@ import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.FlussConnection;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.FlussAdmin;
+import org.apache.fluss.client.admin.KvSnapshotLease;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.writer.AppendWriter;
@@ -55,6 +56,7 @@ import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
+import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.security.acl.AccessControlEntry;
 import org.apache.fluss.security.acl.AccessControlEntryFilter;
@@ -83,7 +85,9 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
@@ -100,6 +104,7 @@ import static org.apache.fluss.security.acl.OperationType.READ;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
@@ -453,7 +458,7 @@ public class FlussAuthorizationITCase {
         assertThatThrownBy(() -> guestAdmin.getLatestLakeSnapshot(DATA1_TABLE_PATH_PK).get())
                 .rootCause()
                 .isInstanceOf(LakeTableSnapshotNotExistException.class)
-                .hasMessageContaining("Lake table snapshot not exist for table");
+                .hasMessageContaining("Lake table snapshot doesn't exist for table");
     }
 
     @ParameterizedTest
@@ -643,7 +648,7 @@ public class FlussAuthorizationITCase {
                                     Collections.singletonList(noWriteAclTable)));
         }
 
-        // 2. Try to write data to writeAclTable. It will success and writeId will be set.
+        // 2. Try to write data to writeAclTable. It will succeed and writeId will be set.
         try (Table table = guestConn.getTable(writeAclTable)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             appendWriter.append(row(1, "a")).get();
@@ -1018,6 +1023,253 @@ public class FlussAuthorizationITCase {
 
         // test cancelRebalance with WRITE permission should succeed
         guestAdmin.cancelRebalance(null).get();
+    }
+
+    @Test
+    void testRebalanceDuringConcurrentTableCreation() throws Exception {
+        // Setup WRITE permission on the cluster for the guest user to allow rebalance operations.
+        rootAdmin
+                .createAcls(
+                        Collections.singletonList(
+                                new AclBinding(
+                                        Resource.cluster(),
+                                        new AccessControlEntry(
+                                                guestPrincipal,
+                                                WILD_CARD_HOST,
+                                                OperationType.WRITE,
+                                                PermissionType.ALLOW))))
+                .all()
+                .get();
+
+        // Run multiple iterations to catch potential race conditions between
+        // table creation events and rebalance plan generation.
+        // Locally verified with 50+ iterations without failures.
+        for (int i = 0; i < 5; i++) {
+            TablePath transientTable = TablePath.of("test_db_1", "transient_rebalance_table_" + i);
+
+            // Trigger table creation. We do not wait for the table to be "ready"
+            // to maximize the chance of the rebalancer encountering transient metadata.
+            rootAdmin.createTable(transientTable, DATA1_TABLE_DESCRIPTOR_PK, false);
+
+            // Attempt to rebalance the cluster.
+            // This verifies that the rebalance operation is robust against transient table states
+            // (e.g., leader elected but not yet present in the assignment list) and does not fail.
+            assertThatCode(() -> guestAdmin.rebalance(Collections.emptyList()).get())
+                    .doesNotThrowAnyException();
+
+            // Cleanup the table for the next iteration.
+            rootAdmin.dropTable(transientTable, true).get();
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    //  KV Snapshot Lease Authorization Tests
+    // ------------------------------------------------------------------------
+
+    @Test
+    void testAcquireKvSnapshotLease() throws Exception {
+        TableInfo tableInfo = rootAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get();
+        long tableId = tableInfo.getTableId();
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+
+        KvSnapshotLease kvSnapshotLease =
+                guestAdmin.createKvSnapshotLease(
+                        "test-acquire-lease", Duration.ofDays(1).toMillis());
+        Map<TableBucket, Long> snapshotIds = new HashMap<>();
+        snapshotIds.put(new TableBucket(tableId, 0), 0L);
+
+        // test acquireKvSnapshotLease without READ permission on table resource
+        assertThatThrownBy(() -> kvSnapshotLease.acquireSnapshots(snapshotIds).get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining(
+                        String.format(
+                                "Principal %s have no authorization to operate READ on resource Resource{type=TABLE, name='%s'}",
+                                guestPrincipal, DATA1_TABLE_PATH_PK));
+
+        // add READ permission to guest user on table resource
+        List<AclBinding> aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.table(DATA1_TABLE_PATH_PK),
+                                new AccessControlEntry(
+                                        guestPrincipal, "*", READ, PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+
+        // test acquireKvSnapshotLease with READ permission should succeed
+        // (no AuthorizationException should be thrown)
+        kvSnapshotLease.acquireSnapshots(snapshotIds).get();
+
+        // cleanup: drop the lease using root admin
+        guestAdmin
+                .createKvSnapshotLease("test-acquire-lease", Duration.ofDays(1).toMillis())
+                .dropLease()
+                .get();
+    }
+
+    @Test
+    void testReleaseKvSnapshotLease() throws Exception {
+        TableInfo tableInfo = rootAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get();
+        long tableId = tableInfo.getTableId();
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+
+        AdminGateway guestGateway = ((FlussAdmin) guestAdmin).getAdminGateway();
+        ReleaseKvSnapshotLeaseRequest request =
+                ClientRpcMessageUtils.makeReleaseKvSnapshotLeaseRequest(
+                        "test-release-lease", Collections.singleton(new TableBucket(tableId, 0)));
+
+        // test releaseKvSnapshotLease without READ permission on table resource
+        assertThatThrownBy(() -> guestGateway.releaseKvSnapshotLease(request).get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining(
+                        String.format(
+                                "Principal %s have no authorization to operate READ on resource Resource{type=TABLE, name='%s'}",
+                                guestPrincipal, DATA1_TABLE_PATH_PK));
+
+        // add READ permission to guest user on table resource
+        List<AclBinding> aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.table(DATA1_TABLE_PATH_PK),
+                                new AccessControlEntry(
+                                        guestPrincipal, "*", READ, PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+
+        // test releaseKvSnapshotLease with READ permission should succeed
+        // (the lease doesn't exist, but no AuthorizationException should be thrown)
+        guestGateway.releaseKvSnapshotLease(request).get();
+    }
+
+    @Test
+    void testDropKvSnapshotLease() throws Exception {
+        TableInfo tableInfo = rootAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get();
+        long tableId = tableInfo.getTableId();
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+
+        KvSnapshotLease kvSnapshotLease =
+                guestAdmin.createKvSnapshotLease("test-drop-lease", Duration.ofDays(1).toMillis());
+        Map<TableBucket, Long> snapshotIds = new HashMap<>();
+        snapshotIds.put(new TableBucket(tableId, 0), 0L);
+
+        // this there is no lease exists, so no AuthorizationException should be thrown
+        kvSnapshotLease.dropLease().get();
+
+        // add READ permission to guest user on table resource
+        List<AclBinding> aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.table(DATA1_TABLE_PATH_PK),
+                                new AccessControlEntry(
+                                        guestPrincipal, "*", READ, PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+
+        // test acquireKvSnapshotLease with READ permission should succeed
+        // (no AuthorizationException should be thrown)
+        kvSnapshotLease.acquireSnapshots(snapshotIds).get();
+
+        // remove the READ permission to guest user on table resource
+        rootAdmin.dropAcls(Collections.singletonList(AclBindingFilter.ANY)).all().get();
+
+        // After removing the READ permission, AuthorizationException should be thrown
+        assertThatThrownBy(() -> kvSnapshotLease.dropLease().get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining(
+                        String.format(
+                                "Principal %s have no authorization to operate READ on resource Resource{type=TABLE, name='%s'}",
+                                guestPrincipal, DATA1_TABLE_PATH_PK));
+
+        // add READ permission to guest user on table resource
+        rootAdmin.createAcls(aclBindings).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+
+        // test dropKvSnapshotLease with READ permission should succeed
+        // (no AuthorizationException should be thrown)
+        kvSnapshotLease.dropLease().get();
+    }
+
+    // ------------------------------------------------------------------------
+    //  Producer Offsets Authorization Tests
+    // ------------------------------------------------------------------------
+
+    @Test
+    void testRegisterProducerOffsetsAuthorization() throws Exception {
+        String producerId = "test-producer-auth-" + System.currentTimeMillis();
+        TableInfo tableInfo = rootAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get();
+        long tableId = tableInfo.getTableId();
+
+        Map<TableBucket, Long> offsets = new HashMap<>();
+        offsets.put(new TableBucket(tableId, 0), 100L);
+
+        // test registerProducerOffsets without WRITE permission on table resource
+        assertThatThrownBy(() -> guestAdmin.registerProducerOffsets(producerId, offsets).get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining(
+                        String.format(
+                                "Principal %s have no authorization to operate WRITE on resource Resource{type=TABLE, name='%s'}",
+                                guestPrincipal, DATA1_TABLE_PATH_PK));
+
+        // add WRITE permission to guest user on table resource
+        List<AclBinding> aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.table(DATA1_TABLE_PATH_PK),
+                                new AccessControlEntry(
+                                        guestPrincipal,
+                                        "*",
+                                        OperationType.WRITE,
+                                        PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+
+        // test registerProducerOffsets with WRITE permission should succeed
+        guestAdmin.registerProducerOffsets(producerId, offsets).get();
+
+        // cleanup
+        rootAdmin.deleteProducerOffsets(producerId).get();
+    }
+
+    @Test
+    void testDeleteProducerOffsetsAuthorization() throws Exception {
+        String producerId = "test-producer-delete-auth-" + System.currentTimeMillis();
+        TableInfo tableInfo = rootAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get();
+        long tableId = tableInfo.getTableId();
+
+        Map<TableBucket, Long> offsets = new HashMap<>();
+        offsets.put(new TableBucket(tableId, 0), 100L);
+
+        // register offsets as root user first
+        rootAdmin.registerProducerOffsets(producerId, offsets).get();
+
+        // test deleteProducerOffsets without WRITE permission on table resource
+        assertThatThrownBy(() -> guestAdmin.deleteProducerOffsets(producerId).get())
+                .rootCause()
+                .isInstanceOf(AuthorizationException.class)
+                .hasMessageContaining(
+                        String.format(
+                                "Principal %s have no authorization to operate WRITE on resource Resource{type=TABLE, name='%s'}",
+                                guestPrincipal, DATA1_TABLE_PATH_PK));
+
+        // add WRITE permission to guest user on table resource
+        List<AclBinding> aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.table(DATA1_TABLE_PATH_PK),
+                                new AccessControlEntry(
+                                        guestPrincipal,
+                                        "*",
+                                        OperationType.WRITE,
+                                        PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+
+        // test deleteProducerOffsets with WRITE permission should succeed
+        guestAdmin.deleteProducerOffsets(producerId).get();
     }
 
     private static Configuration initConfig() {

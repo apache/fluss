@@ -19,9 +19,9 @@
 apiVersion: v2
 name: fluss
 description: A Helm chart for Kubernetes to deploy Apache Fluss CoordinatorServer and TabletServers.
-appVersion: "0.9.0-incubating"
+appVersion: "0.10.0-incubating"
 type: application
-version: 0.9.0-incubating
+version: 0.10.0-incubating
 home: https://fluss.apache.org
 icon: https://fluss.apache.org/img/logo/svg/colored_logo.svg
 maintainers:

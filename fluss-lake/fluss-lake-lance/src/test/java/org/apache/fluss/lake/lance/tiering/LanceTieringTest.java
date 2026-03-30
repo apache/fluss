@@ -21,6 +21,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
+import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.lance.LanceConfig;
 import org.apache.fluss.lake.lance.utils.LanceArrowUtils;
@@ -37,6 +38,7 @@ import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.GenericRecord;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.types.Tuple2;
@@ -46,7 +48,9 @@ import com.lancedb.lance.WriteParams;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.complex.FixedSizeListVector;
 import org.apache.arrow.vector.ipc.ArrowReader;
+import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -65,10 +69,13 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** The UT for tiering to Lance via {@link LanceLakeTieringFactory}. */
 class LanceTieringTest {
+    private static final int EMBEDDING_LIST_SIZE = 4;
+
     private @TempDir File tempWarehouseDir;
     private LanceLakeTieringFactory lanceLakeTieringFactory;
     private Configuration configuration;
@@ -91,13 +98,16 @@ class LanceTieringTest {
         TablePath tablePath = TablePath.of("lance", "logTable");
         Map<String, String> customProperties = new HashMap<>();
         customProperties.put("lance.batch_size", "256");
+        customProperties.put(
+                "embedding" + LanceArrowUtils.FIXED_SIZE_LIST_SIZE_SUFFIX,
+                String.valueOf(EMBEDDING_LIST_SIZE));
         LanceConfig config =
                 LanceConfig.from(
                         configuration.toMap(),
                         customProperties,
                         tablePath.getDatabaseName(),
                         tablePath.getTableName());
-        Schema schema = createTable(config);
+        Schema schema = createTable(config, customProperties);
 
         TableDescriptor descriptor =
                 TableDescriptor.builder()
@@ -106,7 +116,8 @@ class LanceTieringTest {
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
                         .customProperties(customProperties)
                         .build();
-        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
+        TableInfo tableInfo =
+                TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
 
         List<LanceWriteResult> lanceWriteResults = new ArrayList<>();
         SimpleVersionedSerializer<LanceWriteResult> writeResultSerializer =
@@ -167,7 +178,10 @@ class LanceTieringTest {
                             committableSerializer.getVersion(), serialized);
             Map<String, String> snapshotProperties =
                     Collections.singletonMap(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "offsets");
-            long snapshot = lakeCommitter.commit(lanceCommittable, snapshotProperties);
+            long snapshot =
+                    lakeCommitter
+                            .commit(lanceCommittable, snapshotProperties)
+                            .getCommittedSnapshotId();
             // lance dataset version starts from 1
             assertThat(snapshot).isEqualTo(2);
         }
@@ -177,6 +191,13 @@ class LanceTieringTest {
                         new RootAllocator(),
                         config.getDatasetUri(),
                         LanceConfig.genReadOptionFromConfig(config))) {
+            // verify the embedding column uses FixedSizeList in the Lance schema
+            org.apache.arrow.vector.types.pojo.Field embeddingField =
+                    dataset.getSchema().findField("embedding");
+            assertThat(embeddingField.getType()).isInstanceOf(ArrowType.FixedSizeList.class);
+            assertThat(((ArrowType.FixedSizeList) embeddingField.getType()).getListSize())
+                    .isEqualTo(EMBEDDING_LIST_SIZE);
+
             ArrowReader reader = dataset.newScan().scanBatches();
             VectorSchemaRoot readerRoot = reader.getVectorSchemaRoot();
 
@@ -186,8 +207,7 @@ class LanceTieringTest {
                     reader.loadNextBatch();
                     Tuple2<String, Integer> partitionBucket = Tuple2.of(partition, bucket);
                     List<LogRecord> expectRecords = recordsByBucket.get(partitionBucket);
-                    verifyLogTableRecords(
-                            readerRoot, expectRecords, bucket, isPartitioned, partition);
+                    verifyLogTableRecords(readerRoot, expectRecords);
                 }
             }
             assertThat(reader.loadNextBatch()).isFalse();
@@ -213,14 +233,13 @@ class LanceTieringTest {
         }
     }
 
-    private void verifyLogTableRecords(
-            VectorSchemaRoot root,
-            List<LogRecord> expectRecords,
-            int expectBucket,
-            boolean isPartitioned,
-            @Nullable String partition)
-            throws Exception {
+    private void verifyLogTableRecords(VectorSchemaRoot root, List<LogRecord> expectRecords) {
         assertThat(root.getRowCount()).isEqualTo(expectRecords.size());
+
+        // verify the embedding vector is a FixedSizeListVector
+        assertThat(root.getVector("embedding")).isInstanceOf(FixedSizeListVector.class);
+        FixedSizeListVector embeddingVector = (FixedSizeListVector) root.getVector("embedding");
+
         for (int i = 0; i < expectRecords.size(); i++) {
             LogRecord expectRecord = expectRecords.get(i);
             // check business columns:
@@ -230,6 +249,13 @@ class LanceTieringTest {
                     .isEqualTo(expectRecord.getRow().getString(1).toString());
             assertThat(((VarCharVector) root.getVector(2)).getObject(i).toString())
                     .isEqualTo(expectRecord.getRow().getString(2).toString());
+            // check embedding column
+            java.util.List<?> embeddingValues = embeddingVector.getObject(i);
+            assertThat(embeddingValues).hasSize(EMBEDDING_LIST_SIZE);
+            org.apache.fluss.row.InternalArray expectedArray = expectRecord.getRow().getArray(3);
+            for (int j = 0; j < EMBEDDING_LIST_SIZE; j++) {
+                assertThat((Float) embeddingValues.get(j)).isEqualTo(expectedArray.getFloat(j));
+            }
         }
     }
 
@@ -249,6 +275,11 @@ class LanceTieringTest {
 
                     @Override
                     public Configuration lakeTieringConfig() {
+                        return new Configuration();
+                    }
+
+                    @Override
+                    public Configuration flussClientConfig() {
                         return new Configuration();
                     }
                 });
@@ -288,19 +319,21 @@ class LanceTieringTest {
         List<LogRecord> logRecords = new ArrayList<>();
         for (int i = 0; i < numRecords; i++) {
             GenericRow genericRow;
-            if (partition != null) {
-                // Partitioned table: include partition field in data
-                genericRow = new GenericRow(3); // c1, c2, c3(partition)
-                genericRow.setField(0, i);
-                genericRow.setField(1, BinaryString.fromString("bucket" + bucket + "_" + i));
-                genericRow.setField(2, BinaryString.fromString(partition)); // partition field
-            } else {
-                // Non-partitioned table
-                genericRow = new GenericRow(3);
-                genericRow.setField(0, i);
-                genericRow.setField(1, BinaryString.fromString("bucket" + bucket + "_" + i));
+
+            // Partitioned table: include partition field in data
+            genericRow = new GenericRow(4); // c1, c2, c3(partition), embedding
+            genericRow.setField(0, i);
+            genericRow.setField(1, BinaryString.fromString("bucket" + bucket + "_" + i));
+
+            if (partition == null) {
                 genericRow.setField(2, BinaryString.fromString("bucket" + bucket));
+            } else {
+                genericRow.setField(2, BinaryString.fromString(partition));
             }
+
+            genericRow.setField(
+                    3, new GenericArray(new float[] {0.1f * i, 0.2f * i, 0.3f * i, 0.4f * i}));
+
             LogRecord logRecord =
                     new GenericRecord(
                             i, System.currentTimeMillis(), ChangeType.APPEND_ONLY, genericRow);
@@ -309,17 +342,182 @@ class LanceTieringTest {
         return Tuple2.of(logRecords, logRecords);
     }
 
-    private Schema createTable(LanceConfig config) {
+    private Schema createTable(LanceConfig config, Map<String, String> customProperties) {
         List<Schema.Column> columns = new ArrayList<>();
         columns.add(new Schema.Column("c1", DataTypes.INT()));
         columns.add(new Schema.Column("c2", DataTypes.STRING()));
         columns.add(new Schema.Column("c3", DataTypes.STRING()));
+        columns.add(new Schema.Column("embedding", DataTypes.ARRAY(DataTypes.FLOAT())));
         Schema.Builder schemaBuilder = Schema.newBuilder().fromColumns(columns);
+        Schema schema = schemaBuilder.build();
+        WriteParams params = LanceConfig.genWriteParamsFromConfig(config);
+        LanceDatasetAdapter.createDataset(
+                config.getDatasetUri(),
+                LanceArrowUtils.toArrowSchema(schema.getRowType(), customProperties),
+                params);
+
+        return schema;
+    }
+
+    @ParameterizedTest
+    @MethodSource("tieringWriteArgs")
+    void testTieringWriteTableWithNestedRowType(boolean isPartitioned) throws Exception {
+        int bucketNum = 3;
+        TablePath tablePath = TablePath.of("lance", "nestedRowTable");
+        Map<String, String> customProperties = new HashMap<>();
+        customProperties.put("lance.batch_size", "256");
+        LanceConfig config =
+                LanceConfig.from(
+                        configuration.toMap(),
+                        customProperties,
+                        tablePath.getDatabaseName(),
+                        tablePath.getTableName());
+        Schema schema = createNestedRowTable(config);
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(bucketNum)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .customProperties(customProperties)
+                        .build();
+        TableInfo tableInfo =
+                TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
+
+        List<LanceWriteResult> lanceWriteResults = new ArrayList<>();
+        SimpleVersionedSerializer<LanceWriteResult> writeResultSerializer =
+                lanceLakeTieringFactory.getWriteResultSerializer();
+        SimpleVersionedSerializer<LanceCommittable> committableSerializer =
+                lanceLakeTieringFactory.getCommittableSerializer();
+
+        Map<Tuple2<String, Integer>, List<LogRecord>> recordsByBucket = new HashMap<>();
+        Map<Long, String> partitionIdAndName =
+                isPartitioned
+                        ? new HashMap<Long, String>() {
+                            {
+                                put(1L, "p1");
+                                put(2L, "p2");
+                                put(3L, "p3");
+                            }
+                        }
+                        : Collections.singletonMap(null, null);
+
+        // First, write data with nested row types
+        for (int bucket = 0; bucket < bucketNum; bucket++) {
+            for (Map.Entry<Long, String> entry : partitionIdAndName.entrySet()) {
+                String partition = entry.getValue();
+                try (LakeWriter<LanceWriteResult> lakeWriter =
+                        createLakeWriter(tablePath, bucket, partition, tableInfo)) {
+                    Tuple2<String, Integer> partitionBucket = Tuple2.of(partition, bucket);
+                    Tuple2<List<LogRecord>, List<LogRecord>> writeAndExpectRecords =
+                            genNestedRowLogRecords(bucket, 10);
+                    List<LogRecord> writtenRecords = writeAndExpectRecords.f0;
+                    List<LogRecord> expectRecords = writeAndExpectRecords.f1;
+                    recordsByBucket.put(partitionBucket, expectRecords);
+                    for (LogRecord logRecord : writtenRecords) {
+                        lakeWriter.write(logRecord);
+                    }
+                    // serialize/deserialize writeResult
+                    LanceWriteResult lanceWriteResult = lakeWriter.complete();
+                    byte[] serialized = writeResultSerializer.serialize(lanceWriteResult);
+                    lanceWriteResults.add(
+                            writeResultSerializer.deserialize(
+                                    writeResultSerializer.getVersion(), serialized));
+                }
+            }
+        }
+
+        // Second, commit data
+        try (LakeCommitter<LanceWriteResult, LanceCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo)) {
+            // serialize/deserialize committable
+            LanceCommittable lanceCommittable = lakeCommitter.toCommittable(lanceWriteResults);
+            byte[] serialized = committableSerializer.serialize(lanceCommittable);
+            lanceCommittable =
+                    committableSerializer.deserialize(
+                            committableSerializer.getVersion(), serialized);
+            Map<String, String> snapshotProperties =
+                    Collections.singletonMap(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "offsets");
+            LakeCommitResult commitResult =
+                    lakeCommitter.commit(lanceCommittable, snapshotProperties);
+            // lance dataset version starts from 1
+            assertThat(commitResult.getCommittedSnapshotId()).isEqualTo(2);
+        }
+
+        try (Dataset dataset =
+                Dataset.open(
+                        new RootAllocator(),
+                        config.getDatasetUri(),
+                        LanceConfig.genReadOptionFromConfig(config))) {
+            ArrowReader reader = dataset.newScan().scanBatches();
+            VectorSchemaRoot readerRoot = reader.getVectorSchemaRoot();
+
+            // Verify data can be read back
+            for (int bucket = 0; bucket < 3; bucket++) {
+                for (String partition : partitionIdAndName.values()) {
+                    reader.loadNextBatch();
+                    Tuple2<String, Integer> partitionBucket = Tuple2.of(partition, bucket);
+                    List<LogRecord> expectRecords = recordsByBucket.get(partitionBucket);
+                    verifyNestedRowRecords(readerRoot, expectRecords);
+                }
+            }
+            assertThat(reader.loadNextBatch()).isFalse();
+        }
+    }
+
+    private Schema createNestedRowTable(LanceConfig config) {
+        Schema.Builder schemaBuilder =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column(
+                                "address",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("city", DataTypes.STRING()),
+                                        DataTypes.FIELD("zip", DataTypes.INT())));
         Schema schema = schemaBuilder.build();
         WriteParams params = LanceConfig.genWriteParamsFromConfig(config);
         LanceDatasetAdapter.createDataset(
                 config.getDatasetUri(), LanceArrowUtils.toArrowSchema(schema.getRowType()), params);
 
         return schema;
+    }
+
+    private Tuple2<List<LogRecord>, List<LogRecord>> genNestedRowLogRecords(
+            int bucket, int numRecords) {
+        List<LogRecord> logRecords = new ArrayList<>();
+        for (int i = 0; i < numRecords; i++) {
+            GenericRow genericRow = new GenericRow(3);
+            genericRow.setField(0, i);
+            genericRow.setField(1, BinaryString.fromString("user" + bucket + "_" + i));
+
+            // Create nested address row
+            GenericRow addressRow = new GenericRow(2);
+            addressRow.setField(0, BinaryString.fromString("city" + bucket));
+            addressRow.setField(1, 10000 + bucket);
+            genericRow.setField(2, addressRow);
+
+            LogRecord logRecord =
+                    new GenericRecord(
+                            i, System.currentTimeMillis(), ChangeType.APPEND_ONLY, genericRow);
+            logRecords.add(logRecord);
+        }
+        return Tuple2.of(logRecords, logRecords);
+    }
+
+    private void verifyNestedRowRecords(VectorSchemaRoot root, List<LogRecord> expectRecords) {
+        assertThat(root.getRowCount()).isEqualTo(expectRecords.size());
+        for (int i = 0; i < expectRecords.size(); i++) {
+            LogRecord expectRecord = expectRecords.get(i);
+            // check id column
+            assertThat((int) (root.getVector(0).getObject(i)))
+                    .isEqualTo(expectRecord.getRow().getInt(0));
+            // check name column
+            assertThat(((VarCharVector) root.getVector(1)).getObject(i).toString())
+                    .isEqualTo(expectRecord.getRow().getString(1).toString());
+            // For nested row, just verify that the struct vector is not null and has correct
+            // structure
+            assertThat(root.getVector(2)).isNotNull();
+        }
     }
 }

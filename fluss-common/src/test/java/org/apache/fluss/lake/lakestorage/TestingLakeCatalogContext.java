@@ -17,10 +17,27 @@
 
 package org.apache.fluss.lake.lakestorage;
 
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.security.acl.FlussPrincipal;
 
 /** A testing implementation of {@link LakeCatalog.Context}. */
 public class TestingLakeCatalogContext implements LakeCatalog.Context {
+
+    private final TableDescriptor currentTable;
+    private final TableDescriptor expectedTable;
+
+    public TestingLakeCatalogContext(TableDescriptor tableDescriptor) {
+        this(tableDescriptor, tableDescriptor);
+    }
+
+    public TestingLakeCatalogContext(TableDescriptor currentTable, TableDescriptor expectedTable) {
+        this.currentTable = currentTable;
+        this.expectedTable = expectedTable;
+    }
+
+    public TestingLakeCatalogContext() {
+        this(null);
+    }
 
     @Override
     public boolean isCreatingFlussTable() {
@@ -30,5 +47,15 @@ public class TestingLakeCatalogContext implements LakeCatalog.Context {
     @Override
     public FlussPrincipal getFlussPrincipal() {
         return null;
+    }
+
+    @Override
+    public TableDescriptor getCurrentTable() {
+        return currentTable;
+    }
+
+    @Override
+    public TableDescriptor getExpectedTable() {
+        return expectedTable;
     }
 }

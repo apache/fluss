@@ -28,11 +28,15 @@ import org.apache.fluss.client.initializer.SnapshotOffsetsInitializer;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.flink.lake.LakeSplitGenerator;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
+import org.apache.fluss.flink.source.FlinkSource;
+import org.apache.fluss.flink.source.event.FinishedKvSnapshotConsumeEvent;
 import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
 import org.apache.fluss.flink.source.event.PartitionsRemovedEvent;
+import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
 import org.apache.fluss.flink.source.split.LogSplit;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
@@ -40,6 +44,7 @@ import org.apache.fluss.flink.source.state.SourceEnumeratorState;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -71,9 +76,11 @@ import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableMap;
 import java.util.Objects;
 import java.util.OptionalLong;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -132,6 +139,11 @@ public class FlinkSourceEnumerator
     private final OffsetsInitializer startingOffsetsInitializer;
     private final OffsetsInitializer stoppingOffsetsInitializer;
 
+    private final LeaseContext leaseContext;
+
+    /** checkpointId -> tableBuckets who finished consume kv snapshots. */
+    private final TreeMap<Long, Set<TableBucket>> consumedKvSnapshotMap = new TreeMap<>();
+
     // Lazily instantiated or mutable fields.
     private Connection connection;
     private Admin flussAdmin;
@@ -145,6 +157,27 @@ public class FlinkSourceEnumerator
     private boolean lakeEnabled = false;
 
     private volatile boolean closed = false;
+
+    /**
+     * Whether a checkpoint has been successfully completed before.
+     *
+     * <p>This flag is used in {@link #close()} to decide whether the kv snapshot lease should be
+     * dropped:
+     *
+     * <ul>
+     *   <li>If {@code false} (no checkpoint completed), the lease ID has not been persisted to
+     *       checkpoint state, so it is safe to drop the lease on close — no future restore will
+     *       reference it.
+     *   <li>If {@code true} (at least one checkpoint completed), the lease ID has been persisted
+     *       and may be restored via {@link FlinkSource#restoreEnumerator}. Dropping the lease on
+     *       close would invalidate the restored lease, so it must be kept.
+     * </ul>
+     *
+     * <p>This field is initialized to {@code true} when restoring from a checkpoint (i.e., {@code
+     * assignedTableBuckets} is non-empty), and set to {@code true} in {@link
+     * #notifyCheckpointComplete(long)} upon the first successful checkpoint.
+     */
+    private volatile boolean checkpointTriggeredBefore;
 
     @Nullable private final Predicate partitionFilters;
 
@@ -160,7 +193,9 @@ public class FlinkSourceEnumerator
             long scanPartitionDiscoveryIntervalMs,
             boolean streaming,
             @Nullable Predicate partitionFilters,
-            @Nullable LakeSource<LakeSplit> lakeSource) {
+            @Nullable LakeSource<LakeSplit> lakeSource,
+            LeaseContext leaseContext,
+            boolean checkpointTriggeredBefore) {
         this(
                 tablePath,
                 flussConf,
@@ -174,7 +209,9 @@ public class FlinkSourceEnumerator
                 scanPartitionDiscoveryIntervalMs,
                 streaming,
                 partitionFilters,
-                lakeSource);
+                lakeSource,
+                leaseContext,
+                checkpointTriggeredBefore);
     }
 
     public FlinkSourceEnumerator(
@@ -190,7 +227,9 @@ public class FlinkSourceEnumerator
             long scanPartitionDiscoveryIntervalMs,
             boolean streaming,
             @Nullable Predicate partitionFilters,
-            @Nullable LakeSource<LakeSplit> lakeSource) {
+            @Nullable LakeSource<LakeSplit> lakeSource,
+            LeaseContext leaseContext,
+            boolean checkpointTriggeredBefore) {
         this(
                 tablePath,
                 flussConf,
@@ -205,7 +244,9 @@ public class FlinkSourceEnumerator
                 streaming,
                 partitionFilters,
                 lakeSource,
-                new WorkerExecutor(context));
+                new WorkerExecutor(context),
+                leaseContext,
+                checkpointTriggeredBefore);
     }
 
     FlinkSourceEnumerator(
@@ -222,7 +263,9 @@ public class FlinkSourceEnumerator
             boolean streaming,
             @Nullable Predicate partitionFilters,
             @Nullable LakeSource<LakeSplit> lakeSource,
-            WorkerExecutor workerExecutor) {
+            WorkerExecutor workerExecutor,
+            LeaseContext leaseContext,
+            boolean checkpointTriggeredBefore) {
         this.tablePath = checkNotNull(tablePath);
         this.flussConf = checkNotNull(flussConf);
         this.hasPrimaryKey = hasPrimaryKey;
@@ -243,6 +286,8 @@ public class FlinkSourceEnumerator
                 streaming ? new NoStoppingOffsetsInitializer() : OffsetsInitializer.latest();
         this.lakeSource = lakeSource;
         this.workerExecutor = workerExecutor;
+        this.leaseContext = leaseContext;
+        this.checkpointTriggeredBefore = checkpointTriggeredBefore;
     }
 
     @Override
@@ -349,16 +394,7 @@ public class FlinkSourceEnumerator
 
     private List<SourceSplitBase> initNonPartitionedSplits() {
         if (hasPrimaryKey && startingOffsetsInitializer instanceof SnapshotOffsetsInitializer) {
-            // get the table snapshot info
-            final KvSnapshots kvSnapshots;
-            try {
-                kvSnapshots = flussAdmin.getLatestKvSnapshots(tablePath).get();
-            } catch (Exception e) {
-                throw new FlinkRuntimeException(
-                        String.format("Failed to get table snapshot for %s", tablePath),
-                        ExceptionUtils.stripCompletionException(e));
-            }
-            return getSnapshotAndLogSplits(kvSnapshots, null);
+            return getSnapshotAndLogSplits(getLatestKvSnapshotsAndRegister(null), null);
         } else {
             return getLogSplit(null, null);
         }
@@ -531,20 +567,91 @@ public class FlinkSourceEnumerator
         List<SourceSplitBase> splits = new ArrayList<>();
         for (Partition partition : newPartitions) {
             String partitionName = partition.getPartitionName();
-            // get the table snapshot info
-            final KvSnapshots kvSnapshots;
-            try {
-                kvSnapshots = flussAdmin.getLatestKvSnapshots(tablePath, partitionName).get();
-            } catch (Exception e) {
-                throw new FlinkRuntimeException(
-                        String.format(
-                                "Failed to get table snapshot for table %s and partition %s",
-                                tablePath, partitionName),
-                        ExceptionUtils.stripCompletionException(e));
-            }
-            splits.addAll(getSnapshotAndLogSplits(kvSnapshots, partitionName));
+            splits.addAll(
+                    getSnapshotAndLogSplits(
+                            getLatestKvSnapshotsAndRegister(partitionName), partitionName));
         }
         return splits;
+    }
+
+    private KvSnapshots getLatestKvSnapshotsAndRegister(@Nullable String partitionName) {
+        long tableId;
+        Long partitionId;
+        Map<Integer, Long> snapshotIds = new HashMap<>();
+        Map<Integer, Long> logOffsets = new HashMap<>();
+
+        // Get the latest kv snapshots and acquire kvSnapshot lease.
+        try {
+            KvSnapshots kvSnapshots = getLatestKvSnapshots(partitionName);
+
+            tableId = kvSnapshots.getTableId();
+            partitionId = kvSnapshots.getPartitionId();
+
+            Map<TableBucket, Long> bucketsToLease = new HashMap<>();
+            for (TableBucket tb : kvSnapshots.getTableBuckets()) {
+                int bucket = tb.getBucket();
+                OptionalLong snapshotIdOpt = kvSnapshots.getSnapshotId(bucket);
+                OptionalLong logOffsetOpt = kvSnapshots.getLogOffset(bucket);
+                if (snapshotIdOpt.isPresent() && !ignoreTableBucket(tb)) {
+                    bucketsToLease.put(tb, snapshotIdOpt.getAsLong());
+                }
+
+                snapshotIds.put(
+                        bucket, snapshotIdOpt.isPresent() ? snapshotIdOpt.getAsLong() : null);
+                logOffsets.put(bucket, logOffsetOpt.isPresent() ? logOffsetOpt.getAsLong() : null);
+            }
+
+            if (!bucketsToLease.isEmpty()) {
+                String kvSnapshotLeaseId = leaseContext.getKvSnapshotLeaseId();
+                LOG.info(
+                        "Try to acquire kv snapshot lease {} for table {}",
+                        kvSnapshotLeaseId,
+                        PhysicalTablePath.of(tablePath, partitionName));
+                long kvSnapshotLeaseDurationMs = leaseContext.getKvSnapshotLeaseDurationMs();
+                try {
+                    Set<TableBucket> unavailableTableBucketSet =
+                            flussAdmin
+                                    .createKvSnapshotLease(
+                                            kvSnapshotLeaseId, kvSnapshotLeaseDurationMs)
+                                    .acquireSnapshots(bucketsToLease)
+                                    .get()
+                                    .getUnavailableTableBucketSet();
+                    if (!unavailableTableBucketSet.isEmpty()) {
+                        LOG.error(
+                                "Failed to acquire kv snapshot lease for table {}: {}.",
+                                tablePath,
+                                unavailableTableBucketSet);
+                    }
+                } catch (Exception e) {
+                    if (ExceptionUtils.findThrowable(e, UnsupportedVersionException.class)
+                            .isPresent()) {
+                        LOG.warn(
+                                "Failed to acquire kv snapshot lease for table {} because the "
+                                        + "server does not support kv snapshot lease API. "
+                                        + "Snapshots may be cleaned up earlier than expected. "
+                                        + "Please upgrade the Fluss server to version 0.9 or later.",
+                                tablePath,
+                                e);
+                    } else {
+                        throw e;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            throw new FlinkRuntimeException(
+                    String.format("Failed to get table snapshot for %s", tablePath),
+                    ExceptionUtils.stripCompletionException(e));
+        }
+
+        return new KvSnapshots(tableId, partitionId, snapshotIds, logOffsets);
+    }
+
+    private KvSnapshots getLatestKvSnapshots(@Nullable String partitionName) throws Exception {
+        if (partitionName == null) {
+            return flussAdmin.getLatestKvSnapshots(tablePath).get();
+        } else {
+            return flussAdmin.getLatestKvSnapshots(tablePath, partitionName).get();
+        }
     }
 
     private List<SourceSplitBase> getSnapshotAndLogSplits(
@@ -889,6 +996,18 @@ public class FlinkSourceEnumerator
             for (Long partitionToRemove : partitionsPendingRemove) {
                 assignedPartitions.remove(partitionToRemove);
             }
+        } else if (sourceEvent instanceof FinishedKvSnapshotConsumeEvent) {
+            FinishedKvSnapshotConsumeEvent event = (FinishedKvSnapshotConsumeEvent) sourceEvent;
+            long checkpointId = event.getCheckpointId();
+            Set<TableBucket> tableBuckets = event.getTableBuckets();
+            if (!tableBuckets.isEmpty()) {
+                LOG.info(
+                        "Received finished kv snapshot consumer event for buckets: {}, checkpoint id: {}",
+                        tableBuckets,
+                        checkpointId);
+            }
+
+            tableBuckets.forEach(tableBucket -> addConsumedBucket(checkpointId, tableBucket));
         }
     }
 
@@ -923,26 +1042,130 @@ public class FlinkSourceEnumerator
     public SourceEnumeratorState snapshotState(long checkpointId) {
         final SourceEnumeratorState enumeratorState =
                 new SourceEnumeratorState(
-                        assignedTableBuckets, assignedPartitions, pendingHybridLakeFlussSplits);
+                        assignedTableBuckets,
+                        assignedPartitions,
+                        pendingHybridLakeFlussSplits,
+                        leaseContext.getKvSnapshotLeaseId());
         LOG.debug("Source Checkpoint is {}", enumeratorState);
         return enumeratorState;
     }
 
     @Override
+    public void notifyCheckpointComplete(long checkpointId) throws Exception {
+        checkpointTriggeredBefore = true;
+
+        if (hasPrimaryKey) {
+            // lower than this checkpoint id.
+            Set<TableBucket> consumedKvSnapshots = getAndRemoveConsumedBucketsUpTo(checkpointId);
+
+            if (!consumedKvSnapshots.isEmpty()) {
+                LOG.info(
+                        "kv snapshot has already consumed and try to release kv snapshot lease for: {}, checkpoint id: {}",
+                        consumedKvSnapshots,
+                        checkpointId);
+
+                // send request to fluss to unregister the kv snapshot lease.
+                try {
+                    flussAdmin
+                            .createKvSnapshotLease(
+                                    leaseContext.getKvSnapshotLeaseId(),
+                                    leaseContext.getKvSnapshotLeaseDurationMs())
+                            .releaseSnapshots(consumedKvSnapshots)
+                            .get();
+                } catch (Exception e) {
+                    if (ExceptionUtils.findThrowable(e, UnsupportedVersionException.class)
+                            .isPresent()) {
+                        LOG.warn(
+                                "Failed to release kv snapshot lease because the server does not support "
+                                        + "kv snapshot lease API. Snapshots may remain in storage longer "
+                                        + "than necessary. Please upgrade the Fluss server to version 0.9 "
+                                        + "or later.",
+                                e);
+                    } else {
+                        LOG.error(
+                                "Failed to release kv snapshot lease. These snapshots need to re-enqueue",
+                                e);
+                        // use the current checkpoint id to re-enqueue the buckets
+                        consumedKvSnapshots.forEach(
+                                tableBucket -> addConsumedBucket(checkpointId, tableBucket));
+                    }
+                }
+            }
+        }
+    }
+
+    /** Add bucket who has been consumed kv snapshot to the consumedKvSnapshotMap. */
+    public void addConsumedBucket(long checkpointId, TableBucket tableBucket) {
+        consumedKvSnapshotMap.computeIfAbsent(checkpointId, k -> new HashSet<>()).add(tableBucket);
+    }
+
+    /** Get and remove the buckets who have been consumed kv snapshot up to the checkpoint id. */
+    public Set<TableBucket> getAndRemoveConsumedBucketsUpTo(long checkpointId) {
+        NavigableMap<Long, Set<TableBucket>> toRemove =
+                consumedKvSnapshotMap.headMap(checkpointId, false);
+        Set<TableBucket> result = new HashSet<>();
+        for (Set<TableBucket> snapshots : toRemove.values()) {
+            result.addAll(snapshots);
+        }
+        toRemove.clear();
+        return result;
+    }
+
+    @Override
     public void close() throws IOException {
         try {
+            maybeDropKvSnapshotLease();
+
             closed = true;
+
             if (workerExecutor != null) {
                 workerExecutor.close();
             }
+
             if (flussAdmin != null) {
                 flussAdmin.close();
             }
+
             if (connection != null) {
                 connection.close();
             }
         } catch (Exception e) {
             throw new IOException("Failed to close Flink Source enumerator.", e);
+        }
+    }
+
+    private void maybeDropKvSnapshotLease() throws Exception {
+        if (flussAdmin != null
+                && hasPrimaryKey
+                && startingOffsetsInitializer instanceof SnapshotOffsetsInitializer
+                && !checkpointTriggeredBefore) {
+            // 1. Drop the kv snapshot lease for the batch mode.
+            // 2. For streaming mode, if no checkpoint was triggered, the lease ID
+            // has not been persisted to state. It won't be restored on restart,
+            // so it's safe to drop it now.
+            LOG.info(
+                    "Dropping kv snapshot lease {} when source enumerator close. isStreaming {}",
+                    leaseContext.getKvSnapshotLeaseId(),
+                    streaming);
+            try {
+                flussAdmin
+                        .createKvSnapshotLease(
+                                leaseContext.getKvSnapshotLeaseId(),
+                                leaseContext.getKvSnapshotLeaseDurationMs())
+                        .dropLease()
+                        .get();
+            } catch (Exception e) {
+                if (ExceptionUtils.findThrowable(e, UnsupportedVersionException.class)
+                        .isPresent()) {
+                    LOG.warn(
+                            "Failed to drop kv snapshot lease because the server does not support "
+                                    + "kv snapshot lease API. Please upgrade the Fluss server to "
+                                    + "version 0.9 or later.",
+                            e);
+                } else {
+                    throw e;
+                }
+            }
         }
     }
 

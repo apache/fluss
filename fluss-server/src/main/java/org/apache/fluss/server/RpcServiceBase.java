@@ -36,7 +36,6 @@ import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
@@ -52,10 +51,10 @@ import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
+import org.apache.fluss.rpc.messages.GetLakeSnapshotRequest;
+import org.apache.fluss.rpc.messages.GetLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsRequest;
 import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
-import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotRequest;
-import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.GetTableInfoRequest;
 import org.apache.fluss.rpc.messages.GetTableInfoResponse;
 import org.apache.fluss.rpc.messages.GetTableSchemaRequest;
@@ -93,6 +92,7 @@ import org.apache.fluss.server.tablet.TabletService;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 
 import org.slf4j.Logger;
@@ -115,13 +115,14 @@ import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclFilter;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toResolvedPartitionSpec;
 import static org.apache.fluss.security.acl.Resource.TABLE_SPLITTER;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.buildMetadataResponse;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeGetLakeSnapshotResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeGetLatestKvSnapshotsResponse;
-import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeGetLatestLakeSnapshotResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeKvSnapshotMetadataResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toGetFileSystemSecurityTokenResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toListPartitionInfosResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPbConfigEntries;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPbDatabaseSummary;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
@@ -197,6 +198,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         }
         ApiVersionsResponse response = new ApiVersionsResponse();
         response.addAllApiVersions(apiVersions);
+        response.setServerType(provider.toTypeId());
         return CompletableFuture.completedFuture(response);
     }
 
@@ -217,7 +219,13 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                     authorizedDatabase.stream().map(Resource::getName).collect(Collectors.toList());
         }
 
-        response.addAllDatabaseNames(databaseNames);
+        if (request.hasIncludeSummary() && request.isIncludeSummary()) {
+            response.addAllDatabaseSummaries(
+                    toPbDatabaseSummary(metadataManager.listDatabaseSummaries(databaseNames)));
+        } else {
+            response.addAllDatabaseNames(databaseNames);
+        }
+
         return CompletableFuture.completedFuture(response);
     }
 
@@ -354,21 +362,21 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     }
 
     private long getPartitionId(TablePath tablePath, String partitionName) {
-        Optional<TablePartition> optTablePartition;
+        Optional<PartitionRegistration> optPartitionRegistration;
         try {
-            optTablePartition = zkClient.getPartition(tablePath, partitionName);
+            optPartitionRegistration = zkClient.getPartition(tablePath, partitionName);
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format("Failed to get latest kv snapshots for table '%s'", tablePath),
                     e);
         }
-        if (!optTablePartition.isPresent()) {
+        if (!optPartitionRegistration.isPresent()) {
             throw new PartitionNotExistException(
                     String.format(
                             "The partition '%s' of table '%s' does not exist.",
                             partitionName, tablePath));
         }
-        return optTablePartition.get().getPartitionId();
+        return optPartitionRegistration.get().getPartitionId();
     }
 
     @Override
@@ -428,47 +436,73 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         TablePath tablePath = toTablePath(request.getTablePath());
         authorizeTable(OperationType.DESCRIBE, tablePath);
 
-        Map<String, Long> partitionNameAndIds;
+        Map<String, PartitionRegistration> partitionRegistrations;
         if (request.hasPartialPartitionSpec()) {
             ResolvedPartitionSpec partitionSpecFromRequest =
                     toResolvedPartitionSpec(request.getPartialPartitionSpec());
-            partitionNameAndIds =
+            partitionRegistrations =
                     metadataManager.listPartitions(tablePath, partitionSpecFromRequest);
         } else {
-            partitionNameAndIds = metadataManager.listPartitions(tablePath);
+            partitionRegistrations = metadataManager.listPartitions(tablePath);
         }
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         List<String> partitionKeys = tableInfo.getPartitionKeys();
         return CompletableFuture.completedFuture(
-                toListPartitionInfosResponse(partitionKeys, partitionNameAndIds));
+                toListPartitionInfosResponse(partitionKeys, partitionRegistrations));
     }
 
     @Override
-    public CompletableFuture<GetLatestLakeSnapshotResponse> getLatestLakeSnapshot(
-            GetLatestLakeSnapshotRequest request) {
+    public CompletableFuture<GetLakeSnapshotResponse> getLakeSnapshot(
+            GetLakeSnapshotRequest request) {
+        // get table info
         TablePath tablePath = toTablePath(request.getTablePath());
         authorizeTable(OperationType.DESCRIBE, tablePath);
+
+        boolean requestReadableSnapshot = request.hasReadable() && request.isReadable();
+        if (requestReadableSnapshot && request.hasSnapshotId()) {
+            CompletableFuture<GetLakeSnapshotResponse> failed = new CompletableFuture<>();
+            failed.completeExceptionally(
+                    new IllegalArgumentException(
+                            "GetLakeSnapshotRequest cannot set both snapshot_id and readable=true; "
+                                    + "use one or the other to specify either a snapshot by id or the latest readable snapshot."));
+            return failed;
+        }
 
         // get table info
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         // get table id
         long tableId = tableInfo.getTableId();
-        CompletableFuture<GetLatestLakeSnapshotResponse> resultFuture = new CompletableFuture<>();
+        CompletableFuture<GetLakeSnapshotResponse> resultFuture = new CompletableFuture<>();
         ioExecutor.execute(
                 () -> {
-                    Optional<LakeTableSnapshot> optLakeTableSnapshot;
                     try {
-                        optLakeTableSnapshot = zkClient.getLakeTableSnapshot(tableId);
-                        if (!optLakeTableSnapshot.isPresent()) {
-                            resultFuture.completeExceptionally(
-                                    new LakeTableSnapshotNotExistException(
-                                            String.format(
-                                                    "Lake table snapshot not exist for table: %s, table id: %d",
-                                                    tablePath, tableId)));
-                        } else {
-                            LakeTableSnapshot lakeTableSnapshot = optLakeTableSnapshot.get();
+                        Optional<LakeTableSnapshot> optSnapshot =
+                                requestReadableSnapshot
+                                        ? zkClient.getLatestReadableLakeTableSnapshot(tableId)
+                                        : zkClient.getLakeTableSnapshot(
+                                                tableId,
+                                                request.hasSnapshotId()
+                                                        ? request.getSnapshotId()
+                                                        : null);
+                        if (optSnapshot.isPresent()) {
                             resultFuture.complete(
-                                    makeGetLatestLakeSnapshotResponse(tableId, lakeTableSnapshot));
+                                    makeGetLakeSnapshotResponse(tableId, optSnapshot.get()));
+                        } else {
+                            String snapshotType =
+                                    requestReadableSnapshot ? "readable snapshot" : "snapshot";
+                            StringBuilder errorMsg =
+                                    new StringBuilder()
+                                            .append("Lake table ")
+                                            .append(snapshotType)
+                                            .append(" doesn't exist for table: ")
+                                            .append(tablePath)
+                                            .append(", table id: ")
+                                            .append(tableId);
+                            if (!requestReadableSnapshot && request.hasSnapshotId()) {
+                                errorMsg.append(", snapshot id: ").append(request.getSnapshotId());
+                            }
+                            resultFuture.completeExceptionally(
+                                    new LakeTableSnapshotNotExistException(errorMsg.toString()));
                         }
                     } catch (Exception e) {
                         resultFuture.completeExceptionally(

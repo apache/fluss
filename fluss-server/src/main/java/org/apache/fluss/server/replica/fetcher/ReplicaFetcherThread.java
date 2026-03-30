@@ -40,6 +40,7 @@ import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.replica.fetcher.LeaderEndpoint.FetchData;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.concurrent.ShutdownableThread;
@@ -60,6 +61,7 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
@@ -82,7 +84,7 @@ final class ReplicaFetcherThread extends ShutdownableThread {
 
     // manually add timout logic in here, todo remove this timeout logic if
     // we support global request timeout in #279
-    private final int timeoutSeconds = 30;
+    private final int timeoutSeconds;
 
     // TODO this range-robin fair map will take effect after we introduce fetch response limit size
     // in FetchLogRequest. trace id: FLUSS-56111098
@@ -104,10 +106,20 @@ final class ReplicaFetcherThread extends ShutdownableThread {
 
     public ReplicaFetcherThread(
             String name, ReplicaManager replicaManager, LeaderEndpoint leader, int fetchBackOffMs) {
+        this(name, replicaManager, leader, fetchBackOffMs, 30);
+    }
+
+    ReplicaFetcherThread(
+            String name,
+            ReplicaManager replicaManager,
+            LeaderEndpoint leader,
+            int fetchBackOffMs,
+            int timeoutSeconds) {
         super(name, false);
         this.replicaManager = replicaManager;
         this.leader = leader;
         this.fetchBackOffMs = fetchBackOffMs;
+        this.timeoutSeconds = timeoutSeconds;
         this.serverMetricGroup = replicaManager.getServerMetricGroup();
     }
 
@@ -217,6 +229,7 @@ final class ReplicaFetcherThread extends ShutdownableThread {
         Set<TableBucket> bucketsWithError = new HashSet<>();
         FetchData responseData = null;
         FetchLogRequest fetchLogRequest = fetchLogContext.getFetchLogRequest();
+        CompletableFuture<FetchData> fetchFuture = null;
         try {
             LOG.trace(
                     "Sending fetch log request {} to leader {}",
@@ -224,13 +237,21 @@ final class ReplicaFetcherThread extends ShutdownableThread {
                     leader.leaderServerId());
             // TODO this need not blocking to wait fetch log complete, change to async, see
             // FLUSS-56115172.
-            responseData = leader.fetchLog(fetchLogContext).get(timeoutSeconds, TimeUnit.SECONDS);
+            fetchFuture = leader.fetchLog(fetchLogContext);
+            responseData = fetchFuture.get(timeoutSeconds, TimeUnit.SECONDS);
         } catch (Throwable t) {
             if (isRunning()) {
                 LOG.warn("Error in response for fetch log request {}", fetchLogRequest, t);
                 inLock(
                         bucketStatusMapLock,
                         () -> bucketsWithError.addAll(fairBucketStatusMap.bucketSet()));
+            }
+            // If the fetch timed out but the future may still complete later,
+            // register a callback to release the ByteBuf when the late response arrives.
+            // Without this, the pooled ByteBuf held by FetchLogResponse would never be
+            // released, causing a Netty direct memory leak.
+            if (fetchFuture != null) {
+                fetchFuture.thenAccept(ReplicaFetcherThread::releaseFetchDataBuffer);
             }
         }
 
@@ -240,16 +261,23 @@ final class ReplicaFetcherThread extends ShutdownableThread {
                 handleFetchLogResponse(responseData.getFetchLogResultMap(), bucketsWithError);
             } finally {
                 // release buffer handle by fetchLogResponse.
-                ByteBuf parsedByteBuf = responseData.getFetchLogResponse().getParsedByteBuf();
-                if (parsedByteBuf != null) {
-                    parsedByteBuf.release();
-                }
+                releaseFetchDataBuffer(responseData);
                 bucketStatusMapLock.unlock();
             }
         }
 
         if (!bucketsWithError.isEmpty()) {
             handleBucketWithError(bucketsWithError);
+        }
+    }
+
+    /** Releases the ByteBuf held by a FetchLogResponse in the given FetchData. */
+    private static void releaseFetchDataBuffer(FetchData data) {
+        if (data != null) {
+            ByteBuf parsedByteBuf = data.getFetchLogResponse().getParsedByteBuf();
+            if (parsedByteBuf != null) {
+                ReferenceCountUtil.safeRelease(parsedByteBuf);
+            }
         }
     }
 

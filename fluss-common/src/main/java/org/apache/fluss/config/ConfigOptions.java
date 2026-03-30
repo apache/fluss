@@ -55,6 +55,9 @@ import static org.apache.fluss.config.ConfigOptions.NoKeyAssigner.STICKY;
 public class ConfigOptions {
     public static final String DEFAULT_LISTENER_NAME = "FLUSS";
 
+    public static final int KV_FORMAT_VERSION_2 = 2;
+    public static final int CURRENT_KV_FORMAT_VERSION = KV_FORMAT_VERSION_2;
+
     @Internal
     public static final String[] PARENT_FIRST_LOGGING_PATTERNS =
             new String[] {
@@ -93,8 +96,59 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The directory used for storing the kv snapshot data files and remote log for log tiered storage "
-                                    + " in a Fluss supported filesystem.");
+                            "The directory used for storing the kv snapshot data files and remote log for log tiered storage"
+                                    + " in a Fluss supported filesystem. "
+                                    + "When upgrading to `remote.data.dirs`, please ensure this value is placed as the first entry in the new configuration."
+                                    + "For new clusters, it is recommended to use `remote.data.dirs` instead. "
+                                    + "If `remote.data.dirs` is configured, this value will be ignored.");
+
+    public static final ConfigOption<List<String>> REMOTE_DATA_DIRS =
+            key("remote.data.dirs")
+                    .stringType()
+                    .asList()
+                    .defaultValues()
+                    .withDescription(
+                            "A comma-separated list of directories in Fluss supported filesystems "
+                                    + "for storing the kv snapshot data files and remote log files of tables/partitions. "
+                                    + "If configured, when a new table or a new partition is created, "
+                                    + "one of the directories from this list will be selected according to the strategy "
+                                    + "specified by `remote.data.dirs.strategy` (`ROUND_ROBIN` by default). "
+                                    + "If not configured, the system uses `"
+                                    + REMOTE_DATA_DIR.key()
+                                    + "` as the sole remote data directory for all data.");
+
+    public static final ConfigOption<RemoteDataDirStrategy> REMOTE_DATA_DIRS_STRATEGY =
+            key("remote.data.dirs.strategy")
+                    .enumType(RemoteDataDirStrategy.class)
+                    .defaultValue(RemoteDataDirStrategy.ROUND_ROBIN)
+                    .withDescription(
+                            String.format(
+                                    "The strategy for selecting the remote data directory from `%s`. "
+                                            + "The candidate strategies are: %s, the default strategy is %s.\n"
+                                            + "%s: this strategy employs a round-robin approach to select one from the available remote directories.\n"
+                                            + "%s: this strategy selects one of the available remote directories based on the weights configured in `remote.data.dirs.weights`.",
+                                    REMOTE_DATA_DIRS.key(),
+                                    Arrays.toString(RemoteDataDirStrategy.values()),
+                                    RemoteDataDirStrategy.ROUND_ROBIN,
+                                    RemoteDataDirStrategy.ROUND_ROBIN,
+                                    RemoteDataDirStrategy.WEIGHTED_ROUND_ROBIN));
+
+    public static final ConfigOption<List<Integer>> REMOTE_DATA_DIRS_WEIGHTS =
+            key("remote.data.dirs.weights")
+                    .intType()
+                    .asList()
+                    .defaultValues()
+                    .withDescription(
+                            "The weights of the remote data directories. "
+                                    + "This is a list of weights corresponding to the `"
+                                    + REMOTE_DATA_DIRS.key()
+                                    + "` in the same order. When `"
+                                    + REMOTE_DATA_DIRS_STRATEGY.key()
+                                    + "` is set to `"
+                                    + RemoteDataDirStrategy.WEIGHTED_ROUND_ROBIN
+                                    + "`, this must be configured, and its size must be equal to `"
+                                    + REMOTE_DATA_DIRS.key()
+                                    + "`; otherwise, it will be ignored.");
 
     public static final ConfigOption<MemorySize> REMOTE_FS_WRITE_BUFFER_SIZE =
             key("remote.fs.write-buffer-size")
@@ -353,6 +407,28 @@ public class ConfigOptions {
                                     + "Increase this value if you experience slow unnecessary snapshot files clean. "
                                     + "The default value is 10. "
                                     + "This option is deprecated. Please use server.io-pool.size instead.");
+
+    /**
+     * The TTL (time-to-live) for producer offsets. Producer offsets older than this TTL will be
+     * automatically cleaned up by the coordinator server.
+     */
+    public static final ConfigOption<Duration> COORDINATOR_PRODUCER_OFFSETS_TTL =
+            key("coordinator.producer-offsets.ttl")
+                    .durationType()
+                    .defaultValue(Duration.ofHours(24))
+                    .withDescription(
+                            "The TTL (time-to-live) for producer offsets. "
+                                    + "Producer offsets older than this TTL will be automatically cleaned up "
+                                    + "by the coordinator server. Default is 24 hours.");
+
+    /** The interval for cleaning up expired producer offsets and orphan files in remote storage. */
+    public static final ConfigOption<Duration> COORDINATOR_PRODUCER_OFFSETS_CLEANUP_INTERVAL =
+            key("coordinator.producer-offsets.cleanup-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofHours(1))
+                    .withDescription(
+                            "The interval for cleaning up expired producer offsets "
+                                    + "and orphan files in remote storage. Default is 1 hour.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Tablet Server
@@ -772,6 +848,16 @@ public class ConfigOptions {
                             "Interval at which remote log manager runs the scheduled tasks like "
                                     + "copy segments, clean up remote log segments, delete local log segments etc. "
                                     + "If the value is set to 0, it means that the remote log storage is disabled.");
+
+    public static final ConfigOption<Integer> REMOTE_LOG_TASK_MAX_UPLOAD_SEGMENTS =
+            key("remote.log.task-max-upload-segments")
+                    .intType()
+                    .defaultValue(5)
+                    .withDescription(
+                            "The maximum number of log segments to upload to remote storage per "
+                                    + "tiering task execution. This limits the upload batch size to "
+                                    + "prevent overwhelming the remote storage when there is a large "
+                                    + "backlog of segments to upload.");
 
     public static final ConfigOption<MemorySize> REMOTE_LOG_INDEX_FILE_CACHE_SIZE =
             key("remote.log.index-file-cache-size")
@@ -1283,6 +1369,27 @@ public class ConfigOptions {
                             "The format of the kv records in kv store. The default value is `compacted`. "
                                     + "The supported formats are `compacted` and `indexed`.");
 
+    /** The version of the KV format. */
+    public static final ConfigOption<Integer> TABLE_KV_FORMAT_VERSION =
+            key("table.kv.format-version")
+                    .intType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The version of the kv format. "
+                                    + "Automatically set by the coordinator during table creation if not configured by users. "
+                                    + "Note: The datalake encoding and bucketing strategy mentioned below only takes effect "
+                                    + "when 'datalake.format' is configured at cluster level. "
+                                    + "Version Behaviors: "
+                                    + "(1) Version 1: Tables created before 'table.kv.format-version' was introduced are treated as version 1. "
+                                    + "Uses datalake's encoder (e.g., Paimon/Iceberg) for both primary key and bucket key encoding. "
+                                    + "This may not support prefix lookup properly because some datalake encoders (like Paimon) "
+                                    + "don't guarantee that encoded bucket key bytes are a prefix of encoded primary key bytes. "
+                                    + "(2) Version 2 (current): New tables use Fluss's default encoder for primary key encoding "
+                                    + "when bucket key differs from primary key, which ensures proper prefix lookup support. "
+                                    + "When bucket key equals primary key (default bucket key), it still uses datalake's encoder "
+                                    + "for optimization (encoded bytes can be reused for bucket calculation). "
+                                    + "Bucket key encoding always uses datalake's encoder to align with datalake bucket calculation.");
+
     public static final ConfigOption<Boolean> TABLE_AUTO_PARTITION_ENABLED =
             key("table.auto-partition.enabled")
                     .booleanType()
@@ -1472,6 +1579,22 @@ public class ConfigOptions {
                                     + "This mode reduces storage and transmission costs but loses the ability to track previous values. "
                                     + "This option only affects primary key tables.");
 
+    public static final ConfigOption<String> TABLE_STATISTICS_COLUMNS =
+            key("table.statistics.columns")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Configures column-level statistics collection for the table. "
+                                    + "By default this option is not set and no column statistics are collected. "
+                                    + "The value '*' means collect statistics for all supported columns. "
+                                    + "A comma-separated list of column names means collect statistics only for the specified columns. "
+                                    + "Supported types include: BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, FLOAT, DOUBLE, "
+                                    + "STRING, CHAR, DECIMAL, DATE, TIME, TIMESTAMP, and TIMESTAMP_LTZ. "
+                                    + "Example: 'id,name,timestamp' to collect statistics only for specified columns. "
+                                    + "Note: enabling column statistics requires the V1 batch format. "
+                                    + "Downstream consumers must be upgraded to Fluss v1.0+ before enabling this option, "
+                                    + "as older versions cannot parse the extended batch format.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv
     // ------------------------------------------------------------------------
@@ -1506,8 +1629,16 @@ public class ConfigOptions {
     public static final ConfigOption<Integer> KV_MAX_RETAINED_SNAPSHOTS =
             key("kv.snapshot.num-retained")
                     .intType()
-                    .defaultValue(1)
+                    .defaultValue(2)
                     .withDescription("The maximum number of completed snapshots to retain.");
+
+    public static final ConfigOption<Duration> KV_SNAPSHOT_LEASE_EXPIRATION_CHECK_INTERVAL =
+            key("kv.snapshot.lease.expiration-check-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(10))
+                    .withDescription(
+                            "The interval to check the expiration of kv snapshot lease. "
+                                    + "The default setting is 10 minutes.");
 
     public static final ConfigOption<Integer> KV_MAX_BACKGROUND_THREADS =
             key("kv.rocksdb.thread.num")
@@ -1812,6 +1943,55 @@ public class ConfigOptions {
                                     + "like 9250-9260.");
 
     // ------------------------------------------------------------------------
+    //  ConfigOptions for prometheus push gateway reporter
+    // ------------------------------------------------------------------------
+    public static final ConfigOption<String> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_HOST_URL =
+            key("metrics.reporter.prometheus-push.host-url")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The PushGateway server host URL including scheme, host name, and port.");
+
+    public static final ConfigOption<String> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_JOB_NAME =
+            key("metrics.reporter.prometheus-push.job-name")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("The job name under which metrics will be pushed");
+
+    public static final ConfigOption<Boolean>
+            METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_RANDOM_JOB_NAME_SUFFIX =
+                    key("metrics.reporter.prometheus-push.random-job-name-suffix")
+                            .booleanType()
+                            .defaultValue(true)
+                            .withDescription(
+                                    "Specifies whether a random suffix should be appended to the job name. "
+                                            + "This is useful when multiple instances of the reporter "
+                                            + "are running on the same host.");
+
+    public static final ConfigOption<Boolean>
+            METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_DELETE_ON_SHUTDOWN =
+                    key("metrics.reporter.prometheus-push.delete-on-shutdown")
+                            .booleanType()
+                            .defaultValue(true)
+                            .withDescription(
+                                    "Specifies whether to delete metrics from the PushGateway on shutdown. Fluss will try its best to delete the metrics but this is not guaranteed.");
+
+    public static final ConfigOption<String> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_GROUPING_KEY =
+            key("metrics.reporter.prometheus-push.grouping-key")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Specifies the grouping key which is the group and global labels of all metrics. The label name and value are separated by '=', and labels are separated by ';', e.g., k1=v1;k2=v2.");
+
+    public static final ConfigOption<Duration>
+            METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_PUSH_INTERVAL =
+                    key("metrics.reporter.prometheus-push.push-interval")
+                            .durationType()
+                            .defaultValue(Duration.ofSeconds(10))
+                            .withDescription(
+                                    "The interval of pushing metrics to Prometheus PushGateway.");
+
+    // ------------------------------------------------------------------------
     //  ConfigOptions for jmx reporter
     // ------------------------------------------------------------------------
     public static final ConfigOption<String> METRICS_REPORTER_JMX_HOST =
@@ -1962,5 +2142,11 @@ public class ConfigOptions {
     @Internal
     public static ConfigOption<?> getConfigOption(String key) {
         return ConfigOptionsHolder.CONFIG_OPTIONS_BY_KEY.get(key);
+    }
+
+    /** Remote data dir select strategy for Fluss. */
+    public enum RemoteDataDirStrategy {
+        ROUND_ROBIN,
+        WEIGHTED_ROUND_ROBIN
     }
 }

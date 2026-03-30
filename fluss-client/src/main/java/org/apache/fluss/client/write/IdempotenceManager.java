@@ -19,7 +19,9 @@ package org.apache.fluss.client.write;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.exception.UnknownWriterIdException;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -63,18 +65,21 @@ public class IdempotenceManager {
     private final IdempotenceBucketMap idempotenceBucketMap;
     private final int maxInflightRequestsPerBucket;
     private final TabletServerGateway tabletServerGateway;
+    private final MetadataUpdater metadataUpdater;
 
     private volatile long writerId;
 
     public IdempotenceManager(
             boolean idempotenceEnabled,
             int maxInflightRequestsPerBucket,
-            TabletServerGateway tabletServerGateway) {
+            TabletServerGateway tabletServerGateway,
+            MetadataUpdater metadataUpdater) {
         this.idempotenceEnabled = idempotenceEnabled;
         this.maxInflightRequestsPerBucket = maxInflightRequestsPerBucket;
         this.idempotenceBucketMap = new IdempotenceBucketMap();
         this.tabletServerGateway = tabletServerGateway;
         this.writerId = NO_WRITER_ID;
+        this.metadataUpdater = metadataUpdater;
     }
 
     boolean idempotenceEnabled() {
@@ -289,6 +294,23 @@ public class IdempotenceManager {
         return false;
     }
 
+    /**
+     * Returns true if the batch has already been committed on the server.
+     *
+     * <p>If the batch's sequence is less than or equal to {@code lastAckedBatchSequence}, it means
+     * a higher-sequence batch has already been acknowledged. This implies the previous batch was
+     * also successfully written on the server (otherwise the higher-sequence batch could not have
+     * been committed).
+     *
+     * @param batch the batch to check
+     * @param tableBucket the target table-bucket
+     * @return true if the batch is already committed on the server
+     */
+    synchronized boolean isAlreadyCommitted(WriteBatch batch, TableBucket tableBucket) {
+        Optional<Integer> lastAcked = lastAckedBatchSequence(tableBucket);
+        return lastAcked.isPresent() && batch.batchSequence() <= lastAcked.get();
+    }
+
     void maybeWaitForWriterId(Set<PhysicalTablePath> tablePaths) throws Throwable {
         if (isWriterIdValid()) {
             return;
@@ -307,6 +329,9 @@ public class IdempotenceManager {
                 if (t instanceof AuthorizationException || retryCount >= RETRY_TIMES) {
                     throw t;
                 } else {
+                    if (t instanceof InvalidMetadataException) {
+                        metadataUpdater.updatePhysicalTableMetadata(tablePaths);
+                    }
                     LOG.warn(
                             "Failed to init writer id, the retry count: {}, error message: {}",
                             retryCount,
