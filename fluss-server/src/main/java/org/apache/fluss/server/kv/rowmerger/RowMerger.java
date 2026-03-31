@@ -56,6 +56,35 @@ public interface RowMerger {
     BinaryValue delete(BinaryValue oldRow);
 
     /**
+     * Retract (reverse) a previously merged value from the accumulator.
+     *
+     * <p>Only supported by merge engines whose aggregation functions have retract implementations
+     * (e.g., aggregation merge engine with SUM). Retract quality varies by function — see {@link
+     * org.apache.fluss.metadata.AggFunctionType#supportsRetract()} for details. By default, this
+     * method throws {@link UnsupportedOperationException}.
+     *
+     * @param oldValue the current accumulated value
+     * @param retractValue the value to retract
+     * @return the result after retraction, or null if the row should be removed
+     */
+    @Nullable
+    default BinaryValue retract(BinaryValue oldValue, BinaryValue retractValue) {
+        throw new UnsupportedOperationException(
+                String.format("%s does not support retract", this.getClass().getSimpleName()));
+    }
+
+    /**
+     * Returns whether this merger has a retract implementation.
+     *
+     * <p>When true, {@link #retract(BinaryValue, BinaryValue)} can be called. When false, calling
+     * retract will throw {@link UnsupportedOperationException}. Note that retract quality varies by
+     * function — returning true does not guarantee a mathematically exact inverse.
+     */
+    default boolean supportsRetract() {
+        return false;
+    }
+
+    /**
      * The behavior of delete operations on primary key tables.
      *
      * @return {@link DeleteBehavior}

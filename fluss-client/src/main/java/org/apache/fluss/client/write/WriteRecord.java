@@ -23,6 +23,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.CompactedLogRecord;
 import org.apache.fluss.record.DefaultKvRecord;
 import org.apache.fluss.record.IndexedLogRecord;
+import org.apache.fluss.record.MutationType;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.compacted.CompactedRow;
@@ -88,7 +89,39 @@ public final class WriteRecord {
                 writeFormat,
                 targetColumns,
                 estimatedSizeInBytes,
-                mergeMode);
+                mergeMode,
+                MutationType.UPSERT);
+    }
+
+    /**
+     * Create a write record for retract operation. Same shape as upsert but carries {@link
+     * MutationType#RETRACT} so the server knows to retract the old aggregation value.
+     */
+    public static WriteRecord forRetract(
+            TableInfo tableInfo,
+            PhysicalTablePath tablePath,
+            BinaryRow row,
+            byte[] key,
+            byte[] bucketKey,
+            WriteFormat writeFormat,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode) {
+        checkNotNull(row, "row must not be null");
+        checkNotNull(key, "key must not be null");
+        checkNotNull(bucketKey, "bucketKey must not be null");
+        checkArgument(writeFormat.isKv(), "writeFormat must be a KV format");
+        int estimatedSizeInBytes = DefaultKvRecord.sizeOfV2(key, row) + RECORD_BATCH_HEADER_SIZE;
+        return new WriteRecord(
+                tableInfo,
+                tablePath,
+                key,
+                bucketKey,
+                row,
+                writeFormat,
+                targetColumns,
+                estimatedSizeInBytes,
+                mergeMode,
+                MutationType.RETRACT);
     }
 
     /** Create a write record for delete operation and partial-delete update. */
@@ -119,7 +152,7 @@ public final class WriteRecord {
             @Nullable int[] targetColumns,
             MergeMode mergeMode) {
         checkNotNull(key, "key must not be null");
-        checkNotNull(bucketKey, "key must not be null");
+        checkNotNull(bucketKey, "bucketKey must not be null");
         checkArgument(writeFormat.isKv(), "writeFormat must be a KV format");
         int estimatedSizeInBytes = DefaultKvRecord.sizeOf(key, null) + RECORD_BATCH_HEADER_SIZE;
         return new WriteRecord(
@@ -131,7 +164,8 @@ public final class WriteRecord {
                 writeFormat,
                 targetColumns,
                 estimatedSizeInBytes,
-                mergeMode);
+                mergeMode,
+                MutationType.DELETE);
     }
 
     /** Create a write record for append operation for indexed format. */
@@ -152,7 +186,8 @@ public final class WriteRecord {
                 WriteFormat.INDEXED_LOG,
                 null,
                 estimatedSizeInBytes,
-                MergeMode.DEFAULT);
+                MergeMode.DEFAULT,
+                MutationType.UPSERT);
     }
 
     /** Creates a write record for append operation for Arrow format. */
@@ -174,7 +209,8 @@ public final class WriteRecord {
                 WriteFormat.ARROW_LOG,
                 null,
                 estimatedSizeInBytes,
-                MergeMode.DEFAULT);
+                MergeMode.DEFAULT,
+                MutationType.UPSERT);
     }
 
     /** Creates a write record for append operation for Compacted format. */
@@ -195,7 +231,8 @@ public final class WriteRecord {
                 WriteFormat.COMPACTED_LOG,
                 null,
                 estimatedSizeInBytes,
-                MergeMode.DEFAULT);
+                MergeMode.DEFAULT,
+                MutationType.UPSERT);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -213,14 +250,12 @@ public final class WriteRecord {
     private final TableInfo tableInfo;
 
     /**
-     * The merge mode for this record. This controls how the server handles data merging.
-     *
-     * <ul>
-     *   <li>DEFAULT: Normal merge through server-side merge engine
-     *   <li>OVERWRITE: Bypass merge engine, directly replace values (for undo recovery)
-     * </ul>
+     * The merge mode for this record: DEFAULT (normal merge) or OVERWRITE (bypass merge engine).
      */
     private final MergeMode mergeMode;
+
+    /** The per-record mutation type: UPSERT, DELETE, or RETRACT. */
+    private final MutationType mutationType;
 
     private WriteRecord(
             TableInfo tableInfo,
@@ -231,7 +266,8 @@ public final class WriteRecord {
             WriteFormat writeFormat,
             @Nullable int[] targetColumns,
             int estimatedSizeInBytes,
-            MergeMode mergeMode) {
+            MergeMode mergeMode,
+            MutationType mutationType) {
         this.tableInfo = tableInfo;
         this.physicalTablePath = physicalTablePath;
         this.key = key;
@@ -241,6 +277,7 @@ public final class WriteRecord {
         this.targetColumns = targetColumns;
         this.estimatedSizeInBytes = estimatedSizeInBytes;
         this.mergeMode = mergeMode;
+        this.mutationType = mutationType;
     }
 
     public PhysicalTablePath getPhysicalTablePath() {
@@ -272,22 +309,17 @@ public final class WriteRecord {
         return writeFormat;
     }
 
-    /**
-     * Get the merge mode for this record.
-     *
-     * @return the merge mode
-     */
+    /** Get the merge mode for this record. */
     public MergeMode getMergeMode() {
         return mergeMode;
     }
 
-    /**
-     * Get the estimated size in bytes of the record with batch header.
-     *
-     * @return the estimated size in bytes of the record with batch header
-     * @throws IllegalStateException if the estimated size in bytes is not supported for the write
-     *     format
-     */
+    /** Get the per-record mutation type (UPSERT, DELETE, or RETRACT). */
+    public MutationType getMutationType() {
+        return mutationType;
+    }
+
+    /** Returns the estimated size in bytes of the record with batch header. */
     public int getEstimatedSizeInBytes() {
         if (estimatedSizeInBytes < 0) {
             throw new IllegalStateException(

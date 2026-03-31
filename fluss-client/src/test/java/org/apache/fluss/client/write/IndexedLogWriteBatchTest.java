@@ -79,12 +79,13 @@ public class IndexedLogWriteBatchTest {
         for (int i = 0; i < maxRecordsPerBatch; i++) {
             boolean appendResult =
                     logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
-            assertThat(appendResult).isTrue();
+            assertThat(appendResult).isEqualTo(true);
         }
 
         // batch full.
-        boolean appendResult = logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
-        assertThat(appendResult).isFalse();
+        boolean appendResult =
+                logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
+        assertThat(appendResult).isEqualTo(false);
     }
 
     @Test
@@ -92,8 +93,9 @@ public class IndexedLogWriteBatchTest {
         int bucketId = 0;
         IndexedLogWriteBatch logProducerBatch =
                 createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId));
-        boolean appendResult = logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
-        assertThat(appendResult).isTrue();
+        boolean appendResult =
+                logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
+        assertThat(appendResult).isEqualTo(true);
 
         logProducerBatch.close();
         BytesView bytesView = logProducerBatch.build();
@@ -109,8 +111,9 @@ public class IndexedLogWriteBatchTest {
         int bucketId = 0;
         IndexedLogWriteBatch logWriteBatch =
                 createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId));
-        boolean appendResult = logWriteBatch.tryAppend(createWriteRecord(), newWriteCallback());
-        assertThat(appendResult).isTrue();
+        boolean appendResult =
+                logWriteBatch.tryAppend(createWriteRecord(), newWriteCallback());
+        assertThat(appendResult).isEqualTo(true);
 
         assertThat(logWriteBatch.complete()).isTrue();
         assertThatThrownBy(logWriteBatch::complete)
@@ -124,8 +127,9 @@ public class IndexedLogWriteBatchTest {
         int bucketId = 0;
         IndexedLogWriteBatch logWriteBatch =
                 createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId));
-        boolean appendResult = logWriteBatch.tryAppend(createWriteRecord(), newWriteCallback());
-        assertThat(appendResult).isTrue();
+        boolean appendResult =
+                logWriteBatch.tryAppend(createWriteRecord(), newWriteCallback());
+        assertThat(appendResult).isEqualTo(true);
 
         assertThat(logWriteBatch.completeExceptionally(new IllegalStateException("test failed.")))
                 .isTrue();
@@ -139,14 +143,15 @@ public class IndexedLogWriteBatchTest {
         int bucketId = 0;
         IndexedLogWriteBatch logProducerBatch =
                 createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId));
-        boolean appendResult = logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
-        assertThat(appendResult).isTrue();
+        boolean appendResult =
+                logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
+        assertThat(appendResult).isEqualTo(true);
 
         logProducerBatch.close();
         assertThat(logProducerBatch.isClosed()).isTrue();
 
         appendResult = logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
-        assertThat(appendResult).isFalse();
+        assertThat(appendResult).isEqualTo(false);
     }
 
     @Test

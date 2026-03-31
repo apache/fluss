@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.exception.DeletionDisabledException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.exception.InvalidRecordException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.memory.MemorySegmentPool;
 import org.apache.fluss.metadata.ChangelogImage;
@@ -36,6 +37,7 @@ import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.KvRecordReadContext;
+import org.apache.fluss.record.MutationType;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.PaddingRow;
 import org.apache.fluss.row.arrow.ArrowWriterProvider;
@@ -68,6 +70,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.Set;
 
 /**
@@ -318,6 +321,12 @@ public final class KvWriteProcessor {
             @Nullable String originalPartitionName,
             @Nullable HistoricalValueLookup historicalValueLookup)
             throws Exception {
+        if (kvRecords.isV2Format()) {
+            processV2KvRecords(kvRecords, schemaIdOfNewData, currentMerger,
+                    autoIncrementUpdater, walBuilder, latestSchemaRow, startLogOffset,
+                    stateAccessor, originalPartitionName, historicalValueLookup);
+            return;
+        }
         long logOffset = startLogOffset;
 
         // TODO: reuse the read context
@@ -355,6 +364,363 @@ public final class KvWriteProcessor {
                                 keyBytes,
                                 historicalValueLookup);
             }
+        }
+    }
+
+    private void processV2KvRecords(
+            KvRecordBatch kvRecords, short schemaIdOfNewData, RowMerger currentMerger,
+            AutoIncrementUpdater autoIncrementUpdater, WalBuilder walBuilder,
+            PaddingRow latestSchemaRow, long startLogOffset, KvStateAccessor stateAccessor,
+            @Nullable String originalPartitionName,
+            @Nullable HistoricalValueLookup historicalValueLookup) throws Exception {
+        long logOffset = startLogOffset;
+        KvRecordBatch.ReadContext readContext =
+                KvRecordReadContext.createReadContext(kvFormat, schemaGetter);
+        // V2 path: uses PeekableKvMutationIterator for RETRACT+UPSERT pairing optimization
+        Iterator<KvRecord> iter = kvRecords.records(readContext).iterator();
+        PeekableKvMutationIterator peekableIter =
+                new PeekableKvMutationIterator(iter, schemaIdOfNewData, stateAccessor, originalPartitionName);
+        while (peekableIter.hasNext()) {
+            KvRecord kvRecord = peekableIter.next();
+            NormalizedKvMutation mutation = peekableIter.nextMutation(kvRecord);
+            MutationType mutationType = kvRecord.getMutationType();
+
+            switch (mutationType) {
+                case UPSERT:
+                    {
+                        if (mutation.isDelete()) {
+                            throw new InvalidRecordException(
+                                    "V2 UPSERT record must carry a non-null row value.");
+                        }
+                        logOffset =
+                                dispatchMutation(
+                                        mutation,
+                                        currentMerger,
+                                        autoIncrementUpdater,
+                                        walBuilder,
+                                        latestSchemaRow,
+                                        logOffset, stateAccessor, originalPartitionName,
+                                        historicalValueLookup);
+                        break;
+                    }
+                case DELETE:
+                    {
+                        logOffset =
+                                dispatchMutation(
+                                        mutation,
+                                        currentMerger,
+                                        autoIncrementUpdater,
+                                        walBuilder,
+                                        latestSchemaRow,
+                                        logOffset, stateAccessor, originalPartitionName,
+                                        historicalValueLookup);
+                        break;
+                    }
+                case RETRACT:
+                    {
+                        if (!currentMerger.supportsRetract()) {
+                            throw new InvalidRecordException(
+                                    "RETRACT records are only supported for aggregation merge "
+                                            + "engine tables with retract-safe functions.");
+                        }
+                        if (mutation.isDelete()) {
+                            throw new InvalidRecordException(
+                                    "RETRACT record must carry a non-null row value.");
+                        }
+
+                        // Snapshot key/value from the reusable NormalizedKvMutation to decouple
+                        // from the reusable object's lifecycle during multi-step retract
+                        // processing.
+                        final KvPreWriteBuffer.Key retractKey = mutation.key;
+                        final BinaryValue retractValue = mutation.value;
+
+                        BinaryValue oldValue = getPreviousValue(retractKey,
+                                mutation.primaryKey, stateAccessor, historicalValueLookup);
+                        if (oldValue == null) {
+                            // Retract on non-existent key — nothing to undo, safe to skip.
+                            LOG.debug(
+                                    "Retract on non-existent key in kv tablet for {}, "
+                                            + "ignoring as the key does not exist.",
+                                    tableBucket);
+                            break;
+                        }
+
+
+                        // Best-effort merge optimization: peek next record for same key
+                        KvRecord nextRecord = peekableIter.peek();
+                        if (nextRecord != null) {
+                            NormalizedKvMutation nextMutation = peekableIter.peekMutation();
+                            if (nextMutation.key.equals(retractKey)
+                                    && nextRecord.getMutationType() == MutationType.UPSERT
+                                    && !nextMutation.isDelete()) {
+                                // Consume the peeked record — it's part of this merged pair
+                                peekableIter.consumePeeked();
+                                // Merged retract+upsert pair
+                                BinaryValue intermediate =
+                                        currentMerger.retract(oldValue, retractValue);
+                                BinaryValue newValue;
+                                if (intermediate == null) {
+                                    // Retract fully removed the row (intermediate == null).
+                                    // Treat the subsequent upsert as a fresh insert by merging
+                                    // with null accumulator — this is the intended semantic.
+                                    newValue = currentMerger.merge(null, nextMutation.value);
+                                } else {
+                                    newValue =
+                                            currentMerger.merge(intermediate, nextMutation.value);
+                                }
+
+                                if (newValue == null) {
+                                    DeleteBehavior deleteBehavior = currentMerger.deleteBehavior();
+                                    if (deleteBehavior == DeleteBehavior.IGNORE) {
+                                        // Merged retract+upsert produced null but delete is
+                                        // ignored.
+                                        // The old value remains in the KV store — this is
+                                        // intentional:
+                                        // IGNORE means "do not delete keys", so the pre-retract
+                                        // value
+                                        // is preserved. Subsequent lookups will return the old
+                                        // value.
+                                        // No CDC output is emitted for this no-op.
+                                    } else if (deleteBehavior == DeleteBehavior.DISABLE) {
+                                        throw new DeletionDisabledException(
+                                                "Delete operations are disabled for this table."
+                                                        + " The table.delete.behavior is set to 'disable'.");
+                                    } else {
+                                        logOffset =
+                                                applyDelete(
+                                                        retractKey,
+                                                        oldValue,
+                                                        walBuilder,
+                                                        latestSchemaRow,
+                                                        logOffset, stateAccessor);
+                                    }
+                                }
+                                // Use value equality (not reference equality) because
+                                // retract()+merge() always creates new BinaryValue instances
+                                // even when the result is logically unchanged.
+                                else if (newValue.equals(oldValue)) {
+                                    // Merged retract+upsert produced same value as before:
+                                    // intentionally no CDC output and no offset consumed.
+                                } else {
+                                    logOffset =
+                                            applyUpdate(
+                                                    retractKey,
+                                                    oldValue,
+                                                    newValue,
+                                                    walBuilder,
+                                                    latestSchemaRow,
+                                                    logOffset, stateAccessor);
+                                }
+                                break;
+                            }
+                            // Non-matching peeked record stays in the iterator for the
+                            // next loop iteration — no need to manually save it.
+                        }
+
+                        // Independent retract (no matching upsert follows)
+                        logOffset =
+                                processIndependentRetract(
+                                        retractKey,
+                                        retractValue,
+                                        oldValue,
+                                        currentMerger,
+                                        walBuilder,
+                                        latestSchemaRow,
+                                        logOffset, stateAccessor);
+                        break;
+                    }
+                default:
+                    // Defensive: should be unreachable; MutationType is validated
+                    // during deserialization.
+                    throw new InvalidRecordException("Unknown MutationType: " + mutationType);
+            }
+        }
+    }
+
+    /**
+     * Process an independent retract (not paired with a subsequent upsert). Retracts the given
+     * value from the old value and applies the result.
+     */
+    private long processIndependentRetract(
+            KvPreWriteBuffer.Key key,
+            BinaryValue retractValue,
+            BinaryValue oldValue,
+            RowMerger currentMerger,
+            WalBuilder walBuilder,
+            PaddingRow latestSchemaRow,
+            long logOffset, KvStateAccessor stateAccessor)
+            throws Exception {
+        BinaryValue intermediate = currentMerger.retract(oldValue, retractValue);
+
+        if (intermediate == null) {
+            // Retract resulted in removal
+            DeleteBehavior deleteBehavior = currentMerger.deleteBehavior();
+            if (deleteBehavior == DeleteBehavior.IGNORE) {
+                // Retract produced null but delete is ignored.
+                // The old value remains in the KV store — this is intentional:
+                // IGNORE means "do not delete keys", so the pre-retract value
+                // is preserved. Subsequent lookups will return the old value.
+                return logOffset;
+            } else if (deleteBehavior == DeleteBehavior.DISABLE) {
+                throw new DeletionDisabledException(
+                        "Delete operations are disabled for this table."
+                                + " The table.delete.behavior is set to 'disable'.");
+            } else {
+                return applyDelete(key, oldValue, walBuilder, latestSchemaRow, logOffset, stateAccessor);
+            }
+        }
+        // Use value equality (not reference equality) because retract()+merge() always
+        // creates new BinaryValue instances even when the result is logically unchanged.
+        else if (intermediate.equals(oldValue)) {
+            return logOffset; // no change, no offset consumed
+        } else {
+            return applyUpdate(key, oldValue, intermediate, walBuilder, latestSchemaRow, logOffset, stateAccessor);
+        }
+    }
+
+    private long dispatchMutation(
+            NormalizedKvMutation mutation,
+            RowMerger currentMerger,
+            AutoIncrementUpdater autoIncrementUpdater,
+                WalBuilder walBuilder,
+            PaddingRow latestSchemaRow,
+            long logOffset, KvStateAccessor stateAccessor,
+            @Nullable String originalPartitionName,
+            @Nullable HistoricalValueLookup historicalValueLookup)
+            throws Exception {
+        if (mutation.isDelete()) {
+            return processDeletion(
+                    mutation.key,
+                    currentMerger,
+                    walBuilder,
+                    latestSchemaRow,
+                    logOffset, stateAccessor, mutation.primaryKey, historicalValueLookup);
+        } else {
+            return processUpsert(
+                    mutation.key,
+                    mutation.value,
+                    currentMerger,
+                    autoIncrementUpdater,
+                    walBuilder,
+                    latestSchemaRow,
+                    logOffset, stateAccessor, mutation.primaryKey, historicalValueLookup);
+        }
+    }
+
+    /**
+     * A peekable iterator over KvRecords that pre-computes {@link NormalizedKvMutation} for each
+     * record. Supports one-element lookahead via {@link #peek()} / {@link #peekMutation()} without
+     * consuming the record, eliminating the need for manual pendingRecord/pendingMutation state
+     * management in the caller.
+     */
+    private static final class PeekableKvMutationIterator {
+        private final Iterator<KvRecord> inner;
+        private final short schemaIdOfNewData;
+        private final KvStateAccessor stateAccessor;
+        @Nullable private final String originalPartitionName;
+
+        private @Nullable KvRecord peekedRecord;
+        private @Nullable NormalizedKvMutation peekedMutation;
+        // Holds the mutation from a consumed peeked record so nextMutation() can return
+        // it without recomputing.
+        private @Nullable NormalizedKvMutation lastConsumedMutation;
+        // Reusable mutation object for the non-peeked hot path to avoid per-record allocation.
+        private final NormalizedKvMutation reusable;
+
+        PeekableKvMutationIterator(Iterator<KvRecord> inner, short schemaIdOfNewData,
+                KvStateAccessor stateAccessor, @Nullable String originalPartitionName) {
+            this.inner = inner;
+            this.stateAccessor = stateAccessor;
+            this.originalPartitionName = originalPartitionName;
+            this.schemaIdOfNewData = schemaIdOfNewData;
+            this.reusable = new NormalizedKvMutation(null, null);
+        }
+
+        boolean hasNext() {
+            return peekedRecord != null || inner.hasNext();
+        }
+
+        /** Returns the next record, consuming it. */
+        KvRecord next() {
+            if (peekedRecord != null) {
+                KvRecord record = peekedRecord;
+                lastConsumedMutation = peekedMutation;
+                peekedRecord = null;
+                peekedMutation = null;
+                return record;
+            }
+            lastConsumedMutation = null;
+            return inner.next();
+        }
+
+        /** Returns the mutation for the record returned by the last {@link #next()} call. */
+        NormalizedKvMutation nextMutation(KvRecord kvRecord) {
+            if (lastConsumedMutation != null) {
+                NormalizedKvMutation m = lastConsumedMutation;
+                lastConsumedMutation = null;
+                return m;
+            }
+            // Non-peeked hot path: reuse the mutation object to avoid allocation.
+            byte[] primaryKey = BytesUtils.toArray(kvRecord.getKey());
+            KvPreWriteBuffer.Key key = stateAccessor.encodeKey(primaryKey, originalPartitionName);
+            BinaryRow row = kvRecord.getRow();
+            BinaryValue value = row == null ? null : new BinaryValue(schemaIdOfNewData, row);
+            reusable.reset(key, value);
+            reusable.primaryKey = primaryKey;
+            return reusable;
+        }
+
+        /** Peeks at the next record without consuming it. Returns null if no more records. */
+        @Nullable
+        KvRecord peek() {
+            if (peekedRecord == null && inner.hasNext()) {
+                peekedRecord = inner.next();
+                peekedMutation = normalize(peekedRecord);
+            }
+            return peekedRecord;
+        }
+
+        /** Returns the pre-computed mutation for the peeked record. */
+        @Nullable
+        NormalizedKvMutation peekMutation() {
+            return peekedMutation;
+        }
+
+        /** Consumes the peeked record (must be called after peek()). */
+        void consumePeeked() {
+            peekedRecord = null;
+            peekedMutation = null;
+        }
+
+        private NormalizedKvMutation normalize(KvRecord kvRecord) {
+            byte[] primaryKey = BytesUtils.toArray(kvRecord.getKey());
+            KvPreWriteBuffer.Key key = stateAccessor.encodeKey(primaryKey, originalPartitionName);
+            BinaryRow row = kvRecord.getRow();
+            BinaryValue value = row == null ? null : new BinaryValue(schemaIdOfNewData, row);
+            NormalizedKvMutation mutation = new NormalizedKvMutation(key, value);
+            mutation.primaryKey = primaryKey;
+            return mutation;
+        }
+    }
+
+    private static final class NormalizedKvMutation {
+        private KvPreWriteBuffer.Key key;
+        private byte[] primaryKey;
+        private @Nullable BinaryValue value;
+
+        private NormalizedKvMutation(KvPreWriteBuffer.Key key, @Nullable BinaryValue value) {
+            this.key = key;
+            this.value = value;
+        }
+
+        void reset(KvPreWriteBuffer.Key key, @Nullable BinaryValue value) {
+            this.key = key;
+            this.value = value;
+        }
+
+        /** A delete mutation has null value. */
+        boolean isDelete() {
+            return value == null;
         }
     }
 

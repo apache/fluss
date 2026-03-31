@@ -80,14 +80,15 @@ public class ArrowLogWriteBatchTest {
                 createArrowLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId), maxSizeInBytes);
         int count = 0;
         while (arrowLogWriteBatch.tryAppend(
-                createWriteRecord(row(count, "a" + count)), newWriteCallback())) {
+                        createWriteRecord(row(count, "a" + count)), newWriteCallback())
+                == true) {
             count++;
         }
 
         // batch full.
         boolean appendResult =
                 arrowLogWriteBatch.tryAppend(createWriteRecord(row(1, "a")), newWriteCallback());
-        assertThat(appendResult).isFalse();
+        assertThat(appendResult).isEqualTo(false);
 
         // close this batch.
         arrowLogWriteBatch.close();
@@ -145,14 +146,15 @@ public class ArrowLogWriteBatchTest {
 
         int count = 0;
         while (arrowLogWriteBatch.tryAppend(
-                createWriteRecord(row(count, "a" + count)), newWriteCallback())) {
+                        createWriteRecord(row(count, "a" + count)), newWriteCallback())
+                == true) {
             count++;
         }
 
         // batch full.
         boolean appendResult =
                 arrowLogWriteBatch.tryAppend(createWriteRecord(row(1, "a")), newWriteCallback());
-        assertThat(appendResult).isFalse();
+        assertThat(appendResult).isEqualTo(false);
 
         // close this batch.
         arrowLogWriteBatch.close();
@@ -222,8 +224,9 @@ public class ArrowLogWriteBatchTest {
 
             int recordCount = 0;
             while (arrowLogWriteBatch.tryAppend(
-                    createWriteRecord(row(recordCount, RandomStringUtils.random(100))),
-                    newWriteCallback())) {
+                            createWriteRecord(row(recordCount, RandomStringUtils.random(100))),
+                            newWriteCallback())
+                    == true) {
                 recordCount++;
             }
 
@@ -231,7 +234,7 @@ public class ArrowLogWriteBatchTest {
             boolean appendResult =
                     arrowLogWriteBatch.tryAppend(
                             createWriteRecord(row(1, "a")), newWriteCallback());
-            assertThat(appendResult).isFalse();
+            assertThat(appendResult).isEqualTo(false);
 
             // close this batch and recycle the writer.
             arrowLogWriteBatch.close();

@@ -98,6 +98,14 @@ public interface KvRecordBatch {
     int getRecordCount();
 
     /**
+     * Whether records in this batch use V2 wire format (with per-record MutationType byte). V2
+     * batches have attributes bit 0 set.
+     */
+    default boolean isV2Format() {
+        return false;
+    }
+
+    /**
      * Get the iterable of {@link KvRecord} in this batch.
      *
      * @param readContext The context to read records from the record batch

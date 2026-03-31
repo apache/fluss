@@ -53,7 +53,9 @@ public enum ApiKeys {
     //            KV storage engine rejects a write under pressure; older versions receive the
     //            retriable KV_STORAGE_EXCEPTION instead.
     // Version 3: Supports original_partition_name in requests and responses for historical writes.
-    PUT_KV(1016, 0, 3, PUBLIC),
+    // Version 4: Adds per-record MutationType byte to KvRecord format, enabling
+    //            UPSERT/DELETE/RETRACT identification at the record level.
+    PUT_KV(1016, 0, 4, PUBLIC),
 
     // Version 0: Uses lake's encoder for primary key encoding (legacy behavior).
     // Version 1: Uses CompactedKeyEncoder for primary key encoding when bucket key differs from

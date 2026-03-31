@@ -237,7 +237,8 @@ public class FlussSinkBuilder<InputT> {
                             distributionMode,
                             serializationSchema,
                             enableUndoRecovery,
-                            producerId);
+                            producerId,
+                            false);
         } else {
             LOG.info("Initializing Fluss append sink writer ...");
             writerBuilder =

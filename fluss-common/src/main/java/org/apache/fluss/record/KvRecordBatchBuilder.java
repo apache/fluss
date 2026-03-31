@@ -58,6 +58,7 @@ public class KvRecordBatchBuilder implements AutoCloseable {
     private int sizeInBytes;
     private volatile boolean isClosed;
     private final KvFormat kvFormat;
+    private final boolean v2Format;
     private boolean aborted = false;
 
     private KvRecordBatchBuilder(
@@ -65,7 +66,8 @@ public class KvRecordBatchBuilder implements AutoCloseable {
             byte magic,
             int writeLimit,
             AbstractPagedOutputView pagedOutputView,
-            KvFormat kvFormat) {
+            KvFormat kvFormat,
+            boolean v2Format) {
         checkArgument(
                 schemaId <= Short.MAX_VALUE,
                 "schemaId shouldn't be greater than the max value of short: " + Short.MAX_VALUE);
@@ -83,12 +85,22 @@ public class KvRecordBatchBuilder implements AutoCloseable {
         pagedOutputView.setPosition(RECORD_BATCH_HEADER_SIZE);
         this.sizeInBytes = RECORD_BATCH_HEADER_SIZE;
         this.kvFormat = kvFormat;
+        this.v2Format = v2Format;
     }
 
     public static KvRecordBatchBuilder builder(
             int schemaId, int writeLimit, AbstractPagedOutputView outputView, KvFormat kvFormat) {
+        return builder(schemaId, writeLimit, outputView, kvFormat, false);
+    }
+
+    public static KvRecordBatchBuilder builder(
+            int schemaId,
+            int writeLimit,
+            AbstractPagedOutputView outputView,
+            KvFormat kvFormat,
+            boolean v2Format) {
         return new KvRecordBatchBuilder(
-                schemaId, CURRENT_KV_MAGIC_VALUE, writeLimit, outputView, kvFormat);
+                schemaId, CURRENT_KV_MAGIC_VALUE, writeLimit, outputView, kvFormat, v2Format);
     }
 
     /**
@@ -96,7 +108,17 @@ public class KvRecordBatchBuilder implements AutoCloseable {
      * appended, then this returns true.
      */
     public boolean hasRoomFor(byte[] key, @Nullable BinaryRow row) {
-        return sizeInBytes + DefaultKvRecord.sizeOf(key, row) <= writeLimit;
+        int recordSize = DefaultKvRecord.sizeOf(key, row);
+        return sizeInBytes + recordSize <= writeLimit;
+    }
+
+    /**
+     * Check if we have room for a new V2 record containing the given row. V2 records have an extra
+     * MutationType byte.
+     */
+    public boolean hasRoomForV2(byte[] key, @Nullable BinaryRow row) {
+        int recordSize = DefaultKvRecord.sizeOfV2(key, row);
+        return sizeInBytes + recordSize <= writeLimit;
     }
 
     /**
@@ -107,6 +129,10 @@ public class KvRecordBatchBuilder implements AutoCloseable {
      *     KvRecord is for delete the corresponding key.
      */
     public void append(byte[] key, @Nullable BinaryRow row) throws IOException {
+        if (v2Format) {
+            throw new IllegalStateException(
+                    "append() must not be used on a V2 format builder. Use appendV2() instead.");
+        }
         if (aborted) {
             throw new IllegalStateException(
                     "Tried to append a record, but KvRecordBatchBuilder has already been aborted");
@@ -117,6 +143,40 @@ public class KvRecordBatchBuilder implements AutoCloseable {
                     "Tried to put a record, but KvRecordBatchBuilder is closed for record puts.");
         }
         int recordByteSizes = DefaultKvRecord.writeTo(pagedOutputView, key, validateRowFormat(row));
+        currentRecordNumber++;
+        if (currentRecordNumber == Integer.MAX_VALUE) {
+            throw new IllegalArgumentException(
+                    "Maximum number of records per batch exceeded, max records: "
+                            + Integer.MAX_VALUE);
+        }
+        sizeInBytes += recordByteSizes;
+    }
+
+    /**
+     * Append a V2 format KvRecord with an explicit {@link MutationType} to the batch.
+     *
+     * @param mutationType the mutation type of this record
+     * @param key the key in the KvRecord to be appended
+     * @param row the value in the KvRecord to be appended. Null for DELETE records.
+     */
+    public void appendV2(MutationType mutationType, byte[] key, @Nullable BinaryRow row)
+            throws IOException {
+        if (!v2Format) {
+            throw new IllegalStateException(
+                    "appendV2() requires a V2 format builder. Use builder(..., v2Format=true).");
+        }
+        if (aborted) {
+            throw new IllegalStateException(
+                    "Tried to append a record, but KvRecordBatchBuilder has already been aborted");
+        }
+
+        if (isClosed) {
+            throw new IllegalStateException(
+                    "Tried to put a record, but KvRecordBatchBuilder is closed for record puts.");
+        }
+        int recordByteSizes =
+                DefaultKvRecord.writeToV2(
+                        pagedOutputView, mutationType, key, validateRowFormat(row));
         currentRecordNumber++;
         if (currentRecordNumber == Integer.MAX_VALUE) {
             throw new IllegalArgumentException(
@@ -208,7 +268,7 @@ public class KvRecordBatchBuilder implements AutoCloseable {
     }
 
     private byte computeAttributes() {
-        return 0;
+        return v2Format ? DefaultKvRecordBatch.V2_FORMAT_ATTRIBUTE_MASK : 0;
     }
 
     /** Validate the row instance according to the kv format. */

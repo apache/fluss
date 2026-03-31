@@ -263,6 +263,7 @@ class ClientRpcMessageUtilsTest {
                 null,
                 mergeMode,
                 false,
+                false,
                 System.currentTimeMillis());
     }
 }
