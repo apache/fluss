@@ -580,6 +580,62 @@ abstract class FlinkCatalogITCase {
     }
 
     @Test
+    void testAlterAutoPartitionRetention() throws Exception {
+        String tblName = "test_alter_auto_partition_retention";
+        ObjectPath objectPath = new ObjectPath(DEFAULT_DB, tblName);
+
+        // Create an auto-partitioned table with HOUR time unit and retention=3
+        tEnv.executeSql(
+                "create table "
+                        + tblName
+                        + " (a int, b string) partitioned by (b) "
+                        + "with ('table.auto-partition.enabled' = 'true',"
+                        + " 'table.auto-partition.time-unit' = 'hour',"
+                        + " 'table.auto-partition.num-retention' = '3')");
+
+        TablePath tablePath = new TablePath(DEFAULT_DB, tblName);
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
+
+        String datetimePattern = "yyyyMMddHH";
+        String oldPartition =
+                LocalDateTime.now()
+                        .minusHours(3)
+                        .format(DateTimeFormatter.ofPattern(datetimePattern));
+
+        tEnv.executeSql(
+                String.format("alter table %s add partition (b = '%s')", tblName, oldPartition));
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath, 3);
+        CloseableIterator<Row> showPartitionIterator =
+                tEnv.executeSql("show partitions " + tblName).collect();
+        List<String> partitions =
+                CollectionUtil.iteratorToList(showPartitionIterator).stream()
+                        .map(Row::toString)
+                        .collect(Collectors.toList());
+        assertThat(partitions).contains(String.format("+I[b=%s]", oldPartition));
+
+        // Alter retention from 3 to 1
+        tEnv.executeSql(
+                "alter table " + tblName + " set ('table.auto-partition.num-retention' = '1')");
+
+        // The old partition should be dropped after the periodic check fires
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionsDropped(
+                tablePath, Collections.singletonList(oldPartition));
+
+        // Verify the old partition is no longer listed
+        showPartitionIterator = tEnv.executeSql("show partitions " + tblName).collect();
+        partitions =
+                CollectionUtil.iteratorToList(showPartitionIterator).stream()
+                        .map(Row::toString)
+                        .collect(Collectors.toList());
+        assertThat(partitions).doesNotContain(String.format("+I[b=%s]", oldPartition));
+
+        // Verify the altered property is persisted
+        CatalogTable table = (CatalogTable) catalog.getTable(objectPath);
+        assertThat(table.getOptions().get(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION.key()))
+                .isEqualTo("1");
+    }
+
+    @Test
     void testTableWithExpression() throws Exception {
         // create a table with watermark and computed column
         tEnv.executeSql(
