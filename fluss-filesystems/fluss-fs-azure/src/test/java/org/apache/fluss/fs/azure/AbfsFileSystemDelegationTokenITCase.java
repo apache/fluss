@@ -44,7 +44,7 @@ import java.util.Map;
  */
 class AbfsFileSystemDelegationTokenITCase extends FileSystemBehaviorTestSuite {
 
-    private static final String ABFS_FS_PATH = "abfs://flus@test.dfs.core.windows.net/test";
+    private static final String ABFS_FS_PATH = "abfs://fluss@test.dfs.core.windows.net/test";
 
     @BeforeAll
     static void setup() throws Exception {

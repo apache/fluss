@@ -29,7 +29,7 @@ To enabled Azure Blob Storage as remote storage, there are some required configu
 
 ```yaml
 # The dir that used to be as the remote storage of Fluss, use the Azure Data Lake Storage URI
-remote.data.dir: abfs://flus@flussblob.dfs.core.windows.net/path
+remote.data.dir: abfs://fluss@flussblob.dfs.core.windows.net/path
 # the access key for the azure blob storage account
 fs.azure.account.key: 09a295d5-3da5-4435-a660-f438b331ade8
 # The oauth account provider type for Token-based Authentication
