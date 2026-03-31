@@ -18,6 +18,7 @@
 package org.apache.fluss.client.table.scanner.batch;
 
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.compression.ChunkedAllocationManager;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -164,7 +165,12 @@ public class LimitBatchScanner implements BatchScanner {
             }
         } else {
             LogRecordReadContext readContext =
-                    LogRecordReadContext.createReadContext(tableInfo, false, null, schemaGetter);
+                    LogRecordReadContext.createReadContext(
+                            tableInfo,
+                            false,
+                            null,
+                            schemaGetter,
+                            new ChunkedAllocationManager.ChunkedFactory());
             LogRecords records = MemoryLogRecords.pointToByteBuffer(recordsBuffer);
             for (LogRecordBatch logRecordBatch : records.batches()) {
                 // A batch of log record maybe little more than limit, thus we need slice the

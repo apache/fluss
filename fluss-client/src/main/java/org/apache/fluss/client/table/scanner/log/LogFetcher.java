@@ -23,6 +23,7 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.ScannerMetricGroup;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.cluster.BucketLocation;
+import org.apache.fluss.compression.ChunkedAllocationManager;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ApiException;
@@ -128,10 +129,14 @@ public class LogFetcher implements Closeable {
             SchemaGetter schemaGetter) {
         this.tablePath = tableInfo.getTablePath();
         this.isPartitioned = tableInfo.isPartitioned();
+        ChunkedAllocationManager.ChunkedFactory chunkedFactory =
+                new ChunkedAllocationManager.ChunkedFactory();
         this.readContext =
-                LogRecordReadContext.createReadContext(tableInfo, false, projection, schemaGetter);
+                LogRecordReadContext.createReadContext(
+                        tableInfo, false, projection, schemaGetter, chunkedFactory);
         this.remoteReadContext =
-                LogRecordReadContext.createReadContext(tableInfo, true, projection, schemaGetter);
+                LogRecordReadContext.createReadContext(
+                        tableInfo, true, projection, schemaGetter, chunkedFactory);
         this.projection = projection;
         this.cachedPbPredicate =
                 recordBatchFilter != null
