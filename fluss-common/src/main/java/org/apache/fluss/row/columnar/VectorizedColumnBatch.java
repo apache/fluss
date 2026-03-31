@@ -24,6 +24,7 @@ import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.types.variant.Variant;
 
 import java.nio.charset.StandardCharsets;
 
@@ -116,5 +117,9 @@ public class VectorizedColumnBatch {
 
     public InternalRow getRow(int rowId, int colId) {
         return ((RowColumnVector) columns[colId]).getRow(rowId);
+    }
+
+    public Variant getVariant(int rowId, int colId) {
+        return ((VariantColumnVector) columns[colId]).getVariant(rowId);
     }
 }

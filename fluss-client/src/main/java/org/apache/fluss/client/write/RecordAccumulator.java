@@ -33,10 +33,13 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.record.LogRecordBatchStatisticsCollector;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.arrow.ArrowWriter;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
+import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
+import org.apache.fluss.types.variant.ShreddingSchemaInferrer;
 import org.apache.fluss.utils.CopyOnWriteMap;
 import org.apache.fluss.utils.MathUtils;
 import org.apache.fluss.utils.clock.Clock;
@@ -113,6 +116,19 @@ public final class RecordAccumulator {
     private final Clock clock;
     private final DynamicWriteBatchSizeEstimator batchSizeEstimator;
 
+    /**
+     * Optional Coordinator gateway used to send {@code ApplyShreddingSchema} RPCs. Set after
+     * construction via {@link #setCoordinatorGateway(CoordinatorGateway)}.
+     */
+    @Nullable private volatile CoordinatorGateway coordinatorGateway;
+
+    /**
+     * Per-table {@link VariantShreddingManager}s. Created lazily on first append to an ARROW_LOG
+     * table with Variant shredding enabled and at least one Variant column.
+     */
+    private final ConcurrentMap<PhysicalTablePath, VariantShreddingManager> shreddingManagers =
+            new CopyOnWriteMap<>();
+
     // TODO add retryBackoffMs to retry the produce request upon receiving an error.
     // TODO add deliveryTimeoutMs to report success or failure on record delivery.
     // TODO add nextBatchExpiryTimeMs
@@ -159,6 +175,91 @@ public final class RecordAccumulator {
     }
 
     /**
+     * Sets the {@link CoordinatorGateway} to use for Variant shredding schema evolution RPCs.
+     *
+     * <p>This must be called once after the accumulator is constructed (and after the coordinator
+     * server is known) to enable automatic shredding. If not called, Variant statistics will still
+     * be collected locally but no schema evolution RPC will be fired.
+     */
+    public void setCoordinatorGateway(CoordinatorGateway gateway) {
+        this.coordinatorGateway = gateway;
+    }
+
+    /**
+     * Collects Variant statistics for the row being appended, and — once enough samples have been
+     * observed — fires an async schema-evolution RPC to the Coordinator.
+     *
+     * <p>This method is a no-op when:
+     *
+     * <ul>
+     *   <li>the write format is not {@link WriteFormat#ARROW_LOG}
+     *   <li>the table has no Variant columns
+     *   <li>Variant shredding is disabled in the table's configuration
+     *   <li>the coordinator gateway has not been set
+     * </ul>
+     */
+    private void maybeCollectVariantStats(
+            PhysicalTablePath physicalTablePath,
+            TableInfo tableInfo,
+            WriteFormat writeFormat,
+            InternalRow row) {
+        if (coordinatorGateway == null) {
+            return;
+        }
+        if (writeFormat != WriteFormat.ARROW_LOG) {
+            return;
+        }
+        if (!tableInfo.isVariantShreddingEnabled()) {
+            return;
+        }
+        int[] variantIndices = tableInfo.getVariantColumnIndices();
+        if (variantIndices.length == 0) {
+            return;
+        }
+
+        VariantShreddingManager manager =
+                shreddingManagers.computeIfAbsent(
+                        physicalTablePath,
+                        path -> {
+                            String[] colNames = new String[variantIndices.length];
+                            for (int i = 0; i < variantIndices.length; i++) {
+                                colNames[i] =
+                                        tableInfo
+                                                .getRowType()
+                                                .getFields()
+                                                .get(variantIndices[i])
+                                                .getName();
+                            }
+                            ShreddingSchemaInferrer inferrer =
+                                    new ShreddingSchemaInferrer()
+                                            .setPresenceThreshold(
+                                                    tableInfo
+                                                            .getTableConfig()
+                                                            .getVariantShreddingPresenceThreshold())
+                                            .setTypeConsistencyThreshold(
+                                                    tableInfo
+                                                            .getTableConfig()
+                                                            .getVariantShreddingTypeConsistencyThreshold())
+                                            .setMaxShreddedFields(
+                                                    tableInfo
+                                                            .getTableConfig()
+                                                            .getVariantShreddingMaxFields())
+                                            .setMinSampleSize(
+                                                    tableInfo
+                                                            .getTableConfig()
+                                                            .getVariantShreddingMinSampleSize());
+                            CoordinatorGateway gw = coordinatorGateway;
+                            return new VariantShreddingManager(
+                                    path.getTablePath(),
+                                    variantIndices,
+                                    colNames,
+                                    inferrer,
+                                    gw::applyShreddingSchema);
+                        });
+        manager.collectRow(row);
+    }
+
+    /**
      * Add a record to the accumulator, return to append result.
      *
      * <p>The append result will contain the future metadata, and flag for whether the appended
@@ -195,6 +296,12 @@ public final class RecordAccumulator {
             synchronized (dq) {
                 RecordAppendResult appendResult = tryAppend(writeRecord, callback, dq);
                 if (appendResult != null) {
+                    // Row was appended to an existing batch; collect Variant statistics.
+                    maybeCollectVariantStats(
+                            physicalTablePath,
+                            tableInfo,
+                            writeRecord.getWriteFormat(),
+                            writeRecord.getRow());
                     return appendResult;
                 }
             }
@@ -212,6 +319,12 @@ public final class RecordAccumulator {
                                 writeRecord, callback, bucketId, tableInfo, dq, memorySegments);
                 if (appendResult.newBatchCreated) {
                     memorySegments = Collections.emptyList();
+                    // Row was appended to the new batch; collect Variant statistics.
+                    maybeCollectVariantStats(
+                            physicalTablePath,
+                            tableInfo,
+                            writeRecord.getWriteFormat(),
+                            writeRecord.getRow());
                 }
                 return appendResult;
             }
@@ -628,7 +741,10 @@ public final class RecordAccumulator {
                                 schemaId,
                                 outputView.getPreAllocatedSize(),
                                 tableInfo.getRowType(),
-                                tableInfo.getTableConfig().getArrowCompressionInfo());
+                                tableInfo.getTableConfig().getArrowCompressionInfo(),
+                                tableInfo.getShreddingSchemas().isEmpty()
+                                        ? null
+                                        : tableInfo.getShreddingSchemas());
                 LogRecordBatchStatisticsCollector statisticsCollector = null;
                 if (tableInfo.isStatisticsEnabled()) {
                     statisticsCollector =

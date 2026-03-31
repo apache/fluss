@@ -19,6 +19,7 @@ package org.apache.fluss.row;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.types.variant.Variant;
 
 import java.util.Arrays;
 
@@ -153,6 +154,11 @@ public class ProjectedRow implements InternalRow {
     @Override
     public InternalRow getRow(int pos, int numFields) {
         return row.getRow(indexMapping[pos], numFields);
+    }
+
+    @Override
+    public Variant getVariant(int pos) {
+        return row.getVariant(indexMapping[pos]);
     }
 
     @Override

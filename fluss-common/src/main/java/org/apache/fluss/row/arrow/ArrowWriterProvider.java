@@ -20,6 +20,11 @@ package org.apache.fluss.row.arrow;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.variant.ShreddingSchema;
+
+import javax.annotation.Nullable;
+
+import java.util.Map;
 
 /** The provider used for requesting and releasing {@link ArrowWriter}. */
 @Internal
@@ -30,6 +35,22 @@ public interface ArrowWriterProvider extends AutoCloseable {
             int bufferSizeInBytes,
             RowType schema,
             ArrowCompressionInfo compressionInfo);
+
+    /**
+     * Gets or creates an {@link ArrowWriter} with shredding support for Variant columns.
+     *
+     * @param shreddingSchemas map from variant column name to its shredding schema, or null if no
+     *     shredding
+     */
+    default ArrowWriter getOrCreateWriter(
+            long tableId,
+            int schemaId,
+            int bufferSizeInBytes,
+            RowType schema,
+            ArrowCompressionInfo compressionInfo,
+            @Nullable Map<String, ShreddingSchema> shreddingSchemas) {
+        return getOrCreateWriter(tableId, schemaId, bufferSizeInBytes, schema, compressionInfo);
+    }
 
     void recycleWriter(ArrowWriter arrowWriter);
 }

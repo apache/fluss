@@ -109,6 +109,9 @@ public class WriterClient {
             this.accumulator =
                     new RecordAccumulator(
                             conf, idempotenceManager, writerMetricGroup, SystemClock.getInstance());
+            // Wire the CoordinatorGateway so the accumulator can trigger Variant shredding schema
+            // evolution RPCs once enough statistics have been collected.
+            this.accumulator.setCoordinatorGateway(metadataUpdater.newCoordinatorServerClient());
             this.sender = newSender(acks, retries);
             this.ioThreadPool = createThreadPool();
             ioThreadPool.submit(sender);

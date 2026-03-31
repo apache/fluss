@@ -20,6 +20,8 @@ package org.apache.fluss.rpc.gateway;
 import org.apache.fluss.rpc.RpcGateway;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
+import org.apache.fluss.rpc.messages.ApplyShreddingSchemaRequest;
+import org.apache.fluss.rpc.messages.ApplyShreddingSchemaResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
@@ -113,4 +115,19 @@ public interface CoordinatorGateway extends RpcGateway, AdminGateway {
     @RPC(api = ApiKeys.CONTROLLED_SHUTDOWN)
     CompletableFuture<ControlledShutdownResponse> controlledShutdown(
             ControlledShutdownRequest request);
+
+    /**
+     * Applies an inferred shredding schema to a Variant column by triggering server-side schema
+     * evolution.
+     *
+     * <p>The coordinator will add the shredded fields as hidden nullable columns and store the
+     * serialized shredding schema as a table property. This enables subsequent writes to use the
+     * shredded layout and reads to reconstruct Variant values from the shredded columns.
+     *
+     * @param request the request containing the table path and JSON-serialized shredding schema
+     * @return an empty response on success
+     */
+    @RPC(api = ApiKeys.APPLY_SHREDDING_SCHEMA)
+    CompletableFuture<ApplyShreddingSchemaResponse> applyShreddingSchema(
+            ApplyShreddingSchemaRequest request);
 }

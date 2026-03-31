@@ -28,6 +28,7 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.BaseFixedWidthVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.BaseVariableWidthVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VarBinaryVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorUnloader;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector;
@@ -37,11 +38,19 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.WriteChannel;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowBlock;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.MessageSerializer;
+import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.VariantType;
+import org.apache.fluss.types.variant.ShreddedField;
+import org.apache.fluss.types.variant.ShreddingSchema;
 import org.apache.fluss.utils.ArrowUtils;
 import org.apache.fluss.utils.PagedMemorySegmentWritableChannel;
 
+import javax.annotation.Nullable;
+
 import java.io.IOException;
+import java.util.List;
+import java.util.Map;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -116,6 +125,26 @@ public class ArrowWriter implements AutoCloseable {
             ArrowWriterProvider provider,
             ArrowCompressionInfo compressionInfo,
             ArrowCompressionRatioEstimator compressionRatioEstimator) {
+        this(
+                writerKey,
+                bufferSizeInBytes,
+                schema,
+                allocator,
+                provider,
+                compressionInfo,
+                compressionRatioEstimator,
+                null);
+    }
+
+    ArrowWriter(
+            String writerKey,
+            int bufferSizeInBytes,
+            RowType schema,
+            BufferAllocator allocator,
+            ArrowWriterProvider provider,
+            ArrowCompressionInfo compressionInfo,
+            ArrowCompressionRatioEstimator compressionRatioEstimator,
+            @Nullable Map<String, ShreddingSchema> shreddingSchemas) {
         this.writerKey = writerKey;
         this.schema = schema;
         this.root = VectorSchemaRoot.create(ArrowUtils.toArrowSchema(schema), allocator);
@@ -131,11 +160,50 @@ public class ArrowWriter implements AutoCloseable {
         this.estimatedMaxRecordsCount = -1;
         this.recordsCount = 0;
         this.epoch = 0;
-        this.fieldWriters = new ArrowFieldWriter[schema.getFieldCount()];
-        for (int i = 0; i < fieldWriters.length; i++) {
-            FieldVector fieldVector = root.getVector(i);
+
+        // Initialize ALL vectors first (including shredded columns)
+        for (FieldVector fieldVector : root.getFieldVectors()) {
             initFieldVector(fieldVector);
-            fieldWriters[i] = ArrowUtils.createArrowFieldWriter(fieldVector, schema.getTypeAt(i));
+        }
+
+        // Determine user-visible field count (excluding shredded columns)
+        int userFieldCount = 0;
+        for (int i = 0; i < schema.getFieldCount(); i++) {
+            if (!ShreddingSchema.isAnyShreddedColumn(schema.getFields().get(i).getName())) {
+                userFieldCount++;
+            }
+        }
+
+        this.fieldWriters = new ArrowFieldWriter[userFieldCount];
+        int writerIdx = 0;
+        for (int i = 0; i < schema.getFieldCount(); i++) {
+            String fieldName = schema.getFields().get(i).getName();
+            if (ShreddingSchema.isAnyShreddedColumn(fieldName)) {
+                // Skip shredded columns - handled by ArrowShreddedVariantWriter
+                continue;
+            }
+
+            FieldVector fieldVector = root.getVector(i);
+            DataType dataType = schema.getTypeAt(i);
+
+            if (dataType instanceof VariantType
+                    && shreddingSchemas != null
+                    && shreddingSchemas.containsKey(fieldName)) {
+                ShreddingSchema shreddingSchema = shreddingSchemas.get(fieldName);
+                List<ShreddedField> fields = shreddingSchema.getFields();
+                FieldVector[] shreddedVectors = new FieldVector[fields.size()];
+                for (int j = 0; j < fields.size(); j++) {
+                    String colName =
+                            shreddingSchema.shreddedColumnName(fields.get(j).getFieldPath());
+                    shreddedVectors[j] = root.getVector(colName);
+                }
+                fieldWriters[writerIdx] =
+                        ArrowUtils.createArrowShreddedVariantWriter(
+                                (VarBinaryVector) fieldVector, shreddingSchema, shreddedVectors);
+            } else {
+                fieldWriters[writerIdx] = ArrowUtils.createArrowFieldWriter(fieldVector, dataType);
+            }
+            writerIdx++;
         }
     }
 
@@ -187,8 +255,8 @@ public class ArrowWriter implements AutoCloseable {
             estimatedMaxRecordsCount = -1;
         }
         writeLimitInBytes = newWriteLimit;
-        for (int i = 0; i < fieldWriters.length; i++) {
-            FieldVector fieldVector = root.getVector(i);
+        // Initialize ALL vectors including shredded ones
+        for (FieldVector fieldVector : root.getFieldVectors()) {
             initFieldVector(fieldVector);
         }
         // Reset field writers to clear their offset counters (for ArrayWriter)

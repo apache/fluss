@@ -1321,3 +1321,14 @@ message PbLiteralValue {
   optional int32 timestamp_nano_of_millis_value = 12; // Nano of millis
   optional bytes decimal_bytes = 13;   // Serialized decimal (non-compact mode)
 }
+
+// Apply shredding schema request and response.
+// Sent from the client write path to the Coordinator to trigger schema evolution for a Variant
+// column. The shredding_schema_json field contains the JSON-serialized ShreddingSchema.
+message ApplyShreddingSchemaRequest {
+  required PbTablePath table_path = 1;
+  required string shredding_schema_json = 2;
+}
+
+message ApplyShreddingSchemaResponse {
+}

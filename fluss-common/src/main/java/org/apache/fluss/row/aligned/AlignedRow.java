@@ -38,6 +38,7 @@ import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.LocalZonedTimestampType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.TimestampType;
+import org.apache.fluss.types.variant.Variant;
 
 import javax.annotation.Nullable;
 
@@ -414,6 +415,15 @@ public final class AlignedRow extends BinarySection
         return BinarySegmentUtils.readAlignedRow(segments, offset, offsetAndSize, numFields);
     }
 
+    @Override
+    public Variant getVariant(int pos) {
+        assertIndexIsValid(pos);
+        int fieldOffset = getFieldOffset(pos);
+        final long offsetAndLen = segments[0].getLong(fieldOffset);
+        byte[] bytes = BinarySegmentUtils.readBinary(segments, offset, fieldOffset, offsetAndLen);
+        return Variant.fromBytes(bytes);
+    }
+
     /** The bit is 1 when the field is null. Default is 0. */
     public boolean anyNull() {
         // Skip the header.
@@ -559,6 +569,9 @@ public final class AlignedRow extends BinarySection
                                 i,
                                 row.getTimestampLtz(i, localZonedTimestampType.getPrecision()),
                                 localZonedTimestampType.getPrecision());
+                        break;
+                    case VARIANT:
+                        writer.writeBytes(i, row.getVariant(i).toBytes());
                         break;
                     default:
                         throw new UnsupportedOperationException(

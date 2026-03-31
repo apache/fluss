@@ -69,6 +69,8 @@ import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
 import org.apache.fluss.rpc.messages.AlterDatabaseResponse;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.AlterTableResponse;
+import org.apache.fluss.rpc.messages.ApplyShreddingSchemaRequest;
+import org.apache.fluss.rpc.messages.ApplyShreddingSchemaResponse;
 import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
 import org.apache.fluss.rpc.messages.CancelRebalanceResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
@@ -172,6 +174,7 @@ import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.producer.ProducerOffsets;
+import org.apache.fluss.types.variant.ShreddingSchema;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 import org.apache.fluss.utils.json.TableBucketOffsets;
@@ -1436,6 +1439,35 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                 "Failed to delete producer offsets for producer "
                                         + request.getProducerId(),
                                 e);
+                    }
+                },
+                ioExecutor);
+    }
+
+    @Override
+    public CompletableFuture<ApplyShreddingSchemaResponse> applyShreddingSchema(
+            ApplyShreddingSchemaRequest request) {
+        TablePath tablePath = toTablePath(request.getTablePath());
+        tablePath.validate();
+        authorizeTable(OperationType.ALTER, tablePath);
+
+        // Capture the principal before entering the async block: currentSession() reads a
+        // ThreadLocal that is only set on the Netty handler thread, not on the ioExecutor threads.
+        FlussPrincipal principal = currentSession().getPrincipal();
+
+        return CompletableFuture.supplyAsync(
+                () -> {
+                    try {
+                        ShreddingSchema shreddingSchema =
+                                ShreddingSchema.fromJson(request.getShreddingSchemaJson());
+                        metadataManager.applyShreddingSchemaEvolution(
+                                tablePath, shreddingSchema, principal);
+                        return new ApplyShreddingSchemaResponse();
+                    } catch (ApiException e) {
+                        throw e;
+                    } catch (Exception e) {
+                        throw new UnknownServerException(
+                                "Failed to apply shredding schema for table " + tablePath, e);
                     }
                 },
                 ioExecutor);
