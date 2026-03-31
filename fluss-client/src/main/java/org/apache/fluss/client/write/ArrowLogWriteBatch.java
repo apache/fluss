@@ -52,6 +52,7 @@ public class ArrowLogWriteBatch extends WriteBatch {
     private final AbstractPagedOutputView outputView;
 
     public ArrowLogWriteBatch(
+            long tableId,
             int bucketId,
             PhysicalTablePath physicalTablePath,
             int schemaId,
@@ -59,7 +60,7 @@ public class ArrowLogWriteBatch extends WriteBatch {
             AbstractPagedOutputView outputView,
             long createdMs,
             @Nullable LogRecordBatchStatisticsCollector statisticsCollector) {
-        super(bucketId, physicalTablePath, createdMs);
+        super(tableId, bucketId, physicalTablePath, createdMs);
         this.outputView = outputView;
         this.recordsBuilder =
                 MemoryLogRecordsArrowBuilder.builder(
