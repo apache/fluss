@@ -194,7 +194,14 @@ public class ProjectedRow implements InternalRow {
         return new ProjectedRow(indexMapping);
     }
 
-    public int getSizeInBytes() {
+    /**
+     * Returns the on-wire size in bytes of the underlying raw row (before projection), not the
+     * projected subset. This is used for byte-level metrics tracking where the original record size
+     * is needed.
+     *
+     * @return the size in bytes of the underlying row, or -1 if unknown.
+     */
+    public int getUnderlyingRowSizeInBytes() {
         if (row instanceof BinaryRow) {
             return ((BinaryRow) row).getSizeInBytes();
         }
