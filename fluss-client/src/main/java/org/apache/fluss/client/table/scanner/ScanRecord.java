@@ -34,16 +34,27 @@ public class ScanRecord implements LogRecord {
     private final long timestamp;
     private final ChangeType changeType;
     private final InternalRow row;
+    private final int sizeInBytes;
 
     public ScanRecord(InternalRow row) {
         this(INVALID, INVALID, ChangeType.INSERT, row);
     }
 
+    public ScanRecord(InternalRow row, int sizeInBytes) {
+        this(INVALID, INVALID, ChangeType.INSERT, row, sizeInBytes);
+    }
+
     public ScanRecord(long offset, long timestamp, ChangeType changeType, InternalRow row) {
+        this(offset, timestamp, changeType, row, (int) INVALID);
+    }
+
+    public ScanRecord(
+            long offset, long timestamp, ChangeType changeType, InternalRow row, int sizeInBytes) {
         this.offset = offset;
         this.timestamp = timestamp;
         this.changeType = changeType;
         this.row = row;
+        this.sizeInBytes = sizeInBytes;
     }
 
     /** The position of this record in the corresponding fluss table bucket. */
@@ -65,6 +76,11 @@ public class ScanRecord implements LogRecord {
     @Override
     public InternalRow getRow() {
         return row;
+    }
+
+    @Override
+    public int getSizeInBytes() {
+        return sizeInBytes;
     }
 
     @Override

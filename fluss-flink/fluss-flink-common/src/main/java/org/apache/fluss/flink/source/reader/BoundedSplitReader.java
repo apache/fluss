@@ -21,7 +21,9 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.flink.lake.reader.IndexedLakeSplitRecordIterator;
 import org.apache.fluss.flink.source.split.SnapshotSplit;
+import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.utils.CloseableIterator;
 
 import javax.annotation.Nullable;
@@ -153,7 +155,14 @@ public class BoundedSplitReader implements AutoCloseable {
 
         @Override
         public ScanRecord next() {
-            return new ScanRecord(rowIterator.next());
+            InternalRow row = rowIterator.next();
+            int sizeInBytes = -1;
+            if (row instanceof ProjectedRow) {
+                sizeInBytes = ((ProjectedRow) row).getSizeInBytes();
+            } else if (row instanceof BinaryRow) {
+                sizeInBytes = ((BinaryRow) row).getSizeInBytes();
+            }
+            return new ScanRecord(row, sizeInBytes);
         }
 
         @Override

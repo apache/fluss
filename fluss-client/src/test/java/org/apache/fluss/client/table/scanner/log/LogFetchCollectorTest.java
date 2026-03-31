@@ -19,6 +19,7 @@ package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metadata.TestingMetadataUpdater;
+import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecordReadContext;
@@ -183,9 +184,12 @@ public class LogFetchCollectorTest {
         assertThat(completedFetch2.isConsumed()).isTrue();
 
         // totalBytesRead should be the sum of both completed fetches
-        long expectedBytes = completedFetch1.getSizeInBytes() + completedFetch2.getSizeInBytes();
-        assertThat(scanRecords.getTotalBytes()).isEqualTo(expectedBytes);
-        assertThat(scanRecords.getTotalBytes()).isGreaterThan(0);
+        long totalBytesRead = 0;
+        for (ScanRecord record : scanRecords) {
+            assertThat(record.getSizeInBytes()).isGreaterThan(0);
+            totalBytesRead += record.getSizeInBytes();
+        }
+        assertThat(totalBytesRead).isGreaterThan(0);
     }
 
     private DefaultCompletedFetch makeCompletedFetch(

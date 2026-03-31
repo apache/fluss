@@ -86,7 +86,6 @@ public class LogFetchCollector {
     public ScanRecords collectFetch(final LogFetchBuffer logFetchBuffer) {
         Map<TableBucket, List<ScanRecord>> fetched = new HashMap<>();
         int recordsRemaining = maxPollRecords;
-        long totalBytesRead = 0;
 
         try {
             while (recordsRemaining > 0) {
@@ -136,11 +135,6 @@ public class LogFetchCollector {
 
                         recordsRemaining -= records.size();
                     }
-
-                    // Only count bytes when the fetch is fully consumed
-                    if (nextInLineFetch.isConsumed()) {
-                        totalBytesRead += nextInLineFetch.getSizeInBytes();
-                    }
                 }
             }
         } catch (FetchException e) {
@@ -149,7 +143,7 @@ public class LogFetchCollector {
             }
         }
 
-        return new ScanRecords(fetched, totalBytesRead);
+        return new ScanRecords(fetched);
     }
 
     private List<ScanRecord> fetchRecords(CompletedFetch nextInLineFetch, int maxRecords) {

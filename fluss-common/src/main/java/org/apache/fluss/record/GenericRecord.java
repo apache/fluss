@@ -27,12 +27,23 @@ public class GenericRecord implements LogRecord {
     private final long timestamp;
     private final ChangeType changeType;
     private final InternalRow row;
+    private final int sizeInBytes;
 
     public GenericRecord(long logOffset, long timestamp, ChangeType changeType, InternalRow row) {
+        this(logOffset, timestamp, changeType, row, -1);
+    }
+
+    public GenericRecord(
+            long logOffset,
+            long timestamp,
+            ChangeType changeType,
+            InternalRow row,
+            int sizeInBytes) {
         this.logOffset = logOffset;
         this.timestamp = timestamp;
         this.changeType = changeType;
         this.row = row;
+        this.sizeInBytes = sizeInBytes;
     }
 
     @Override
@@ -53,5 +64,10 @@ public class GenericRecord implements LogRecord {
     @Override
     public InternalRow getRow() {
         return row;
+    }
+
+    @Override
+    public int getSizeInBytes() {
+        return sizeInBytes;
     }
 }

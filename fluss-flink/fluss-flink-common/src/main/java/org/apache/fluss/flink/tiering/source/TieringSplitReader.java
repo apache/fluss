@@ -34,9 +34,6 @@ import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.row.BinaryRow;
-import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.utils.CloseableIterator;
 
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
@@ -359,8 +356,6 @@ public class TieringSplitReader<WriteResult>
         Map<TableBucket, String> finishedSplitIds = new HashMap<>();
         LOG.info("for log records to tier table {}.", currentTableId);
 
-        // Report bytes read from Fluss log records
-        tieringMetrics.recordBytesRead(scanRecords.getTotalBytes());
         for (TableBucket bucket : scanRecords.buckets()) {
             LOG.info("tiering table bucket {}.", bucket);
             List<ScanRecord> bucketScanRecords = scanRecords.records(bucket);
@@ -381,6 +376,9 @@ public class TieringSplitReader<WriteResult>
                 // if record is less than stopping offset
                 if (record.logOffset() < stoppingOffset) {
                     lakeWriter.write(record);
+                    if (record.getSizeInBytes() > 0) {
+                        tieringMetrics.recordBytesRead(record.getSizeInBytes());
+                    }
                 }
             }
             ScanRecord lastRecord = bucketScanRecords.get(bucketScanRecords.size() - 1);
@@ -515,13 +513,13 @@ public class TieringSplitReader<WriteResult>
         LakeWriter<WriteResult> lakeWriter =
                 getOrCreateLakeWriter(
                         bucket, checkNotNull(currentSnapshotSplit).getPartitionName());
-        long bytesRead = 0;
         while (recordIterator.hasNext()) {
             ScanRecord scanRecord = recordIterator.next().record();
             lakeWriter.write(scanRecord);
-            bytesRead += getRowSizeInBytes(scanRecord.getRow());
+            if (scanRecord.getSizeInBytes() > 0) {
+                tieringMetrics.recordBytesRead(scanRecord.getSizeInBytes());
+            }
         }
-        tieringMetrics.recordBytesRead(bytesRead);
         recordIterator.close();
         return emptyTableBucketWriteResultWithSplitIds();
     }
@@ -714,14 +712,5 @@ public class TieringSplitReader<WriteResult>
             this.logOffset = logOffset;
             this.timestamp = timestamp;
         }
-    }
-
-    private static int getRowSizeInBytes(InternalRow row) {
-        if (row instanceof BinaryRow) {
-            return ((BinaryRow) row).getSizeInBytes();
-        } else if (row instanceof ProjectedRow) {
-            return ((ProjectedRow) row).getSizeInBytes();
-        }
-        return 0;
     }
 }

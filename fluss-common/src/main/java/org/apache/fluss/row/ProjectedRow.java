@@ -198,6 +198,6 @@ public class ProjectedRow implements InternalRow {
         if (row instanceof BinaryRow) {
             return ((BinaryRow) row).getSizeInBytes();
         }
-        return 0;
+        return -1;
     }
 }

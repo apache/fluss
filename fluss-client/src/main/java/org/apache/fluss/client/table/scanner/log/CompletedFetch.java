@@ -102,7 +102,11 @@ abstract class CompletedFetch {
             newRow.setField(i, selectedFieldGetters[i].getFieldOrNull(internalRow));
         }
         return new ScanRecord(
-                record.logOffset(), record.timestamp(), record.getChangeType(), newRow);
+                record.logOffset(),
+                record.timestamp(),
+                record.getChangeType(),
+                newRow,
+                record.getSizeInBytes());
     }
 
     boolean isConsumed() {
