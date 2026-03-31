@@ -61,8 +61,18 @@ public abstract class RecordWriter<T> implements AutoCloseable {
 
     public abstract void write(LogRecord record) throws Exception;
 
+    /**
+     * Completes the write process and returns the commit message.
+     *
+     * @return the commit message, or null if no data was written (empty write scenario)
+     */
+    @Nullable
     CommitMessage complete() throws Exception {
         List<CommitMessage> commitMessages = tableWrite.prepareCommit();
+        if (commitMessages.isEmpty()) {
+            // No data was written, return null to indicate empty write
+            return null;
+        }
         checkState(
                 commitMessages.size() == 1,
                 "The size of CommitMessage must be 1, but got %s.",

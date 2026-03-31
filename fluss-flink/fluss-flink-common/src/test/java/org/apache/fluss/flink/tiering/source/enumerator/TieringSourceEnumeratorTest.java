@@ -22,6 +22,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
+import org.apache.fluss.flink.tiering.event.TieringTableDroppedEvent;
 import org.apache.fluss.flink.tiering.source.TieringTestBase;
 import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSnapshotSplit;
@@ -836,6 +837,52 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                             split ->
                                     split.getTableBucket().getTableId() == tableId
                                             && !split.shouldSkipCurrentRound());
+        }
+    }
+
+    @Test
+    void testHandleTableDropped() throws Throwable {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-dropped-table-test");
+        long tableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
+        int numSubtasks = 2;
+
+        appendRow(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR, 0, 10);
+
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                        new FlussMockSplitEnumeratorContext<>(numSubtasks);
+                TieringSourceEnumerator enumerator =
+                        createTieringSourceEnumerator(flussConf, context)) {
+            enumerator.start();
+
+            // Register all readers
+            for (int subtaskId = 0; subtaskId < numSubtasks; subtaskId++) {
+                context.registerSourceReader(subtaskId, subtaskId, "localhost-" + subtaskId);
+            }
+
+            for (int subTask = 0; subTask < numSubtasks; subTask++) {
+                enumerator.handleSplitRequest(subTask, "localhost-" + subTask);
+            }
+
+            // Wait for initial assignment - this registers the table in tieringTableEpochs
+            // Use numSubtasks (not DEFAULT_BUCKET_NUM) since only numSubtasks readers
+            // request splits, so at most numSubtasks assignments can be made
+            waitUntilTieringTableSplitAssignmentReady(context, numSubtasks, 200L);
+
+            // Drop the table while tiering is in progress
+            conn.getAdmin().dropTable(tablePath, true).get();
+
+            // Directly call handleTableDropped to simulate detection of table drop
+            // This is similar to how testTableReachMaxTieringDuration directly triggers
+            // handleTableTieringReachMaxDuration via timer
+            enumerator.handleTableDropped(tableId);
+
+            // Verify that TieringTableDroppedEvent was sent to all readers
+            // The containsExactly assertion naturally triggers equals/hashCode coverage
+            Map<Integer, List<SourceEvent>> eventsToReaders = context.getSentSourceEvent();
+            assertThat(eventsToReaders).hasSize(numSubtasks);
+            for (Map.Entry<Integer, List<SourceEvent>> entry : eventsToReaders.entrySet()) {
+                assertThat(entry.getValue()).contains(new TieringTableDroppedEvent(tableId));
+            }
         }
     }
 }

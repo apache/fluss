@@ -33,7 +33,10 @@ public class TableBucketWriteResultSerializer<WriteResult>
     private static final ThreadLocal<DataOutputSerializer> SERIALIZER_CACHE =
             ThreadLocal.withInitial(() -> new DataOutputSerializer(64));
 
-    private static final int CURRENT_VERSION = 1;
+    private static final int CURRENT_VERSION = 2;
+
+    // Version 1: original format without the cancelled flag
+    private static final int VERSION_1 = 1;
 
     private final org.apache.fluss.lake.serializer.SimpleVersionedSerializer<WriteResult>
             writeResultSerializer;
@@ -91,6 +94,9 @@ public class TableBucketWriteResultSerializer<WriteResult>
         // serialize number of write results
         out.writeInt(tableBucketWriteResult.numberOfWriteResults());
 
+        // serialize cancelled flag
+        out.writeBoolean(tableBucketWriteResult.isCancelled());
+
         final byte[] result = out.getCopyOfBuffer();
         out.clear();
         return result;
@@ -99,7 +105,7 @@ public class TableBucketWriteResultSerializer<WriteResult>
     @Override
     public TableBucketWriteResult<WriteResult> deserialize(int version, byte[] serialized)
             throws IOException {
-        if (version != CURRENT_VERSION) {
+        if (version != CURRENT_VERSION && version != VERSION_1) {
             throw new IOException("Unknown version " + version);
         }
         final DataInputDeserializer in = new DataInputDeserializer(serialized);
@@ -125,7 +131,9 @@ public class TableBucketWriteResultSerializer<WriteResult>
         if (writeResultLength >= 0) {
             byte[] writeResultBytes = new byte[writeResultLength];
             in.readFully(writeResultBytes);
-            writeResult = writeResultSerializer.deserialize(version, writeResultBytes);
+            writeResult =
+                    writeResultSerializer.deserialize(
+                            writeResultSerializer.getVersion(), writeResultBytes);
         } else {
             writeResult = null;
         }
@@ -136,6 +144,10 @@ public class TableBucketWriteResultSerializer<WriteResult>
         long maxTimestamp = in.readLong();
         // deserialize number of write results
         int numberOfWriteResults = in.readInt();
+
+        // deserialize cancelled flag (added in version 2; default to false for version 1)
+        boolean cancelled = (version >= CURRENT_VERSION) && in.readBoolean();
+
         return new TableBucketWriteResult<>(
                 tablePath,
                 tableBucket,
@@ -143,6 +155,7 @@ public class TableBucketWriteResultSerializer<WriteResult>
                 writeResult,
                 logEndOffset,
                 maxTimestamp,
-                numberOfWriteResults);
+                numberOfWriteResults,
+                cancelled);
     }
 }

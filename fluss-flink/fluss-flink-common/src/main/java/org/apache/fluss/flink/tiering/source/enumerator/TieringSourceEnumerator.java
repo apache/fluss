@@ -27,6 +27,7 @@ import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
+import org.apache.fluss.flink.tiering.event.TieringTableDroppedEvent;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
@@ -39,9 +40,12 @@ import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
+import org.apache.fluss.rpc.messages.PbHeartbeatRespForTable;
 import org.apache.fluss.rpc.messages.PbLakeTieringStats;
 import org.apache.fluss.rpc.messages.PbLakeTieringTableInfo;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
+import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.utils.MapUtils;
 
 import org.apache.flink.api.connector.source.ReaderInfo;
@@ -407,8 +411,9 @@ public class TieringSourceEnumerator
                 currentFailedTableEpochs,
                 tieringTableEpochs);
 
+        LakeTieringHeartbeatResponse heartbeatResponse;
         if (pendingSplits.isEmpty() && !readersAwaitingSplit.isEmpty()) {
-            LakeTieringHeartbeatResponse heartbeatResponse =
+            heartbeatResponse =
                     waitHeartbeatResponse(
                             coordinatorGateway.lakeTieringHeartbeat(
                                     heartBeatWithRequestNewTieringTable(tieringHeartbeatRequest)));
@@ -427,14 +432,74 @@ public class TieringSourceEnumerator
             }
         } else {
             // report heartbeat to fluss coordinator
-            waitHeartbeatResponse(coordinatorGateway.lakeTieringHeartbeat(tieringHeartbeatRequest));
+            heartbeatResponse =
+                    waitHeartbeatResponse(
+                            coordinatorGateway.lakeTieringHeartbeat(tieringHeartbeatRequest));
         }
+
+        // Process tiering_table_resp to detect table deletion errors
+        handleTieringTableResponseErrors(heartbeatResponse);
 
         // if come to here, we can remove currentFinishedTables/failedTableEpochs to avoid send
         // in next round
         currentFinishedTables.forEach(finishedTables::remove);
         currentFailedTableEpochs.forEach(failedTableEpochs::remove);
         return lakeTieringInfo;
+    }
+
+    /**
+     * Handle errors in tiering_table_resp from heartbeat response. If a table has been dropped,
+     * mark it as failed and notify readers to skip processing.
+     */
+    private void handleTieringTableResponseErrors(LakeTieringHeartbeatResponse heartbeatResponse) {
+        for (PbHeartbeatRespForTable resp : heartbeatResponse.getTieringTableRespsList()) {
+            if (resp.hasError()) {
+                ApiError error = ApiError.fromErrorMessage(resp.getError());
+                Errors errors = error.error();
+                // Check if the error indicates table doesn't exist or tiering epoch is fenced
+                // (which happens when table is dropped and recreated)
+                if (errors == Errors.TABLE_NOT_EXIST
+                        || errors == Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION
+                        || errors == Errors.FENCED_TIERING_EPOCH_EXCEPTION) {
+                    long tableId = resp.getTableId();
+                    LOG.warn(
+                            "Table {} is dropped or epoch mismatch (error: {}), canceling tiering.",
+                            tableId,
+                            errors);
+                    handleTableDropped(tableId);
+                }
+            }
+        }
+    }
+
+    /**
+     * Handle a dropped table by marking all related splits to skip, removing from tiering epochs,
+     * and notifying readers.
+     */
+    @VisibleForTesting
+    protected void handleTableDropped(long tableId) {
+        // Remove from tiering table epochs
+        Long tieringEpoch = tieringTableEpochs.remove(tableId);
+
+        // Mark all pending splits for this table to skip current round
+        for (TieringSplit tieringSplit : pendingSplits) {
+            if (tieringSplit.getTableBucket().getTableId() == tableId) {
+                tieringSplit.skipCurrentRound();
+            }
+        }
+
+        // Add to failed table epochs to notify coordinator in next heartbeat
+        if (tieringEpoch != null) {
+            failedTableEpochs.put(tableId, tieringEpoch);
+        }
+
+        // Broadcast the event to all readers to stop processing this table
+        Set<Integer> readers = new HashSet<>(context.registeredReaders().keySet());
+        for (int reader : readers) {
+            TieringTableDroppedEvent event = new TieringTableDroppedEvent(tableId);
+            LOG.info("Send {} to reader {} for dropped table", event, reader);
+            context.sendEventToSourceReader(reader, event);
+        }
     }
 
     private void generateTieringSplits(Tuple3<Long, Long, TablePath> tieringTable)

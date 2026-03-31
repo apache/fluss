@@ -20,6 +20,8 @@ package org.apache.fluss.lake.writer;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.record.LogRecord;
 
+import javax.annotation.Nullable;
+
 import java.io.Closeable;
 import java.io.IOException;
 
@@ -43,8 +45,9 @@ public interface LakeWriter<WriteResult> extends Closeable {
     /**
      * Completes the writing process and returns the write result.
      *
-     * @return the write result
+     * @return the write result, or null if no data was written (empty write scenario)
      * @throws IOException if an I/O error occurs
      */
+    @Nullable
     WriteResult complete() throws IOException;
 }
