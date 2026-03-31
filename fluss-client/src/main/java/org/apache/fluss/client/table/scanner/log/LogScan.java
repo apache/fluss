@@ -21,6 +21,9 @@ import org.apache.fluss.annotation.PublicEvolving;
 
 import javax.annotation.Nullable;
 
+import java.util.List;
+import java.util.Map;
+
 /**
  * Used to describe the operation to scan log data by {@link LogScanner} to a table.
  *
@@ -32,12 +35,21 @@ public class LogScan {
     /** The projected fields to do projection. No projection if is null. */
     @Nullable private final int[] projectedFields;
 
+    /**
+     * Variant sub-field projection hints. Maps Variant column index to the list of sub-field names
+     * that should be projected. Null means no sub-field projection.
+     */
+    @Nullable private final Map<Integer, List<String>> variantFieldProjection;
+
     public LogScan() {
-        this(null);
+        this(null, null);
     }
 
-    private LogScan(@Nullable int[] projectedFields) {
+    private LogScan(
+            @Nullable int[] projectedFields,
+            @Nullable Map<Integer, List<String>> variantFieldProjection) {
         this.projectedFields = projectedFields;
+        this.variantFieldProjection = variantFieldProjection;
     }
 
     /**
@@ -46,11 +58,26 @@ public class LogScan {
      * @param projectedFields the projection fields
      */
     public LogScan withProjectedFields(int[] projectedFields) {
-        return new LogScan(projectedFields);
+        return new LogScan(projectedFields, variantFieldProjection);
+    }
+
+    /**
+     * Returns a new instance of LogScan description with variant sub-field projection hints.
+     *
+     * @param variantFieldProjection mapping from Variant column index to desired field names
+     */
+    public LogScan withVariantFieldProjection(
+            @Nullable Map<Integer, List<String>> variantFieldProjection) {
+        return new LogScan(projectedFields, variantFieldProjection);
     }
 
     @Nullable
     public int[] getProjectedFields() {
         return projectedFields;
+    }
+
+    @Nullable
+    public Map<Integer, List<String>> getVariantFieldProjection() {
+        return variantFieldProjection;
     }
 }

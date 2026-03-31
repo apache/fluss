@@ -26,6 +26,7 @@ import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.variant.Variant;
 
 import javax.annotation.Nullable;
 
@@ -184,6 +185,8 @@ public interface BinaryWriter {
                                 rowType.getFieldTypes().toArray(new DataType[0]), rowFormat);
                 return (writer, pos, value) ->
                         writer.writeRow(pos, (InternalRow) value, rowSerializer);
+            case VARIANT:
+                return (writer, pos, value) -> writer.writeBytes(pos, ((Variant) value).toBytes());
             default:
                 String msg =
                         String.format(

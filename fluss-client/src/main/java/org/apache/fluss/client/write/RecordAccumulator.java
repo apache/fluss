@@ -33,10 +33,13 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.record.LogRecordBatchStatisticsCollector;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.arrow.ArrowWriter;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
+import org.apache.fluss.types.variant.ShreddingSchema;
+import org.apache.fluss.types.variant.ShreddingSchemaInferrer;
 import org.apache.fluss.utils.CopyOnWriteMap;
 import org.apache.fluss.utils.MathUtils;
 import org.apache.fluss.utils.clock.Clock;
@@ -113,6 +116,13 @@ public final class RecordAccumulator {
     private final Clock clock;
     private final DynamicWriteBatchSizeEstimator batchSizeEstimator;
 
+    /**
+     * Per-table {@link VariantShreddingManager}s. Created lazily on first append to an ARROW_LOG
+     * table with Variant shredding enabled and at least one Variant column.
+     */
+    private final ConcurrentMap<PhysicalTablePath, VariantShreddingManager> shreddingManagers =
+            new CopyOnWriteMap<>();
+
     // TODO add retryBackoffMs to retry the produce request upon receiving an error.
     // TODO add deliveryTimeoutMs to report success or failure on record delivery.
     // TODO add nextBatchExpiryTimeMs
@@ -159,6 +169,71 @@ public final class RecordAccumulator {
     }
 
     /**
+     * Collects Variant statistics for the row being appended, and — once enough samples have been
+     * observed — stores the inferred shredding schema locally in the per-table manager.
+     *
+     * <p>This method is a no-op when:
+     *
+     * <ul>
+     *   <li>the write format is not {@link WriteFormat#ARROW_LOG}
+     *   <li>the table has no Variant columns
+     *   <li>Variant shredding is disabled in the table's configuration
+     * </ul>
+     */
+    private void maybeCollectVariantStats(
+            PhysicalTablePath physicalTablePath,
+            TableInfo tableInfo,
+            WriteFormat writeFormat,
+            InternalRow row) {
+        if (writeFormat != WriteFormat.ARROW_LOG) {
+            return;
+        }
+        if (!tableInfo.isVariantShreddingEnabled()) {
+            return;
+        }
+        int[] variantIndices = tableInfo.getVariantColumnIndices();
+        if (variantIndices.length == 0) {
+            return;
+        }
+
+        VariantShreddingManager manager =
+                shreddingManagers.computeIfAbsent(
+                        physicalTablePath,
+                        path -> {
+                            String[] colNames = new String[variantIndices.length];
+                            for (int i = 0; i < variantIndices.length; i++) {
+                                colNames[i] =
+                                        tableInfo
+                                                .getRowType()
+                                                .getFields()
+                                                .get(variantIndices[i])
+                                                .getName();
+                            }
+                            ShreddingSchemaInferrer inferrer =
+                                    new ShreddingSchemaInferrer()
+                                            .setPresenceThreshold(
+                                                    tableInfo
+                                                            .getTableConfig()
+                                                            .getVariantShreddingPresenceThreshold())
+                                            .setTypeConsistencyThreshold(
+                                                    tableInfo
+                                                            .getTableConfig()
+                                                            .getVariantShreddingTypeConsistencyThreshold())
+                                            .setMaxShreddedFields(
+                                                    tableInfo
+                                                            .getTableConfig()
+                                                            .getVariantShreddingMaxFields())
+                                            .setMinSampleSize(
+                                                    tableInfo
+                                                            .getTableConfig()
+                                                            .getVariantShreddingMinSampleSize());
+                            return new VariantShreddingManager(
+                                    path.getTablePath(), variantIndices, colNames, inferrer);
+                        });
+        manager.collectRow(row);
+    }
+
+    /**
      * Add a record to the accumulator, return to append result.
      *
      * <p>The append result will contain the future metadata, and flag for whether the appended
@@ -195,6 +270,12 @@ public final class RecordAccumulator {
             synchronized (dq) {
                 RecordAppendResult appendResult = tryAppend(writeRecord, callback, dq);
                 if (appendResult != null) {
+                    // Row was appended to an existing batch; collect Variant statistics.
+                    maybeCollectVariantStats(
+                            physicalTablePath,
+                            tableInfo,
+                            writeRecord.getWriteFormat(),
+                            writeRecord.getRow());
                     return appendResult;
                 }
             }
@@ -212,6 +293,12 @@ public final class RecordAccumulator {
                                 writeRecord, callback, bucketId, tableInfo, dq, memorySegments);
                 if (appendResult.newBatchCreated) {
                     memorySegments = Collections.emptyList();
+                    // Row was appended to the new batch; collect Variant statistics.
+                    maybeCollectVariantStats(
+                            physicalTablePath,
+                            tableInfo,
+                            writeRecord.getWriteFormat(),
+                            writeRecord.getRow());
                 }
                 return appendResult;
             }
@@ -622,13 +709,23 @@ public final class RecordAccumulator {
                         clock.milliseconds());
 
             case ARROW_LOG:
+                // Get shredding schemas from the local manager (Writer-independent decision)
+                Map<String, ShreddingSchema> shreddingSchemas = null;
+                VariantShreddingManager mgr = shreddingManagers.get(physicalTablePath);
+                if (mgr != null) {
+                    Map<String, ShreddingSchema> inferred = mgr.getShreddingSchemas();
+                    if (!inferred.isEmpty()) {
+                        shreddingSchemas = inferred;
+                    }
+                }
                 ArrowWriter arrowWriter =
                         arrowWriterPool.getOrCreateWriter(
                                 tableInfo.getTableId(),
                                 schemaId,
                                 outputView.getPreAllocatedSize(),
                                 tableInfo.getRowType(),
-                                tableInfo.getTableConfig().getArrowCompressionInfo());
+                                tableInfo.getTableConfig().getArrowCompressionInfo(),
+                                shreddingSchemas);
                 LogRecordBatchStatisticsCollector statisticsCollector = null;
                 if (tableInfo.isStatisticsEnabled()) {
                     statisticsCollector =

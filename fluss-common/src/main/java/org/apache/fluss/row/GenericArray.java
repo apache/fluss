@@ -20,6 +20,7 @@ package org.apache.fluss.row;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.types.ArrayType;
+import org.apache.fluss.types.variant.Variant;
 import org.apache.fluss.utils.ArrayUtils;
 
 import java.io.Serializable;
@@ -226,6 +227,11 @@ public final class GenericArray implements InternalArray, Serializable {
     @Override
     public InternalRow getRow(int pos, int numFields) {
         return (InternalRow) getObject(pos);
+    }
+
+    @Override
+    public Variant getVariant(int pos) {
+        return (Variant) getObject(pos);
     }
 
     private Object getObject(int pos) {

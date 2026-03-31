@@ -38,15 +38,21 @@ import org.apache.fluss.types.StringType;
 import org.apache.fluss.types.TimeType;
 import org.apache.fluss.types.TimestampType;
 import org.apache.fluss.types.TinyIntType;
+import org.apache.fluss.types.VariantType;
 
 import org.apache.flink.table.api.DataTypes;
+import org.apache.flink.table.types.AtomicDataType;
 import org.apache.flink.table.types.DataType;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /** Convert Fluss's {@link org.apache.fluss.types.DataType} to Flink's {@link DataType}. */
 class FlussTypeToFlinkType implements DataTypeVisitor<DataType> {
+
+    private static final Logger LOG = LoggerFactory.getLogger(FlussTypeToFlinkType.class);
 
     static final FlussTypeToFlinkType INSTANCE = new FlussTypeToFlinkType();
 
@@ -166,6 +172,26 @@ class FlussTypeToFlinkType implements DataTypeVisitor<DataType> {
             dataFields.add(dataTypeField);
         }
         return withNullability(DataTypes.ROW(dataFields), rowType.isNullable());
+    }
+
+    @Override
+    public DataType visit(VariantType variantType) {
+        try {
+            // Use reflection to create Flink's VariantType which is only available in Flink 2.1+
+            Class<?> flinkVariantTypeClass =
+                    Class.forName("org.apache.flink.table.types.logical.VariantType");
+            Object flinkVariantLogicalType =
+                    flinkVariantTypeClass
+                            .getConstructor(boolean.class)
+                            .newInstance(variantType.isNullable());
+            return new AtomicDataType(
+                    (org.apache.flink.table.types.logical.LogicalType) flinkVariantLogicalType);
+        } catch (Exception e) {
+            throw new UnsupportedOperationException(
+                    "Variant type requires Flink 2.1 or later. "
+                            + "Please upgrade your Flink version to support Variant type.",
+                    e);
+        }
     }
 
     private DataType withNullability(DataType flinkType, boolean nullable) {

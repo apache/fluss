@@ -50,6 +50,7 @@ import org.apache.fluss.rpc.messages.PbFetchLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForTable;
+import org.apache.fluss.rpc.messages.PbVariantFieldProjection;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.util.PredicateMessageUtils;
@@ -97,6 +98,12 @@ public class LogFetcher implements Closeable {
     @Nullable private final Projection projection;
     @Nullable private final org.apache.fluss.rpc.messages.PbPredicate cachedPbPredicate;
     private final int filterSchemaId;
+    /**
+     * Variant sub-field projection hints. Maps Variant column index to desired sub-field names.
+     * Null means no sub-field projection (initial version).
+     */
+    @Nullable private final Map<Integer, List<String>> variantFieldProjection;
+
     private final int maxFetchBytes;
     private final int maxBucketFetchBytes;
     private final int minFetchBytes;
@@ -120,6 +127,7 @@ public class LogFetcher implements Closeable {
             TableInfo tableInfo,
             @Nullable Projection projection,
             @Nullable Predicate recordBatchFilter,
+            @Nullable Map<Integer, List<String>> variantFieldProjection,
             LogScannerStatus logScannerStatus,
             Configuration conf,
             MetadataUpdater metadataUpdater,
@@ -139,6 +147,7 @@ public class LogFetcher implements Closeable {
                                 recordBatchFilter, tableInfo.getRowType())
                         : null;
         this.filterSchemaId = tableInfo.getSchemaId();
+        this.variantFieldProjection = variantFieldProjection;
         this.logScannerStatus = logScannerStatus;
         this.maxFetchBytes =
                 (int) conf.get(ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MAX_BYTES).getBytes();
@@ -555,15 +564,26 @@ public class LogFetcher implements Closeable {
                                 new PbFetchLogReqForTable().setTableId(finalTableId);
                         if (readContext.isProjectionPushDowned()) {
                             assert projection != null;
+                            int[] projectedFields = projection.getProjectionInOrder();
                             reqForTable
                                     .setProjectionPushdownEnabled(true)
-                                    .setProjectedFields(projection.getProjectionInOrder());
+                                    .setProjectedFields(projectedFields);
                         } else {
                             reqForTable.setProjectionPushdownEnabled(false);
                         }
                         if (cachedPbPredicate != null) {
                             reqForTable.setFilterPredicate(cachedPbPredicate);
                             reqForTable.setFilterSchemaId(filterSchemaId);
+                        }
+                        // Serialize variant sub-field projection hints if present
+                        if (variantFieldProjection != null && !variantFieldProjection.isEmpty()) {
+                            variantFieldProjection.forEach(
+                                    (colIdx, fieldNames) -> {
+                                        PbVariantFieldProjection vfp =
+                                                reqForTable.addVariantFieldProjection();
+                                        vfp.setColumnIndex(colIdx);
+                                        vfp.addAllFieldNames(fieldNames);
+                                    });
                         }
                         reqForTable.addAllBucketsReqs(reqForBuckets);
                         fetchLogRequest.addAllTablesReqs(Collections.singletonList(reqForTable));

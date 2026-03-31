@@ -80,6 +80,7 @@ public class LogFetcherTest {
                         DATA1_TABLE_INFO,
                         null,
                         null,
+                        null,
                         logScannerStatus,
                         new Configuration(),
                         metadataUpdater,

@@ -1406,6 +1406,7 @@ public class ReplicaManager implements ServerReconfigurable {
                         replica.getSchemaGetter(),
                         replica.getArrowCompressionInfo(),
                         fetchReqInfo.getProjectFields(),
+                        fetchReqInfo.getVariantFieldProjection(),
                         projectionsCache);
                 LogReadInfo readInfo = replica.fetchRecords(fetchParams);
 

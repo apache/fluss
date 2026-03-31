@@ -49,7 +49,7 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
 
     // the log format of the table
     private final LogFormat logFormat;
-    // the schema of the date read form server or remote. (which is projected in the server side)
+    // the schema of the data read from server or remote
     private final RowType dataRowType;
     // the static schemaId of the table, should support dynamic schema evolution in the future
     private final int targetSchemaId;
@@ -74,7 +74,6 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         boolean projectionPushDowned = projection != null && logFormat == LogFormat.ARROW;
         int schemaId = tableInfo.getSchemaId();
         if (projection == null) {
-            // set a default dummy projection to simplify code
             projection = Projection.of(IntStream.range(0, rowType.getFieldCount()).toArray());
         }
 
@@ -252,10 +251,13 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
 
     @Override
     public RowType getRowType(int schemaId) {
-        if (isSameRowType(schemaId)) {
+        if (targetSchemaId == schemaId) {
             return dataRowType;
         }
-
+        if (projectionPushDowned) {
+            // Non-shredding pushdown: all schemas have the same projected shape
+            return dataRowType;
+        }
         Schema schema = schemaGetter.getSchema(schemaId);
         return schema.getRowType();
     }

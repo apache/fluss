@@ -41,6 +41,8 @@ import org.apache.fluss.row.arrow.vectors.ArrowTimestampNtzColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowTinyIntColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowVarBinaryColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowVarCharColumnVector;
+import org.apache.fluss.row.arrow.vectors.ArrowVariantColumnVector;
+import org.apache.fluss.row.arrow.vectors.ShreddedVariantColumnVector;
 import org.apache.fluss.row.arrow.writers.ArrowArrayWriter;
 import org.apache.fluss.row.arrow.writers.ArrowBigIntWriter;
 import org.apache.fluss.row.arrow.writers.ArrowBinaryWriter;
@@ -53,6 +55,7 @@ import org.apache.fluss.row.arrow.writers.ArrowFloatWriter;
 import org.apache.fluss.row.arrow.writers.ArrowIntWriter;
 import org.apache.fluss.row.arrow.writers.ArrowMapWriter;
 import org.apache.fluss.row.arrow.writers.ArrowRowWriter;
+import org.apache.fluss.row.arrow.writers.ArrowShreddedVariantWriter;
 import org.apache.fluss.row.arrow.writers.ArrowSmallIntWriter;
 import org.apache.fluss.row.arrow.writers.ArrowTimeWriter;
 import org.apache.fluss.row.arrow.writers.ArrowTimestampLtzWriter;
@@ -60,9 +63,11 @@ import org.apache.fluss.row.arrow.writers.ArrowTimestampNtzWriter;
 import org.apache.fluss.row.arrow.writers.ArrowTinyIntWriter;
 import org.apache.fluss.row.arrow.writers.ArrowVarBinaryWriter;
 import org.apache.fluss.row.arrow.writers.ArrowVarCharWriter;
+import org.apache.fluss.row.arrow.writers.ArrowVariantWriter;
 import org.apache.fluss.row.columnar.ColumnVector;
 import org.apache.fluss.row.columnar.VectorizedColumnBatch;
 import org.apache.fluss.shaded.arrow.com.google.flatbuffers.FlatBufferBuilder;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.Message;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.MessageHeader;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.RecordBatch;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf;
@@ -132,14 +137,23 @@ import org.apache.fluss.types.StringType;
 import org.apache.fluss.types.TimeType;
 import org.apache.fluss.types.TimestampType;
 import org.apache.fluss.types.TinyIntType;
+import org.apache.fluss.types.VariantType;
+import org.apache.fluss.types.variant.ShreddedField;
+import org.apache.fluss.types.variant.ShreddingSchema;
+
+import javax.annotation.Nullable;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.channels.Channels;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.MessageSerializer.deserializeRecordBatch;
@@ -160,6 +174,15 @@ public class ArrowUtils {
 
     /**
      * Creates an {@link ArrowReader} for the specified memory segment and {@link VectorSchemaRoot}.
+     *
+     * <p>When the serialized data contains an embedded Arrow Schema message (present when variant
+     * shredding is active), the Schema is parsed to create a VectorSchemaRoot with the actual
+     * structure (including typed_value children). This root is owned by the returned ArrowReader
+     * and released via {@link ArrowReader#close()}.
+     *
+     * <p>When the rowType contains Variant columns backed by StructVector with typed_value
+     * children, they are automatically detected and wrapped into a {@link
+     * ShreddedVariantColumnVector}.
      */
     public static ArrowReader createArrowReader(
             MemorySegment segment,
@@ -168,24 +191,224 @@ public class ArrowUtils {
             VectorSchemaRoot schemaRoot,
             BufferAllocator allocator,
             RowType rowType) {
+        return createArrowReader(
+                segment, arrowOffset, arrowLength, schemaRoot, allocator, rowType, null);
+    }
+
+    /**
+     * Creates an {@link ArrowReader} with optional column projection for shredded Variant fields.
+     *
+     * <p>When {@code projectedVariantFields} is non-null, only the specified shredded fields are
+     * loaded from the Arrow batch. Non-projected fields' buffers are skipped during loading,
+     * significantly reducing the batch deserialization overhead (which is proportional to the
+     * number of loaded vectors, ~1ms per vector).
+     *
+     * @param projectedVariantFields if non-null, only load these shredded field names from the
+     *     typed_value struct. Accesses to non-projected fields will fall back to the residual
+     *     binary.
+     */
+    public static ArrowReader createArrowReader(
+            MemorySegment segment,
+            int arrowOffset,
+            int arrowLength,
+            VectorSchemaRoot schemaRoot,
+            BufferAllocator allocator,
+            RowType rowType,
+            @Nullable Set<String> projectedVariantFields) {
         ByteBuffer arrowBatchBuffer = segment.wrap(arrowOffset, arrowLength);
+
+        VectorSchemaRoot actualRoot = schemaRoot;
+        VectorSchemaRoot ownedRoot = null;
+
+        // Detect embedded Arrow Schema message (present when variant shredding is used).
+        // The writer serializes Schema + RecordBatch when shredded columns are present.
+        boolean hasVariantColumns =
+                rowType.getFields().stream().anyMatch(f -> f.getType() instanceof VariantType);
+        if (hasVariantColumns && arrowBatchBuffer.remaining() >= 8) {
+            arrowBatchBuffer.mark();
+            arrowBatchBuffer.order(ByteOrder.LITTLE_ENDIAN);
+            int continuation = arrowBatchBuffer.getInt();
+            int metadataSize = arrowBatchBuffer.getInt();
+
+            if (continuation == -1 /* IPC continuation 0xFFFFFFFF */
+                    && metadataSize > 0
+                    && arrowBatchBuffer.remaining() >= metadataSize) {
+                ByteBuffer metadataBuf = arrowBatchBuffer.slice();
+                metadataBuf.limit(metadataSize);
+                Message message = Message.getRootAsMessage(metadataBuf);
+
+                if (message.headerType() == MessageHeader.Schema) {
+                    // Schema message found - create VectorSchemaRoot from actual schema
+                    Schema actualSchema = MessageSerializer.deserializeSchema(message);
+                    ownedRoot = VectorSchemaRoot.create(actualSchema, allocator);
+                    actualRoot = ownedRoot;
+
+                    // Advance past Schema message (metadata padded to 8-byte boundary)
+                    int paddedMetadataSize = (metadataSize + 7) & ~7;
+                    arrowBatchBuffer.position(arrowBatchBuffer.position() + paddedMetadataSize);
+                } else {
+                    arrowBatchBuffer.reset();
+                }
+            } else {
+                arrowBatchBuffer.reset();
+            }
+        }
+
         try (ReadChannel channel =
                         new ReadChannel(new ByteBufferReadableChannel(arrowBatchBuffer));
                 ArrowRecordBatch batch = deserializeRecordBatch(channel, allocator)) {
-            FlussVectorLoader vectorLoader =
-                    new FlussVectorLoader(schemaRoot, ArrowCompressionFactory.INSTANCE);
-            vectorLoader.load(batch);
-            List<ColumnVector> columnVectors = new ArrayList<>();
-            List<FieldVector> fieldVectors = schemaRoot.getFieldVectors();
-            for (int i = 0; i < fieldVectors.size(); i++) {
-                columnVectors.add(
-                        createArrowColumnVector(fieldVectors.get(i), rowType.getTypeAt(i)));
+
+            // Compute skip set for column projection
+            Set<String> skipTypedValueChildren = null;
+            if (projectedVariantFields != null && ownedRoot != null) {
+                skipTypedValueChildren = computeSkipSet(actualRoot, projectedVariantFields);
             }
+
+            FlussVectorLoader vectorLoader =
+                    new FlussVectorLoader(actualRoot, ArrowCompressionFactory.INSTANCE);
+            vectorLoader.loadWithProjection(batch, skipTypedValueChildren);
+
+            List<FieldVector> fieldVectors = actualRoot.getFieldVectors();
+            int fieldCount = rowType.getFieldCount();
+
+            // Build column vectors - Variant columns with typed_value are auto-detected
+            List<ColumnVector> columnVectors = new ArrayList<>();
+            for (int i = 0; i < fieldCount; i++) {
+                FieldVector fieldVector = fieldVectors.get(i);
+                DataType dataType = rowType.getTypeAt(i);
+
+                if (dataType instanceof VariantType && fieldVector instanceof StructVector) {
+                    StructVector variantStruct = (StructVector) fieldVector;
+                    // Check if this Variant has typed_value (shredding)
+                    FieldVector typedValueChild = variantStruct.getChild("typed_value");
+                    if (typedValueChild instanceof StructVector
+                            && !((StructVector) typedValueChild)
+                                    .getChildrenFromFields()
+                                    .isEmpty()) {
+                        // Build ShreddingSchema from the Arrow schema structure
+                        ShreddingSchema schema =
+                                buildShreddingSchemaFromArrow(
+                                        rowType.getFields().get(i).getName(),
+                                        (StructVector) typedValueChild,
+                                        projectedVariantFields);
+                        columnVectors.add(createShreddedVariantColumnVector(variantStruct, schema));
+                    } else {
+                        // Basic Variant (no shredding)
+                        columnVectors.add(new ArrowVariantColumnVector(variantStruct));
+                    }
+                } else {
+                    columnVectors.add(createArrowColumnVector(fieldVector, dataType));
+                }
+            }
+
             return new ArrowReader(
-                    columnVectors.toArray(new ColumnVector[0]), schemaRoot.getRowCount());
-        } catch (IOException e) {
+                    columnVectors.toArray(new ColumnVector[0]),
+                    actualRoot.getRowCount(),
+                    ownedRoot);
+        } catch (Exception e) {
+            if (ownedRoot != null) {
+                ownedRoot.close();
+            }
+            if (e instanceof RuntimeException) {
+                throw (RuntimeException) e;
+            }
             throw new RuntimeException("Failed to deserialize ArrowRecordBatch.", e);
         }
+    }
+
+    /**
+     * Builds a ShreddingSchema by inspecting the Arrow typed_value StructVector structure. Each
+     * child of typed_value is a field-level StructVector{value: Binary, typed_value: &lt;Type&gt;}.
+     */
+    private static ShreddingSchema buildShreddingSchemaFromArrow(
+            String variantName,
+            StructVector typedValueVector,
+            @Nullable Set<String> projectedFields) {
+        List<ShreddedField> fields = new ArrayList<>();
+        List<FieldVector> children = typedValueVector.getChildrenFromFields();
+        for (FieldVector child : children) {
+            String fieldPath = child.getName();
+            // Skip non-projected fields when projection is active
+            if (projectedFields != null && !projectedFields.contains(fieldPath)) {
+                continue;
+            }
+            // The typed_value sub-vector's type determines the shredded type
+            if (child instanceof StructVector) {
+                StructVector fieldStruct = (StructVector) child;
+                FieldVector typedVec = fieldStruct.getChild("typed_value");
+                if (typedVec != null) {
+                    DataType shreddedType = arrowTypeToDataType(typedVec.getField().getType());
+                    fields.add(new ShreddedField(fieldPath, shreddedType));
+                }
+            }
+        }
+        return new ShreddingSchema(variantName, fields);
+    }
+
+    /**
+     * Computes the set of typed_value children to skip loading based on the projected fields.
+     * Returns null if no skipping is needed.
+     */
+    private static Set<String> computeSkipSet(VectorSchemaRoot root, Set<String> projectedFields) {
+        for (FieldVector fv : root.getFieldVectors()) {
+            if (fv instanceof StructVector) {
+                StructVector sv = (StructVector) fv;
+                FieldVector typedValueChild = sv.getChild("typed_value");
+                if (typedValueChild instanceof StructVector) {
+                    StructVector tvStruct = (StructVector) typedValueChild;
+                    List<FieldVector> tvChildren = tvStruct.getChildrenFromFields();
+                    Set<String> skipSet = new HashSet<>();
+                    for (FieldVector child : tvChildren) {
+                        if (!projectedFields.contains(child.getName())) {
+                            skipSet.add(child.getName());
+                        }
+                    }
+                    if (!skipSet.isEmpty()) {
+                        return skipSet;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Converts an Arrow type back to a Fluss DataType. Used when reconstructing ShreddingSchema
+     * from Arrow schema during reading.
+     */
+    private static DataType arrowTypeToDataType(ArrowType arrowType) {
+        if (arrowType instanceof ArrowType.Int) {
+            ArrowType.Int intType = (ArrowType.Int) arrowType;
+            switch (intType.getBitWidth()) {
+                case 8:
+                    return org.apache.fluss.types.DataTypes.TINYINT();
+                case 16:
+                    return org.apache.fluss.types.DataTypes.SMALLINT();
+                case 32:
+                    return org.apache.fluss.types.DataTypes.INT();
+                case 64:
+                    return org.apache.fluss.types.DataTypes.BIGINT();
+            }
+        } else if (arrowType instanceof ArrowType.Bool) {
+            return org.apache.fluss.types.DataTypes.BOOLEAN();
+        } else if (arrowType instanceof ArrowType.FloatingPoint) {
+            ArrowType.FloatingPoint fpType = (ArrowType.FloatingPoint) arrowType;
+            if (fpType.getPrecision() == FloatingPointPrecision.SINGLE) {
+                return org.apache.fluss.types.DataTypes.FLOAT();
+            } else {
+                return org.apache.fluss.types.DataTypes.DOUBLE();
+            }
+        } else if (arrowType instanceof ArrowType.Utf8) {
+            return org.apache.fluss.types.DataTypes.STRING();
+        } else if (arrowType instanceof ArrowType.Binary) {
+            return org.apache.fluss.types.DataTypes.BYTES();
+        } else if (arrowType instanceof ArrowType.Date) {
+            return org.apache.fluss.types.DataTypes.DATE();
+        } else if (arrowType instanceof ArrowType.Timestamp) {
+            return org.apache.fluss.types.DataTypes.TIMESTAMP(6);
+        }
+        throw new UnsupportedOperationException(
+                "Cannot convert Arrow type to DataType: " + arrowType);
     }
 
     /**
@@ -314,6 +537,8 @@ public class ArrowUtils {
             return new ArrowVarCharWriter((VarCharVector) vector);
         } else if (vector instanceof FixedSizeBinaryVector) {
             return new ArrowBinaryWriter((FixedSizeBinaryVector) vector);
+        } else if (vector instanceof StructVector && dataType instanceof VariantType) {
+            return new ArrowVariantWriter((StructVector) vector);
         } else if (vector instanceof VarBinaryVector) {
             return new ArrowVarBinaryWriter((VarBinaryVector) vector);
         } else if (vector instanceof DecimalVector) {
@@ -388,6 +613,8 @@ public class ArrowUtils {
             return new ArrowVarCharColumnVector((VarCharVector) vector);
         } else if (vector instanceof FixedSizeBinaryVector) {
             return new ArrowBinaryColumnVector((FixedSizeBinaryVector) vector);
+        } else if (vector instanceof StructVector && dataType instanceof VariantType) {
+            return new ArrowVariantColumnVector((StructVector) vector);
         } else if (vector instanceof VarBinaryVector) {
             return new ArrowVarBinaryColumnVector((VarBinaryVector) vector);
         } else if (vector instanceof DecimalVector) {
@@ -433,6 +660,106 @@ public class ArrowUtils {
         }
     }
 
+    /**
+     * Returns the Arrow schema for a RowType with shredding support. For each Variant column with a
+     * ShreddingSchema, the Variant Field includes an additional typed_value child StructVector.
+     *
+     * <p>Layout: Struct{metadata: Binary, value: Binary, typed_value: Struct{ fieldName:
+     * Struct{value: Binary, typed_value: &lt;Type&gt;}, ... }}
+     *
+     * @param rowType the row type
+     * @param shreddingSchemas map of variant column name to its shredding schema
+     * @return the Arrow schema including shredded typed_value fields
+     */
+    public static Schema toArrowSchemaWithShredding(
+            RowType rowType, Map<String, ShreddingSchema> shreddingSchemas) {
+        List<Field> fields = new ArrayList<>();
+        for (DataField f : rowType.getFields()) {
+            if (f.getType() instanceof VariantType && shreddingSchemas.containsKey(f.getName())) {
+                fields.add(
+                        toVariantFieldWithShredding(
+                                f.getName(), shreddingSchemas.get(f.getName())));
+            } else {
+                fields.add(toArrowField(f.getName(), f.getType()));
+            }
+        }
+        return new Schema(fields);
+    }
+
+    /**
+     * Builds a Variant Arrow Field with typed_value support for shredding.
+     *
+     * <p>Layout:
+     *
+     * <pre>
+     * Struct "variantName" (nullable)
+     *   ├── VarBinary "metadata" (nullable)
+     *   ├── VarBinary "value"    (nullable, residual)
+     *   └── Struct "typed_value" (nullable)
+     *         ├── Struct "fieldName1" (nullable)
+     *         │     ├── VarBinary "value"       (nullable, per-field fallback)
+     *         │     └── &lt;TypedVector&gt; "typed_value" (nullable)
+     *         └── Struct "fieldName2" (nullable)
+     *               ├── VarBinary "value"       (nullable)
+     *               └── &lt;TypedVector&gt; "typed_value" (nullable)
+     * </pre>
+     */
+    public static Field toVariantFieldWithShredding(
+            String variantName, ShreddingSchema shreddingSchema) {
+        List<Field> typedValueChildren = new ArrayList<>();
+        for (ShreddedField sf : shreddingSchema.getFields()) {
+            // Each field is: Struct{value: Binary, typed_value: <Type>}
+            DataType shreddedType = sf.getShreddedType().copy(true);
+            List<Field> fieldChildren = new ArrayList<>(2);
+            fieldChildren.add(Field.nullable("value", ArrowType.Binary.INSTANCE));
+            fieldChildren.add(toArrowField("typed_value", shreddedType));
+            typedValueChildren.add(
+                    new Field(
+                            sf.getFieldPath(),
+                            FieldType.notNullable(ArrowType.Struct.INSTANCE),
+                            fieldChildren));
+        }
+
+        Field typedValueField =
+                new Field(
+                        "typed_value",
+                        FieldType.notNullable(ArrowType.Struct.INSTANCE),
+                        typedValueChildren);
+
+        List<Field> variantChildren = new ArrayList<>(3);
+        variantChildren.add(Field.nullable("metadata", ArrowType.Binary.INSTANCE));
+        variantChildren.add(Field.nullable("value", ArrowType.Binary.INSTANCE));
+        variantChildren.add(typedValueField);
+
+        return new Field(
+                variantName, FieldType.nullable(ArrowType.Struct.INSTANCE), variantChildren);
+    }
+
+    /**
+     * Creates an {@link ArrowShreddedVariantWriter} for a Variant column with shredding.
+     *
+     * @param variantStructVector the top-level StructVector for the Variant column (contains
+     *     metadata, value, typed_value children)
+     * @param shreddingSchema the shredding schema describing which fields to extract
+     * @return the shredded variant writer
+     */
+    public static ArrowFieldWriter createArrowShreddedVariantWriter(
+            StructVector variantStructVector, ShreddingSchema shreddingSchema) {
+        return new ArrowShreddedVariantWriter(variantStructVector, shreddingSchema);
+    }
+
+    /**
+     * Creates a {@link ShreddedVariantColumnVector} for reading shredded Variant columns.
+     *
+     * @param variantStructVector the top-level StructVector for the Variant column
+     * @param shreddingSchema the shredding schema
+     * @return the shredded variant column vector
+     */
+    public static ColumnVector createShreddedVariantColumnVector(
+            StructVector variantStructVector, ShreddingSchema shreddingSchema) {
+        return new ShreddedVariantColumnVector(variantStructVector, shreddingSchema);
+    }
+
     private static Field toArrowField(String fieldName, DataType logicalType) {
         FieldType fieldType =
                 new FieldType(
@@ -462,6 +789,11 @@ public class ArrowUtils {
             Field structField =
                     new Field(MapVector.DATA_VECTOR_NAME, structFieldType, structChildren);
             children = Collections.singletonList(structField);
+        } else if (logicalType instanceof VariantType) {
+            // Variant is represented as Struct{metadata: Binary, value: Binary}
+            children = new ArrayList<>(2);
+            children.add(Field.nullable("metadata", ArrowType.Binary.INSTANCE));
+            children.add(Field.nullable("value", ArrowType.Binary.INSTANCE));
         }
         return new Field(fieldName, fieldType, children);
     }
@@ -589,6 +921,11 @@ public class ArrowUtils {
 
         @Override
         public ArrowType visit(RowType rowType) {
+            return ArrowType.Struct.INSTANCE;
+        }
+
+        @Override
+        public ArrowType visit(VariantType variantType) {
             return ArrowType.Struct.INSTANCE;
         }
 
