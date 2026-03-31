@@ -18,6 +18,7 @@
 package org.apache.fluss.spark.row
 
 import org.apache.fluss.row.{BinaryString, Decimal, InternalMap, InternalRow => FlussInternalRow, TimestampLtz, TimestampNtz}
+import org.apache.fluss.types.variant.Variant
 
 import org.apache.spark.sql.catalyst.{InternalRow => SparkInternalRow}
 import org.apache.spark.sql.types.StructType
@@ -128,5 +129,10 @@ class SparkAsFlussRow(schema: StructType) extends FlussInternalRow with Serializ
   /** Returns the map value at the given position. */
   override def getMap(pos: Int): InternalMap = {
     throw new UnsupportedOperationException()
+  }
+
+  /** Returns the variant value at the given position. */
+  override def getVariant(pos: Int): Variant = {
+    throw new UnsupportedOperationException("Variant type is not supported in Spark 3.x.")
   }
 }

@@ -25,16 +25,29 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.variant.Variant;
+import org.apache.fluss.utils.MapUtils;
 
 import org.apache.flink.table.data.ArrayData;
 import org.apache.flink.table.data.TimestampData;
 
 import java.lang.reflect.Array;
+import java.lang.reflect.Method;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.apache.fluss.flink.row.FlinkAsFlussRow.fromFlinkDecimal;
 
 /** Wraps a Flink {@link ArrayData} as a Fluss {@link InternalArray}. */
 public class FlinkAsFlussArray implements InternalArray {
+
+    /**
+     * Cache of reflected methods keyed by the concrete ArrayData class. The entry is a {@code
+     * Method[3]} array {@code [getVariantMethod, getMetadataMethod, getValueMethod]}.
+     *
+     * @see FlinkAsFlussRow#VARIANT_METHOD_CACHE for why we use direct byte passthrough
+     */
+    private static final ConcurrentHashMap<Class<?>, Method[]> VARIANT_METHOD_CACHE =
+            MapUtils.newConcurrentHashMap();
 
     private final ArrayData flinkArray;
 
@@ -174,6 +187,41 @@ public class FlinkAsFlussArray implements InternalArray {
     @Override
     public InternalRow getRow(int pos, int numFields) {
         return new FlinkAsFlussRow(flinkArray.getRow(pos, numFields));
+    }
+
+    @Override
+    public Variant getVariant(int pos) {
+        try {
+            Method[] methods =
+                    VARIANT_METHOD_CACHE.computeIfAbsent(
+                            flinkArray.getClass(),
+                            clazz -> {
+                                try {
+                                    Method getVariantMethod =
+                                            clazz.getMethod("getVariant", int.class);
+                                    Class<?> variantClass =
+                                            Class.forName(
+                                                    "org.apache.flink.types.variant.BinaryVariant");
+                                    Method getMetadataMethod =
+                                            variantClass.getMethod("getMetadata");
+                                    Method getValueMethod = variantClass.getMethod("getValue");
+                                    return new Method[] {
+                                        getVariantMethod, getMetadataMethod, getValueMethod
+                                    };
+                                } catch (Exception e) {
+                                    throw new UnsupportedOperationException(
+                                            "Variant type requires Flink 2.1 or later.", e);
+                                }
+                            });
+            Object flinkVariant = methods[0].invoke(flinkArray, pos);
+            byte[] metadata = (byte[]) methods[1].invoke(flinkVariant);
+            byte[] value = (byte[]) methods[2].invoke(flinkVariant);
+            return new Variant(metadata, value);
+        } catch (UnsupportedOperationException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new UnsupportedOperationException("Variant type requires Flink 2.1 or later.", e);
+        }
     }
 
     @SuppressWarnings("unchecked")

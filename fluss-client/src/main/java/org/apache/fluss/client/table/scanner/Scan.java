@@ -28,6 +28,7 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Used to configure and create a scanner to scan data for a table.
@@ -71,6 +72,19 @@ public interface Scan {
      * @param predicate the predicate to apply for record batch level filtering
      */
     Scan filter(@Nullable Predicate predicate);
+
+    /**
+     * Returns a new scan from this with variant sub-field projection hints. When a Variant column
+     * has been shredded, specifying which sub-fields are needed allows the server to send only the
+     * relevant typed_value children, reducing network transfer.
+     *
+     * <p>The map key is the column index (in the projected or full schema), and the value is the
+     * list of field names to project within that Variant column.
+     *
+     * @param columnToFields mapping from Variant column index to desired field names, or null to
+     *     disable sub-field projection
+     */
+    Scan variantFieldProjection(@Nullable Map<Integer, List<String>> columnToFields);
 
     /**
      * Creates a {@link LogScanner} to continuously read log data for this scan.

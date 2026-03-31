@@ -439,6 +439,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             // Clear old buffers before the next batch load to avoid temporary
             // duplication of buffers (old + new) during loadFieldBuffers.
             root.clear();
+            reader.close();
         }
     }
 

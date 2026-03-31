@@ -19,6 +19,7 @@
 package org.apache.fluss.row;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.types.variant.Variant;
 
 /**
  * Getters to get data.
@@ -100,4 +101,7 @@ public interface DataGetters {
 
     /** Returns the row value at the given position. */
     InternalRow getRow(int pos, int numFields);
+
+    /** Returns the variant value at the given position. */
+    Variant getVariant(int pos);
 }

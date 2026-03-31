@@ -30,6 +30,7 @@ import org.apache.fluss.row.encode.IndexedRowEncoder;
 import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.variant.Variant;
 
 import org.apache.flink.table.data.ArrayData;
 import org.apache.flink.table.data.DecimalData;
@@ -41,6 +42,7 @@ import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
 
 import java.io.Serializable;
+import java.lang.reflect.Method;
 
 /**
  * A converter to convert Flink's {@link RowData} to Fluss's {@link InternalRow}.
@@ -187,6 +189,33 @@ public class FlinkRowToFlussRowConverter implements AutoCloseable {
             case ROW:
                 return flinkField -> new FlinkAsFlussRow((RowData) flinkField);
             default:
+                // Check for Variant type by name since it's only available in Flink 2.1+
+                if ("VARIANT".equals(flinkDataType.getTypeRoot().name())) {
+                    // Resolve BinaryVariant accessor methods once at converter construction time.
+                    // The concrete BinaryVariant class is the same for all rows, so we look it up
+                    // from the declared return type of the known class.
+                    final Method resolvedMetadataMethod;
+                    final Method resolvedValueMethod;
+                    try {
+                        Class<?> binaryVariantClass =
+                                Class.forName("org.apache.flink.types.variant.BinaryVariant");
+                        resolvedMetadataMethod = binaryVariantClass.getMethod("getMetadata");
+                        resolvedValueMethod = binaryVariantClass.getMethod("getValue");
+                    } catch (Exception e) {
+                        throw new UnsupportedOperationException(
+                                "Variant type requires Flink 2.1 or later.", e);
+                    }
+                    return flinkField -> {
+                        try {
+                            byte[] metadata = (byte[]) resolvedMetadataMethod.invoke(flinkField);
+                            byte[] value = (byte[]) resolvedValueMethod.invoke(flinkField);
+                            return new Variant(metadata, value);
+                        } catch (Exception e) {
+                            throw new RuntimeException(
+                                    "Failed to read Flink BinaryVariant fields.", e);
+                        }
+                    };
+                }
                 throw new UnsupportedOperationException(
                         "Fluss Unsupported data type: " + flinkDataType);
         }

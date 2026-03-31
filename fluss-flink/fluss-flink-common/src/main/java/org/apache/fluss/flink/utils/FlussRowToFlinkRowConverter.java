@@ -29,6 +29,7 @@ import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.variant.Variant;
 
 import org.apache.flink.table.data.DecimalData;
 import org.apache.flink.table.data.GenericArrayData;
@@ -40,6 +41,7 @@ import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.types.RowKind;
 
 import java.io.Serializable;
+import java.lang.reflect.Constructor;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -209,6 +211,31 @@ public class FlussRowToFlinkRowConverter {
                         flinkRowData.setField(i, fieldConverters[i].deserialize(flussFieldValue));
                     }
                     return flinkRowData;
+                };
+            case VARIANT:
+                // NOTE: FlussVariant (shredded fast-path) is disabled because Flink 2.2's
+                // VariantSerializer.toBinaryVariant() requires instanceof BinaryVariant and
+                // BinaryVariant is final — custom Variant implementations are rejected during
+                // serialisation / copy.  Always produce BinaryVariant for now.
+                final Constructor<?> binaryVariantConstructor;
+                try {
+                    Class<?> binaryVariantClass =
+                            Class.forName("org.apache.flink.types.variant.BinaryVariant");
+                    binaryVariantConstructor =
+                            binaryVariantClass.getConstructor(byte[].class, byte[].class);
+                } catch (Exception e) {
+                    throw new UnsupportedOperationException(
+                            "Variant type requires Flink 2.1 or later.", e);
+                }
+                return (flussField) -> {
+                    Variant variant = (Variant) flussField;
+                    try {
+                        return binaryVariantConstructor.newInstance(
+                                variant.value(), variant.metadata());
+                    } catch (Exception e) {
+                        throw new RuntimeException(
+                                "Failed to create Flink BinaryVariant instance.", e);
+                    }
                 };
             default:
                 throw new UnsupportedOperationException("Unsupported data type: " + flussDataType);

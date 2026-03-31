@@ -204,6 +204,7 @@ public class FlussSinkBuilder<InputT> {
         int numBucket = tableInfo.getNumBuckets();
         List<String> bucketKeys = tableInfo.getBucketKeys();
         List<String> partitionKeys = tableInfo.getPartitionKeys();
+        // Use user-visible row type (excludes internal shredded columns like $v.x)
         RowType tableRowType = toFlinkRowType(tableInfo.getRowType());
         DataLakeFormat lakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
 

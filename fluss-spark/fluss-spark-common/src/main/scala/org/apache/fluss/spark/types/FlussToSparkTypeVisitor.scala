@@ -113,4 +113,8 @@ object FlussToSparkTypeVisitor extends DataTypeVisitor[SparkDataType] {
     }
     SparkDataTypes.createStructType(sparkFields.toArray)
   }
+
+  override def visit(variantType: VariantType): SparkDataType = {
+    throw new UnsupportedOperationException("Variant type is not supported in Spark 3.x.")
+  }
 }

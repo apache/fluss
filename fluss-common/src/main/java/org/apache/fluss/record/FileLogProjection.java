@@ -28,6 +28,7 @@ import org.apache.fluss.shaded.arrow.com.google.flatbuffers.FlatBufferBuilder;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.Buffer;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.FieldNode;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.Message;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.MessageHeader;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.RecordBatch;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TypeLayout;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionUtil;
@@ -43,6 +44,8 @@ import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.ArrowUtils;
 import org.apache.fluss.utils.types.Tuple2;
 
+import javax.annotation.Nullable;
+
 import java.io.ByteArrayOutputStream;
 import java.io.EOFException;
 import java.io.IOException;
@@ -54,6 +57,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
 import java.util.List;
+import java.util.Map;
 
 import static org.apache.fluss.record.DefaultLogRecordBatch.APPEND_ONLY_FLAG_MASK;
 import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;
@@ -105,6 +109,12 @@ public class FileLogProjection {
     private long tableId;
     private ArrowCompressionInfo compressionInfo;
     private int[] selectedFieldPositions;
+    /**
+     * Variant sub-field projection hints. Maps Variant column index to the list of sub-field names
+     * to project within that Variant's typed_value StructVector. Null means project all sub-fields
+     * (no filtering).
+     */
+    @Nullable private Map<Integer, List<String>> variantFieldProjection;
 
     public FileLogProjection(ProjectionPushdownCache projectionsCache) {
         this.projectionsCache = projectionsCache;
@@ -121,10 +131,27 @@ public class FileLogProjection {
             SchemaGetter schemaGetter,
             ArrowCompressionInfo compressionInfo,
             int[] selectedFieldPositions) {
+        setCurrentProjection(tableId, schemaGetter, compressionInfo, selectedFieldPositions, null);
+    }
+
+    public void setCurrentProjection(
+            long tableId,
+            SchemaGetter schemaGetter,
+            ArrowCompressionInfo compressionInfo,
+            int[] selectedFieldPositions,
+            @Nullable Map<Integer, List<String>> variantFieldProjection) {
+        // Validate projection against the latest schema to catch genuinely invalid
+        // projections (out-of-bound, non-ascending, duplicated) early.
+        // Per-batch schema evolution filtering is handled in createProjectionInfo.
+        int latestFieldCount =
+                schemaGetter.getLatestSchemaInfo().getSchema().getRowType().getFieldCount();
+        toBitSet(latestFieldCount, selectedFieldPositions);
+
         this.tableId = tableId;
         this.schemaGetter = schemaGetter;
         this.compressionInfo = compressionInfo;
         this.selectedFieldPositions = selectedFieldPositions;
+        this.variantFieldProjection = variantFieldProjection;
     }
 
     /**
@@ -290,18 +317,68 @@ public class FileLogProjection {
 
         arrowMetadataBuffer.rewind();
         Message metadata = Message.getRootAsMessage(arrowMetadataBuffer);
+
+        // Handle embedded Schema IPC prefix (present when variant shredding
+        // is active). The writer serializes Schema + RecordBatch for shredded
+        // batches. We must:
+        //   (1) compute projection from the actual (shredded) schema,
+        //   (2) skip past the Schema to the RecordBatch,
+        //   (3) optionally include a projected Schema prefix in the output.
+        byte[] projectedSchemaPrefix = null;
+        ProjectionInfo effectiveProjection = currentProjection;
+        long recordBatchBodyOffset;
+
+        if (metadata.headerType() == MessageHeader.Schema) {
+            Schema actualSchema = MessageSerializer.deserializeSchema(metadata);
+            effectiveProjection = createProjectionInfoFromActualSchema(actualSchema);
+
+            // Include Schema prefix only when projected fields contain
+            // Variant columns with shredded typed_value children.
+            if (projectedFieldsHaveShredding(
+                    actualSchema, effectiveProjection.selectedFieldPositions)) {
+                projectedSchemaPrefix = serializeProjectedSchemaPrefix(actualSchema);
+            }
+
+            // Advance past the Schema IPC message to the RecordBatch
+            int paddedMetadataSize = (arrowMetadataSize + 7) & ~7;
+            long rbOffset = arrowHeaderOffset + ARROW_HEADER_SIZE + paddedMetadataSize;
+
+            // Re-read for the RecordBatch IPC message
+            arrowHeaderBuffer.rewind();
+            readFullyOrFail(channel, arrowHeaderBuffer, rbOffset, "record batch arrow header");
+            arrowHeaderBuffer.position(ARROW_IPC_METADATA_SIZE_OFFSET);
+            arrowMetadataSize = arrowHeaderBuffer.getInt();
+
+            resizeArrowMetadataBuffer(arrowMetadataSize);
+            arrowMetadataBuffer.rewind();
+            readFullyOrFail(
+                    channel,
+                    arrowMetadataBuffer,
+                    rbOffset + ARROW_HEADER_SIZE,
+                    "record batch metadata");
+            arrowMetadataBuffer.rewind();
+            metadata = Message.getRootAsMessage(arrowMetadataBuffer);
+
+            recordBatchBodyOffset = rbOffset + ARROW_HEADER_SIZE + arrowMetadataSize;
+        } else {
+            recordBatchBodyOffset = arrowHeaderOffset + ARROW_HEADER_SIZE + arrowMetadataSize;
+        }
+
+        // Project the RecordBatch
         ProjectedArrowBatch projectedArrowBatch =
                 projectArrowBatch(
                         metadata,
-                        currentProjection.nodesProjection,
-                        currentProjection.buffersProjection,
-                        currentProjection.bufferCount);
+                        effectiveProjection.nodesProjection,
+                        effectiveProjection.buffersProjection,
+                        effectiveProjection.bufferCount);
         long arrowBodyLength = projectedArrowBatch.bodyLength();
 
+        int schemaPrefixLen = projectedSchemaPrefix != null ? projectedSchemaPrefix.length : 0;
         int newBatchSizeInBytes =
                 recordBatchHeaderSize
                         + changeTypeBytes
-                        + currentProjection.arrowMetadataLength
+                        + schemaPrefixLen
+                        + effectiveProjection.arrowMetadataLength
                         + (int) arrowBodyLength;
 
         if (newBatchSizeInBytes > maxBytes) {
@@ -311,9 +388,9 @@ public class FileLogProjection {
         // create new arrow batch metadata which already projected
         byte[] headerMetadata =
                 serializeArrowRecordBatchMetadata(
-                        projectedArrowBatch, arrowBodyLength, currentProjection.bodyCompression);
+                        projectedArrowBatch, arrowBodyLength, effectiveProjection.bodyCompression);
         checkState(
-                headerMetadata.length == currentProjection.arrowMetadataLength,
+                headerMetadata.length == effectiveProjection.arrowMetadataLength,
                 "Invalid metadata length");
 
         // update and copy log batch header
@@ -332,10 +409,13 @@ public class FileLogProjection {
         if (!isAppendOnly) {
             builder.addBytes(channel, position + recordsStartOffset, changeTypeBytes);
         }
+        if (projectedSchemaPrefix != null) {
+            builder.addBytes(projectedSchemaPrefix);
+        }
         builder.addBytes(headerMetadata);
-        final long bufferOffset = arrowHeaderOffset + ARROW_HEADER_SIZE + arrowMetadataSize;
+        final long bodyBaseOffset = recordBatchBodyOffset;
         projectedArrowBatch.buffers.forEach(
-                b -> builder.addBytes(channel, bufferOffset + b.getOffset(), (int) b.getSize()));
+                b -> builder.addBytes(channel, bodyBaseOffset + b.getOffset(), (int) b.getSize()));
 
         return newBatchSizeInBytes;
     }
@@ -506,7 +586,21 @@ public class FileLogProjection {
 
         // initialize the projection util information
         Schema arrowSchema = ArrowUtils.toArrowSchema(rowType);
-        BitSet selection = toBitSet(arrowSchema.getFields().size(), selectedFieldPositions);
+        int schemaFieldCount = arrowSchema.getFields().size();
+
+        // Filter projection indices to valid range for this schema version.
+        // This handles schema evolution: data written before shredding doesn't have
+        // shredded columns, so those indices are simply skipped.
+        int[] effectivePositions = selectedFieldPositions;
+        if (selectedFieldPositions.length > 0
+                && selectedFieldPositions[selectedFieldPositions.length - 1] >= schemaFieldCount) {
+            effectivePositions =
+                    Arrays.stream(selectedFieldPositions)
+                            .filter(i -> i < schemaFieldCount)
+                            .toArray();
+        }
+
+        BitSet selection = toBitSet(schemaFieldCount, effectivePositions);
         List<Tuple2<Field, Boolean>> flattenedFields = new ArrayList<>();
         flattenFields(arrowSchema.getFields(), selection, flattenedFields);
         int totalFieldNodes = flattenedFields.size();
@@ -529,8 +623,7 @@ public class FileLogProjection {
             bufferIndex += bufferLayoutCount[i];
         }
 
-        Schema projectedArrowSchema =
-                ArrowUtils.toArrowSchema(rowType.project(selectedFieldPositions));
+        Schema projectedArrowSchema = ArrowUtils.toArrowSchema(rowType.project(effectivePositions));
         ArrowBodyCompression bodyCompression =
                 CompressionUtil.createBodyCompression(compressionInfo.createCompressionCodec());
         int metadataLength =
@@ -541,7 +634,101 @@ public class FileLogProjection {
                 bufferIndex,
                 metadataLength,
                 bodyCompression,
-                selectedFieldPositions);
+                effectivePositions);
+    }
+
+    /**
+     * Compute a per-batch {@link ProjectionInfo} from the actual Arrow Schema embedded in a
+     * shredded batch. Unlike {@link #createProjectionInfo} (which derives the schema from RowType),
+     * this accounts for typed_value children in Variant columns.
+     */
+    private ProjectionInfo createProjectionInfoFromActualSchema(Schema actualSchema) {
+        int schemaFieldCount = actualSchema.getFields().size();
+
+        int[] effectivePositions = selectedFieldPositions;
+        if (selectedFieldPositions.length > 0
+                && selectedFieldPositions[selectedFieldPositions.length - 1] >= schemaFieldCount) {
+            effectivePositions =
+                    Arrays.stream(selectedFieldPositions)
+                            .filter(i -> i < schemaFieldCount)
+                            .toArray();
+        }
+
+        BitSet selection = toBitSet(schemaFieldCount, effectivePositions);
+        List<Tuple2<Field, Boolean>> flattenedFields = new ArrayList<>();
+        flattenFields(actualSchema.getFields(), selection, flattenedFields);
+        int totalFieldNodes = flattenedFields.size();
+        int[] bufferLayoutCount = new int[totalFieldNodes];
+        BitSet nodesProjection = new BitSet(totalFieldNodes);
+        int totalBuffers = 0;
+        for (int i = 0; i < totalFieldNodes; i++) {
+            Field fieldNode = flattenedFields.get(i).f0;
+            boolean selected = flattenedFields.get(i).f1;
+            nodesProjection.set(i, selected);
+            bufferLayoutCount[i] = TypeLayout.getTypeBufferCount(fieldNode.getType());
+            totalBuffers += bufferLayoutCount[i];
+        }
+        BitSet buffersProjection = new BitSet(totalBuffers);
+        int bufferIndex = 0;
+        for (int i = 0; i < totalFieldNodes; i++) {
+            if (nodesProjection.get(i)) {
+                buffersProjection.set(bufferIndex, bufferIndex + bufferLayoutCount[i]);
+            }
+            bufferIndex += bufferLayoutCount[i];
+        }
+
+        List<Field> projectedFields = new ArrayList<>();
+        for (int pos : effectivePositions) {
+            projectedFields.add(actualSchema.getFields().get(pos));
+        }
+        Schema projectedSchema = new Schema(projectedFields);
+        ArrowBodyCompression bodyCompression =
+                CompressionUtil.createBodyCompression(compressionInfo.createCompressionCodec());
+        int metadataLength =
+                ArrowUtils.estimateArrowMetadataLength(projectedSchema, bodyCompression);
+        return new ProjectionInfo(
+                nodesProjection,
+                buffersProjection,
+                bufferIndex,
+                metadataLength,
+                bodyCompression,
+                effectivePositions);
+    }
+
+    /**
+     * Check whether any of the projected fields has a "typed_value" child, indicating that the
+     * projected output needs a Schema IPC prefix for correct deserialization.
+     */
+    private static boolean projectedFieldsHaveShredding(
+            Schema actualSchema, int[] selectedPositions) {
+        for (int pos : selectedPositions) {
+            if (pos < actualSchema.getFields().size()) {
+                for (Field child : actualSchema.getFields().get(pos).getChildren()) {
+                    if ("typed_value".equals(child.getName())) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Serialize the projected actual Schema as an Arrow IPC Schema message. This prefix is included
+     * in the projected output so the reader can create a VectorSchemaRoot with the correct
+     * structure (including typed_value children).
+     */
+    private byte[] serializeProjectedSchemaPrefix(Schema actualSchema) throws IOException {
+        List<Field> projectedFields = new ArrayList<>();
+        for (int pos : selectedFieldPositions) {
+            if (pos < actualSchema.getFields().size()) {
+                projectedFields.add(actualSchema.getFields().get(pos));
+            }
+        }
+        Schema projectedSchema = new Schema(projectedFields);
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        MessageSerializer.serialize(new WriteChannel(Channels.newChannel(baos)), projectedSchema);
+        return baos.toByteArray();
     }
 
     /** Projection pushdown information for a specific schema and selected fields. */

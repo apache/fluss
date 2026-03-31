@@ -25,6 +25,7 @@ import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.variant.Variant;
 
 import javax.annotation.Nullable;
 
@@ -135,6 +136,8 @@ public interface InternalRow extends DataGetters {
                 return InternalMap.class;
             case ROW:
                 return InternalRow.class;
+            case VARIANT:
+                return Variant.class;
             default:
                 throw new IllegalArgumentException("Illegal type: " + type);
         }
@@ -223,6 +226,9 @@ public interface InternalRow extends DataGetters {
             case ROW:
                 final int numFields = ((RowType) fieldType).getFieldCount();
                 fieldGetter = row -> row.getRow(fieldPos, numFields);
+                break;
+            case VARIANT:
+                fieldGetter = row -> row.getVariant(fieldPos);
                 break;
             default:
                 throw new IllegalArgumentException("Illegal type: " + fieldType);

@@ -1596,6 +1596,57 @@ public class ConfigOptions {
                                     + "as older versions cannot parse the extended batch format.");
 
     // ------------------------------------------------------------------------
+    //  ConfigOptions for Variant Shredding
+    // ------------------------------------------------------------------------
+
+    public static final ConfigOption<Boolean> TABLE_VARIANT_SHREDDING_ENABLED =
+            key("table.variant.shredding.enabled")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription(
+                            "Whether to enable automatic shredding for Variant columns. "
+                                    + "When enabled, the system will analyze Variant data during writes "
+                                    + "and automatically extract frequently occurring fields with consistent types "
+                                    + "into independent typed columns for efficient columnar access.");
+
+    public static final ConfigOption<Double> TABLE_VARIANT_SHREDDING_PRESENCE_THRESHOLD =
+            key("table.variant.shredding.presence-threshold")
+                    .doubleType()
+                    .defaultValue(0.5)
+                    .withDescription(
+                            "The minimum presence ratio required for a Variant field to be considered for shredding. "
+                                    + "A field must appear in at least this fraction of total records "
+                                    + "to be eligible. Value range: 0.0 to 1.0. Default is 0.5 (50%).");
+
+    public static final ConfigOption<Double> TABLE_VARIANT_SHREDDING_TYPE_CONSISTENCY_THRESHOLD =
+            key("table.variant.shredding.type-consistency-threshold")
+                    .doubleType()
+                    .defaultValue(0.9)
+                    .withDescription(
+                            "The minimum type consistency ratio required for a Variant field to be considered for shredding. "
+                                    + "At least this fraction of the field's occurrences must have the same type. "
+                                    + "Value range: 0.0 to 1.0. Default is 0.9 (90%).");
+
+    public static final ConfigOption<Integer> TABLE_VARIANT_SHREDDING_MAX_FIELDS =
+            key("table.variant.shredding.max-fields")
+                    .intType()
+                    .defaultValue(100)
+                    .withDescription(
+                            "The maximum number of fields that can be shredded from a single Variant column. "
+                                    + "Fields are ranked by presence ratio * type consistency, "
+                                    + "and only the top-N are selected. Default is 100.");
+
+    public static final ConfigOption<Integer> TABLE_VARIANT_SHREDDING_MIN_SAMPLE_SIZE =
+            key("table.variant.shredding.min-sample-size")
+                    .intType()
+                    .defaultValue(1000)
+                    .withDescription(
+                            "The minimum number of records that must be sampled before "
+                                    + "the shredding inference algorithm can run. "
+                                    + "This ensures reliable statistics before making schema changes. "
+                                    + "Default is 1000.");
+
+    // ------------------------------------------------------------------------
     //  ConfigOptions for Kv
     // ------------------------------------------------------------------------
     public static final ConfigOption<Duration> KV_SNAPSHOT_INTERVAL =

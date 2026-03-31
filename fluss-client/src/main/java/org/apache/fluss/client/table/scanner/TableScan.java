@@ -42,6 +42,7 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -56,12 +57,14 @@ public class TableScan implements Scan {
 
     /** The limited row number to read. No limit if is null. */
     @Nullable private final Integer limit;
+    /** Variant sub-field projection hints. Null means no sub-field projection. */
+    @Nullable private final Map<Integer, List<String>> variantFieldProjection;
 
     /** The record batch filter to apply. No filter if is null. */
     @Nullable private final Predicate recordBatchFilter;
 
     public TableScan(FlussConnection conn, TableInfo tableInfo, SchemaGetter schemaGetter) {
-        this(conn, tableInfo, schemaGetter, null, null, null);
+        this(conn, tableInfo, schemaGetter, null, null, null, null);
     }
 
     private TableScan(
@@ -70,19 +73,27 @@ public class TableScan implements Scan {
             SchemaGetter schemaGetter,
             @Nullable int[] projectedColumns,
             @Nullable Integer limit,
-            @Nullable Predicate recordBatchFilter) {
+            @Nullable Predicate recordBatchFilter,
+            @Nullable Map<Integer, List<String>> variantFieldProjection) {
         this.conn = conn;
         this.tableInfo = tableInfo;
         this.projectedColumns = projectedColumns;
         this.limit = limit;
         this.schemaGetter = schemaGetter;
         this.recordBatchFilter = recordBatchFilter;
+        this.variantFieldProjection = variantFieldProjection;
     }
 
     @Override
     public Scan project(@Nullable int[] projectedColumns) {
         return new TableScan(
-                conn, tableInfo, schemaGetter, projectedColumns, limit, recordBatchFilter);
+                conn,
+                tableInfo,
+                schemaGetter,
+                projectedColumns,
+                limit,
+                recordBatchFilter,
+                variantFieldProjection);
     }
 
     @Override
@@ -102,18 +113,49 @@ public class TableScan implements Scan {
             columnIndexes[i] = index;
         }
         return new TableScan(
-                conn, tableInfo, schemaGetter, columnIndexes, limit, recordBatchFilter);
+                conn,
+                tableInfo,
+                schemaGetter,
+                columnIndexes,
+                limit,
+                recordBatchFilter,
+                variantFieldProjection);
     }
 
     @Override
     public Scan limit(int rowNumber) {
         return new TableScan(
-                conn, tableInfo, schemaGetter, projectedColumns, rowNumber, recordBatchFilter);
+                conn,
+                tableInfo,
+                schemaGetter,
+                projectedColumns,
+                rowNumber,
+                recordBatchFilter,
+                variantFieldProjection);
     }
 
     @Override
     public Scan filter(@Nullable Predicate predicate) {
-        return new TableScan(conn, tableInfo, schemaGetter, projectedColumns, limit, predicate);
+        return new TableScan(
+                conn,
+                tableInfo,
+                schemaGetter,
+                projectedColumns,
+                limit,
+                predicate,
+                variantFieldProjection);
+    }
+
+    @Override
+    public Scan variantFieldProjection(@Nullable Map<Integer, List<String>> columnToFields) {
+        return new TableScan(
+                conn,
+                tableInfo,
+                schemaGetter,
+                projectedColumns,
+                limit,
+                recordBatchFilter,
+                columnToFields);
     }
 
     @Override
@@ -142,7 +184,8 @@ public class TableScan implements Scan {
                 conn.getOrCreateRemoteFileDownloader(),
                 projectedColumns,
                 schemaGetter,
-                recordBatchFilter);
+                recordBatchFilter,
+                variantFieldProjection);
     }
 
     @Override

@@ -24,13 +24,31 @@ import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.types.variant.Variant;
+import org.apache.fluss.utils.MapUtils;
 
 import org.apache.flink.table.data.DecimalData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.TimestampData;
 
+import java.lang.reflect.Method;
+import java.util.concurrent.ConcurrentHashMap;
+
 /** Wraps a Flink {@link RowData} as a Fluss {@link InternalRow}. */
 public class FlinkAsFlussRow implements InternalRow {
+
+    /**
+     * Cache of reflected methods keyed by the concrete class. The entry is a {@code Method[3]}
+     * array {@code [getVariantMethod, getMetadataMethod, getValueMethod]}. Using a per-class cache
+     * avoids repeated {@link Class#getMethod} calls on the hot read path.
+     *
+     * <p>We directly pass the raw byte arrays from Flink's {@code BinaryVariant} (metadata and
+     * value) into Fluss's {@code Variant}, similar to Paimon's {@code FlinkRowWrapper}. Fluss's
+     * {@code VariantUtil} supports Parquet Variant spec variable-width encoding, so the raw bytes
+     * are compatible.
+     */
+    private static final ConcurrentHashMap<Class<?>, Method[]> VARIANT_METHOD_CACHE =
+            MapUtils.newConcurrentHashMap();
 
     private RowData flinkRow;
 
@@ -152,5 +170,44 @@ public class FlinkAsFlussRow implements InternalRow {
     @Override
     public InternalRow getRow(int pos, int numFields) {
         return new FlinkAsFlussRow(flinkRow.getRow(pos, numFields));
+    }
+
+    @Override
+    public Variant getVariant(int pos) {
+        try {
+            // Resolve and cache reflected methods per RowData concrete class to avoid
+            // per-call Method lookup overhead on the hot read path.
+            Method[] methods =
+                    VARIANT_METHOD_CACHE.computeIfAbsent(
+                            flinkRow.getClass(),
+                            clazz -> {
+                                try {
+                                    Method getVariantMethod =
+                                            clazz.getMethod("getVariant", int.class);
+                                    Class<?> variantClass =
+                                            Class.forName(
+                                                    "org.apache.flink.types.variant.BinaryVariant");
+                                    Method getMetadataMethod =
+                                            variantClass.getMethod("getMetadata");
+                                    Method getValueMethod = variantClass.getMethod("getValue");
+                                    return new Method[] {
+                                        getVariantMethod, getMetadataMethod, getValueMethod
+                                    };
+                                } catch (Exception e) {
+                                    throw new UnsupportedOperationException(
+                                            "Variant type requires Flink 2.1 or later.", e);
+                                }
+                            });
+            Object flinkVariant = methods[0].invoke(flinkRow, pos);
+            // Directly pass raw byte arrays from Flink's BinaryVariant to Fluss's Variant.
+            // VariantUtil supports variable-width Parquet Variant encoding.
+            byte[] metadata = (byte[]) methods[1].invoke(flinkVariant);
+            byte[] value = (byte[]) methods[2].invoke(flinkVariant);
+            return new Variant(metadata, value);
+        } catch (UnsupportedOperationException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new UnsupportedOperationException("Variant type requires Flink 2.1 or later.", e);
+        }
     }
 }
