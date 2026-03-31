@@ -54,7 +54,6 @@ import org.apache.fluss.rpc.messages.PbFetchLogRespForTable;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.util.PredicateMessageUtils;
-import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.Projection;
 
@@ -98,7 +97,6 @@ public class LogFetcher implements Closeable {
     @Nullable private final Projection projection;
     @Nullable private final Predicate recordBatchFilter;
     @Nullable private final org.apache.fluss.rpc.messages.PbPredicate cachedPbPredicate;
-    private final RowType fullRowType;
     private final int schemaId;
     private final int maxFetchBytes;
     private final int maxBucketFetchBytes;
@@ -142,7 +140,6 @@ public class LogFetcher implements Closeable {
                         ? PredicateMessageUtils.toPbPredicate(
                                 recordBatchFilter, tableInfo.getRowType())
                         : null;
-        this.fullRowType = tableInfo.getRowType();
         this.schemaId = tableInfo.getSchemaId();
         this.logScannerStatus = logScannerStatus;
         this.maxFetchBytes =
@@ -551,7 +548,7 @@ public class LogFetcher implements Closeable {
                         } else {
                             reqForTable.setProjectionPushdownEnabled(false);
                         }
-                        if (null != cachedPbPredicate) {
+                        if (cachedPbPredicate != null) {
                             reqForTable.setFilterPredicate(cachedPbPredicate);
                             reqForTable.setFilterSchemaId(schemaId);
                         }

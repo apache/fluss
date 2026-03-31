@@ -679,12 +679,13 @@ public final class LogSegment {
         AbstractIterator<FileChannelLogRecordBatch> iter =
                 fileLogRecords.batchIterator(startPosition, (int) maxPosition);
 
-        MultiBytesView.Builder builder = MultiBytesView.builder();
+        MultiBytesView.Builder builder = null;
         int accumulatedSize = 0;
         FileChannelLogRecordBatch firstIncludedBatch = null;
         FileChannelLogRecordBatch lastIncludedBatch = null;
         FileChannelLogRecordBatch lastScannedBatch = null;
         int adjustedMaxSize = maxSize;
+        int filterEvalFailures = 0;
 
         while (iter.hasNext()) {
             FileChannelLogRecordBatch batch = iter.next();
@@ -717,13 +718,16 @@ public final class LogSegment {
                     // fallback)
                 }
             } catch (Exception e) {
-                LOG.warn(
-                        "Failed to evaluate filter for batch at offset {} in segment {} ({}), "
-                                + "including batch as safe fallback.",
-                        batch.baseLogOffset(),
-                        fileLogRecords,
-                        e.getClass().getSimpleName(),
-                        e);
+                filterEvalFailures++;
+                if (filterEvalFailures <= 3) {
+                    LOG.warn(
+                            "Failed to evaluate filter for batch at offset {} in segment {} ({}), "
+                                    + "including batch as safe fallback.",
+                            batch.baseLogOffset(),
+                            fileLogRecords,
+                            e.getClass().getSimpleName(),
+                            e);
+                }
                 include = true;
             }
 
@@ -742,6 +746,9 @@ public final class LogSegment {
                     break;
                 }
                 lastIncludedBatch = batch;
+                if (builder == null) {
+                    builder = MultiBytesView.builder();
+                }
                 builder.addBytes(fileLogRecords.channel(), batch.position(), batchSize);
                 accumulatedSize += batchSize;
             } else {
@@ -757,10 +764,19 @@ public final class LogSegment {
                         break;
                     }
                     lastIncludedBatch = batch;
+                    if (builder == null) {
+                        builder = MultiBytesView.builder();
+                    }
                     builder.addBytes(projectedBytesView);
                     accumulatedSize += projectedSize;
                 }
             }
+        }
+        if (filterEvalFailures > 3) {
+            LOG.warn(
+                    "Suppressed {} additional filter evaluation failures in segment {}.",
+                    filterEvalFailures - 3,
+                    fileLogRecords);
         }
 
         if (firstIncludedBatch == null) {

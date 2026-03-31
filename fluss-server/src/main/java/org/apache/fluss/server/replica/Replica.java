@@ -1542,8 +1542,18 @@ public final class Replica {
                         tableBucket,
                         e.getClass().getSimpleName(),
                         e);
-                // Safe fallback: read without filter. resolvedFilter/readContext/predicateResolver
-                // remain null, so the read proceeds as if no filter was requested.
+                // Safe fallback: reset all variables to ensure consistent null state,
+                // so the read proceeds as if no filter was requested.
+                resolvedFilter = null;
+                if (readContext != null) {
+                    try {
+                        readContext.close();
+                    } catch (Exception closeEx) {
+                        LOG.debug("Failed to close readContext for {}", tableBucket, closeEx);
+                    }
+                }
+                readContext = null;
+                predicateResolver = null;
             }
         }
 

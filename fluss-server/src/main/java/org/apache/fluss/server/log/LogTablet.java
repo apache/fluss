@@ -396,6 +396,20 @@ public final class LogTablet {
         return append(records, false);
     }
 
+    /**
+     * Read messages from the local log.
+     *
+     * @param readOffset the offset to start reading from
+     * @param maxLength the maximum number of bytes to read
+     * @param fetchIsolation the fetch isolation level
+     * @param minOneMessage if true, at least one message is returned even if it exceeds maxLength
+     * @param projection the column projection to apply, or null for no projection
+     * @param recordBatchFilter the batch-level filter predicate, or null for no filtering
+     * @param readContext the read context for batch statistics extraction (must be non-null iff
+     *     recordBatchFilter is non-null)
+     * @param predicateResolver resolves predicates for evolved schemas, or null to use the original
+     *     predicate for all batches
+     */
     public FetchDataInfo read(
             long readOffset,
             int maxLength,

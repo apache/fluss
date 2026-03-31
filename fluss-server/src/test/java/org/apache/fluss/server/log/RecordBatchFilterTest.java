@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.record;
+package org.apache.fluss.server.log;
 
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.MemorySegmentOutputView;
@@ -24,22 +24,27 @@ import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
+import org.apache.fluss.record.DefaultLogRecordBatchStatistics;
+import org.apache.fluss.record.LogRecordBatchStatisticsCollector;
+import org.apache.fluss.record.LogRecordBatchStatisticsParser;
+import org.apache.fluss.record.TestData;
+import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
-import org.apache.fluss.utils.SchemaUtil;
 
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Tests for schema-aware record-batch predicate evaluation. */
+/**
+ * Tests for schema-aware record-batch predicate evaluation using {@link PredicateSchemaResolver}.
+ */
 class RecordBatchFilterTest {
 
     private static final int TEST_SCHEMA_ID = 123;
@@ -196,12 +201,9 @@ class RecordBatchFilterTest {
 
     @Test
     void testSchemaEvolution_FilterWithSameSchema() {
-        // Create predicate using RowType (no columnId needed - all schema evolution handled by
-        // Filter)
         PredicateBuilder builder = new PredicateBuilder(SCHEMA_V1.getRowType());
         Predicate predicate = builder.greaterThan(0, 5L); // id > 5
 
-        // Create statistics for schema V1
         List<Object[]> v1Data =
                 Arrays.asList(
                         new Object[] {1L, "a", 1.0}, new Object[] {10L, "z", 100.0}); // max id = 10
@@ -216,115 +218,92 @@ class RecordBatchFilterTest {
 
     @Test
     void testSchemaEvolution_FilterOldDataWithNewSchema() {
-        // Create predicate using V2's RowType
-        // Filter on 'id' column (index 0 in V2)
         PredicateBuilder builder = new PredicateBuilder(SCHEMA_V2.getRowType());
         Predicate predicate = builder.greaterThan(0, 5L); // id > 5
 
-        // Statistics from old data (Schema V1, schemaId = 1)
         List<Object[]> v1Data =
                 Arrays.asList(
                         new Object[] {1L, "a", 1.0}, new Object[] {10L, "z", 100.0}); // max id = 10
         DefaultLogRecordBatchStatistics statsV1 =
                 createStatisticsForSchema(SCHEMA_V1, SCHEMA_ID_V1, v1Data);
 
-        // Create SchemaGetter for schema evolution support
         TestingSchemaGetter schemaGetter =
                 createSchemaGetter(SCHEMA_ID_V2, SCHEMA_V2, SCHEMA_ID_V1, SCHEMA_V1);
 
         boolean result = mayMatch(predicate, SCHEMA_ID_V2, schemaGetter, 100L, statsV1);
 
-        // Schema evolution: using SchemaUtil.getIndexMapping(statsSchema=V1, filterSchema=V2)
-        // Filter field index 0 (id) maps to stats field index 0
+        // Schema evolution: filter field index 0 (id) maps to stats field index 0
         // max(id)=10 > 5 => true
         assertThat(result).isTrue();
     }
 
     @Test
     void testSchemaEvolution_FilterWithNewColumnPredicate() {
-        // Predicate on 'age' column (only exists in V2)
-        // 'age' is at index 2 in V2
         PredicateBuilder builder = new PredicateBuilder(SCHEMA_V2.getRowType());
         Predicate predicate = builder.greaterThan(2, 18); // age > 18
 
-        // Statistics from old data (Schema V1, doesn't have 'age')
         List<Object[]> v1Data =
                 Arrays.asList(new Object[] {1L, "a", 1.0}, new Object[] {10L, "z", 100.0});
         DefaultLogRecordBatchStatistics statsV1 =
                 createStatisticsForSchema(SCHEMA_V1, SCHEMA_ID_V1, v1Data);
 
-        // Create SchemaGetter for schema evolution support
         TestingSchemaGetter schemaGetter =
                 createSchemaGetter(SCHEMA_ID_V2, SCHEMA_V2, SCHEMA_ID_V1, SCHEMA_V1);
 
         boolean result = mayMatch(predicate, SCHEMA_ID_V2, schemaGetter, 100L, statsV1);
 
-        // 'age' (index 2 in V2, columnId=4) doesn't exist in V1
-        // indexMapping[2] = UNEXIST_MAPPING
-        // Cannot adapt predicate, should return true (include batch, safe fallback)
+        // 'age' doesn't exist in V1, cannot adapt -> include batch (safe fallback)
         assertThat(result).isTrue();
     }
 
     @Test
     void testSchemaEvolution_FilterCanReject() {
-        // Predicate: id > 100
         PredicateBuilder builder = new PredicateBuilder(SCHEMA_V2.getRowType());
         Predicate predicate = builder.greaterThan(0, 100L); // id > 100
 
-        // Statistics with max id = 10 (all data id <= 10)
         List<Object[]> v1Data =
                 Arrays.asList(
                         new Object[] {1L, "a", 1.0}, new Object[] {10L, "z", 100.0}); // max id = 10
         DefaultLogRecordBatchStatistics statsV1 =
                 createStatisticsForSchema(SCHEMA_V1, SCHEMA_ID_V1, v1Data);
 
-        // Create SchemaGetter for schema evolution support
         TestingSchemaGetter schemaGetter =
                 createSchemaGetter(SCHEMA_ID_V2, SCHEMA_V2, SCHEMA_ID_V1, SCHEMA_V1);
 
         boolean result = mayMatch(predicate, SCHEMA_ID_V2, schemaGetter, 100L, statsV1);
 
         // max(id)=10 < 100, predicate id > 100 can never be satisfied
-        // Should return false (reject batch)
         assertThat(result).isFalse();
     }
 
     @Test
     void testSchemaEvolution_CompoundPredicate() {
-        // Compound predicate: id > 5 AND score < 50
         PredicateBuilder builder = new PredicateBuilder(SCHEMA_V2.getRowType());
         Predicate idPredicate = builder.greaterThan(0, 5L); // id > 5
         Predicate scorePredicate = builder.lessThan(3, 50.0); // score < 50 (index 3 in V2)
         Predicate compoundPredicate = PredicateBuilder.and(idPredicate, scorePredicate);
 
-        // Statistics: id range [1, 10], score range [1.0, 100.0]
         List<Object[]> v1Data =
                 Arrays.asList(new Object[] {1L, "a", 1.0}, new Object[] {10L, "z", 100.0});
         DefaultLogRecordBatchStatistics statsV1 =
                 createStatisticsForSchema(SCHEMA_V1, SCHEMA_ID_V1, v1Data);
 
-        // Create SchemaGetter for schema evolution support
         TestingSchemaGetter schemaGetter =
                 createSchemaGetter(SCHEMA_ID_V2, SCHEMA_V2, SCHEMA_ID_V1, SCHEMA_V1);
 
         boolean result = mayMatch(compoundPredicate, SCHEMA_ID_V2, schemaGetter, 100L, statsV1);
 
-        // Both conditions can potentially be satisfied:
-        // - max(id)=10 > 5: true
-        // - min(score)=1.0 < 50: true
-        // Should return true (possible match)
+        // Both conditions can potentially be satisfied
         assertThat(result).isTrue();
     }
 
     @Test
     void testSchemaEvolution_OrCompoundPredicate() {
-        // OR predicate: id > 100 OR score < 50
         PredicateBuilder builder = new PredicateBuilder(SCHEMA_V2.getRowType());
         Predicate idPredicate = builder.greaterThan(0, 100L); // id > 100
         Predicate scorePredicate = builder.lessThan(3, 50.0); // score < 50 (index 3 in V2)
         Predicate orPredicate = PredicateBuilder.or(idPredicate, scorePredicate);
 
-        // Statistics: id range [1, 10], score range [1.0, 100.0]
         List<Object[]> v1Data =
                 Arrays.asList(new Object[] {1L, "a", 1.0}, new Object[] {10L, "z", 100.0});
         DefaultLogRecordBatchStatistics statsV1 =
@@ -335,21 +314,17 @@ class RecordBatchFilterTest {
 
         boolean result = mayMatch(orPredicate, SCHEMA_ID_V2, schemaGetter, 100L, statsV1);
 
-        // id > 100: max(id)=10 < 100 → false
-        // score < 50: min(score)=1.0 < 50 → true
-        // OR: false OR true → true (batch should be included)
+        // id > 100: false, score < 50: true => OR: true
         assertThat(result).isTrue();
     }
 
     @Test
     void testSchemaEvolution_OrPredicateBothFalse() {
-        // OR predicate where both branches reject: id > 100 OR score > 200
         PredicateBuilder builder = new PredicateBuilder(SCHEMA_V2.getRowType());
         Predicate idPredicate = builder.greaterThan(0, 100L); // id > 100
         Predicate scorePredicate = builder.greaterThan(3, 200.0); // score > 200 (index 3 in V2)
         Predicate orPredicate = PredicateBuilder.or(idPredicate, scorePredicate);
 
-        // Statistics: id range [1, 10], score range [1.0, 100.0]
         List<Object[]> v1Data =
                 Arrays.asList(new Object[] {1L, "a", 1.0}, new Object[] {10L, "z", 100.0});
         DefaultLogRecordBatchStatistics statsV1 =
@@ -360,22 +335,17 @@ class RecordBatchFilterTest {
 
         boolean result = mayMatch(orPredicate, SCHEMA_ID_V2, schemaGetter, 100L, statsV1);
 
-        // id > 100: max(id)=10 < 100 → false
-        // score > 200: max(score)=100.0 < 200 → false
-        // OR: false OR false → false (batch should be rejected)
+        // id > 100: false, score > 200: false => OR: false
         assertThat(result).isFalse();
     }
 
     @Test
     void testSchemaEvolution_OrPredicateWithUnmappedColumn() {
-        // OR predicate: id > 100 OR age > 5
-        // 'age' exists in V2 but not in V1
         PredicateBuilder builder = new PredicateBuilder(SCHEMA_V2.getRowType());
         Predicate idPredicate = builder.greaterThan(0, 100L); // id > 100
         Predicate agePredicate = builder.greaterThan(2, 5); // age > 5 (index 2 in V2)
         Predicate orPredicate = PredicateBuilder.or(idPredicate, agePredicate);
 
-        // Statistics from V1 (no 'age' column)
         List<Object[]> v1Data =
                 Arrays.asList(new Object[] {1L, "a", 1.0}, new Object[] {10L, "z", 100.0});
         DefaultLogRecordBatchStatistics statsV1 =
@@ -386,18 +356,15 @@ class RecordBatchFilterTest {
 
         boolean result = mayMatch(orPredicate, SCHEMA_ID_V2, schemaGetter, 100L, statsV1);
 
-        // 'age' cannot be mapped to V1, so the predicate adaptation should fail
-        // or return a safe fallback (include the batch)
+        // 'age' cannot be mapped to V1, safe fallback: include the batch
         assertThat(result).isTrue();
     }
 
     @Test
     void testSchemaEvolution_WithoutSchemaGetter() {
-        // Predicate created with V2's RowType
         PredicateBuilder builder = new PredicateBuilder(SCHEMA_V2.getRowType());
         Predicate predicate = builder.greaterThan(0, 5L); // id > 5
 
-        // Statistics from old data (Schema V1)
         List<Object[]> v1Data =
                 Arrays.asList(new Object[] {1L, "a", 1.0}, new Object[] {10L, "z", 100.0});
         DefaultLogRecordBatchStatistics statsV1 =
@@ -405,11 +372,14 @@ class RecordBatchFilterTest {
 
         boolean result = mayMatch(predicate, SCHEMA_ID_V2, null, 100L, statsV1);
 
-        // Without SchemaGetter, cannot perform schema evolution
-        // Should return true (safe fallback)
+        // Without SchemaGetter, cannot perform schema evolution -> safe fallback
         assertThat(result).isTrue();
     }
 
+    /**
+     * Evaluates whether a batch may contain matching records using {@link PredicateSchemaResolver}
+     * for schema evolution support.
+     */
     private boolean mayMatch(
             Predicate predicate,
             int predicateSchemaId,
@@ -420,8 +390,9 @@ class RecordBatchFilterTest {
             return true;
         }
 
-        Predicate effectivePredicate =
-                resolvePredicateForSchema(predicate, predicateSchemaId, schemaGetter, statistics);
+        PredicateSchemaResolver resolver =
+                new PredicateSchemaResolver(predicate, predicateSchemaId, schemaGetter);
+        Predicate effectivePredicate = resolver.resolve(statistics.getSchemaId());
         if (effectivePredicate == null) {
             return true;
         }
@@ -431,33 +402,5 @@ class RecordBatchFilterTest {
                 statistics.getMinValues(),
                 statistics.getMaxValues(),
                 statistics.getNullCounts());
-    }
-
-    private Predicate resolvePredicateForSchema(
-            Predicate predicate,
-            int predicateSchemaId,
-            SchemaGetter schemaGetter,
-            DefaultLogRecordBatchStatistics statistics) {
-        if (predicateSchemaId == statistics.getSchemaId() || predicateSchemaId < 0) {
-            return predicate;
-        }
-        if (schemaGetter == null) {
-            return null;
-        }
-
-        try {
-            Schema predicateSchema = schemaGetter.getSchema(predicateSchemaId);
-            Schema batchSchema = schemaGetter.getSchema(statistics.getSchemaId());
-            if (predicateSchema == null || batchSchema == null) {
-                return null;
-            }
-
-            int[] indexMapping = SchemaUtil.getIndexMapping(batchSchema, predicateSchema);
-            Optional<Predicate> adapted =
-                    PredicateBuilder.transformFieldMapping(predicate, indexMapping);
-            return adapted.orElse(null);
-        } catch (Exception e) {
-            return null;
-        }
     }
 }
