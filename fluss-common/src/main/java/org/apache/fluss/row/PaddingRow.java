@@ -17,6 +17,8 @@
 
 package org.apache.fluss.row;
 
+import org.apache.fluss.types.variant.Variant;
+
 /**
  * An {@link InternalRow} that pads another {@link InternalRow} with nulls up to a target field
  * count.
@@ -139,5 +141,10 @@ public class PaddingRow implements InternalRow {
     @Override
     public InternalRow getRow(int pos, int numFields) {
         return row.getRow(pos, numFields);
+    }
+
+    @Override
+    public Variant getVariant(int pos) {
+        return row.getVariant(pos);
     }
 }

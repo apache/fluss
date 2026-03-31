@@ -115,6 +115,10 @@ import static org.apache.fluss.record.TestData.DATA3_TABLE_DESCRIPTOR_PK_AUTO_IN
 import static org.apache.fluss.record.TestData.DATA3_TABLE_ID_PK_AUTO_INC;
 import static org.apache.fluss.record.TestData.DATA3_TABLE_PATH_PK_AUTO_INC;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
+import static org.apache.fluss.record.TestData.VARIANT_SCHEMA;
+import static org.apache.fluss.record.TestData.VARIANT_TABLE_DESCRIPTOR;
+import static org.apache.fluss.record.TestData.VARIANT_TABLE_ID;
+import static org.apache.fluss.record.TestData.VARIANT_TABLE_PATH;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.replica.ReplicaManager.HIGH_WATERMARK_CHECKPOINT_FILE_NAME;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
@@ -308,6 +312,12 @@ public class ReplicaTestBase {
                         DEFAULT_REMOTE_DATA_DIR,
                         DATA3_TABLE_DESCRIPTOR_PK_AUTO_INC));
         zkClient.registerFirstSchema(DATA3_TABLE_PATH_PK_AUTO_INC, DATA3_SCHEMA_PK_AUTO_INC);
+
+        zkClient.registerTable(
+                VARIANT_TABLE_PATH,
+                TableRegistration.newTable(
+                        VARIANT_TABLE_ID, DEFAULT_REMOTE_DATA_DIR, VARIANT_TABLE_DESCRIPTOR));
+        zkClient.registerFirstSchema(VARIANT_TABLE_PATH, VARIANT_SCHEMA);
     }
 
     protected long registerTableInZkClient(
@@ -419,6 +429,23 @@ public class ReplicaTestBase {
                 Collections.singletonList(TABLET_SERVER_ID),
                 Collections.singletonList(TABLET_SERVER_ID),
                 partitionTable);
+    }
+
+    /** Makes a log table as leader for any table path (not limited to DATA1). */
+    protected void makeLogTableAsLeader(PhysicalTablePath physicalTablePath, TableBucket tb) {
+        makeLeaderAndFollower(
+                Collections.singletonList(
+                        new NotifyLeaderAndIsrData(
+                                physicalTablePath,
+                                tb,
+                                Collections.singletonList(TABLET_SERVER_ID),
+                                new LeaderAndIsr(
+                                        TABLET_SERVER_ID,
+                                        INITIAL_LEADER_EPOCH,
+                                        Collections.singletonList(TABLET_SERVER_ID),
+                                        Collections.emptyList(),
+                                        INITIAL_COORDINATOR_EPOCH,
+                                        INITIAL_BUCKET_EPOCH))));
     }
 
     protected void makeLogTableAsLeader(

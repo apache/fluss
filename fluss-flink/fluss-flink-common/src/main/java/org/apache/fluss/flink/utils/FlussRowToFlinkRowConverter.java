@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.utils;
 
+import org.apache.fluss.flink.adapter.VariantAdapter;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
@@ -29,6 +30,7 @@ import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.variant.Variant;
 
 import org.apache.flink.table.data.DecimalData;
 import org.apache.flink.table.data.GenericArrayData;
@@ -209,6 +211,15 @@ public class FlussRowToFlinkRowConverter {
                         flinkRowData.setField(i, fieldConverters[i].deserialize(flussFieldValue));
                     }
                     return flinkRowData;
+                };
+            case VARIANT:
+                // NOTE: FlussVariant (shredded fast-path) is disabled because Flink 2.2's
+                // VariantSerializer.toBinaryVariant() requires instanceof BinaryVariant and
+                // BinaryVariant is final — custom Variant implementations are rejected during
+                // serialisation / copy.  Always produce BinaryVariant for now.
+                return (flussField) -> {
+                    Variant variant = (Variant) flussField;
+                    return VariantAdapter.createBinaryVariant(variant.metadata(), variant.value());
                 };
             default:
                 throw new UnsupportedOperationException("Unsupported data type: " + flussDataType);

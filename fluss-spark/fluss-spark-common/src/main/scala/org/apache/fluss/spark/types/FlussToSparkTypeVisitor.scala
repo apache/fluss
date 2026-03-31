@@ -113,4 +113,17 @@ object FlussToSparkTypeVisitor extends DataTypeVisitor[SparkDataType] {
     }
     SparkDataTypes.createStructType(sparkFields.toArray)
   }
+
+  override def visit(variantType: VariantType): SparkDataType = {
+    // TODO: FIP-36 §6 Spark Connector Integration is deferred to a follow-up PR.
+    //  Spark 4.0+ supports Variant type natively (org.apache.spark.sql.types.VariantType),
+    //  but Fluss currently only ships Spark 3.4 / 3.5 connector modules. The Spark 4.0
+    //  connector module (and the variant_get() pushdown described in FIP-36 §6.3) will be
+    //  delivered in a separate PR after this one is merged.
+    //  To implement, follow the Flink adapter pattern:
+    //    - fluss-spark-common: throw UnsupportedOperationException (Spark 3.x)
+    //    - fluss-spark-4.0:    map to Spark's native VariantType + wire variant_get() pushdown
+    //                          to PbVariantFieldProjection (FIP-36 §4.7)
+    throw new UnsupportedOperationException("Variant type is not supported in Spark 3.x.")
+  }
 }

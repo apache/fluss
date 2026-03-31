@@ -26,6 +26,7 @@ import org.apache.fluss.rpc.messages.FetchLogRequest;
 
 import javax.annotation.Nullable;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -106,6 +107,26 @@ public final class FetchParams {
             ArrowCompressionInfo compressionInfo,
             @Nullable int[] projectedFields,
             ProjectionPushdownCache projectionCache) {
+        setCurrentFetch(
+                tableId,
+                fetchOffset,
+                maxFetchBytes,
+                schemaGetter,
+                compressionInfo,
+                projectedFields,
+                null,
+                projectionCache);
+    }
+
+    public void setCurrentFetch(
+            long tableId,
+            long fetchOffset,
+            int maxFetchBytes,
+            SchemaGetter schemaGetter,
+            ArrowCompressionInfo compressionInfo,
+            @Nullable int[] projectedFields,
+            @Nullable Map<Integer, List<String>> variantFieldProjection,
+            ProjectionPushdownCache projectionCache) {
         this.fetchOffset = fetchOffset;
         this.maxFetchBytes = maxFetchBytes;
         if (projectedFields != null) {
@@ -115,7 +136,11 @@ public final class FetchParams {
             }
 
             fileLogProjection.setCurrentProjection(
-                    tableId, schemaGetter, compressionInfo, projectedFields);
+                    tableId,
+                    schemaGetter,
+                    compressionInfo,
+                    projectedFields,
+                    variantFieldProjection);
         } else {
             projectionEnabled = false;
         }

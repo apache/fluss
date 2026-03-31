@@ -19,6 +19,7 @@ package org.apache.fluss.row;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.variant.Variant;
 import org.apache.fluss.utils.StringUtils;
 
 import java.io.Serializable;
@@ -179,6 +180,11 @@ public final class GenericRow implements InternalRow, Serializable {
     @Override
     public InternalRow getRow(int pos, int numFields) {
         return (InternalRow) this.fields[pos];
+    }
+
+    @Override
+    public Variant getVariant(int pos) {
+        return (Variant) this.fields[pos];
     }
 
     @Override

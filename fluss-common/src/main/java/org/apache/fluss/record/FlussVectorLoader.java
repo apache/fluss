@@ -36,6 +36,7 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Field;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Set;
 
 /**
  * A patched version of Arrow's {@code VectorLoader} that ensures decompressed buffers are properly
@@ -77,6 +78,22 @@ public class FlussVectorLoader {
     }
 
     public void load(ArrowRecordBatch recordBatch) {
+        loadWithProjection(recordBatch, null);
+    }
+
+    /**
+     * Loads the ArrowRecordBatch with optional column projection for shredded Variant fields.
+     *
+     * <p>When {@code skipTypedValueChildren} is non-null, the loader will skip loading buffers for
+     * typed_value children whose names are in the skip set. This avoids the cost of loading Arrow
+     * vectors for non-projected shredded fields, which is the primary performance bottleneck when
+     * reading shredded Variant batches with many fields.
+     *
+     * @param recordBatch the Arrow record batch to load
+     * @param skipTypedValueChildren field names under typed_value to skip loading (null = load all)
+     */
+    public void loadWithProjection(
+            ArrowRecordBatch recordBatch, Set<String> skipTypedValueChildren) {
         Iterator<ArrowBuf> buffers = recordBatch.getBuffers().iterator();
         Iterator<ArrowFieldNode> nodes = recordBatch.getNodes().iterator();
         CompressionUtil.CodecType codecType =
@@ -88,7 +105,13 @@ public class FlussVectorLoader {
                         : NoCompressionCodec.INSTANCE;
 
         for (FieldVector fieldVector : this.root.getFieldVectors()) {
-            this.loadBuffers(fieldVector, fieldVector.getField(), buffers, nodes, codec);
+            this.loadBuffersSelective(
+                    fieldVector,
+                    fieldVector.getField(),
+                    buffers,
+                    nodes,
+                    codec,
+                    skipTypedValueChildren);
         }
 
         this.root.setRowCount(recordBatch.getLength());
@@ -101,12 +124,13 @@ public class FlussVectorLoader {
         }
     }
 
-    private void loadBuffers(
+    private void loadBuffersSelective(
             FieldVector vector,
             Field field,
             Iterator<ArrowBuf> buffers,
             Iterator<ArrowFieldNode> nodes,
-            CompressionCodec codec) {
+            CompressionCodec codec,
+            Set<String> skipTypedValueChildren) {
         Preconditions.checkArgument(
                 nodes.hasNext(), "no more field nodes for field %s and vector %s", field, vector);
         ArrowFieldNode fieldNode = nodes.next();
@@ -150,11 +174,38 @@ public class FlussVectorLoader {
                     childrenFromFields.size(),
                     children.size());
 
+            // When this field is the "typed_value" struct and projection is active,
+            // skip loading for non-projected shredded field subtrees.
+            boolean isTypedValueParent =
+                    skipTypedValueChildren != null && field.getName().equals("typed_value");
+
             for (int i = 0; i < childrenFromFields.size(); ++i) {
                 Field child = children.get(i);
                 FieldVector fieldVector = childrenFromFields.get(i);
-                this.loadBuffers(fieldVector, child, buffers, nodes, codec);
+                if (isTypedValueParent && skipTypedValueChildren.contains(child.getName())) {
+                    // Skip this subtree: consume nodes/buffers without loading
+                    skipFieldBuffers(child, buffers, nodes);
+                } else {
+                    this.loadBuffersSelective(
+                            fieldVector, child, buffers, nodes, codec, skipTypedValueChildren);
+                }
             }
+        }
+    }
+
+    /**
+     * Consumes all nodes and buffers for a field and its children without loading them into
+     * vectors. Used to skip non-projected shredded field subtrees in the IPC stream.
+     */
+    private void skipFieldBuffers(
+            Field field, Iterator<ArrowBuf> buffers, Iterator<ArrowFieldNode> nodes) {
+        nodes.next();
+        int bufferCount = TypeLayout.getTypeBufferCount(field.getType());
+        for (int i = 0; i < bufferCount; i++) {
+            buffers.next();
+        }
+        for (Field child : field.getChildren()) {
+            skipFieldBuffers(child, buffers, nodes);
         }
     }
 }

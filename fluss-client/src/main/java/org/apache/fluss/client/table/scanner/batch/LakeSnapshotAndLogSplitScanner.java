@@ -134,7 +134,8 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
             this.adjustProjectedFields = adjustProjectedFields;
             return newProjection;
         } else {
-            // no projectedFields, use all fields
+            // no projectedFields, use all user-visible fields
+            // (getUserRowType() excludes internal shredded columns like $v.x)
             keyIndexesInRow = pkIndexes;
             return IntStream.range(0, flussTable.getTableInfo().getRowType().getFieldCount())
                     .toArray();

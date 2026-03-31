@@ -136,6 +136,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         this.projectedFields = projectedFields;
 
         this.flinkSourceReaderMetrics = flinkSourceReaderMetrics;
+        // Validate against user-visible schema (excludes internal shredded columns like $v.x)
         sanityCheck(table.getTableInfo().getRowType(), projectedFields);
         this.logScanner =
                 table.newScan()

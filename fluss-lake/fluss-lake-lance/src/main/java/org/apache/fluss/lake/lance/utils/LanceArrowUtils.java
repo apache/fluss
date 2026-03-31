@@ -57,6 +57,13 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 /**
  * Utilities for converting Fluss RowType to non-shaded Arrow Schema. This is needed because Lance
  * requires non-shaded Arrow API.
+ *
+ * <p>Note: Variant type tiering to Lance is not yet supported. When a Fluss table contains Variant
+ * columns, the current implementation will throw {@link UnsupportedOperationException} during
+ * schema conversion. Future work includes mapping Variant columns to Lance's binary storage format
+ * or leveraging Lance's native support for semi-structured data. Shredded Variant data (which is
+ * already stored as Arrow StructVector) could potentially be passed through to Lance directly via
+ * the {@link ArrowDataConverter} memory sharing mechanism.
  */
 public class LanceArrowUtils {
 
