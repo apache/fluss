@@ -44,6 +44,18 @@ public interface RowMerger {
     BinaryValue merge(BinaryValue oldValue, BinaryValue newValue);
 
     /**
+     * Process a new value being inserted for the first time (no existing row). Most mergers simply
+     * return the new value unchanged. Partial update mergers override this to null out non-target
+     * columns.
+     *
+     * @param newValue the new row being inserted
+     * @return the value to insert
+     */
+    default BinaryValue mergeInsert(BinaryValue newValue) {
+        return newValue;
+    }
+
+    /**
      * Merge the old row with a delete row.
      *
      * <p>This method will be invoked only when {@link #deleteBehavior()} returns {@link
