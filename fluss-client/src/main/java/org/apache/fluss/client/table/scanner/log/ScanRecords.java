@@ -40,15 +40,15 @@ public class ScanRecords implements Iterable<ScanRecord> {
     public static final ScanRecords EMPTY = new ScanRecords(Collections.emptyMap(), 0);
 
     private final Map<TableBucket, List<ScanRecord>> records;
-    private final long totalBytesRead;
+    private final long totalBytes;
 
     public ScanRecords(Map<TableBucket, List<ScanRecord>> records) {
         this(records, 0);
     }
 
-    public ScanRecords(Map<TableBucket, List<ScanRecord>> records, long totalBytesRead) {
+    public ScanRecords(Map<TableBucket, List<ScanRecord>> records, long totalBytes) {
         this.records = records;
-        this.totalBytesRead = totalBytesRead;
+        this.totalBytes = totalBytes;
     }
 
     /**
@@ -56,8 +56,8 @@ public class ScanRecords implements Iterable<ScanRecord> {
      *
      * @return the total bytes read
      */
-    public long getTotalBytesRead() {
-        return totalBytesRead;
+    public long getTotalBytes() {
+        return totalBytes;
     }
 
     /**

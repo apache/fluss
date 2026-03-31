@@ -36,6 +36,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.utils.CloseableIterator;
 
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
@@ -359,7 +360,7 @@ public class TieringSplitReader<WriteResult>
         LOG.info("for log records to tier table {}.", currentTableId);
 
         // Report bytes read from Fluss log records
-        tieringMetrics.recordBytesRead(scanRecords.getTotalBytesRead());
+        tieringMetrics.recordBytesRead(scanRecords.getTotalBytes());
         for (TableBucket bucket : scanRecords.buckets()) {
             LOG.info("tiering table bucket {}.", bucket);
             List<ScanRecord> bucketScanRecords = scanRecords.records(bucket);
@@ -518,9 +519,7 @@ public class TieringSplitReader<WriteResult>
         while (recordIterator.hasNext()) {
             ScanRecord scanRecord = recordIterator.next().record();
             lakeWriter.write(scanRecord);
-            InternalRow row = scanRecord.getRow();
-            // Snapshot path always produces BinaryRow (CompactedRow/IndexedRow).
-            bytesRead += ((BinaryRow) row).getSizeInBytes();
+            bytesRead += getRowSizeInBytes(scanRecord.getRow());
         }
         tieringMetrics.recordBytesRead(bytesRead);
         recordIterator.close();
@@ -715,5 +714,14 @@ public class TieringSplitReader<WriteResult>
             this.logOffset = logOffset;
             this.timestamp = timestamp;
         }
+    }
+
+    private static int getRowSizeInBytes(InternalRow row) {
+        if (row instanceof BinaryRow) {
+            return ((BinaryRow) row).getSizeInBytes();
+        } else if (row instanceof ProjectedRow) {
+            return ((ProjectedRow) row).getSizeInBytes();
+        }
+        return 0;
     }
 }

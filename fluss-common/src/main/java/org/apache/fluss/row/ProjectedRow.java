@@ -193,4 +193,11 @@ public class ProjectedRow implements InternalRow {
         int[] indexMapping = getIndexMapping(originSchema, expectedSchema);
         return new ProjectedRow(indexMapping);
     }
+
+    public int getSizeInBytes() {
+        if (row instanceof BinaryRow) {
+            return ((BinaryRow) row).getSizeInBytes();
+        }
+        return 0;
+    }
 }

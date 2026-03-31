@@ -184,8 +184,8 @@ public class LogFetchCollectorTest {
 
         // totalBytesRead should be the sum of both completed fetches
         long expectedBytes = completedFetch1.getSizeInBytes() + completedFetch2.getSizeInBytes();
-        assertThat(scanRecords.getTotalBytesRead()).isEqualTo(expectedBytes);
-        assertThat(scanRecords.getTotalBytesRead()).isGreaterThan(0);
+        assertThat(scanRecords.getTotalBytes()).isEqualTo(expectedBytes);
+        assertThat(scanRecords.getTotalBytes()).isGreaterThan(0);
     }
 
     private DefaultCompletedFetch makeCompletedFetch(
