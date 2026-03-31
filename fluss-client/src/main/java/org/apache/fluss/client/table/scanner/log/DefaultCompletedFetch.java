@@ -64,6 +64,9 @@ class DefaultCompletedFetch extends CompletedFetch {
     @Override
     void drain() {
         try {
+            // Note: if super.drain() throws, isConsumed stays false in the parent.
+            // The finally block below still nulls parsedByteBuf after releasing it,
+            // so a subsequent drain() call will not double-release the buffer.
             super.drain();
         } finally {
             if (parsedByteBuf != null) {
