@@ -20,7 +20,6 @@ package org.apache.fluss.flink.tiering.source;
 
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
-import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.tiering.TestingLakeTieringFactory;
@@ -245,17 +244,7 @@ class TieringSourceReaderTest extends FlinkTestBase {
                 TieringTableDroppedEvent event = new TieringTableDroppedEvent(pendingTableId);
                 reader.handleSourceEvents(event);
 
-                // Use an independent Connection to drop the table, avoiding
-                // invalidation of the reader's metadata cache.
-                // This simulates the real scenario: an external client drops
-                // the table, and the reader discovers it via fetch response
-                // error code (UNKNOWN_TABLE_OR_BUCKET).
-                try (Connection dropConnection =
-                                ConnectionFactory.createConnection(
-                                        FLUSS_CLUSTER_EXTENSION.getClientConfig());
-                        Admin dropAdmin = dropConnection.getAdmin()) {
-                    dropAdmin.dropTable(pendingTablePath, true).get();
-                }
+                connection.getAdmin().dropTable(pendingTablePath, true).get();
 
                 // Force complete the current table so the pending table becomes active
                 TieringReachMaxDurationEvent maxDurationEvent =

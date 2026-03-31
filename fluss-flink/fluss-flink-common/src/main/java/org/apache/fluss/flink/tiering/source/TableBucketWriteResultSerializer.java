@@ -131,7 +131,9 @@ public class TableBucketWriteResultSerializer<WriteResult>
         if (writeResultLength >= 0) {
             byte[] writeResultBytes = new byte[writeResultLength];
             in.readFully(writeResultBytes);
-            writeResult = writeResultSerializer.deserialize(version, writeResultBytes);
+            writeResult =
+                    writeResultSerializer.deserialize(
+                            writeResultSerializer.getVersion(), writeResultBytes);
         } else {
             writeResult = null;
         }
