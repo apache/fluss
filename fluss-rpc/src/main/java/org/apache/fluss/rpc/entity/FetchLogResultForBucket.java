@@ -126,6 +126,10 @@ public class FetchLogResultForBucket extends ResultForBucket {
         return filteredEndOffset >= 0;
     }
 
+    /**
+     * Returns the offset up to which server-side filtering has been applied. Only meaningful when
+     * {@link #hasFilteredEndOffset()} returns {@code true}.
+     */
     public long getFilteredEndOffset() {
         return filteredEndOffset;
     }

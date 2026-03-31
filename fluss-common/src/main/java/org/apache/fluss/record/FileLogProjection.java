@@ -138,7 +138,7 @@ public class FileLogProjection {
         FileChannel channel = batch.fileRecords.channel();
         int position = batch.position();
 
-        // Read the log header to get schema ID
+        // Schema ID determines which projection mapping to use (handles schema evolution).
         logHeaderBuffer.rewind();
         readLogHeaderFullyOrFail(channel, logHeaderBuffer, position);
         logHeaderBuffer.rewind();

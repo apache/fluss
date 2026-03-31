@@ -27,6 +27,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.NotThreadSafe;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -42,6 +43,7 @@ import java.util.Optional;
  * <p>Adapted predicates are cached in a simple HashMap since the resolver is created per-request
  * and does not require thread-safety or eviction policies.
  */
+@NotThreadSafe
 public final class PredicateSchemaResolver {
 
     private static final Logger LOG = LoggerFactory.getLogger(PredicateSchemaResolver.class);

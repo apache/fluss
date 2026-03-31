@@ -271,7 +271,7 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
     }
 
     /** Get the target schema ID. */
-    public int getSchemaId() {
+    public int getTargetSchemaId() {
         return targetSchemaId;
     }
 

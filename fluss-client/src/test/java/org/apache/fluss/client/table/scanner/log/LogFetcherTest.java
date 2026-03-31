@@ -90,8 +90,7 @@ public class LogFetcherTest {
 
     @Test
     void sendFetchRequestWithNotLeaderOrFollowerException() {
-        Map<Integer, org.apache.fluss.rpc.messages.FetchLogRequest> requestMap =
-                logFetcher.prepareFetchLogRequests();
+        Map<Integer, FetchLogRequest> requestMap = logFetcher.prepareFetchLogRequests();
         Set<Integer> serverSet = requestMap.keySet();
         assertThat(serverSet).containsExactlyInAnyOrder(1);
 

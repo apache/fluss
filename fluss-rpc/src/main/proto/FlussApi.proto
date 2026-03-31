@@ -816,6 +816,9 @@ message PbFetchLogReqForTable {
   required bool projection_pushdown_enabled = 2;
   repeated int32 projected_fields = 3 [packed = true];
   repeated PbFetchLogReqForBucket buckets_req = 4;
+  // filter_predicate and filter_schema_id MUST be set together.
+  // filter_predicate is the serialized predicate; filter_schema_id identifies
+  // the schema against which the predicate was compiled.
   optional PbPredicate filter_predicate = 5;
   optional int32 filter_schema_id = 6;
 }

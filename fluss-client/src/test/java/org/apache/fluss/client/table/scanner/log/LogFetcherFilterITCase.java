@@ -41,6 +41,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
@@ -56,8 +57,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
     private LogFetcher logFetcher;
     private long tableId;
-    private final int bucketId0 = 0;
-    private final int bucketId1 = 1;
+    private static final int BUCKET_ID_0 = 0;
+    private static final int BUCKET_ID_1 = 1;
 
     // Use the same row type as DATA1 to avoid Arrow compatibility issues
     private static final RowType FILTER_TEST_ROW_TYPE = DATA1_ROW_TYPE;
@@ -94,8 +95,8 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
 
         Map<TableBucket, Long> scanBuckets = new HashMap<>();
         // Add bucket 0 and bucket 1 to log scanner status
-        scanBuckets.put(new TableBucket(tableId, bucketId0), 0L);
-        scanBuckets.put(new TableBucket(tableId, bucketId1), 0L);
+        scanBuckets.put(new TableBucket(tableId, BUCKET_ID_0), 0L);
+        scanBuckets.put(new TableBucket(tableId, BUCKET_ID_1), 0L);
         LogScannerStatus logScannerStatus = new LogScannerStatus();
         logScannerStatus.assignScanBuckets(scanBuckets);
 
@@ -126,8 +127,8 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
 
     @Test
     void testFetchWithRecordBatchFilter() throws Exception {
-        TableBucket tb0 = new TableBucket(tableId, bucketId0);
-        TableBucket tb1 = new TableBucket(tableId, bucketId1);
+        TableBucket tb0 = new TableBucket(tableId, BUCKET_ID_0);
+        TableBucket tb1 = new TableBucket(tableId, BUCKET_ID_1);
 
         // Add matching data to bucket 0 - should be included in results
         MemoryLogRecords matchingRecords =
@@ -163,12 +164,9 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
 
         // Verify the content of returned records - all should match filter (a > 5)
         List<ScanRecord> tb0Records = records.get(tb0);
-        for (ScanRecord scanRecord : tb0Records) {
-            assertThat(scanRecord).isNotNull();
-            // Verify that the record's first field (a) is greater than 5
-            int aValue = scanRecord.getRow().getInt(0);
-            assertThat(aValue).isGreaterThan(5);
-        }
+        List<Integer> aValues =
+                tb0Records.stream().map(r -> r.getRow().getInt(0)).collect(Collectors.toList());
+        assertThat(aValues).containsExactlyInAnyOrder(6, 7, 8, 9, 10);
 
         // Verify tb1 (non-matching data) does not surface user-visible records.
         // The server may return a filteredEndOffset response for the bucket, but collectFetch()
@@ -182,7 +180,7 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
 
     @Test
     void testBatchLevelFilterIncludesEntireBatchWhenStatisticsOverlap() throws Exception {
-        TableBucket tb0 = new TableBucket(tableId, bucketId0);
+        TableBucket tb0 = new TableBucket(tableId, BUCKET_ID_0);
 
         // Create mixed data: some matching, some not matching (using DATA1 structure)
         List<Object[]> mixedData =
@@ -221,30 +219,15 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
         // because recordBatchFilter works at batch level based on statistics
         assertThat(tb0Records.size()).isEqualTo(mixedData.size());
 
-        // However, we can verify that the batch does contain some records that match the filter
-        boolean hasMatchingRecords =
-                tb0Records.stream()
-                        .anyMatch(
-                                record -> {
-                                    int aValue = record.getRow().getInt(0);
-                                    return aValue > 5;
-                                });
-        assertThat(hasMatchingRecords).isTrue();
-
-        // And some records that don't match (this proves batch-level filtering, not row-level)
-        boolean hasNonMatchingRecords =
-                tb0Records.stream()
-                        .anyMatch(
-                                record -> {
-                                    int aValue = record.getRow().getInt(0);
-                                    return aValue <= 5;
-                                });
-        assertThat(hasNonMatchingRecords).isTrue();
+        // Verify concrete values: batch-level filter includes the entire batch
+        List<Integer> aValues =
+                tb0Records.stream().map(r -> r.getRow().getInt(0)).collect(Collectors.toList());
+        assertThat(aValues).containsExactly(1, 6, 3, 8, 2);
     }
 
     @Test
     void testFilterCompletelyRejectsNonMatchingBatch() throws Exception {
-        TableBucket tb0 = new TableBucket(tableId, bucketId0);
+        TableBucket tb0 = new TableBucket(tableId, BUCKET_ID_0);
 
         // Create a batch where ALL records don't match filter (all a <= 5)
         List<Object[]> allNonMatchingData =
@@ -286,8 +269,8 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
         // Write only non-matching data to bucket 0, matching data to bucket 1.
         // Bucket 0 should be fully filtered — the client must advance its offset
         // past the filtered data and not re-fetch the same offset indefinitely.
-        TableBucket tb0 = new TableBucket(tableId, bucketId0);
-        TableBucket tb1 = new TableBucket(tableId, bucketId1);
+        TableBucket tb0 = new TableBucket(tableId, BUCKET_ID_0);
+        TableBucket tb1 = new TableBucket(tableId, BUCKET_ID_1);
 
         // Bucket 0: non-matching data only (a <= 5, filtered by a > 5)
         addRecordsToBucket(

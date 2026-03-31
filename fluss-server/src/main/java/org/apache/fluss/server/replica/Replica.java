@@ -1515,25 +1515,34 @@ public final class Replica {
         if (filterInfo != null && logFormat == LogFormat.ARROW) {
             try {
                 int filterSchemaId = filterInfo.getSchemaId();
-                RowType rowType;
-                int schemaIdForContext;
+                RowType rowType = null;
+                int schemaIdForContext = -1;
                 if (filterSchemaId >= 0) {
                     Schema filterSchema = schemaGetter.getSchema(filterSchemaId);
-                    rowType = filterSchema.getRowType();
-                    schemaIdForContext = filterSchemaId;
+                    if (filterSchema == null) {
+                        LOG.warn(
+                                "Filter schema not found (schemaId={}) for {}, falling back to unfiltered read.",
+                                filterSchemaId,
+                                tableBucket);
+                    } else {
+                        rowType = filterSchema.getRowType();
+                        schemaIdForContext = filterSchemaId;
+                    }
                 } else {
                     rowType = tableInfo.getSchema().getRowType();
                     schemaIdForContext = tableInfo.getSchemaId();
                 }
-                resolvedFilter =
-                        PredicateMessageUtils.toPredicate(filterInfo.getPbPredicate(), rowType);
-                if (resolvedFilter != null) {
-                    readContext =
-                            LogRecordReadContext.createArrowReadContext(
-                                    rowType, schemaIdForContext, schemaGetter);
-                    predicateResolver =
-                            new PredicateSchemaResolver(
-                                    resolvedFilter, schemaIdForContext, schemaGetter);
+                if (rowType != null) {
+                    resolvedFilter =
+                            PredicateMessageUtils.toPredicate(filterInfo.getPbPredicate(), rowType);
+                    if (resolvedFilter != null) {
+                        readContext =
+                                LogRecordReadContext.createArrowReadContext(
+                                        rowType, schemaIdForContext, schemaGetter);
+                        predicateResolver =
+                                new PredicateSchemaResolver(
+                                        resolvedFilter, schemaIdForContext, schemaGetter);
+                    }
                 }
             } catch (Exception e) {
                 LOG.warn(

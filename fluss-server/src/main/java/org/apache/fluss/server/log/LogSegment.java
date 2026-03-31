@@ -18,6 +18,7 @@
 package org.apache.fluss.server.log;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.CorruptRecordException;
@@ -509,7 +510,8 @@ public final class LogSegment {
      * @return The fetch data information including fetch starting offset metadata and messages
      *     read.
      */
-    public FetchDataInfo read(
+    @VisibleForTesting
+    FetchDataInfo read(
             long startOffset,
             int maxSize,
             long maxPosition,
@@ -690,9 +692,6 @@ public final class LogSegment {
         while (iter.hasNext()) {
             FileChannelLogRecordBatch batch = iter.next();
 
-            if (batch.position() > maxPosition) {
-                break;
-            }
             lastScannedBatch = batch;
 
             // Apply filter using statistics. On any failure, fall back to including

@@ -97,7 +97,7 @@ public class LogFetcher implements Closeable {
     @Nullable private final Projection projection;
     @Nullable private final Predicate recordBatchFilter;
     @Nullable private final org.apache.fluss.rpc.messages.PbPredicate cachedPbPredicate;
-    private final int schemaId;
+    private final int filterSchemaId;
     private final int maxFetchBytes;
     private final int maxBucketFetchBytes;
     private final int minFetchBytes;
@@ -140,7 +140,7 @@ public class LogFetcher implements Closeable {
                         ? PredicateMessageUtils.toPbPredicate(
                                 recordBatchFilter, tableInfo.getRowType())
                         : null;
-        this.schemaId = tableInfo.getSchemaId();
+        this.filterSchemaId = tableInfo.getSchemaId();
         this.logScannerStatus = logScannerStatus;
         this.maxFetchBytes =
                 (int) conf.get(ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MAX_BYTES).getBytes();
@@ -550,7 +550,7 @@ public class LogFetcher implements Closeable {
                         }
                         if (cachedPbPredicate != null) {
                             reqForTable.setFilterPredicate(cachedPbPredicate);
-                            reqForTable.setFilterSchemaId(schemaId);
+                            reqForTable.setFilterSchemaId(filterSchemaId);
                         }
                         reqForTable.addAllBucketsReqs(reqForBuckets);
                         fetchLogRequest.addAllTablesReqs(Collections.singletonList(reqForTable));

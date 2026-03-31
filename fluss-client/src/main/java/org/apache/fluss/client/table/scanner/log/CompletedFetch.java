@@ -49,6 +49,7 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 @Internal
 abstract class CompletedFetch {
     static final Logger LOG = LoggerFactory.getLogger(CompletedFetch.class);
+    static final long NO_FILTERED_END_OFFSET = -1L;
 
     final TableBucket tableBucket;
     final ApiError error;
@@ -94,18 +95,20 @@ abstract class CompletedFetch {
         this.selectedFieldGetters = readContext.getSelectedFieldGetters();
         this.fetchOffset = fetchOffset;
         checkArgument(
-                nextFetchOffset == -1 || nextFetchOffset >= fetchOffset,
-                "nextFetchOffset (%s) must be -1 or >= fetchOffset (%s) for bucket %s.",
+                nextFetchOffset == NO_FILTERED_END_OFFSET || nextFetchOffset >= fetchOffset,
+                "nextFetchOffset (%s) must be %s (NO_FILTERED_END_OFFSET) or >= fetchOffset (%s) for bucket %s.",
                 nextFetchOffset,
+                NO_FILTERED_END_OFFSET,
                 fetchOffset,
                 tableBucket);
         checkArgument(
-                nextFetchOffset == -1 || sizeInBytes == 0,
+                nextFetchOffset == NO_FILTERED_END_OFFSET || sizeInBytes == 0,
                 "When nextFetchOffset is set (%s), records must be empty (sizeInBytes=%s) for bucket %s.",
                 nextFetchOffset,
                 sizeInBytes,
                 tableBucket);
-        this.nextFetchOffset = nextFetchOffset != -1 ? nextFetchOffset : fetchOffset;
+        this.nextFetchOffset =
+                nextFetchOffset != NO_FILTERED_END_OFFSET ? nextFetchOffset : fetchOffset;
     }
 
     // TODO: optimize this to avoid deep copying the record.
