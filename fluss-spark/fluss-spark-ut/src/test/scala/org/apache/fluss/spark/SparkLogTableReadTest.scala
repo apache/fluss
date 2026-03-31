@@ -44,6 +44,29 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
           Row(1000L, 25L, 605, "addr5") :: Nil
       )
 
+      // Verify empty projection handling for COUNT(*)
+      checkAnswer(
+        sql(s"SELECT count(*) FROM $DEFAULT_DATABASE.t"),
+        Row(5L) :: Nil
+      )
+
+      checkAnswer(
+        sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t WHERE amount > 602"),
+        Row(3L) :: Nil
+      )
+
+      // Test COUNT(column) with nullable column
+      sql(s"INSERT INTO $DEFAULT_DATABASE.t VALUES (1100L, 26L, NULL, NULL)")
+      checkAnswer(
+        sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t"),
+        Row(6L) :: Nil
+      )
+      // COUNT(column) should handle NULLs correctly
+      checkAnswer(
+        sql(s"SELECT COUNT(amount) FROM $DEFAULT_DATABASE.t"),
+        Row(5L) :: Nil
+      )
+
       // projection
       checkAnswer(
         sql(s"SELECT address, itemId FROM $DEFAULT_DATABASE.t ORDER BY orderId"),
@@ -51,7 +74,8 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
           Row("addr2", 22L) ::
           Row("addr3", 23L) ::
           Row("addr4", 24L) ::
-          Row("addr5", 25L) :: Nil
+          Row("addr5", 25L) ::
+          Row(null, 26L) :: Nil
       )
 
       // filter
@@ -75,6 +99,7 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
         Row(900L, 24L) ::
           Row(900L, 240L) ::
           Row(1000L, 25L) ::
+          Row(1100L, 26L) ::
           Row(1100L, 260L) :: Nil
       )
     }
@@ -122,6 +147,18 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
           Row(700L, "addr2", "2026-01-01") ::
           Row(800L, "addr3", "2026-01-02") ::
           Row(900L, "addr4", "2026-01-02") :: Nil
+      )
+
+      // Test COUNT(*) on partitioned table
+      checkAnswer(
+        sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t"),
+        Row(5L) :: Nil
+      )
+
+      // COUNT(*) on partitioned table with partition filter
+      checkAnswer(
+        sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01'"),
+        Row(2L) :: Nil
       )
     }
   }
