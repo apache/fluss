@@ -476,7 +476,8 @@ public class TieringSourceEnumerator
      * Handle a dropped table by marking all related splits to skip, removing from tiering epochs,
      * and notifying readers.
      */
-    private void handleTableDropped(long tableId) {
+    @VisibleForTesting
+    protected void handleTableDropped(long tableId) {
         // Remove from tiering table epochs
         Long tieringEpoch = tieringTableEpochs.remove(tableId);
 
