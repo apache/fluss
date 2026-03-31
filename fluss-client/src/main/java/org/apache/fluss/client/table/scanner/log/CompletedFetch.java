@@ -22,6 +22,8 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.exception.CorruptRecordException;
 import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.record.CompactedLogRecord;
+import org.apache.fluss.record.IndexedLogRecord;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
@@ -106,15 +108,34 @@ abstract class CompletedFetch {
                 record.timestamp(),
                 record.getChangeType(),
                 newRow,
-                record.getSizeInBytes());
+                getRecordSizeInBytes(record));
+    }
+
+    /**
+     * Returns an approximate size in bytes for the given record, used for metrics and flow control.
+     *
+     * <p>For {@link IndexedLogRecord} and {@link CompactedLogRecord}, the size is read directly
+     * from the record's serialized framing (includes length header and attributes overhead). For
+     * other record types (e.g., arrow-format or projection-pushdown records backed by {@link
+     * org.apache.fluss.record.GenericRecord}), per-record size is unavailable, so the batch-level
+     * average ({@link LogRecordBatch#sizeInBytes()} / record count) is used as a fallback. Returns
+     * {@code -1} if no estimate is available.
+     */
+    private int getRecordSizeInBytes(LogRecord record) {
+        if (record instanceof IndexedLogRecord) {
+            return ((IndexedLogRecord) record).getSizeInBytes();
+        } else if (record instanceof CompactedLogRecord) {
+            return ((CompactedLogRecord) record).getSizeInBytes();
+        }
+        // For GenericRecord (arrow/projected), use batch-level average
+        if (currentBatch != null && currentBatch.getRecordCount() > 0) {
+            return currentBatch.sizeInBytes() / currentBatch.getRecordCount();
+        }
+        return -1;
     }
 
     boolean isConsumed() {
         return isConsumed;
-    }
-
-    public int getSizeInBytes() {
-        return sizeInBytes;
     }
 
     boolean isInitialized() {

@@ -62,8 +62,6 @@ public interface LogRecord {
      */
     InternalRow getRow();
 
-    int getSizeInBytes();
-
     /** Deserialize the row in the log record according to given log format. */
     static InternalRow deserializeInternalRow(
             int length,

@@ -195,16 +195,12 @@ public class ProjectedRow implements InternalRow {
     }
 
     /**
-     * Returns the on-wire size in bytes of the underlying raw row (before projection), not the
-     * projected subset. This is used for byte-level metrics tracking where the original record size
-     * is needed.
+     * Returns the underlying row before column projection.
      *
-     * @return the size in bytes of the underlying row, or -1 if unknown.
+     * <p>Note: the returned row may be replaced by a subsequent call to {@link
+     * #replaceRow(InternalRow)}.
      */
-    public int getUnderlyingRowSizeInBytes() {
-        if (row instanceof BinaryRow) {
-            return ((BinaryRow) row).getSizeInBytes();
-        }
-        return -1;
+    public InternalRow getUnderlyingRow() {
+        return row;
     }
 }

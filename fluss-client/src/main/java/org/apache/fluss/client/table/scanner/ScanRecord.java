@@ -78,7 +78,6 @@ public class ScanRecord implements LogRecord {
         return row;
     }
 
-    @Override
     public int getSizeInBytes() {
         return sizeInBytes;
     }

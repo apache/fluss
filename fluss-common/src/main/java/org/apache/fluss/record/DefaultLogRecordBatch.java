@@ -305,8 +305,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
                             logRecord.logOffset(),
                             logRecord.timestamp(),
                             logRecord.getChangeType(),
-                            outputProjection.replaceRow(logRecord.getRow()),
-                            logRecord.getSizeInBytes());
+                            outputProjection.replaceRow(logRecord.getRow()));
                 }
             }
 
@@ -363,7 +362,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             ArrowReader reader =
                     ArrowUtils.createArrowReader(
                             segment, arrowOffset, arrowLength, root, allocator, rowType);
-            return new ArrowLogRecordIterator(reader, timestamp, outputProjection, sizeInBytes()) {
+            return new ArrowLogRecordIterator(reader, timestamp, outputProjection) {
                 @Override
                 protected ChangeType getChangeType(int rowId) {
                     return ChangeType.APPEND_ONLY;
@@ -380,7 +379,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             ArrowReader reader =
                     ArrowUtils.createArrowReader(
                             segment, arrowOffset, arrowLength, root, allocator, rowType);
-            return new ArrowLogRecordIterator(reader, timestamp, outputProjection, sizeInBytes()) {
+            return new ArrowLogRecordIterator(reader, timestamp, outputProjection) {
                 @Override
                 protected ChangeType getChangeType(int rowId) {
                     return changeTypeVector.getChangeType(rowId);
@@ -395,18 +394,12 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         private final long timestamp;
         private int rowId = 0;
         @Nullable private final ProjectedRow outputProjection;
-        private final int perRecordSize;
 
         private ArrowLogRecordIterator(
-                ArrowReader reader,
-                long timestamp,
-                @Nullable ProjectedRow outputProjection,
-                int batchSizeInBytes) {
+                ArrowReader reader, long timestamp, @Nullable ProjectedRow outputProjection) {
             this.reader = reader;
             this.timestamp = timestamp;
             this.outputProjection = outputProjection;
-            this.perRecordSize =
-                    reader.getRowCount() > 0 ? batchSizeInBytes / reader.getRowCount() : 0;
         }
 
         protected abstract ChangeType getChangeType(int rowId);
@@ -426,8 +419,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
                             getChangeType(rowId),
                             outputProjection == null
                                     ? originalRow
-                                    : outputProjection.replaceRow(originalRow),
-                            perRecordSize);
+                                    : outputProjection.replaceRow(originalRow));
             rowId++;
             return record;
         }

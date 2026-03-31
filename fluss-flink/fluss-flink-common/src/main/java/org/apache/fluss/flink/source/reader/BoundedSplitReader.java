@@ -158,7 +158,10 @@ public class BoundedSplitReader implements AutoCloseable {
             InternalRow row = rowIterator.next();
             int sizeInBytes = -1;
             if (row instanceof ProjectedRow) {
-                sizeInBytes = ((ProjectedRow) row).getUnderlyingRowSizeInBytes();
+                InternalRow underlyingRow = ((ProjectedRow) row).getUnderlyingRow();
+                if (underlyingRow instanceof BinaryRow) {
+                    sizeInBytes = ((BinaryRow) underlyingRow).getSizeInBytes();
+                }
             } else if (row instanceof BinaryRow) {
                 sizeInBytes = ((BinaryRow) row).getSizeInBytes();
             }
