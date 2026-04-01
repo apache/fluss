@@ -63,6 +63,7 @@ public class RemoteLogDownloader implements Closeable {
     private static final Logger LOG = LoggerFactory.getLogger(RemoteLogDownloader.class);
 
     private static final long POLL_TIMEOUT = 5000L;
+    private static final int MAX_RETRY_COUNT = 5;
 
     private final Path localLogDir;
 
@@ -152,7 +153,11 @@ public class RemoteLogDownloader implements Closeable {
             return;
         }
 
-        TableBucket tableBucket = request.getTableBucket();
+        downloadRemoteLog(request, MAX_RETRY_COUNT, System.currentTimeMillis());
+    }
+
+    private void downloadRemoteLog(
+            RemoteLogDownloadRequest request, int retryCount, long startTime) {
         try {
             // 1. cleanup the finished logs first to free up disk space
             cleanupRemoteLogs();
@@ -160,31 +165,18 @@ public class RemoteLogDownloader implements Closeable {
             // 2. do the actual download work
             FsPathAndFileName fsPathAndFileName = request.getFsPathAndFileName();
             scannerMetricGroup.remoteFetchRequestCount().inc();
-
-            long startTime = System.currentTimeMillis();
-            // download the remote file to local
             remoteFileDownloader
                     .downloadFileAsync(fsPathAndFileName, localLogDir)
                     .whenComplete(
                             (bytes, throwable) -> {
                                 if (throwable != null) {
-                                    LOG.error(
-                                            "Failed to download remote log segment file {} for table bucket {}.",
-                                            fsPathAndFileName.getFileName(),
-                                            tableBucket,
-                                            ExceptionUtils.stripExecutionException(throwable));
-                                    // release the semaphore for the failed request
-                                    prefetchSemaphore.release();
-                                    // add back the request to the queue,
-                                    // so we do not complete the request.future here
-                                    segmentsToFetch.add(request);
-                                    scannerMetricGroup.remoteFetchErrorCount().inc();
+                                    handleFetchException(request, throwable, retryCount, startTime);
                                 } else {
                                     LOG.info(
                                             "Successfully downloaded remote log segment file {} to local for "
                                                     + "table bucket {} cost {} ms.",
                                             fsPathAndFileName.getFileName(),
-                                            tableBucket,
+                                            request.getTableBucket(),
                                             System.currentTimeMillis() - startTime);
                                     File localFile =
                                             new File(
@@ -195,12 +187,27 @@ public class RemoteLogDownloader implements Closeable {
                                 }
                             });
         } catch (Throwable t) {
-            prefetchSemaphore.release();
-            // add back the request to the queue
-            segmentsToFetch.add(request);
-            scannerMetricGroup.remoteFetchErrorCount().inc();
-            // log the error and continue instead of shutdown the download thread
-            LOG.error("Failed to download remote log segment for table bucket {}.", tableBucket, t);
+            handleFetchException(request, t, retryCount, startTime);
+        }
+    }
+
+    private void handleFetchException(
+            RemoteLogDownloadRequest request, Throwable throwable, int retryCount, long startTime) {
+        LOG.error(
+                "Failed to download remote log segment file {} for table bucket {}.",
+                request.getFsPathAndFileName().getFileName(),
+                request.getTableBucket(),
+                ExceptionUtils.stripExecutionException(throwable));
+        scannerMetricGroup.remoteFetchErrorCount().inc();
+        if (retryCount >= 1) {
+            downloadRemoteLog(request, retryCount - 1, startTime);
+        } else {
+            request.future.completeExceptionally(
+                    new IOException(
+                            String.format(
+                                    "Failed to download remote log segment file %s, retry count %d",
+                                    request.getFsPathAndFileName().getFileName(), MAX_RETRY_COUNT),
+                            throwable));
         }
     }
 

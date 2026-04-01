@@ -459,7 +459,8 @@ public class LogFetcher implements Closeable {
                             logScannerStatus,
                             isCheckCrcs);
             logFetchBuffer.pend(pendingFetch);
-            downloadFuture.onComplete(() -> logFetchBuffer.tryComplete(segment.tableBucket()));
+            downloadFuture.whenComplete(
+                    (throwable) -> logFetchBuffer.tryComplete(segment.tableBucket(), throwable));
         }
     }
 
