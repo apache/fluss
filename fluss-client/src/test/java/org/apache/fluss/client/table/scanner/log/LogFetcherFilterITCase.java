@@ -29,7 +29,6 @@ import org.apache.fluss.record.LogRecordBatchStatisticsTestUtils;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
-import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -59,9 +58,6 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
     private long tableId;
     private static final int BUCKET_ID_0 = 0;
     private static final int BUCKET_ID_1 = 1;
-
-    // Use the same row type as DATA1 to avoid Arrow compatibility issues
-    private static final RowType FILTER_TEST_ROW_TYPE = DATA1_ROW_TYPE;
 
     // Data that should match filter (a > 5) - using DATA1 compatible structure
     private static final List<Object[]> MATCHING_DATA =
@@ -101,7 +97,7 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
         logScannerStatus.assignScanBuckets(scanBuckets);
 
         // Create predicate for filter testing: field 'a' > 5 (first field in DATA1 structure)
-        PredicateBuilder builder = new PredicateBuilder(FILTER_TEST_ROW_TYPE);
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
         Predicate recordBatchFilter = builder.greaterThan(0, 5); // a > 5
 
         TestingScannerMetricGroup scannerMetricGroup = TestingScannerMetricGroup.newInstance();
@@ -133,13 +129,13 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
         // Add matching data to bucket 0 - should be included in results
         MemoryLogRecords matchingRecords =
                 LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
-                        MATCHING_DATA, FILTER_TEST_ROW_TYPE, 0L, DEFAULT_SCHEMA_ID);
+                        MATCHING_DATA, DATA1_ROW_TYPE, 0L, DEFAULT_SCHEMA_ID);
         addRecordsToBucket(tb0, matchingRecords);
 
         // Add non-matching data to bucket 1 - should be filtered out
         MemoryLogRecords nonMatchingRecords =
                 LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
-                        NON_MATCHING_DATA, FILTER_TEST_ROW_TYPE, 0L, DEFAULT_SCHEMA_ID);
+                        NON_MATCHING_DATA, DATA1_ROW_TYPE, 0L, DEFAULT_SCHEMA_ID);
         addRecordsToBucket(tb1, nonMatchingRecords);
 
         assertThat(logFetcher.hasAvailableFetches()).isFalse();
@@ -158,7 +154,7 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
 
         // Verify that only matching data is returned
         // tb0 should have records (matching data), tb1 should have no records (filtered out)
-        assertThat(records.containsKey(tb0)).isTrue();
+        assertThat(records).containsKey(tb0);
         assertThat(records.get(tb0)).isNotEmpty();
         assertThat(records.get(tb0).size()).isEqualTo(MATCHING_DATA.size());
 
@@ -194,7 +190,7 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
 
         MemoryLogRecords mixedRecords =
                 LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
-                        mixedData, FILTER_TEST_ROW_TYPE, 0L, DEFAULT_SCHEMA_ID);
+                        mixedData, DATA1_ROW_TYPE, 0L, DEFAULT_SCHEMA_ID);
         addRecordsToBucket(tb0, mixedRecords);
 
         logFetcher.sendFetches();
@@ -210,7 +206,7 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
         // With recordBatchFilter at batch level, the behavior depends on the batch statistics
         // Since mixedData contains values 1,6,3,8,2 (min=1, max=8), and our filter is a > 5,
         // the entire batch should be included because max value (8) > 5
-        assertThat(records.containsKey(tb0)).isTrue();
+        assertThat(records).containsKey(tb0);
         assertThat(records.get(tb0)).isNotEmpty();
 
         List<ScanRecord> tb0Records = records.get(tb0);
@@ -240,7 +236,7 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
 
         MemoryLogRecords nonMatchingRecords =
                 LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
-                        allNonMatchingData, FILTER_TEST_ROW_TYPE, 0L, DEFAULT_SCHEMA_ID);
+                        allNonMatchingData, DATA1_ROW_TYPE, 0L, DEFAULT_SCHEMA_ID);
         addRecordsToBucket(tb0, nonMatchingRecords);
 
         logFetcher.sendFetches();
@@ -276,24 +272,22 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
         addRecordsToBucket(
                 tb0,
                 LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
-                        NON_MATCHING_DATA, FILTER_TEST_ROW_TYPE, 0L, DEFAULT_SCHEMA_ID));
+                        NON_MATCHING_DATA, DATA1_ROW_TYPE, 0L, DEFAULT_SCHEMA_ID));
 
         // Bucket 1: matching data (a > 5)
         addRecordsToBucket(
                 tb1,
                 LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
-                        MATCHING_DATA, FILTER_TEST_ROW_TYPE, 0L, DEFAULT_SCHEMA_ID));
+                        MATCHING_DATA, DATA1_ROW_TYPE, 0L, DEFAULT_SCHEMA_ID));
 
-        // Use retry loop to handle the case where bucket 0's HW hasn't advanced yet
-        // on the first fetch cycle. The filtered-empty response (with filteredEndOffset)
-        // is only returned when the server has data up to HW to scan.
+        // Retry loop: send fetches, wait for results, collect, and verify offset advancement.
+        // The filtered-empty response (with filteredEndOffset) is only returned when the
+        // server has data up to HW to scan, so we may need multiple cycles.
         retry(
                 Duration.ofMinutes(1),
                 () -> {
                     logFetcher.sendFetches();
-                    retry(
-                            Duration.ofSeconds(30),
-                            () -> assertThat(logFetcher.hasAvailableFetches()).isTrue());
+                    assertThat(logFetcher.hasAvailableFetches()).isTrue();
                     logFetcher.collectFetch();
 
                     // Verify that bucket 0's fetch offset has advanced past 0.

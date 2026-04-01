@@ -1521,8 +1521,9 @@ public final class Replica {
                     Schema filterSchema = schemaGetter.getSchema(filterSchemaId);
                     if (filterSchema == null) {
                         LOG.warn(
-                                "Filter schema not found (schemaId={}) for {}, falling back to unfiltered read.",
+                                "Filter schema not found (schemaId={}) for table {} bucket {}, falling back to unfiltered read.",
                                 filterSchemaId,
+                                tableInfo.getTablePath(),
                                 tableBucket);
                     } else {
                         rowType = filterSchema.getRowType();
@@ -1546,10 +1547,9 @@ public final class Replica {
                 }
             } catch (Exception e) {
                 LOG.warn(
-                        "Failed to initialize filter context for {} ({}), "
+                        "Failed to initialize filter context for {}, "
                                 + "falling back to unfiltered read.",
                         tableBucket,
-                        e.getClass().getSimpleName(),
                         e);
                 // Safe fallback: reset all variables to ensure consistent null state,
                 // so the read proceeds as if no filter was requested.

@@ -17,7 +17,6 @@
 
 package org.apache.fluss.server.log;
 
-import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.record.FileLogProjection;
@@ -79,8 +78,7 @@ public final class FetchParams {
         this(replicaId, true, maxFetchBytes, minFetchBytes, maxWaitMs, null);
     }
 
-    @VisibleForTesting
-    public FetchParams(
+    FetchParams(
             int replicaId,
             boolean fetchOnlyLeader,
             int maxFetchBytes,

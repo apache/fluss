@@ -270,11 +270,6 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         return projectionPushDowned;
     }
 
-    /** Get the target schema ID. */
-    public int getTargetSchemaId() {
-        return targetSchemaId;
-    }
-
     /** Get the schema getter. */
     @Nullable
     public SchemaGetter getSchemaGetter() {

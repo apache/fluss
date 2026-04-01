@@ -428,23 +428,22 @@ public class MemoryLogRecordsArrowBuilderTest {
         LogRecordBatchStatistics statistics = statisticsOpt.get();
         assertThat(statistics.getMinValues()).isNotNull();
         assertThat(statistics.getMaxValues()).isNotNull();
+        // V2 format: null counts extracted from Arrow metadata (all zero since no nulls)
         assertThat(statistics.getNullCounts()).isNotNull();
+        assertThat(statistics.getNullCounts()).containsExactly(0L, 0L, 0L);
 
         // Verify statistics for each field
         // Field 0: id (INT)
         assertThat(statistics.getMinValues().getInt(0)).isEqualTo(1); // min id
         assertThat(statistics.getMaxValues().getInt(0)).isEqualTo(5); // max id
-        assertThat(statistics.getNullCounts()[0]).isEqualTo(0); // no nulls
 
         // Field 1: name (STRING)
         assertThat(statistics.getMinValues().getString(1).toString()).isEqualTo("a"); // min name
         assertThat(statistics.getMaxValues().getString(1).toString()).isEqualTo("e"); // max name
-        assertThat(statistics.getNullCounts()[1]).isEqualTo(0); // no nulls
 
         // Field 2: value (DOUBLE)
         assertThat(statistics.getMinValues().getDouble(2)).isEqualTo(8.9); // min value
         assertThat(statistics.getMaxValues().getDouble(2)).isEqualTo(30.1); // max value
-        assertThat(statistics.getNullCounts()[2]).isEqualTo(0); // no nulls
 
         // Test record reading and verify data integrity
         try (CloseableIterator<LogRecord> recordIterator = batch.records(readContext)) {
@@ -472,6 +471,71 @@ public class MemoryLogRecordsArrowBuilderTest {
         }
 
         // Close read context
+        readContext.close();
+    }
+
+    @Test
+    void testV2NullCountRoundTripFromArrowMetadata() throws Exception {
+        // Create test data where each column has a known number of nulls:
+        // col0 (INT):    null, 2, 3, null, 5       -> 2 nulls
+        // col1 (STRING): "a", null, "c", "d", null -> 2 nulls
+        // col2 (DOUBLE): 1.0, 2.0, null, 4.0, 5.0 -> 1 null
+        List<Object[]> testData =
+                Arrays.asList(
+                        new Object[] {null, "a", 1.0},
+                        new Object[] {2, null, 2.0},
+                        new Object[] {3, "c", null},
+                        new Object[] {null, "d", 4.0},
+                        new Object[] {5, null, 5.0});
+
+        RowType testRowType =
+                new RowType(
+                        Arrays.asList(
+                                new DataField("id", DataTypes.INT()),
+                                new DataField("name", DataTypes.STRING()),
+                                new DataField("value", DataTypes.DOUBLE())));
+
+        // Build a V2 batch with statistics
+        ArrowWriter writer =
+                provider.getOrCreateWriter(
+                        1L, DEFAULT_SCHEMA_ID, 1024 * 10, testRowType, NO_COMPRESSION);
+        MemoryLogRecordsArrowBuilder builder =
+                createMemoryLogRecordsArrowBuilder(0, writer, 10, 1024 * 10, LOG_MAGIC_VALUE_V2);
+
+        for (Object[] data : testData) {
+            builder.append(ChangeType.APPEND_ONLY, row(data));
+        }
+        builder.setWriterState(1L, 0);
+        builder.close();
+
+        MemoryLogRecords records = MemoryLogRecords.pointToBytesView(builder.build());
+        LogRecordBatch batch = records.batches().iterator().next();
+        assertThat(batch.getRecordCount()).isEqualTo(5);
+        assertThat(batch.magic()).isEqualTo(LOG_MAGIC_VALUE_V2);
+
+        // Read statistics — V2 should extract null counts from Arrow metadata
+        LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        testRowType, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER);
+        Optional<LogRecordBatchStatistics> statisticsOpt = batch.getStatistics(readContext);
+        assertThat(statisticsOpt).isPresent();
+
+        LogRecordBatchStatistics statistics = statisticsOpt.get();
+
+        // Verify null counts are populated (not null) and match expected values
+        Long[] nullCounts = statistics.getNullCounts();
+        assertThat(nullCounts).isNotNull();
+        assertThat(nullCounts).hasSize(3);
+        assertThat(nullCounts[0]).isEqualTo(2L); // col0: 2 nulls
+        assertThat(nullCounts[1]).isEqualTo(2L); // col1: 2 nulls
+        assertThat(nullCounts[2]).isEqualTo(1L); // col2: 1 null
+
+        // Also verify min/max are still correct (nulls excluded)
+        assertThat(statistics.getMinValues().getInt(0)).isEqualTo(2);
+        assertThat(statistics.getMaxValues().getInt(0)).isEqualTo(5);
+        assertThat(statistics.getMinValues().getDouble(2)).isEqualTo(1.0);
+        assertThat(statistics.getMaxValues().getDouble(2)).isEqualTo(5.0);
+
         readContext.close();
     }
 
@@ -532,10 +596,9 @@ public class MemoryLogRecordsArrowBuilderTest {
 
         LogRecordBatchStatistics statistics = statisticsOpt.get();
 
-        // Verify null counts
-        assertThat(statistics.getNullCounts()[0]).isEqualTo(1); // one null in id field
-        assertThat(statistics.getNullCounts()[1]).isEqualTo(1); // one null in name field
-        assertThat(statistics.getNullCounts()[2]).isEqualTo(1); // one null in value field
+        // V2 format: null counts extracted from Arrow metadata (1 null per column)
+        assertThat(statistics.getNullCounts()).isNotNull();
+        assertThat(statistics.getNullCounts()).containsExactly(1L, 1L, 1L);
 
         // Verify min/max values (should exclude nulls)
         assertThat(statistics.getMinValues().getInt(0)).isEqualTo(1); // min id (excluding null)
@@ -618,7 +681,9 @@ public class MemoryLogRecordsArrowBuilderTest {
         // Verify statistics
         assertThat(statistics.getMinValues().getInt(0)).isEqualTo(1);
         assertThat(statistics.getMaxValues().getInt(0)).isEqualTo(3);
-        assertThat(statistics.getNullCounts()[0]).isEqualTo(0);
+        // V2 format: null counts extracted from Arrow metadata (no nulls in data)
+        assertThat(statistics.getNullCounts()).isNotNull();
+        assertThat(statistics.getNullCounts()).containsExactly(0L, 0L);
 
         // Test record reading and verify change types
         try (CloseableIterator<LogRecord> recordIterator = batch.records(readContext)) {
@@ -646,6 +711,42 @@ public class MemoryLogRecordsArrowBuilderTest {
 
         // Close read context
         readContext.close();
+    }
+
+    @Test
+    void testV2NullCountAllNullColumn() throws Exception {
+        // Schema: INT, STRING, DOUBLE
+        RowType rowType =
+                RowType.builder()
+                        .field("id", DataTypes.INT())
+                        .field("name", DataTypes.STRING())
+                        .field("score", DataTypes.DOUBLE())
+                        .build();
+
+        // col2 (DOUBLE) is entirely null
+        List<Object[]> testData =
+                Arrays.asList(
+                        new Object[] {1, "a", null},
+                        new Object[] {2, "b", null},
+                        new Object[] {3, "c", null});
+
+        MemoryLogRecords records =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        testData, rowType, 0L, DEFAULT_SCHEMA_ID);
+
+        DefaultLogRecordBatch batch = (DefaultLogRecordBatch) records.batches().iterator().next();
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        rowType, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            Optional<LogRecordBatchStatistics> statsOpt = batch.getStatistics(readContext);
+            assertThat(statsOpt).isPresent();
+
+            Long[] nullCounts = statsOpt.get().getNullCounts();
+            assertThat(nullCounts).isNotNull();
+            assertThat(nullCounts[0]).isEqualTo(0L); // col0: no nulls
+            assertThat(nullCounts[1]).isEqualTo(0L); // col1: no nulls
+            assertThat(nullCounts[2]).isEqualTo(3L); // col2: all 3 rows are null
+        }
     }
 
     private static List<ArrowCompressionInfo> compressionInfos() {

@@ -93,10 +93,8 @@ public class LogRecordBatchStatisticsCollectorTest {
         assertThat(minValues.getFloat(5)).isEqualTo(1.23f);
         assertThat(maxValues.getFloat(5)).isEqualTo(5.67f);
 
-        // All null counts should be 0
-        for (int i = 0; i < 6; i++) {
-            assertThat(statistics.getNullCounts()[i]).isEqualTo(0L);
-        }
+        // V2 format: null counts are null (will come from Arrow metadata later)
+        assertThat(statistics.getNullCounts()).isNull();
     }
 
     @Test
@@ -159,10 +157,8 @@ public class LogRecordBatchStatisticsCollectorTest {
         DefaultLogRecordBatchStatistics statistics =
                 LogRecordBatchStatisticsParser.parseStatistics(segment, 0, nullableRowType, 1);
 
-        // Verify null counts
-        assertThat(statistics.getNullCounts()[0]).isEqualTo(1L);
-        assertThat(statistics.getNullCounts()[1]).isEqualTo(1L);
-        assertThat(statistics.getNullCounts()[2]).isEqualTo(1L);
+        // V2 format: null counts are null (will come from Arrow metadata later)
+        assertThat(statistics.getNullCounts()).isNull();
 
         // Verify min/max values exclude nulls
         assertThat(statistics.getMinValues().getInt(0)).isEqualTo(1);
@@ -307,11 +303,8 @@ public class LogRecordBatchStatisticsCollectorTest {
                 LogRecordBatchStatisticsParser.parseStatistics(segment, 0, rowType, 1);
         assertThat(statistics).isNotNull();
 
-        // All null counts should be 0
-        Long[] nullCounts = statistics.getNullCounts();
-        for (int i = 0; i < rowType.getFieldCount(); i++) {
-            assertThat(nullCounts[i]).isEqualTo(0L);
-        }
+        // V2 format: null counts are null (will come from Arrow metadata later)
+        assertThat(statistics.getNullCounts()).isNull();
 
         // Min/max values row exists but all fields should be null since no rows were processed
         InternalRow minValues = statistics.getMinValues();
@@ -356,8 +349,8 @@ public class LogRecordBatchStatisticsCollectorTest {
                 LogRecordBatchStatisticsParser.parseStatistics(segment, 0, rowType, 1);
         assertThat(statistics).isNotNull();
 
-        // Column 2 (value) null count should equal total row count
-        assertThat(statistics.getNullCounts()[2]).isEqualTo(dataWithAllNullColumn.size());
+        // V2 format: null counts are null (will come from Arrow metadata later)
+        assertThat(statistics.getNullCounts()).isNull();
 
         // Column 2 min/max should be null (all values were null)
         InternalRow minValues = statistics.getMinValues();
@@ -368,8 +361,6 @@ public class LogRecordBatchStatisticsCollectorTest {
         assertThat(maxValues.isNullAt(2)).isTrue();
 
         // Other columns should have correct min/max
-        assertThat(statistics.getNullCounts()[0]).isEqualTo(0L);
-        assertThat(statistics.getNullCounts()[1]).isEqualTo(0L);
         assertThat(minValues.getInt(0)).isEqualTo(1);
         assertThat(maxValues.getInt(0)).isEqualTo(5);
         assertThat(minValues.getString(1)).isEqualTo(BinaryString.fromString("a"));

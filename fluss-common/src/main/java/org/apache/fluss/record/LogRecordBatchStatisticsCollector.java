@@ -47,7 +47,6 @@ public class LogRecordBatchStatisticsCollector {
     // Statistics arrays (only for columns that need statistics)
     private final Object[] minValues;
     private final Object[] maxValues;
-    private final Long[] nullCounts;
 
     private final LogRecordBatchStatisticsWriter statisticsWriter;
 
@@ -58,11 +57,8 @@ public class LogRecordBatchStatisticsCollector {
         // Initialize statistics arrays
         this.minValues = new Object[statsIndexMapping.length];
         this.maxValues = new Object[statsIndexMapping.length];
-        this.nullCounts = new Long[statsIndexMapping.length];
 
         this.statisticsWriter = new LogRecordBatchStatisticsWriter(rowType, statsIndexMapping);
-
-        Arrays.fill(nullCounts, 0L);
     }
 
     /**
@@ -73,9 +69,7 @@ public class LogRecordBatchStatisticsCollector {
     public void processRow(InternalRow row) {
         for (int statIndex = 0; statIndex < statsIndexMapping.length; statIndex++) {
             int fullRowIndex = statsIndexMapping[statIndex];
-            if (row.isNullAt(fullRowIndex)) {
-                nullCounts[statIndex]++;
-            } else {
+            if (!row.isNullAt(fullRowIndex)) {
                 updateMinMax(statIndex, fullRowIndex, row);
             }
         }
@@ -90,7 +84,7 @@ public class LogRecordBatchStatisticsCollector {
      */
     public int writeStatistics(OutputView outputView) throws IOException {
         return statisticsWriter.writeStatistics(
-                GenericRow.of(minValues), GenericRow.of(maxValues), nullCounts, outputView);
+                GenericRow.of(minValues), GenericRow.of(maxValues), outputView);
     }
 
     /**
@@ -116,7 +110,6 @@ public class LogRecordBatchStatisticsCollector {
 
     /** Reset the collector to collect new statistics. */
     public void reset() {
-        Arrays.fill(nullCounts, 0L);
         Arrays.fill(minValues, null);
         Arrays.fill(maxValues, null);
     }

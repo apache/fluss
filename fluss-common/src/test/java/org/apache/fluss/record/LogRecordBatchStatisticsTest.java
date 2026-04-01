@@ -86,10 +86,8 @@ public class LogRecordBatchStatisticsTest extends LogTestBase {
             assertThat(statistics.getMinValues().getBoolean(3)).isEqualTo(false);
             assertThat(statistics.getMaxValues().getBoolean(3)).isEqualTo(true);
 
-            // All null counts should be 0
-            for (int i = 0; i < 4; i++) {
-                assertThat(statistics.getNullCounts()[i]).isEqualTo(0);
-            }
+            // V2 format: null counts extracted from Arrow metadata
+            assertThat(statistics.getNullCounts()).containsExactly(0L, 0L, 0L, 0L);
         }
     }
 
@@ -110,9 +108,8 @@ public class LogRecordBatchStatisticsTest extends LogTestBase {
                         DEFAULT_SCHEMA_ID,
                         TEST_SCHEMA_GETTER)) {
             LogRecordBatchStatistics statistics = batch.getStatistics(readContext).get();
-            assertThat(statistics.getNullCounts()[0]).isEqualTo(1);
-            assertThat(statistics.getNullCounts()[1]).isEqualTo(1);
-            assertThat(statistics.getNullCounts()[2]).isEqualTo(1);
+            // V2 format: null counts extracted from Arrow metadata
+            assertThat(statistics.getNullCounts()).containsExactly(1L, 1L, 1L);
         }
     }
 
@@ -251,10 +248,10 @@ public class LogRecordBatchStatisticsTest extends LogTestBase {
                 assertThat(fileStats.getMaxValues().getInt(0))
                         .isEqualTo(defaultStats.getMaxValues().getInt(0));
 
-                for (int i = 0; i < fileStats.getNullCounts().length; i++) {
-                    assertThat(fileStats.getNullCounts()[i])
-                            .isEqualTo(defaultStats.getNullCounts()[i]);
-                }
+                // Both paths now extract null counts from Arrow metadata
+                assertThat(fileStats.getNullCounts()).isNotNull();
+                assertThat(defaultStats.getNullCounts()).isNotNull();
+                assertThat(defaultStats.getNullCounts()).containsExactly(fileStats.getNullCounts());
             }
         }
     }
@@ -361,7 +358,6 @@ public class LogRecordBatchStatisticsTest extends LogTestBase {
     void testDefaultLogRecordBatchStatisticsWithSerializedData() throws IOException {
         InternalRow minRow = DataTestUtils.row(new Object[] {1, "a", 10.5});
         InternalRow maxRow = DataTestUtils.row(new Object[] {100, "z", 99.9});
-        Long[] nullCounts = new Long[] {0L, 2L, 1L};
         int[] statsIndexMapping = new int[] {0, 1, 2};
 
         LogRecordBatchStatisticsWriter writer =
@@ -374,7 +370,6 @@ public class LogRecordBatchStatisticsTest extends LogTestBase {
         writer.writeStatistics(
                 AlignedRow.from(TestData.STATISTICS_BASIC_ROW_TYPE, minRow),
                 AlignedRow.from(TestData.STATISTICS_BASIC_ROW_TYPE, maxRow),
-                nullCounts,
                 outputView);
 
         DefaultLogRecordBatchStatistics parsedStats =
@@ -382,7 +377,8 @@ public class LogRecordBatchStatisticsTest extends LogTestBase {
                         segment, 0, TestData.STATISTICS_BASIC_ROW_TYPE, SCHEMA_ID);
 
         assertThat(parsedStats.getSchemaId()).isEqualTo(SCHEMA_ID);
-        assertThat(parsedStats.getNullCounts()).isEqualTo(nullCounts);
+        // V2 format: null counts are null
+        assertThat(parsedStats.getNullCounts()).isNull();
         assertThat(parsedStats.getMinValues().getInt(0)).isEqualTo(1);
         assertThat(parsedStats.getMaxValues().getInt(0)).isEqualTo(100);
     }
@@ -391,7 +387,6 @@ public class LogRecordBatchStatisticsTest extends LogTestBase {
     void testPartialStatisticsWrapperThrowsForUnavailableColumns() throws IOException {
         InternalRow minRow = DataTestUtils.row(1, 10.5);
         InternalRow maxRow = DataTestUtils.row(100, 99.9);
-        Long[] nullCounts = new Long[] {0L, 1L};
         int[] statsIndexMapping = new int[] {0, 2}; // Skip column 1
 
         RowType fullRowType =
@@ -406,7 +401,7 @@ public class LogRecordBatchStatisticsTest extends LogTestBase {
         MemorySegment segment = MemorySegment.allocateHeapMemory(1024);
         MemorySegmentOutputView outputView = new MemorySegmentOutputView(segment);
 
-        writer.writeStatistics(minRow, maxRow, nullCounts, outputView);
+        writer.writeStatistics(minRow, maxRow, outputView);
 
         DefaultLogRecordBatchStatistics parsedStats =
                 LogRecordBatchStatisticsParser.parseStatistics(segment, 0, fullRowType, 0);

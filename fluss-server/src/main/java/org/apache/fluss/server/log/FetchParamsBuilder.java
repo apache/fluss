@@ -48,7 +48,8 @@ public final class FetchParamsBuilder {
         return this;
     }
 
-    public FetchParamsBuilder withTableFilterInfoMap(Map<Long, FilterInfo> tableFilterInfoMap) {
+    public FetchParamsBuilder withTableFilterInfoMap(
+            @Nullable Map<Long, FilterInfo> tableFilterInfoMap) {
         this.tableFilterInfoMap = tableFilterInfoMap;
         return this;
     }

@@ -500,19 +500,19 @@ final class LogSegmentTest extends LogTestBase {
             assertThat(read).isNotNull();
             assertThat(read.getRecords().sizeInBytes()).isGreaterThan(0);
 
-            boolean foundMatchingRecord = false;
+            List<Integer> values = new ArrayList<>();
             for (LogRecordBatch batch : read.getRecords().batches()) {
                 try (CloseableIterator<LogRecord> iterator = batch.records(readContext)) {
                     while (iterator.hasNext()) {
                         LogRecord record = iterator.next();
-                        if (valueMatcher.test(record.getRow().getInt(0))) {
-                            foundMatchingRecord = true;
-                            break;
-                        }
+                        values.add(record.getRow().getInt(0));
                     }
                 }
             }
-            assertThat(foundMatchingRecord).isTrue();
+            assertThat(values).isNotEmpty();
+            // Batch-level filter: if batch statistics overlap with predicate, the entire
+            // batch is included. Verify at least one record matches the predicate.
+            assertThat(values).anyMatch(v -> valueMatcher.test(v));
         }
     }
 
@@ -649,7 +649,7 @@ final class LogSegmentTest extends LogTestBase {
             assertThat(read.getRecords().sizeInBytes()).isEqualTo(0);
             // filteredEndOffset should be set to allow client to advance
             assertThat(read.hasFilteredEndOffset()).isTrue();
-            assertThat(read.getFilteredEndOffset()).isGreaterThanOrEqualTo(50L);
+            assertThat(read.getFilteredEndOffset()).isEqualTo(59L);
         }
     }
 
@@ -824,7 +824,7 @@ final class LogSegmentTest extends LogTestBase {
                             readContext);
             assertThat(read).isNotNull();
             assertThat(read.getRecords().sizeInBytes()).isEqualTo(0);
-            assertThat(read.getFilteredEndOffset()).isGreaterThanOrEqualTo(50L);
+            assertThat(read.getFilteredEndOffset()).isEqualTo(51L);
         }
     }
 
@@ -934,6 +934,70 @@ final class LogSegmentTest extends LogTestBase {
                 batchCount++;
             }
             assertThat(batchCount).isEqualTo(2);
+        }
+    }
+
+    @Test
+    void testReadWithFilterBoundaryPredicateAtBatchMax() throws Exception {
+        // Test boundary condition where predicate threshold equals the batch's max value.
+        LogSegment segment = createSegment(40);
+
+        // Single batch with values [1, 2, 3] — min=1, max=3
+        List<Object[]> batchData =
+                Arrays.asList(new Object[] {1, "a"}, new Object[] {2, "b"}, new Object[] {3, "c"});
+        MemoryLogRecords batch =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        batchData, DATA1_ROW_TYPE, 50, DEFAULT_SCHEMA_ID);
+        segment.append(52, -1L, -1L, batch);
+
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+
+        // greaterOrEqual(0, 3): max=3 >= 3 → batch SHOULD be included
+        Predicate geqPredicate = builder.greaterOrEqual(0, 3);
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            FetchDataInfo read =
+                    segment.read(
+                            50,
+                            1000,
+                            segment.getSizeInBytes(),
+                            true,
+                            null,
+                            geqPredicate,
+                            readContext);
+            assertThat(read).isNotNull();
+            assertThat(read.getRecords().sizeInBytes()).isGreaterThan(0);
+
+            List<Integer> values = new ArrayList<>();
+            for (LogRecordBatch b : read.getRecords().batches()) {
+                try (CloseableIterator<LogRecord> iter = b.records(readContext)) {
+                    while (iter.hasNext()) {
+                        values.add(iter.next().getRow().getInt(0));
+                    }
+                }
+            }
+            assertThat(values).containsExactly(1, 2, 3);
+        }
+
+        // greaterThan(0, 3): max=3 is NOT > 3 → batch SHOULD be excluded
+        Predicate gtPredicate = builder.greaterThan(0, 3);
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            FetchDataInfo read =
+                    segment.read(
+                            50,
+                            1000,
+                            segment.getSizeInBytes(),
+                            true,
+                            null,
+                            gtPredicate,
+                            readContext);
+            assertThat(read).isNotNull();
+            assertThat(read.getRecords().sizeInBytes()).isEqualTo(0);
+            assertThat(read.hasFilteredEndOffset()).isTrue();
+            assertThat(read.getFilteredEndOffset()).isEqualTo(53L);
         }
     }
 
