@@ -22,7 +22,9 @@ import org.apache.fluss.client.metadata.TestingMetadataUpdater;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
+import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 
 import org.junit.jupiter.api.AfterEach;
@@ -183,13 +185,24 @@ public class LogFetchCollectorTest {
         assertThat(completedFetch1.isConsumed()).isTrue();
         assertThat(completedFetch2.isConsumed()).isTrue();
 
-        // totalBytesRead should be the sum of both completed fetches
+        // Compute the expected per-record size from the batch-level average
+        // (Arrow format records use batch.sizeInBytes() / recordCount as fallback)
+        MemoryLogRecords expectedData = genMemoryLogRecordsByObject(DATA1);
+        int expectedPerRecordSize = 0;
+        int expectedRecordCount = 0;
+        for (LogRecordBatch batch : expectedData.batches()) {
+            expectedPerRecordSize = batch.sizeInBytes() / batch.getRecordCount();
+            expectedRecordCount += batch.getRecordCount();
+        }
+        // Two fetches with the same data
+        long expectedTotal = (long) expectedPerRecordSize * expectedRecordCount * 2;
+
         long totalBytesRead = 0;
         for (ScanRecord record : scanRecords) {
-            assertThat(record.getSizeInBytes()).isGreaterThan(0);
+            assertThat(record.getSizeInBytes()).isEqualTo(expectedPerRecordSize);
             totalBytesRead += record.getSizeInBytes();
         }
-        assertThat(totalBytesRead).isGreaterThan(0);
+        assertThat(totalBytesRead).isEqualTo(expectedTotal);
     }
 
     private DefaultCompletedFetch makeCompletedFetch(

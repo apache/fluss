@@ -131,7 +131,7 @@ abstract class CompletedFetch {
         if (currentBatch != null && currentBatch.getRecordCount() > 0) {
             return currentBatch.sizeInBytes() / currentBatch.getRecordCount();
         }
-        return -1;
+        return ScanRecord.UNKNOWN_SIZE_IN_BYTES;
     }
 
     boolean isConsumed() {

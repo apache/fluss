@@ -30,6 +30,9 @@ import java.util.Objects;
 public class ScanRecord implements LogRecord {
     private static final long INVALID = -1L;
 
+    /** Indicates that the size in bytes is unknown for this record. */
+    public static final int UNKNOWN_SIZE_IN_BYTES = -1;
+
     private final long offset;
     private final long timestamp;
     private final ChangeType changeType;
@@ -45,7 +48,7 @@ public class ScanRecord implements LogRecord {
     }
 
     public ScanRecord(long offset, long timestamp, ChangeType changeType, InternalRow row) {
-        this(offset, timestamp, changeType, row, (int) INVALID);
+        this(offset, timestamp, changeType, row, UNKNOWN_SIZE_IN_BYTES);
     }
 
     public ScanRecord(
