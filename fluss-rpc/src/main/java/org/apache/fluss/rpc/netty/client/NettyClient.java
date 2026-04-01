@@ -30,9 +30,11 @@ import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.security.auth.AuthenticationFactory;
 import org.apache.fluss.security.auth.ClientAuthenticator;
 import org.apache.fluss.shaded.netty4.io.netty.bootstrap.Bootstrap;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelOption;
 import org.apache.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
+import org.apache.fluss.shaded.netty4.io.netty.channel.PreferHeapByteBufAllocator;
 import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
@@ -48,6 +50,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
+import static org.apache.fluss.config.ConfigOptions.NETTY_CLIENT_ALLOCATOR_HEAP_BUFFER_FIRST;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
@@ -97,15 +100,23 @@ public final class NettyClient implements RpcClient {
         int connectionMaxIdle =
                 (int) conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds();
         PooledByteBufAllocator pooledAllocator = PooledByteBufAllocator.DEFAULT;
+        // The inner client runs inside a Fluss server process where direct memory budget is
+        // explicitly managed, so it always uses pooled direct buffers. The external client
+        // (e.g. embedded in Flink) defaults to heap buffers to avoid unexpected off-heap
+        // pressure in user JVMs that may not have tuned -XX:MaxDirectMemorySize.
+        ByteBufAllocator allocator =
+                isInnerClient || !conf.getBoolean(NETTY_CLIENT_ALLOCATOR_HEAP_BUFFER_FIRST)
+                        ? PooledByteBufAllocator.DEFAULT
+                        : new PreferHeapByteBufAllocator(pooledAllocator);
         this.bootstrap =
                 new Bootstrap()
                         .group(eventGroup)
                         .channel(NettyUtils.getClientSocketChannelClass(eventGroup))
-                        .option(ChannelOption.ALLOCATOR, pooledAllocator)
+                        .option(ChannelOption.ALLOCATOR, allocator)
                         .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectTimeoutMs)
                         .option(ChannelOption.TCP_NODELAY, true)
                         .option(ChannelOption.SO_KEEPALIVE, true)
-                        .handler(new ClientChannelInitializer(connectionMaxIdle));
+                        .handler(new ClientChannelInitializer(connectionMaxIdle, allocator));
         this.isInnerClient = isInnerClient;
         this.clientMetricGroup = clientMetricGroup;
         this.authenticatorSupplier = AuthenticationFactory.loadClientAuthenticatorSupplier(conf);

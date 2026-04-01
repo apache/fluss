@@ -18,7 +18,9 @@
 package org.apache.fluss.rpc.netty.client;
 
 import org.apache.fluss.rpc.netty.NettyChannelInitializer;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
+import org.apache.fluss.shaded.netty4.io.netty.channel.PreferHeapByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
 
 /**
@@ -26,16 +28,19 @@ import org.apache.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
  * will be used by the client to handle the init request for the server.
  */
 final class ClientChannelInitializer extends NettyChannelInitializer {
+    private final ByteBufAllocator allocator;
 
-    public ClientChannelInitializer(long maxIdleTimeSeconds) {
+    public ClientChannelInitializer(long maxIdleTimeSeconds, ByteBufAllocator allocator) {
         super(maxIdleTimeSeconds);
+        this.allocator = allocator;
     }
 
     @Override
     protected void initChannel(SocketChannel ch) throws Exception {
         // NettyClientHandler will be added dynamically when connection is built
         super.initChannel(ch);
-        addFrameDecoder(ch, Integer.MAX_VALUE, 0);
+        ch.config().setAllocator(allocator);
+        addFrameDecoder(ch, Integer.MAX_VALUE, 0, allocator instanceof PreferHeapByteBufAllocator);
         addIdleStateHandler(ch);
     }
 }

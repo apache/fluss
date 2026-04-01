@@ -65,7 +65,7 @@ final class ServerChannelInitializer extends NettyChannelInitializer {
     protected void initChannel(SocketChannel ch) throws Exception {
         super.initChannel(ch);
         // initialBytesToStrip=0 to include the frame size field after decoding
-        addFrameDecoder(ch, Integer.MAX_VALUE, 0);
+        addFrameDecoder(ch, Integer.MAX_VALUE, 0, false);
         addIdleStateHandler(ch);
         ServerAuthenticator serverAuthenticator = authenticatorSupplier.get();
         LOG.debug(
