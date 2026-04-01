@@ -35,6 +35,7 @@ import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.DatabaseSummary;
@@ -513,6 +514,26 @@ public class MetadataManager {
                     getUpdatedTableDescriptor(tableDescriptor, tablePropertyChanges);
 
             if (newDescriptor != null) {
+                // is to enable datalake for the table
+                if (isDataLakeEnabled(newDescriptor) && !isDataLakeEnabled(tableDescriptor)) {
+                    // The table was created before cluster-level datalake was enabled.
+                    // Backfill `table.datalake.format` before enabling datalake on the table
+                    // so the updated table metadata stays consistent with the cluster setting.
+                    if (!tableInfo.getTableConfig().getDataLakeFormat().isPresent()) {
+                        DataLakeFormat dataLakeFormat =
+                                lakeCatalogDynamicLoader
+                                        .getLakeCatalogContainer()
+                                        .getDataLakeFormat();
+                        if (dataLakeFormat == null) {
+                            throw new InvalidAlterTableException(
+                                    "Cannot alter table "
+                                            + tablePath
+                                            + " in data lake, because the Fluss cluster doesn't enable datalake tables.");
+                        }
+                        newDescriptor = newDescriptor.withDataLakeFormat(dataLakeFormat);
+                    }
+                }
+
                 // reuse the same validate logic with the createTable() method
                 validateTableDescriptor(newDescriptor, maxBucketNum);
 

@@ -143,6 +143,22 @@ public class TableDescriptorValidation {
                             .filter(k -> k.startsWith("table.datalake."))
                             .collect(Collectors.toList());
             if (!datalakeKeys.isEmpty()) {
+                // Allow log tables without bucket keys to enable datalake even when
+                // `table.datalake.format` was not recorded at creation time, because bucket
+                // distribution does not need to stay aligned with the lake format in this case.
+                boolean alterLegacyLogTableWithoutBucketKey =
+                        !currentTable.hasPrimaryKey()
+                                && !currentTable.hasBucketKey()
+                                && datalakeKeys.stream()
+                                        .allMatch(
+                                                k ->
+                                                        k.equals(
+                                                                ConfigOptions.TABLE_DATALAKE_ENABLED
+                                                                        .key()));
+                if (alterLegacyLogTableWithoutBucketKey) {
+                    return;
+                }
+
                 throw new InvalidAlterTableException(
                         String.format(
                                 "The following options cannot be altered for tables that were"

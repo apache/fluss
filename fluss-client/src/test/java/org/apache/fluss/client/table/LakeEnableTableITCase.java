@@ -112,6 +112,65 @@ class LakeEnableTableITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testCanEnableDatalakeForLogTableWithoutBucketKeyCreatedBeforeClusterEnabledDatalake()
+            throws Exception {
+        String databaseName = "test_db";
+        String tableName =
+                "test_log_table_without_bucket_key_created_before_cluster_enabled_datalake";
+        TablePath tablePath = TablePath.of(databaseName, tableName);
+
+        admin.alterClusterConfigs(
+                        Collections.singletonList(
+                                new AlterConfig(
+                                        DATALAKE_FORMAT.key(), null, AlterConfigOpType.SET)))
+                .get();
+        assertThat(
+                        FLUSS_CLUSTER_EXTENSION
+                                .getCoordinatorServer()
+                                .getCoordinatorService()
+                                .getDataLakeFormat())
+                .isEqualTo(null);
+
+        admin.createDatabase(databaseName, DatabaseDescriptor.EMPTY, true).get();
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(3)
+                        .build();
+        admin.createTable(tablePath, tableDescriptor, false).get();
+
+        // enable cluster with datalake
+        admin.alterClusterConfigs(
+                        Collections.singletonList(
+                                new AlterConfig(
+                                        DATALAKE_FORMAT.key(),
+                                        DataLakeFormat.PAIMON.toString(),
+                                        AlterConfigOpType.SET)))
+                .get();
+        assertThat(
+                        FLUSS_CLUSTER_EXTENSION
+                                .getCoordinatorServer()
+                                .getCoordinatorService()
+                                .getDataLakeFormat())
+                .isEqualTo(DataLakeFormat.PAIMON);
+
+        List<TableChange> enableDatalakeChange =
+                Collections.singletonList(TableChange.set(TABLE_DATALAKE_ENABLED.key(), "true"));
+        // alter table to enable datalake
+        admin.alterTable(tablePath, enableDatalakeChange, false).get();
+
+        TableInfo updatedTableInfo = admin.getTableInfo(tablePath).get();
+        assertThat(updatedTableInfo.getTableConfig().isDataLakeEnabled()).isTrue();
+        assertThat(updatedTableInfo.getTableConfig().getDataLakeFormat())
+                .contains(DataLakeFormat.PAIMON);
+    }
+
+    @Test
     void testTableWithExplicitDatalakeFormatCanEnableDatalake() throws Exception {
         String databaseName = "test_db";
         String tableName = "test_table_explicit_format";
