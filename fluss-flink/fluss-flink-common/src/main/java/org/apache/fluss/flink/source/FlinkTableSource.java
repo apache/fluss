@@ -43,9 +43,12 @@ import org.apache.fluss.predicate.PredicateVisitor;
 import org.apache.fluss.types.RowType;
 
 import org.apache.flink.annotation.VisibleForTesting;
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.connector.source.Boundedness;
 import org.apache.flink.api.connector.source.Source;
 import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.connector.ProviderContext;
@@ -60,6 +63,7 @@ import org.apache.flink.table.connector.source.abilities.SupportsFilterPushDown;
 import org.apache.flink.table.connector.source.abilities.SupportsLimitPushDown;
 import org.apache.flink.table.connector.source.abilities.SupportsProjectionPushDown;
 import org.apache.flink.table.connector.source.abilities.SupportsRowLevelModificationScan;
+import org.apache.flink.table.connector.source.abilities.SupportsWatermarkPushDown;
 import org.apache.flink.table.connector.source.lookup.AsyncLookupFunctionProvider;
 import org.apache.flink.table.connector.source.lookup.LookupFunctionProvider;
 import org.apache.flink.table.connector.source.lookup.PartialCachingAsyncLookupProvider;
@@ -105,9 +109,12 @@ public class FlinkTableSource
                 LookupTableSource,
                 SupportsRowLevelModificationScan,
                 SupportsLimitPushDown,
-                SupportsAggregatePushDown {
+                SupportsAggregatePushDown,
+                SupportsWatermarkPushDown {
 
     public static final Logger LOG = LoggerFactory.getLogger(FlinkTableSource.class);
+
+    private static final String FLUSS_TRANSFORMATION = "fluss";
 
     private final TablePath tablePath;
     private final Configuration flussConfig;
@@ -154,6 +161,9 @@ public class FlinkTableSource
     private final Map<String, String> tableOptions;
 
     @Nullable private LakeSource<LakeSplit> lakeSource;
+
+    /** Watermark strategy that is pushed down by the Flink optimizer. */
+    @Nullable private WatermarkStrategy<RowData> watermarkStrategy;
 
     public FlinkTableSource(
             TablePath tablePath,
@@ -373,7 +383,25 @@ public class FlinkTableSource
                 }
             };
         } else {
-            return SourceProvider.of(source);
+            return new DataStreamScanProvider() {
+                @Override
+                public DataStream<RowData> produceDataStream(
+                        ProviderContext providerContext, StreamExecutionEnvironment execEnv) {
+                    WatermarkStrategy<RowData> strategy =
+                            watermarkStrategy != null
+                                    ? watermarkStrategy
+                                    : WatermarkStrategy.noWatermarks();
+                    DataStreamSource<RowData> sourceStream =
+                            execEnv.fromSource(source, strategy, "FlussSource-" + tablePath);
+                    providerContext.generateUid(FLUSS_TRANSFORMATION).ifPresent(sourceStream::uid);
+                    return sourceStream;
+                }
+
+                @Override
+                public boolean isBounded() {
+                    return source.getBoundedness() == Boundedness.BOUNDED;
+                }
+            };
         }
     }
 
@@ -444,6 +472,7 @@ public class FlinkTableSource
         source.modificationScanType = modificationScanType;
         source.partitionFilters = partitionFilters;
         source.lakeSource = lakeSource;
+        source.watermarkStrategy = watermarkStrategy;
         return source;
     }
 
@@ -464,6 +493,11 @@ public class FlinkTableSource
         if (lakeSource != null) {
             lakeSource.withProject(projectedFields);
         }
+    }
+
+    @Override
+    public void applyWatermark(WatermarkStrategy<RowData> watermarkStrategy) {
+        this.watermarkStrategy = watermarkStrategy;
     }
 
     @Override

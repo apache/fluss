@@ -57,6 +57,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+import static org.apache.fluss.config.ConfigOptions.NoKeyAssigner.ROUND_ROBIN;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
@@ -149,6 +150,7 @@ public class FlinkTestBase extends AbstractTestBase {
     @BeforeAll
     protected static void beforeAll() {
         clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+        clientConf.set(ConfigOptions.CLIENT_WRITER_BUCKET_NO_KEY_ASSIGNER, ROUND_ROBIN);
         bootstrapServers = FLUSS_CLUSTER_EXTENSION.getBootstrapServers();
         conn = ConnectionFactory.createConnection(clientConf);
         admin = conn.getAdmin();
