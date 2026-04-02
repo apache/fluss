@@ -219,8 +219,7 @@ public final class FlussClusterExtension
                 RpcClient.create(
                         conf,
                         new ClientMetricGroup(
-                                MetricRegistry.create(conf, null), "fluss-cluster-extension"),
-                        false);
+                                MetricRegistry.create(conf, null), "fluss-cluster-extension"));
         startCoordinatorServer();
         startTabletServers();
         // wait coordinator knows all tablet servers to make cluster
@@ -266,6 +265,7 @@ public final class FlussClusterExtension
             setRemoteDataDir(conf);
             coordinatorServer = new CoordinatorServer(conf, clock);
             coordinatorServer.start();
+            waitUntilCoordinatorServerElected();
             coordinatorServerInfo =
                     // TODO, Currently, we use 0 as coordinator server id.
                     new ServerInfo(
@@ -276,6 +276,7 @@ public final class FlussClusterExtension
         } else {
             // start the existing coordinator server
             coordinatorServer.start();
+            waitUntilCoordinatorServerElected();
             coordinatorServerInfo =
                     new ServerInfo(
                             0,
@@ -939,6 +940,13 @@ public final class FlussClusterExtension
 
     public CoordinatorServer getCoordinatorServer() {
         return coordinatorServer;
+    }
+
+    public void waitUntilCoordinatorServerElected() throws Exception {
+        waitUntil(
+                () -> zooKeeperClient.getCoordinatorLeaderAddress().isPresent(),
+                Duration.ofSeconds(10),
+                "Fail to wait coordinator server elected");
     }
 
     // --------------------------------------------------------------------------------------------

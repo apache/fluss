@@ -49,7 +49,7 @@ class TabletServerChangeWatcherTest {
             new AllCallbackWrapper<>(new ZooKeeperExtension());
 
     @Test
-    void testServetChanges() throws Exception {
+    void testServerChanges() throws Exception {
         ZooKeeperClient zookeeperClient =
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()

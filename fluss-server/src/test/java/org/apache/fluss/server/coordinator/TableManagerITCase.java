@@ -544,8 +544,7 @@ class TableManagerITCase {
                         configuration,
                         new ClientMetricGroup(
                                 MetricRegistry.create(configuration, null),
-                                "fluss-cluster-extension"),
-                        false)) {
+                                "fluss-cluster-extension"))) {
             ServerNode serverNode =
                     FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode(CLIENT_LISTENER);
             AdminGateway adminGatewayForClient =

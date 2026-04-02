@@ -36,6 +36,7 @@ public class MetricNames {
     // metrics for coordinator server
     // --------------------------------------------------------------------------------------------
     public static final String ACTIVE_COORDINATOR_COUNT = "activeCoordinatorCount";
+    public static final String ALIVE_COORDINATOR_COUNT = "aliveCoordinatorCount";
     public static final String ACTIVE_TABLET_SERVER_COUNT = "activeTabletServerCount";
     public static final String OFFLINE_BUCKET_COUNT = "offlineBucketCount";
     public static final String TABLE_COUNT = "tableCount";
@@ -280,4 +281,12 @@ public class MetricNames {
     public static final String NETTY_NUM_ALLOCATIONS_PER_SECONDS = "numAllocationsPerSecond";
     public static final String NETTY_NUM_HUGE_ALLOCATIONS_PER_SECONDS =
             "numHugeAllocationsPerSecond";
+
+    // --------------------------------------------------------------------------------------------
+    // metrics for tiering service
+    // --------------------------------------------------------------------------------------------
+
+    // for lake tiering metrics - operator level
+    public static final String TIERING_SERVICE_READ_BYTES = "readBytes";
+    public static final String TIERING_SERVICE_READ_BYTES_RATE = "readBytesPerSecond";
 }

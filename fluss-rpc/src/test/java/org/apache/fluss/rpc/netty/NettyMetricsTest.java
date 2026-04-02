@@ -73,7 +73,7 @@ public class NettyMetricsTest {
         }
         ClientMetricGroup clientMetricGroup = TestingClientMetricGroup.newInstance();
         clientGroup = clientMetricGroup.addGroup(NettyMetrics.NETTY_METRIC_GROUP);
-        nettyClient = new NettyClient(conf, clientMetricGroup, false);
+        nettyClient = new NettyClient(conf, clientMetricGroup);
     }
 
     @AfterEach

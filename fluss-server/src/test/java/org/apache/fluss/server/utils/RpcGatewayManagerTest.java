@@ -36,7 +36,7 @@ class RpcGatewayManagerTest {
         RpcGatewayManager<TabletServerGateway> gatewayRpcGatewayManager =
                 new RpcGatewayManager<>(
                         new NettyClient(
-                                new Configuration(), TestingClientMetricGroup.newInstance(), false),
+                                new Configuration(), TestingClientMetricGroup.newInstance()),
                         TabletServerGateway.class);
 
         ServerNode serverNode1 =

@@ -193,4 +193,14 @@ public class ProjectedRow implements InternalRow {
         int[] indexMapping = getIndexMapping(originSchema, expectedSchema);
         return new ProjectedRow(indexMapping);
     }
+
+    /**
+     * Returns the underlying row before column projection.
+     *
+     * <p>Note: the returned row may be replaced by a subsequent call to {@link
+     * #replaceRow(InternalRow)}.
+     */
+    public InternalRow getUnderlyingRow() {
+        return row;
+    }
 }

@@ -128,6 +128,22 @@ class PeriodicSnapshotManagerTest {
     }
 
     @Test
+    void testStartWhenInitialDelayIsZero() {
+        // When periodicSnapshotDelay = 1, murmurHash(...) % 1 == 0 always,
+        // so initialDelay = 0. With a positive snapshot interval, start()
+        // should still schedule snapshots — but the current "initialDelay > 0"
+        // guard silently skips scheduling.
+        periodicSnapshotManager = createSnapshotManager(1L, NopSnapshotTarget.INSTANCE);
+        periodicSnapshotManager.start();
+
+        // A positive interval means snapshots should be scheduled.
+        // With the bug, this assertion fails: no task is scheduled.
+        assertThat(scheduledExecutorService.getAllScheduledTasks())
+                .as("snapshot should be scheduled even when initialDelay is 0")
+                .hasSize(1);
+    }
+
+    @Test
     void testDynamicSnapshotInterval() {
         long initialInterval = 10_000L;
         long updatedInterval = 5_000L;

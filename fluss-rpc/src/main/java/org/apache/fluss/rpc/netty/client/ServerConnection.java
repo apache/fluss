@@ -106,8 +106,7 @@ final class ServerConnection {
             ServerNode node,
             ClientMetricGroup clientMetricGroup,
             ClientAuthenticator authenticator,
-            BiConsumer<ServerConnection, Throwable> closeCallback,
-            boolean isInnerClient) {
+            BiConsumer<ServerConnection, Throwable> closeCallback) {
         this.node = node;
         this.state = ConnectionState.CONNECTING;
         this.connectionMetrics = clientMetricGroup.createConnectionMetricGroup(node.uid());
@@ -119,7 +118,7 @@ final class ServerConnection {
         // callback is not registered when connection established.
         bootstrap
                 .connect(node.host(), node.port())
-                .addListener(future -> establishConnection((ChannelFuture) future, isInnerClient));
+                .addListener(future -> establishConnection((ChannelFuture) future));
     }
 
     public ServerNode getServerNode() {
@@ -250,7 +249,7 @@ final class ServerConnection {
 
     // ------------------------------------------------------------------------------------------
 
-    private void establishConnection(ChannelFuture future, boolean isInnerClient) {
+    private void establishConnection(ChannelFuture future) {
         synchronized (lock) {
             if (future.isSuccess()) {
                 if (state.isDisconnected()) {
@@ -262,9 +261,7 @@ final class ServerConnection {
                 LOG.debug("Established connection to server {}.", node);
                 channel = future.channel();
                 channel.pipeline()
-                        .addLast(
-                                "handler",
-                                new NettyClientHandler(new ResponseCallback(), isInnerClient));
+                        .addLast("handler", new NettyClientHandler(new ResponseCallback()));
                 // start checking api versions
                 switchState(ConnectionState.CHECKING_API_VERSIONS);
                 // TODO: set correct client software name and version, used for metrics in server

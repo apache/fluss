@@ -241,6 +241,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final LakeTableHelper lakeTableHelper;
     private final ProducerOffsetsManager producerOffsetsManager;
     private final KvSnapshotLeaseManager kvSnapshotLeaseManager;
+    private final CoordinatorLeaderElection coordinatorLeaderElection;
 
     public CoordinatorService(
             Configuration conf,
@@ -254,7 +255,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             LakeTableTieringManager lakeTableTieringManager,
             DynamicConfigManager dynamicConfigManager,
             ExecutorService ioExecutor,
-            KvSnapshotLeaseManager kvSnapshotLeaseManager) {
+            KvSnapshotLeaseManager kvSnapshotLeaseManager,
+            CoordinatorLeaderElection coordinatorLeaderElection) {
         super(
                 remoteFileSystem,
                 ServerType.COORDINATOR,
@@ -283,11 +285,17 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         this.producerOffsetsManager.start();
 
         this.kvSnapshotLeaseManager = kvSnapshotLeaseManager;
+        this.coordinatorLeaderElection = coordinatorLeaderElection;
     }
 
     @Override
     public String name() {
         return "coordinator";
+    }
+
+    @Override
+    public boolean isLeader() {
+        return coordinatorLeaderElection.isLeader();
     }
 
     @Override

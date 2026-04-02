@@ -67,6 +67,7 @@ public class CoordinatorContext {
     // a success deletion.
     private final Map<TableBucketReplica, Integer> failDeleteNumbers = new HashMap<>();
 
+    private final Set<String> liveCoordinatorServers = new HashSet<>();
     private final Map<Integer, ServerInfo> liveTabletServers = new HashMap<>();
     private final Set<Integer> shuttingDownTabletServers = new HashSet<>();
 
@@ -113,6 +114,23 @@ public class CoordinatorContext {
 
     public int getCoordinatorEpoch() {
         return coordinatorEpoch;
+    }
+
+    public Set<String> getLiveCoordinatorServers() {
+        return liveCoordinatorServers;
+    }
+
+    public void setLiveCoordinators(Set<String> servers) {
+        liveCoordinatorServers.clear();
+        liveCoordinatorServers.addAll(servers);
+    }
+
+    public void addLiveCoordinator(String serverId) {
+        this.liveCoordinatorServers.add(serverId);
+    }
+
+    public void removeLiveCoordinator(String serverId) {
+        this.liveCoordinatorServers.remove(serverId);
     }
 
     public Map<Integer, ServerInfo> getLiveTabletServers() {
@@ -692,10 +710,10 @@ public class CoordinatorContext {
         tablesToBeDeleted.clear();
         coordinatorEpoch = 0;
         clearTablesState();
-        // clear the live tablet servers
         liveTabletServers.clear();
         shuttingDownTabletServers.clear();
         serverTags.clear();
+        liveCoordinatorServers.clear();
     }
 
     public int getTotalPartitionCount() {

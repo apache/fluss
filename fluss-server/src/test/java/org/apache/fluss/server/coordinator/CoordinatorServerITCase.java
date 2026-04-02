@@ -63,6 +63,7 @@ class CoordinatorServerITCase extends ServerITCaseBase {
                 ConfigOptions.BIND_LISTENERS,
                 String.format("%s://%s:%d", DEFAULT_LISTENER_NAME, HOSTNAME, getPort()));
         conf.set(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
+
         return conf;
     }
 

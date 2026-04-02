@@ -345,7 +345,8 @@ public class DefaultCompletedFetchTest {
                                         tableInfo.getSchemaId(), tableInfo.getSchema())),
                         logScannerStatus,
                         true,
-                        fetchOffset);
+                        fetchOffset,
+                        null);
         List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(3);
         // close the read context to release arrow root resource,
         // this is important to test complex types
@@ -398,7 +399,8 @@ public class DefaultCompletedFetchTest {
                         new TestingSchemaGetter(tableInfo.getSchemaId(), tableInfo.getSchema())),
                 logScannerStatus,
                 true,
-                offset);
+                offset,
+                null);
     }
 
     private static Collection<Arguments> typeAndMagic() {

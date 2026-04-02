@@ -49,7 +49,7 @@ public class PaimonSortedRecordReader extends PaimonRecordReader implements Sort
                         PrimaryKeyTableUtils.addKeyNamePrefix(
                                 fileStoreTable.schema().primaryKeysFields()));
         this.comparator =
-                toFlussRowComparator(paimonRowType, new KeyComparatorSupplier(pkKeyType).get());
+                toFlussRowComparator(pkKeyType, new KeyComparatorSupplier(pkKeyType).get());
     }
 
     @Override

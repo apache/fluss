@@ -92,8 +92,7 @@ public class CoordinatorServer extends ServerBase {
     private final AtomicBoolean isShutDown = new AtomicBoolean(false);
     private final Clock clock;
 
-    @GuardedBy("lock")
-    private String serverId;
+    private final String serverId;
 
     @GuardedBy("lock")
     private MetricRegistry metricRegistry;
@@ -115,6 +114,9 @@ public class CoordinatorServer extends ServerBase {
 
     @GuardedBy("lock")
     private CoordinatorMetadataCache metadataCache;
+
+    @GuardedBy("lock")
+    private MetadataManager metadataManager;
 
     @GuardedBy("lock")
     private CoordinatorChannelManager coordinatorChannelManager;
@@ -148,6 +150,9 @@ public class CoordinatorServer extends ServerBase {
     private LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
 
     @GuardedBy("lock")
+    private CoordinatorLeaderElection coordinatorLeaderElection;
+
+    @GuardedBy("lock")
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
 
     public CoordinatorServer(Configuration conf) {
@@ -158,6 +163,7 @@ public class CoordinatorServer extends ServerBase {
         super(conf);
         validateCoordinatorConfigs(conf);
         this.terminationFuture = new CompletableFuture<>();
+        this.serverId = UUID.randomUUID().toString();
         this.clock = clock;
     }
 
@@ -170,10 +176,39 @@ public class CoordinatorServer extends ServerBase {
 
     @Override
     protected void startServices() throws Exception {
+        electCoordinatorLeaderAsync();
+    }
+
+    private void electCoordinatorLeaderAsync() throws Exception {
+        initCoordinatorStandby();
+
+        // start election (coordinatorLeaderElection is created inside initCoordinatorStandby
+        // after zkClient is initialized)
+        coordinatorLeaderElection.startElectLeaderAsync(
+                () -> {
+                    try {
+                        initCoordinatorLeader();
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                },
+                (Throwable t) -> {
+                    try {
+                        cleanupCoordinatorLeader();
+                    } catch (Exception e) {
+                        LOG.error("Failed to cleanup coordinator leader services", e);
+                    }
+                });
+    }
+
+    protected void initCoordinatorStandby() throws Exception {
+        // When a coordinator server starts, it first becomes a standby.
+        // This method execute initialization for standby, opening necessary rpc server port.
+        // Corresponding rpc methods will reject requests from clients
+        // and just serve for health check.
         synchronized (lock) {
-            LOG.info("Initializing Coordinator services.");
+            LOG.info("Initializing Coordinator services as standby.");
             List<Endpoint> endpoints = Endpoint.loadBindEndpoints(conf, ServerType.COORDINATOR);
-            this.serverId = UUID.randomUUID().toString();
 
             // for metrics
             this.metricRegistry = MetricRegistry.create(conf, pluginManager);
@@ -185,6 +220,9 @@ public class CoordinatorServer extends ServerBase {
                             serverId);
 
             this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
+
+            // CoordinatorLeaderElection must be created after zkClient is initialized.
+            this.coordinatorLeaderElection = new CoordinatorLeaderElection(zkClient, serverId);
 
             this.lakeCatalogDynamicLoader = new LakeCatalogDynamicLoader(conf, pluginManager, true);
             this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf, true);
@@ -206,8 +244,7 @@ public class CoordinatorServer extends ServerBase {
                     new LakeTableTieringManager(
                             new LakeTieringMetricGroup(metricRegistry, serverMetricGroup));
 
-            MetadataManager metadataManager =
-                    new MetadataManager(zkClient, conf, lakeCatalogDynamicLoader);
+            this.metadataManager = new MetadataManager(zkClient, conf, lakeCatalogDynamicLoader);
             this.ioExecutor =
                     Executors.newFixedThreadPool(
                             conf.get(ConfigOptions.SERVER_IO_POOL_SIZE),
@@ -237,7 +274,8 @@ public class CoordinatorServer extends ServerBase {
                             lakeTableTieringManager,
                             dynamicConfigManager,
                             ioExecutor,
-                            kvSnapshotLeaseManager);
+                            kvSnapshotLeaseManager,
+                            coordinatorLeaderElection);
 
             this.rpcServer =
                     RpcServer.create(
@@ -249,13 +287,17 @@ public class CoordinatorServer extends ServerBase {
                                     serverMetricGroup));
             rpcServer.start();
 
-            registerCoordinatorLeader();
-            // when init session, register coordinator server again
+            registerCoordinatorServer();
             ZooKeeperUtils.registerZookeeperClientReInitSessionListener(
-                    zkClient, this::registerCoordinatorLeader, this);
+                    zkClient, this::registerCoordinatorServer, this);
+        }
+    }
 
+    protected void initCoordinatorLeader() throws Exception {
+
+        synchronized (lock) {
             this.clientMetricGroup = new ClientMetricGroup(metricRegistry, SERVER_NAME);
-            this.rpcClient = RpcClient.create(conf, clientMetricGroup, true);
+            this.rpcClient = RpcClient.create(conf, clientMetricGroup);
 
             this.coordinatorChannelManager = new CoordinatorChannelManager(rpcClient);
 
@@ -263,6 +305,7 @@ public class CoordinatorServer extends ServerBase {
                     new AutoPartitionManager(metadataCache, metadataManager, conf);
             autoPartitionManager.start();
 
+            registerCoordinatorLeader();
             // start coordinator event processor after we register coordinator leader to zk
             // so that the event processor can get the coordinator leader node from zk during start
             // up.
@@ -287,6 +330,72 @@ public class CoordinatorServer extends ServerBase {
         }
     }
 
+    /**
+     * Cleans up leader-specific resources when this server loses leadership.
+     *
+     * <p>This method is called by {@link CoordinatorLeaderElection} when the server transitions
+     * from leader to standby. It cleans up leader-only resources while keeping the server running
+     * as a standby, ready to participate in future elections.
+     */
+    protected void cleanupCoordinatorLeader() throws Exception {
+        synchronized (lock) {
+            LOG.info("Cleaning up coordinator leader services.");
+
+            // Clean up leader-specific resources in reverse order of initialization
+            try {
+                if (coordinatorEventProcessor != null) {
+                    coordinatorEventProcessor.shutdown();
+                    coordinatorEventProcessor = null;
+                }
+            } catch (Throwable t) {
+                LOG.warn("Failed to shutdown coordinator event processor", t);
+            }
+
+            try {
+                if (coordinatorChannelManager != null) {
+                    coordinatorChannelManager.close();
+                    coordinatorChannelManager = null;
+                }
+            } catch (Throwable t) {
+                LOG.warn("Failed to close coordinator channel manager", t);
+            }
+
+            try {
+                if (autoPartitionManager != null) {
+                    autoPartitionManager.close();
+                    autoPartitionManager = null;
+                }
+            } catch (Throwable t) {
+                LOG.warn("Failed to close auto partition manager", t);
+            }
+
+            try {
+                if (rpcClient != null) {
+                    rpcClient.close();
+                    rpcClient = null;
+                }
+            } catch (Throwable t) {
+                LOG.warn("Failed to close RPC client", t);
+            }
+
+            try {
+                if (clientMetricGroup != null) {
+                    clientMetricGroup.close();
+                    clientMetricGroup = null;
+                }
+            } catch (Throwable t) {
+                LOG.warn("Failed to close client metric group", t);
+            }
+
+            // Reset coordinator context for next election
+            if (coordinatorContext != null) {
+                coordinatorContext.resetContext();
+            }
+
+            LOG.info("Coordinator leader services cleaned up successfully.");
+        }
+    }
+
     @Override
     protected CompletableFuture<Result> closeAsync(Result result) {
         if (isShutDown.compareAndSet(false, true)) {
@@ -306,34 +415,54 @@ public class CoordinatorServer extends ServerBase {
         return terminationFuture;
     }
 
-    private void registerCoordinatorLeader() throws Exception {
-        long startTime = System.currentTimeMillis();
-        List<Endpoint> bindEndpoints = rpcServer.getBindEndpoints();
-        CoordinatorAddress coordinatorAddress =
-                new CoordinatorAddress(
-                        this.serverId, Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf));
+    private void registerCoordinatorServer() throws Exception {
+        CoordinatorAddress coordinatorAddress = buildCoordinatorAddress();
+        registerToZookeeperWithRetry(
+                "coordinator server", () -> zkClient.registerCoordinatorServer(coordinatorAddress));
+    }
 
-        // we need to retry to register since although
-        // zkClient reconnect, the ephemeral node may still exist
-        // for a while time, retry to wait the ephemeral node removed
-        // see ZOOKEEPER-2985
+    private void registerCoordinatorLeader() throws Exception {
+        CoordinatorAddress coordinatorAddress = buildCoordinatorAddress();
+        registerToZookeeperWithRetry(
+                "coordinator leader", () -> zkClient.registerCoordinatorLeader(coordinatorAddress));
+    }
+
+    private CoordinatorAddress buildCoordinatorAddress() {
+        List<Endpoint> bindEndpoints = rpcServer.getBindEndpoints();
+        return new CoordinatorAddress(
+                this.serverId, Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf));
+    }
+
+    /**
+     * Registers to ZooKeeper with retry logic to handle the case where the ephemeral node may still
+     * exist for a while after ZK client reconnects.
+     *
+     * @param description a description of the registration for logging
+     * @param registration the registration action to perform
+     * @see <a href="https://issues.apache.org/jira/browse/ZOOKEEPER-2985">ZOOKEEPER-2985</a>
+     */
+    private void registerToZookeeperWithRetry(String description, ThrowingRunnable registration)
+            throws Exception {
+        long startTime = System.currentTimeMillis();
         while (true) {
             try {
-                zkClient.registerCoordinatorLeader(coordinatorAddress);
+                registration.run();
                 break;
             } catch (KeeperException.NodeExistsException nodeExistsException) {
                 long elapsedTime = System.currentTimeMillis() - startTime;
                 if (elapsedTime >= ZOOKEEPER_REGISTER_TOTAL_WAIT_TIME_MS) {
                     LOG.error(
-                            "Coordinator Server register to Zookeeper exceeded total retry time of {} ms. "
+                            "Registering {} to Zookeeper exceeded total retry time of {} ms. "
                                     + "Aborting registration attempts.",
+                            description,
                             ZOOKEEPER_REGISTER_TOTAL_WAIT_TIME_MS);
                     throw nodeExistsException;
                 }
 
                 LOG.warn(
-                        "Coordinator server already registered in Zookeeper. "
-                                + "retrying register after {} ms....",
+                        "Node for {} already exists in Zookeeper. "
+                                + "Retrying register after {} ms....",
+                        description,
                         ZOOKEEPER_REGISTER_RETRY_INTERVAL_MS);
                 try {
                     Thread.sleep(ZOOKEEPER_REGISTER_RETRY_INTERVAL_MS);
@@ -343,6 +472,12 @@ public class CoordinatorServer extends ServerBase {
                 }
             }
         }
+    }
+
+    /** A functional interface for actions that may throw checked exceptions. */
+    @FunctionalInterface
+    private interface ThrowingRunnable {
+        void run() throws Exception;
     }
 
     private void createDefaultDatabase() {
@@ -489,6 +624,14 @@ public class CoordinatorServer extends ServerBase {
             }
 
             try {
+                if (coordinatorLeaderElection != null) {
+                    coordinatorLeaderElection.close();
+                }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
+
+            try {
                 if (zkClient != null) {
                     zkClient.close();
                 }
@@ -536,6 +679,11 @@ public class CoordinatorServer extends ServerBase {
     }
 
     @VisibleForTesting
+    public String getServerId() {
+        return serverId;
+    }
+
+    @VisibleForTesting
     public ServerMetadataCache getMetadataCache() {
         return metadataCache;
     }
@@ -552,5 +700,10 @@ public class CoordinatorServer extends ServerBase {
     @VisibleForTesting
     public RebalanceManager getRebalanceManager() {
         return coordinatorEventProcessor.getRebalanceManager();
+    }
+
+    @VisibleForTesting
+    public ZooKeeperClient getZooKeeperClient() {
+        return zkClient;
     }
 }

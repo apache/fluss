@@ -272,6 +272,11 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     }
 
     @Override
+    public boolean isLeader() {
+        return true;
+    }
+
+    @Override
     public CompletableFuture<AdjustIsrResponse> adjustIsr(AdjustIsrRequest request) {
         if (networkIssueEnable) {
             return FutureUtils.completedExceptionally(new NetworkException("Mock network issue."));

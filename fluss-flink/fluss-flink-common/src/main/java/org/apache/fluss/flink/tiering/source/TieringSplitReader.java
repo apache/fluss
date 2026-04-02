@@ -25,6 +25,7 @@ import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.flink.source.reader.BoundedSplitReader;
 import org.apache.fluss.flink.source.reader.RecordAndPos;
+import org.apache.fluss.flink.tiering.source.metrics.TieringMetrics;
 import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSnapshotSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
@@ -106,16 +107,21 @@ public class TieringSplitReader<WriteResult>
 
     private final Set<TieringSplit> currentEmptySplits;
 
+    private final TieringMetrics tieringMetrics;
+
     public TieringSplitReader(
-            Connection connection, LakeTieringFactory<WriteResult, ?> lakeTieringFactory) {
-        this(connection, lakeTieringFactory, DEFAULT_POLL_TIMEOUT);
+            Connection connection,
+            LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
+            TieringMetrics tieringMetrics) {
+        this(connection, lakeTieringFactory, DEFAULT_POLL_TIMEOUT, tieringMetrics);
     }
 
     @VisibleForTesting
     protected TieringSplitReader(
             Connection connection,
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
-            Duration pollTimeout) {
+            Duration pollTimeout,
+            TieringMetrics tieringMetrics) {
         this.lakeTieringFactory = lakeTieringFactory;
         // owned by TieringSourceReader
         this.connection = connection;
@@ -129,6 +135,7 @@ public class TieringSplitReader<WriteResult>
         this.currentPendingSnapshotSplits = new ArrayDeque<>();
         this.reachTieringMaxDurationTables = new HashSet<>();
         this.pollTimeout = pollTimeout;
+        this.tieringMetrics = tieringMetrics;
     }
 
     @Override
@@ -348,6 +355,7 @@ public class TieringSplitReader<WriteResult>
         Map<TableBucket, TableBucketWriteResult<WriteResult>> writeResults = new HashMap<>();
         Map<TableBucket, String> finishedSplitIds = new HashMap<>();
         LOG.info("for log records to tier table {}.", currentTableId);
+
         for (TableBucket bucket : scanRecords.buckets()) {
             LOG.info("tiering table bucket {}.", bucket);
             List<ScanRecord> bucketScanRecords = scanRecords.records(bucket);
@@ -368,6 +376,9 @@ public class TieringSplitReader<WriteResult>
                 // if record is less than stopping offset
                 if (record.logOffset() < stoppingOffset) {
                     lakeWriter.write(record);
+                    if (record.getSizeInBytes() > 0) {
+                        tieringMetrics.recordBytesRead(record.getSizeInBytes());
+                    }
                 }
             }
             ScanRecord lastRecord = bucketScanRecords.get(bucketScanRecords.size() - 1);
@@ -505,6 +516,9 @@ public class TieringSplitReader<WriteResult>
         while (recordIterator.hasNext()) {
             ScanRecord scanRecord = recordIterator.next().record();
             lakeWriter.write(scanRecord);
+            if (scanRecord.getSizeInBytes() > 0) {
+                tieringMetrics.recordBytesRead(scanRecord.getSizeInBytes());
+            }
         }
         recordIterator.close();
         return emptyTableBucketWriteResultWithSplitIds();

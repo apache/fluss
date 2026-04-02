@@ -305,13 +305,53 @@ public final class ZkData {
     // ------------------------------------------------------------------------------------------
 
     /**
-     * The znode for the active coordinator. The znode path is:
+     * The znode for alive coordinators. The znode path is:
+     *
+     * <p>/coordinators/ids
+     */
+    public static final class CoordinatorIdsZNode {
+        public static String path() {
+            return "/coordinators/ids";
+        }
+    }
+
+    /**
+     * The znode for a registered Coordinator information. The znode path is:
+     *
+     * <p>/coordinators/ids/[serverId]
+     */
+    public static final class CoordinatorIdZNode {
+        public static String path(String serverId) {
+            return CoordinatorIdsZNode.path() + "/" + serverId;
+        }
+
+        public static byte[] encode(CoordinatorAddress coordinatorAddress) {
+            return JsonSerdeUtils.writeValueAsBytes(
+                    coordinatorAddress, CoordinatorAddressJsonSerde.INSTANCE);
+        }
+
+        public static CoordinatorAddress decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, CoordinatorAddressJsonSerde.INSTANCE);
+        }
+    }
+
+    /**
+     * The znode for the coordinator leader election. The znode path is:
+     *
+     * <p>/coordinators/election
+     */
+    public static final class CoordinatorElectionZNode {
+        public static String path() {
+            return "/coordinators/election";
+        }
+    }
+
+    /**
+     * The znode for the active coordinator leader. The znode path is:
      *
      * <p>/coordinators/active
-     *
-     * <p>Note: introduce standby coordinators in the future for znode "/coordinators/standby/".
      */
-    public static final class CoordinatorZNode {
+    public static final class CoordinatorLeaderZNode {
         public static String path() {
             return "/coordinators/active";
         }

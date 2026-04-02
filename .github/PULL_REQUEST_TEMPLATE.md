@@ -13,6 +13,13 @@
 
   - Each pull request should address only one issue, not mix up code from multiple issues.
 
+  - **Generative AI disclosure:** Indicate whether generative AI tools were used in authoring this PR. If yes, specify the tool below.
+    - [ ] No generative AI tools used
+    - [ ] Yes (please specify the tool below)
+
+<!--
+Generated-by: [Tool Name and Version] following [the guidelines](https://github.com/apache/fluss/blob/main/AGENTS.md)
+-->
 
 **(The sections below can be removed for hotfixes or typos)**
 -->

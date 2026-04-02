@@ -23,7 +23,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * The address information of an active coordinator stored in {@link ZkData.CoordinatorZNode}.
+ * The address information of an active coordinator stored in {@link ZkData.CoordinatorLeaderZNode}.
  *
  * @see CoordinatorAddressJsonSerde for json serialization and deserialization.
  */

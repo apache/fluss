@@ -76,16 +76,9 @@ public final class NettyClient implements RpcClient {
 
     private final Supplier<ClientAuthenticator> authenticatorSupplier;
 
-    /**
-     * Whether the NettyClient is used as inner network client (Communicating between Fluss's
-     * servers).
-     */
-    private final boolean isInnerClient;
-
     private volatile boolean isClosed = false;
 
-    public NettyClient(
-            Configuration conf, ClientMetricGroup clientMetricGroup, boolean isInnerClient) {
+    public NettyClient(Configuration conf, ClientMetricGroup clientMetricGroup) {
         this.connections = MapUtils.newConcurrentHashMap();
 
         // build bootstrap
@@ -106,7 +99,6 @@ public final class NettyClient implements RpcClient {
                         .option(ChannelOption.TCP_NODELAY, true)
                         .option(ChannelOption.SO_KEEPALIVE, true)
                         .handler(new ClientChannelInitializer(connectionMaxIdle));
-        this.isInnerClient = isInnerClient;
         this.clientMetricGroup = clientMetricGroup;
         this.authenticatorSupplier = AuthenticationFactory.loadClientAuthenticatorSupplier(conf);
         NettyMetrics.registerNettyMetrics(clientMetricGroup, pooledAllocator);
@@ -197,8 +189,7 @@ public final class NettyClient implements RpcClient {
                             node,
                             clientMetricGroup,
                             authenticatorSupplier.get(),
-                            (con, ignore) -> connections.remove(serverId, con),
-                            isInnerClient);
+                            (con, ignore) -> connections.remove(serverId, con));
                 });
     }
 

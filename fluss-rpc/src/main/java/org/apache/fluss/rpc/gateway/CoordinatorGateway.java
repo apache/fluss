@@ -40,6 +40,9 @@ import java.util.concurrent.CompletableFuture;
 /** The entry point of RPC gateway interface for coordinator server. */
 public interface CoordinatorGateway extends RpcGateway, AdminGateway {
 
+    /** Checks if the current server is the leader. */
+    boolean isLeader();
+
     /**
      * AdjustIsr request to adjust (expend or shrink) the ISR set for request table bucket.
      *
