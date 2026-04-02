@@ -729,6 +729,7 @@ public final class KvTablet {
      * schema using column IDs. This is needed when a client sends a partial update using an older
      * schema whose positions need to be remapped to the latest schema layout.
      */
+    @VisibleForTesting
     static int[] convertTargetColumns(int[] positions, Schema sourceSchema, Schema targetSchema) {
         List<Integer> sourceColIds = sourceSchema.getColumnIds();
         List<Integer> targetColIds = targetSchema.getColumnIds();
