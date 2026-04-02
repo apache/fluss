@@ -66,6 +66,10 @@ class FlussLakeAppendBatch(
     }
   }
 
+  /**
+   * Plans input partitions for reading. The returned isFallback flag is true when no lake snapshot
+   * exists and the plan falls back to pure log reading.
+   */
   private def doPlan(): (Array[InputPartition], Boolean) = {
     val lakeSnapshot =
       try {
@@ -121,20 +125,20 @@ class FlussLakeAppendBatch(
       tableBucketsOffset: java.util.Map[TableBucket, java.lang.Long],
       buckets: Seq[Int],
       bucketOffsetsRetriever: BucketOffsetsRetrieverImpl): Array[InputPartition] = {
-    val result = mutable.ArrayBuffer.empty[InputPartition]
     val tableId = tableInfo.getTableId
 
-    addLakePartitions(result, lakeSplits, splitSerializer, tableId, partitionId = null)
+    val lakePartitions =
+      createLakePartitions(lakeSplits, splitSerializer, tableId, partitionId = None)
 
     val stoppingOffsets =
       getBucketOffsets(stoppingOffsetsInitializer, null, buckets, bucketOffsetsRetriever)
-    buckets.foreach {
+    val logPartitions = buckets.flatMap {
       bucketId =>
         val tableBucket = new TableBucket(tableId, bucketId)
-        addLogTailPartition(result, tableBucket, tableBucketsOffset, stoppingOffsets(bucketId))
+        createLogTailPartition(tableBucket, tableBucketsOffset, stoppingOffsets(bucketId))
     }
 
-    result.toArray
+    (lakePartitions ++ logPartitions).toArray
   }
 
   private def planPartitionedTable(
@@ -143,7 +147,6 @@ class FlussLakeAppendBatch(
       tableBucketsOffset: java.util.Map[TableBucket, java.lang.Long],
       buckets: Seq[Int],
       bucketOffsetsRetriever: BucketOffsetsRetrieverImpl): Array[InputPartition] = {
-    val result = mutable.ArrayBuffer.empty[InputPartition]
     val tableId = tableInfo.getTableId
 
     val flussPartitionIdByName = mutable.LinkedHashMap.empty[String, Long]
@@ -154,58 +157,60 @@ class FlussLakeAppendBatch(
     val lakeSplitsByPartition = groupLakeSplitsByPartition(lakeSplits)
     var lakeSplitPartitionId = -1L
 
-    lakeSplitsByPartition.foreach {
+    val lakeAndLogPartitions = lakeSplitsByPartition.flatMap {
       case (partitionName, splits) =>
         flussPartitionIdByName.remove(partitionName) match {
           case Some(partitionId) =>
             // Partition in both lake and Fluss — lake splits + log tail
-            addLakePartitions(result, splits, splitSerializer, tableId, partitionId)
+            val lakePartitions =
+              createLakePartitions(splits, splitSerializer, tableId, Some(partitionId))
 
             val stoppingOffsets = getBucketOffsets(
               stoppingOffsetsInitializer,
               partitionName,
               buckets,
               bucketOffsetsRetriever)
-            buckets.foreach {
+            val logPartitions = buckets.flatMap {
               bucketId =>
                 val tableBucket = new TableBucket(tableId, partitionId, bucketId)
-                addLogTailPartition(
-                  result,
-                  tableBucket,
-                  tableBucketsOffset,
-                  stoppingOffsets(bucketId))
+                createLogTailPartition(tableBucket, tableBucketsOffset, stoppingOffsets(bucketId))
             }
+
+            lakePartitions ++ logPartitions
 
           case None =>
             // Partition only in lake (expired in Fluss) — lake splits only
             val pid = lakeSplitPartitionId
             lakeSplitPartitionId -= 1
-            addLakePartitions(result, splits, splitSerializer, tableId, pid)
+            createLakePartitions(splits, splitSerializer, tableId, Some(pid))
         }
-    }
+    }.toSeq
 
     // Partitions only in Fluss (not yet tiered) — log from earliest
-    flussPartitionIdByName.foreach {
+    val flussOnlyPartitions = flussPartitionIdByName.flatMap {
       case (partitionName, partitionId) =>
         val stoppingOffsets = getBucketOffsets(
           stoppingOffsetsInitializer,
           partitionName,
           buckets,
           bucketOffsetsRetriever)
-        buckets.foreach {
+        buckets.flatMap {
           bucketId =>
             val stoppingOffset = stoppingOffsets(bucketId)
             if (stoppingOffset > 0) {
               val tableBucket = new TableBucket(tableId, partitionId, bucketId)
-              result += FlussAppendInputPartition(
-                tableBucket,
-                LogScanner.EARLIEST_OFFSET,
-                stoppingOffset)
+              Some(
+                FlussAppendInputPartition(
+                  tableBucket,
+                  LogScanner.EARLIEST_OFFSET,
+                  stoppingOffset): InputPartition)
+            } else {
+              None
             }
         }
-    }
+    }.toSeq
 
-    result.toArray
+    (lakeAndLogPartitions ++ flussOnlyPartitions).toArray
   }
 
   private def groupLakeSplitsByPartition(
@@ -223,38 +228,36 @@ class FlussLakeAppendBatch(
     grouped
   }
 
-  private def addLakePartitions(
-      result: mutable.ArrayBuffer[InputPartition],
+  private def createLakePartitions(
       splits: Seq[LakeSplit],
       splitSerializer: SimpleVersionedSerializer[LakeSplit],
       tableId: Long,
-      partitionId: java.lang.Long): Unit = {
-    splits.foreach {
+      partitionId: Option[Long]): Seq[InputPartition] = {
+    splits.map {
       split =>
-        val tableBucket = if (partitionId != null) {
-          new TableBucket(tableId, partitionId, split.bucket())
-        } else {
-          new TableBucket(tableId, split.bucket())
+        val tableBucket = partitionId match {
+          case Some(pid) => new TableBucket(tableId, pid, split.bucket())
+          case None => new TableBucket(tableId, split.bucket())
         }
-        result += FlussLakeInputPartition(tableBucket, splitSerializer.serialize(split))
+        FlussLakeInputPartition(tableBucket, splitSerializer.serialize(split))
     }
   }
 
-  private def addLogTailPartition(
-      result: mutable.ArrayBuffer[InputPartition],
+  private def createLogTailPartition(
       tableBucket: TableBucket,
       tableBucketsOffset: java.util.Map[TableBucket, java.lang.Long],
-      stoppingOffset: Long): Unit = {
+      stoppingOffset: Long): Option[InputPartition] = {
     val snapshotLogOffset = tableBucketsOffset.get(tableBucket)
     if (snapshotLogOffset != null) {
       if (snapshotLogOffset.longValue() < stoppingOffset) {
-        result += FlussAppendInputPartition(
-          tableBucket,
-          snapshotLogOffset.longValue(),
-          stoppingOffset)
+        Some(FlussAppendInputPartition(tableBucket, snapshotLogOffset.longValue(), stoppingOffset))
+      } else {
+        None
       }
     } else if (stoppingOffset > 0) {
-      result += FlussAppendInputPartition(tableBucket, LogScanner.EARLIEST_OFFSET, stoppingOffset)
+      Some(FlussAppendInputPartition(tableBucket, LogScanner.EARLIEST_OFFSET, stoppingOffset))
+    } else {
+      None
     }
   }
 

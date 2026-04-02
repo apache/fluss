@@ -17,30 +17,22 @@
 
 package org.apache.fluss.spark.lake
 
-import org.apache.fluss.config.{ConfigOptions, Configuration}
-import org.apache.fluss.lake.committer.{CommitterInitContext, LakeCommitter}
-import org.apache.fluss.lake.writer.{LakeTieringFactory, WriterInitContext}
-import org.apache.fluss.metadata.{TableBucket, TableInfo, TablePath}
-import org.apache.fluss.rpc.messages.{CommitLakeTableSnapshotRequest, PbLakeTableOffsetForBucket, PbLakeTableSnapshotInfo}
+import org.apache.fluss.config.ConfigOptions
 import org.apache.fluss.spark.FlussSparkTestBase
 import org.apache.fluss.spark.SparkConnectorOptions.BUCKET_NUMBER
 
 import org.apache.spark.sql.Row
 
-import java.time.Duration
-import java.util.Collections
-
-import scala.collection.JavaConverters._
-
 /**
  * Base class for lake-enabled log table read tests. Subclasses provide the lake format config and
- * tiering factory.
+ * implement tiering via [[tierToLake]].
  */
 abstract class SparkLakeLogTableReadTestBase extends FlussSparkTestBase {
 
   protected var warehousePath: String = _
 
-  protected def createLakeTieringFactory(): LakeTieringFactory[_, _]
+  /** Tier all pending data for the given table to the lake. */
+  protected def tierToLake(tableName: String): Unit
 
   override protected def withTable(tableNames: String*)(f: => Unit): Unit = {
     try {
@@ -50,82 +42,13 @@ abstract class SparkLakeLogTableReadTestBase extends FlussSparkTestBase {
     }
   }
 
-  private def tierToLake(tp: TablePath, ti: TableInfo, expectedRecordCount: Int): Long = {
-    val tableId = ti.getTableId
-
-    val table = loadFlussTable(tp)
-    val logScanner = table.newScan().createLogScanner()
-    logScanner.subscribeFromBeginning(0)
-
-    val scanRecords =
-      new java.util.ArrayList[org.apache.fluss.client.table.scanner.ScanRecord]()
-    val deadline = System.currentTimeMillis() + 30000
-    while (scanRecords.size() < expectedRecordCount && System.currentTimeMillis() < deadline) {
-      val batch = logScanner.poll(Duration.ofSeconds(1))
-      batch.iterator().asScala.foreach(r => scanRecords.add(r))
-    }
-    assert(
-      scanRecords.size() == expectedRecordCount,
-      s"Expected $expectedRecordCount scan records, got ${scanRecords.size()}")
-    val logEndOffset = scanRecords.asScala.map(_.logOffset()).max + 1
-
-    val factory = createLakeTieringFactory()
-
-    val tb = new TableBucket(tableId, null, 0)
-    val lakeWriter = factory
-      .asInstanceOf[LakeTieringFactory[Any, Any]]
-      .createLakeWriter(new WriterInitContext {
-        override def tablePath(): TablePath = tp
-        override def tableBucket(): TableBucket = tb
-        override def partition(): String = null
-        override def tableInfo(): TableInfo = ti
-      })
-    for (record <- scanRecords.asScala) {
-      lakeWriter.write(record)
-    }
-    val writeResult = lakeWriter.complete()
-    lakeWriter.close()
-
-    val lakeCommitter = factory
-      .asInstanceOf[LakeTieringFactory[Any, Any]]
-      .createLakeCommitter(new CommitterInitContext {
-        override def tablePath(): TablePath = tp
-        override def tableInfo(): TableInfo = ti
-        override def lakeTieringConfig(): Configuration = new Configuration()
-        override def flussClientConfig(): Configuration = new Configuration()
-      })
-    val committable =
-      lakeCommitter.toCommittable(Collections.singletonList(writeResult))
-    val commitResult =
-      lakeCommitter.commit(committable, Collections.emptyMap())
-    val snapshotId = commitResult.getCommittedSnapshotId
-    lakeCommitter.close()
-
-    val coordinatorGateway = flussServer.newCoordinatorClient()
-    val request = new CommitLakeTableSnapshotRequest()
-    val tableReq: PbLakeTableSnapshotInfo = request.addTablesReq()
-    tableReq.setTableId(tableId)
-    tableReq.setSnapshotId(snapshotId)
-    val bucketReq: PbLakeTableOffsetForBucket = tableReq.addBucketsReq()
-    bucketReq.setBucketId(0)
-    bucketReq.setLogEndOffset(logEndOffset)
-    bucketReq.setMaxTimestamp(System.currentTimeMillis())
-    coordinatorGateway.commitLakeTableSnapshot(request).get()
-
-    Thread.sleep(2000)
-
-    logScanner.close()
-    table.close()
-
-    logEndOffset
-  }
-
   test("Spark Lake Read: log table falls back when no lake snapshot") {
     withTable("t") {
       sql(s"""
              |CREATE TABLE $DEFAULT_DATABASE.t (id INT, name STRING)
              | TBLPROPERTIES (
              |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
              |  '${BUCKET_NUMBER.key()}' = 1)
              |""".stripMargin)
 
@@ -152,6 +75,7 @@ abstract class SparkLakeLogTableReadTestBase extends FlussSparkTestBase {
              |CREATE TABLE $DEFAULT_DATABASE.t_lake_only (id INT, name STRING)
              | TBLPROPERTIES (
              |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
              |  '${BUCKET_NUMBER.key()}' = 1)
              |""".stripMargin)
 
@@ -160,12 +84,7 @@ abstract class SparkLakeLogTableReadTestBase extends FlussSparkTestBase {
              |(1, "alpha"), (2, "beta"), (3, "gamma")
              |""".stripMargin)
 
-      val tablePath = createTablePath("t_lake_only")
-      val table = loadFlussTable(tablePath)
-      val tableInfo = table.getTableInfo
-      table.close()
-
-      tierToLake(tablePath, tableInfo, expectedRecordCount = 3)
+      tierToLake("t_lake_only")
 
       checkAnswer(
         sql(s"SELECT * FROM $DEFAULT_DATABASE.t_lake_only ORDER BY id"),
@@ -185,6 +104,7 @@ abstract class SparkLakeLogTableReadTestBase extends FlussSparkTestBase {
              |CREATE TABLE $DEFAULT_DATABASE.t_union (id INT, name STRING)
              | TBLPROPERTIES (
              |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
              |  '${BUCKET_NUMBER.key()}' = 1)
              |""".stripMargin)
 
@@ -193,12 +113,7 @@ abstract class SparkLakeLogTableReadTestBase extends FlussSparkTestBase {
              |(1, "alpha"), (2, "beta"), (3, "gamma")
              |""".stripMargin)
 
-      val tablePath = createTablePath("t_union")
-      val table = loadFlussTable(tablePath)
-      val tableInfo = table.getTableInfo
-      table.close()
-
-      tierToLake(tablePath, tableInfo, expectedRecordCount = 3)
+      tierToLake("t_union")
 
       sql(s"""
              |INSERT INTO $DEFAULT_DATABASE.t_union VALUES
@@ -225,6 +140,7 @@ abstract class SparkLakeLogTableReadTestBase extends FlussSparkTestBase {
              |CREATE TABLE $DEFAULT_DATABASE.t_earliest (id INT, name STRING)
              | TBLPROPERTIES (
              |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
              |  '${BUCKET_NUMBER.key()}' = 1)
              |""".stripMargin)
 
@@ -233,12 +149,7 @@ abstract class SparkLakeLogTableReadTestBase extends FlussSparkTestBase {
              |(1, "alpha"), (2, "beta"), (3, "gamma")
              |""".stripMargin)
 
-      val tablePath = createTablePath("t_earliest")
-      val table = loadFlussTable(tablePath)
-      val tableInfo = table.getTableInfo
-      table.close()
-
-      tierToLake(tablePath, tableInfo, expectedRecordCount = 3)
+      tierToLake("t_earliest")
 
       try {
         spark.conf.set("spark.sql.fluss.scan.startup.mode", "earliest")
