@@ -110,12 +110,14 @@ class SourceEnumeratorStateSerializerTest {
         Map<Long, String> assignedPartitions = new HashMap<>();
         assignedPartitions.put(1L, "partition1");
         assignedPartitions.put(2L, "partition2");
+        // legacy version: isBacklogProcessed should be true after deserialization
         SourceEnumeratorState sourceEnumeratorState =
                 new SourceEnumeratorState(
                         assignedBuckets,
                         assignedPartitions,
                         null,
-                        LeaseContext.DEFAULT.getKvSnapshotLeaseId());
+                        LeaseContext.DEFAULT.getKvSnapshotLeaseId(),
+                        true);
         byte[] serialized = serializer.serializeV0(sourceEnumeratorState);
 
         // then deserialize
@@ -130,12 +132,14 @@ class SourceEnumeratorStateSerializerTest {
         TableBucket logSplitBucket = new TableBucket(1, 0);
         LogSplit logSplit = new LogSplit(logSplitBucket, null, 100L);
         remainingHybridLakeFlussSplits.add(logSplit);
+        // legacy version: isBacklogProcessed should be true after deserialization
         sourceEnumeratorState =
                 new SourceEnumeratorState(
                         assignedBuckets,
                         assignedPartitions,
                         remainingHybridLakeFlussSplits,
-                        LeaseContext.DEFAULT.getKvSnapshotLeaseId());
+                        LeaseContext.DEFAULT.getKvSnapshotLeaseId(),
+                        true);
 
         serialized = serializer.serializeV0(sourceEnumeratorState);
 

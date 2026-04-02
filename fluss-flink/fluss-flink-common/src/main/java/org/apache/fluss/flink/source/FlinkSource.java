@@ -72,6 +72,7 @@ public class FlinkSource<OUT>
     @Nullable private final Predicate partitionFilters;
     @Nullable private final LakeSource<LakeSplit> lakeSource;
     private final LeaseContext leaseContext;
+    private final boolean enableBacklogReporting;
 
     public FlinkSource(
             Configuration flussConf,
@@ -99,7 +100,8 @@ public class FlinkSource<OUT>
                 streaming,
                 partitionFilters,
                 null,
-                leaseContext);
+                leaseContext,
+                false);
     }
 
     public FlinkSource(
@@ -115,7 +117,8 @@ public class FlinkSource<OUT>
             boolean streaming,
             @Nullable Predicate partitionFilters,
             @Nullable LakeSource<LakeSplit> lakeSource,
-            LeaseContext leaseContext) {
+            LeaseContext leaseContext,
+            boolean enableBacklogReporting) {
         this.flussConf = flussConf;
         this.tablePath = tablePath;
         this.hasPrimaryKey = hasPrimaryKey;
@@ -129,6 +132,7 @@ public class FlinkSource<OUT>
         this.partitionFilters = partitionFilters;
         this.lakeSource = lakeSource;
         this.leaseContext = leaseContext;
+        this.enableBacklogReporting = enableBacklogReporting;
     }
 
     @Override
@@ -151,7 +155,8 @@ public class FlinkSource<OUT>
                 partitionFilters,
                 lakeSource,
                 leaseContext,
-                false);
+                false,
+                enableBacklogReporting);
     }
 
     @Override
@@ -175,7 +180,9 @@ public class FlinkSource<OUT>
                 new LeaseContext(
                         sourceEnumeratorState.getLeaseId(),
                         leaseContext.getKvSnapshotLeaseDurationMs()),
-                true);
+                true,
+                enableBacklogReporting,
+                sourceEnumeratorState.isBacklogProcessed());
     }
 
     @Override
