@@ -499,7 +499,8 @@ public class ReplicaTestBase {
                 NOPErrorHandler.INSTANCE,
                 metricGroup,
                 DATA1_TABLE_INFO,
-                manualClock);
+                manualClock,
+                remoteLogManager);
     }
 
     private void initRemoteLogEnv() throws Exception {
