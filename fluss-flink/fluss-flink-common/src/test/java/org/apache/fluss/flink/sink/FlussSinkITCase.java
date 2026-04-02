@@ -382,12 +382,13 @@ public class FlussSinkITCase extends FlinkTestBase {
             for (TableBucket bucket : scanRecords.buckets()) {
                 for (ScanRecord record : scanRecords.records(bucket)) {
                     InternalRow row = record.getRow();
+                    int amount = row.isNullAt(2) ? -1 : row.getInt(2);
                     String address = row.getString(3) != null ? row.getString(3).toString() : null;
                     TestOrder order =
                             new TestOrder(
                                     row.getLong(0),
                                     row.getLong(1),
-                                    row.getInt(2),
+                                    amount,
                                     address,
                                     toFlinkRowKind(record.getChangeType()));
                     actual.add(order);
