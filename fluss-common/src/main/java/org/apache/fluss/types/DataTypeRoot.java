@@ -103,7 +103,20 @@ public enum DataTypeRoot {
 
     MAP(DataTypeFamily.CONSTRUCTED, DataTypeFamily.EXTENSION),
 
-    ROW(DataTypeFamily.CONSTRUCTED);
+    ROW(DataTypeFamily.CONSTRUCTED),
+
+    // Iceberg V3 types
+    TIMESTAMP_NANO_WITHOUT_TIME_ZONE(
+            DataTypeFamily.PREDEFINED,
+            DataTypeFamily.DATETIME,
+            DataTypeFamily.TIMESTAMP,
+            DataTypeFamily.EXTENSION),
+
+    TIMESTAMP_NANO_WITH_LOCAL_TIME_ZONE(
+            DataTypeFamily.PREDEFINED,
+            DataTypeFamily.DATETIME,
+            DataTypeFamily.TIMESTAMP,
+            DataTypeFamily.EXTENSION);
 
     private final Set<DataTypeFamily> families;
 
