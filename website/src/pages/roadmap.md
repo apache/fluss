@@ -1,32 +1,42 @@
 # Fluss Roadmap
-This roadmap means to provide users and contributors with a high-level summary of ongoing efforts in the Fluss community. The roadmap contains both efforts working in process as well as completed efforts, so that users may get a better impression of the overall status and direction of those developments.
-## Flink Integration
-Fluss will provide deep integration with Apache Flink, enabling users a single engine experience for building real-time analytics applications. The integration will include:
-- Upgrade Flink version to 2.x
-- Support new Delta Join to address the pain-points of Stream-Stream Join.
-- More pushdown optimizations: Filter Pushdown ([#197](https://github.com/apache/fluss/issues/197)), Aggregation Pushdown, etc.
-- Upgrade the Rule-Based Optimization into Cost-Based Optimization in Flink SQL streaming planner with leveraging statistics in Fluss tables.
-## Streaming Lakehouse
-- Support for Iceberg ([#452](https://github.com/apache/fluss/issues/452)) as Lakehouse Storage. And DeltaLake, Hudi as well.
-- Support Union Read for Spark, Trino, StarRocks.
-- Support for Lance ([#1155](https://github.com/apache/fluss/issues/1155)) as Lakehouse Storage to enable integration with AI/ML workflows for multi-modal data processing.
-## Spark Integration
-- Support for Spark connector ([#155](https://github.com/apache/fluss/issues/155)) to enable seamless data processing and analytics workflows.
-## Python Client
-- Support Python SDK to connect with Python ecosystems, including PyArrow, Pandas, Lance, and DuckDB.
+This roadmap provides a high-level summary of ongoing efforts in the Fluss community. Fluss is positioned as the **Streaming Storage for Real-Time Analytics and AI**.
+
+For detailed tracking, see the [Fluss 2026 Roadmap](https://github.com/apache/fluss/discussions/2342).
+
+## Real-Time AI and ML
+- Real-Time Feature Store with aggregation merge engines, schema evolution, and point-in-time correctness.
+- Multimodal Streaming Data support for rows, columns, vectors, variant, and images.
+- High-performance Rust/Python SDK integrating PyTorch, Ray, Pandas, and PyArrow.
+
+## Real-Time Lakehouse
+- Iceberg V3, Hudi, and Delta Lake integration
+- In-Place Lakehouse: Define Fluss tables on existing Lake tables
+- Native Union Read for Spark, Trino, and StarRocks
+- Deletion Vectors to accelerate updates and deletes
+
+## Streaming Analytics
+- Global Secondary Index for non-primary key lookups
+- Delta Join with multi-stream and left/right/full join support
+- Cost-Based Optimizer in Flink SQL with Fluss table statistics
+- Full Spark Engine support with Structured Streaming integration
+
 ## Storage Engine
-- Support for complex data types: Array ([#168](https://github.com/apache/fluss/issues/168)), Map ([#169](https://github.com/apache/fluss/issues/169)), Struct ([#170](https://github.com/apache/fluss/issues/170)), Variant/JSON.
-- Support for schema evolution.
-## ZooKeeper Removal
-Fluss currently utilizes ZooKeeper for cluster coordination, metadata storage, and cluster configuration management. In upcoming releases, ZooKeeper will be replaced by KvStore for metadata storage and Raft for cluster coordination and ensuring consistency. This transition aims to streamline operations and enhance system reliability.
+- Columnar Streaming with Filter and Aggregation Pushdown
+- Full Schema Evolution with table renaming and column defaults
 
-## Zero Disks
-Fluss currently utilizes a tiered storage architecture to significantly reduce storage costs and operational complexities. However, the Fluss community is actively investing in the Zero Disk architecture, which aims to completely replace local disks with S3 storage. This transition will enable Fluss to achieve a serverless, stateless, and elastic design, significantly minimizing operational overhead while eliminating inter-zone networking costs.
-## Maintenance
-- Re-balance Cluster: Automatic cluster rebalancing capabilities for optimal resource distribution.
-- Gray Upgrade: Rolling upgrade support enabling zero-downtime system updates.
-## Miscellaneous
-- Upgrade programming language to Java 11.
-- Support for more connectors: Trino, DuckDB, etc.
+## Cloud-Native Architecture
+- ZooKeeper Removal for simpler deployment
+- Zero Disks: Direct S3 writes for elastic, diskless storage
 
-*This roadmap is subject to change based on community feedback, technical discoveries, and evolving requirements. For the most up-to-date information, please refer to the GitHub milestone boards and project issues.*
+## Connectivity and Ingestion
+- Log agent integration 
+- Client SDKs: Rust, C++, Python
+
+## Operational Excellence
+- Automated cluster rebalancing and bucket rescaling
+- Coordinator HA with multi-AZ and cross-cluster geo-replication
+
+## Security
+- (m)TLS for intra-cluster, ZooKeeper, and external clients
+
+*This roadmap is subject to change based on community feedback and evolving requirements.*
