@@ -390,16 +390,14 @@ public class LogFetcher implements Closeable {
                                     fetchResultForBucket.getHighWatermark());
                         } else {
                             LogRecords logRecords = fetchResultForBucket.recordsOrEmpty();
-                            if (!MemoryLogRecords.EMPTY.equals(logRecords)
-                                    || fetchResultForBucket.getErrorCode() != Errors.NONE.code()) {
+                            boolean hasRecords = !MemoryLogRecords.EMPTY.equals(logRecords);
+                            if (hasRecords) {
                                 // Retain the parsed buffer so it stays alive while
                                 // this CompletedFetch's records are being consumed.
                                 if (parsedByteBuf != null) {
                                     parsedByteBuf.retain();
                                 }
-                                // In oder to not signal notEmptyCondition, add completed
-                                // fetch to buffer until log records is not empty.
-                                DefaultCompletedFetch completedFetch =
+                                logFetchBuffer.add(
                                         new DefaultCompletedFetch(
                                                 tb,
                                                 fetchResultForBucket,
@@ -409,8 +407,19 @@ public class LogFetcher implements Closeable {
                                                 // the data is pruned
                                                 isCheckCrcs,
                                                 fetchOffset,
-                                                parsedByteBuf);
-                                logFetchBuffer.add(completedFetch);
+                                                parsedByteBuf));
+                            } else if (fetchResultForBucket.getErrorCode() != Errors.NONE.code()) {
+                                // Error-only bucket: no records to back, so no
+                                // buffer reference needed.
+                                logFetchBuffer.add(
+                                        new DefaultCompletedFetch(
+                                                tb,
+                                                fetchResultForBucket,
+                                                readContext,
+                                                logScannerStatus,
+                                                isCheckCrcs,
+                                                fetchOffset,
+                                                null));
                             }
                         }
                     }
