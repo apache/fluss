@@ -164,7 +164,7 @@ class DynamicServerConfig {
         }
 
         // Build new configuration by merging initial + dynamic configs
-        Map<String, String> newConfigMap = buildConfigMap(effectiveChanges);
+        Map<String, String> newConfigMap = buildConfigMap(newDynamicConfigs);
         Configuration newConfig = Configuration.fromMap(newConfigMap);
 
         // Apply changes to all registered ServerReconfigurable instances
