@@ -22,8 +22,11 @@ import org.apache.fluss.record.FileLogProjection;
 import org.apache.fluss.record.ProjectionPushdownCache;
 import org.apache.fluss.record.TestData;
 import org.apache.fluss.record.TestingSchemaGetter;
+import org.apache.fluss.rpc.messages.PbPredicate;
 
 import org.junit.jupiter.api.Test;
+
+import java.util.Collections;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static org.assertj.core.api.AssertionsForClassTypes.assertThat;
@@ -81,5 +84,35 @@ class FetchParamsTest {
                 projectionCache);
         // the FileLogProjection should be cached
         assertThat(fetchParams.projection()).isNotNull().isSameAs(prevProjection);
+    }
+
+    @Test
+    void testBuilderDefaultsToLeaderOnly() {
+        FetchParams fetchParams = new FetchParamsBuilder(-1, 100).build();
+        assertThat(fetchParams.fetchOnlyLeader()).isTrue();
+
+        FetchParams overrideFetchParams =
+                new FetchParamsBuilder(-1, 100).withFetchOnlyLeader(false).build();
+        assertThat(overrideFetchParams.fetchOnlyLeader()).isFalse();
+    }
+
+    @Test
+    void testBuilderPropagatesFilterInfo() {
+        PbPredicate pbPredicate = new PbPredicate();
+        FilterInfo filterInfo = new FilterInfo(pbPredicate, 42);
+
+        FetchParams fetchParams =
+                new FetchParamsBuilder(-1, 100)
+                        .withTableFilterInfoMap(Collections.singletonMap(1L, filterInfo))
+                        .build();
+
+        assertThat(fetchParams.getFilterInfo(1L)).isEqualTo(filterInfo);
+        assertThat(fetchParams.getFilterInfo(999L)).isNull();
+    }
+
+    @Test
+    void testBuilderWithoutFilterInfo() {
+        FetchParams fetchParams = new FetchParamsBuilder(-1, 100).build();
+        assertThat(fetchParams.getFilterInfo(1L)).isNull();
     }
 }

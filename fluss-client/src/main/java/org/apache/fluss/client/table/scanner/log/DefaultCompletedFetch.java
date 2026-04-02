@@ -36,7 +36,7 @@ class DefaultCompletedFetch extends CompletedFetch {
             LogRecordReadContext readContext,
             LogScannerStatus logScannerStatus,
             boolean isCheckCrc,
-            Long fetchOffset) {
+            long fetchOffset) {
         super(
                 tableBucket,
                 fetchLogResultForBucket.getError(),
@@ -46,6 +46,7 @@ class DefaultCompletedFetch extends CompletedFetch {
                 readContext,
                 logScannerStatus,
                 isCheckCrc,
-                fetchOffset);
+                fetchOffset,
+                fetchLogResultForBucket.getFilteredEndOffset());
     }
 }

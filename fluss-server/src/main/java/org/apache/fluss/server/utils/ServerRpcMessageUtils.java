@@ -186,6 +186,7 @@ import org.apache.fluss.server.entity.StopReplicaResultForBucket;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
+import org.apache.fluss.server.log.FilterInfo;
 import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
@@ -199,6 +200,9 @@ import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 import org.apache.fluss.utils.json.TableBucketOffsets;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -227,6 +231,8 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * request/response.
  */
 public class ServerRpcMessageUtils {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ServerRpcMessageUtils.class);
 
     public static TablePath toTablePath(PbTablePath pbTablePath) {
         return new TablePath(pbTablePath.getDatabaseName(), pbTablePath.getTableName());
@@ -887,6 +893,22 @@ public class ServerRpcMessageUtils {
         return produceResponse;
     }
 
+    public static @Nullable Map<Long, FilterInfo> getTableFilterInfoMap(FetchLogRequest request) {
+        Map<Long, FilterInfo> result = null;
+        for (PbFetchLogReqForTable tableReq : request.getTablesReqsList()) {
+            if (tableReq.hasFilterPredicate()) {
+                if (result == null) {
+                    result = new HashMap<>();
+                }
+                int schemaId = tableReq.hasFilterSchemaId() ? tableReq.getFilterSchemaId() : -1;
+                result.put(
+                        tableReq.getTableId(),
+                        new FilterInfo(tableReq.getFilterPredicate(), schemaId));
+            }
+        }
+        return result == null ? null : Collections.unmodifiableMap(result);
+    }
+
     public static Map<TableBucket, FetchReqInfo> getFetchLogData(FetchLogRequest request) {
         Map<TableBucket, FetchReqInfo> fetchDataMap = new HashMap<>();
         for (PbFetchLogReqForTable fetchLogReqForTable : request.getTablesReqsList()) {
@@ -933,6 +955,18 @@ public class ServerRpcMessageUtils {
             FetchLogResultForBucket bucketResult = entry.getValue();
             PbFetchLogRespForBucket fetchLogRespForBucket =
                     new PbFetchLogRespForBucket().setBucketId(tb.getBucket());
+            if (bucketResult.hasFilteredEndOffset()) {
+                // filteredEndOffset and records are mutually exclusive: when all batches are
+                // filtered out, there should be no record data to send.
+                if (bucketResult.recordsOrEmpty().sizeInBytes() != 0) {
+                    LOG.warn(
+                            "filteredEndOffset is set but records are not empty for bucket {}, "
+                                    + "clearing filteredEndOffset as fallback.",
+                            tb);
+                } else {
+                    fetchLogRespForBucket.setFilteredEndOffset(bucketResult.getFilteredEndOffset());
+                }
+            }
             if (tb.getPartitionId() != null) {
                 fetchLogRespForBucket.setPartitionId(tb.getPartitionId());
             }

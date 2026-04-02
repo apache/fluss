@@ -29,7 +29,6 @@ import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.utils.CloseableIterator;
 
@@ -42,19 +41,23 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+
 /**
- * {@link CompletedFetch} represents the result that was returned from the tablet server via a
- * {@link FetchLogRequest}, which can be a {@link LogRecordBatch} or remote log segments path. It
- * contains logic to maintain state between calls to {@link #fetchRecords(int)}.
+ * {@link CompletedFetch} represents the result that was returned from the tablet server via a fetch
+ * log request, which can be a {@link LogRecordBatch} or remote log segments path. It contains logic
+ * to maintain state between calls to {@link #fetchRecords(int)}.
  */
 @Internal
 abstract class CompletedFetch {
     static final Logger LOG = LoggerFactory.getLogger(CompletedFetch.class);
+    static final long NO_FILTERED_END_OFFSET = -1L;
 
     final TableBucket tableBucket;
     final ApiError error;
     final int sizeInBytes;
     final long highWatermark;
+    private final long fetchOffset;
 
     private final boolean isCheckCrcs;
     private final Iterator<LogRecordBatch> batches;
@@ -81,7 +84,8 @@ abstract class CompletedFetch {
             LogRecordReadContext readContext,
             LogScannerStatus logScannerStatus,
             boolean isCheckCrcs,
-            long fetchOffset) {
+            long fetchOffset,
+            long nextFetchOffset) {
         this.tableBucket = tableBucket;
         this.error = error;
         this.sizeInBytes = sizeInBytes;
@@ -90,8 +94,23 @@ abstract class CompletedFetch {
         this.readContext = readContext;
         this.isCheckCrcs = isCheckCrcs;
         this.logScannerStatus = logScannerStatus;
-        this.nextFetchOffset = fetchOffset;
         this.selectedFieldGetters = readContext.getSelectedFieldGetters();
+        this.fetchOffset = fetchOffset;
+        checkArgument(
+                nextFetchOffset == NO_FILTERED_END_OFFSET || nextFetchOffset >= fetchOffset,
+                "nextFetchOffset (%s) must be %s (NO_FILTERED_END_OFFSET) or >= fetchOffset (%s) for bucket %s.",
+                nextFetchOffset,
+                NO_FILTERED_END_OFFSET,
+                fetchOffset,
+                tableBucket);
+        checkArgument(
+                nextFetchOffset == NO_FILTERED_END_OFFSET || sizeInBytes == 0,
+                "When nextFetchOffset is set (%s), records must be empty (sizeInBytes=%s) for bucket %s.",
+                nextFetchOffset,
+                sizeInBytes,
+                tableBucket);
+        this.nextFetchOffset =
+                nextFetchOffset != NO_FILTERED_END_OFFSET ? nextFetchOffset : fetchOffset;
     }
 
     // TODO: optimize this to avoid deep copying the record.
@@ -140,6 +159,10 @@ abstract class CompletedFetch {
 
     boolean isInitialized() {
         return initialized;
+    }
+
+    long fetchOffset() {
+        return fetchOffset;
     }
 
     long nextFetchOffset() {
@@ -207,6 +230,8 @@ abstract class CompletedFetch {
                 ScanRecord record = toScanRecord(lastRecord);
                 scanRecords.add(record);
                 recordsRead++;
+                // Per-record offset is a best-effort value; the authoritative offset
+                // comes from the batch's nextLogOffset once the batch is fully consumed.
                 nextFetchOffset = lastRecord.logOffset() + 1;
                 cachedRecordException = null;
             }

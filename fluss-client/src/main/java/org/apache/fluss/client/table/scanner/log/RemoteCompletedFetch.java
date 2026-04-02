@@ -55,7 +55,8 @@ class RemoteCompletedFetch extends CompletedFetch {
                 readContext,
                 logScannerStatus,
                 isCheckCrc,
-                fetchOffset);
+                fetchOffset,
+                CompletedFetch.NO_FILTERED_END_OFFSET);
         this.fileLogRecords = fileLogRecords;
         this.recycleCallback = recycleCallback;
     }

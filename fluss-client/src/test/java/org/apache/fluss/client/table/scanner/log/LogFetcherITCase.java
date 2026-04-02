@@ -103,6 +103,7 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                 new LogFetcher(
                         DATA1_TABLE_INFO,
                         null,
+                        null,
                         logScannerStatus,
                         clientConf,
                         metadataUpdater,
@@ -176,6 +177,7 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                                 DATA1_TABLE_INFO.getComment().orElse(null),
                                 DATA1_TABLE_INFO.getCreatedTime(),
                                 DATA1_TABLE_INFO.getModifiedTime()),
+                        null,
                         null,
                         logScannerStatus,
                         clientConf,
@@ -275,6 +277,7 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                 new LogFetcher(
                         DATA1_TABLE_INFO,
                         null,
+                        null,
                         logScannerStatus,
                         clientConf,
                         metadataUpdater,
@@ -314,6 +317,7 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
         logFetcher =
                 new LogFetcher(
                         DATA1_TABLE_INFO,
+                        null,
                         null,
                         logScannerStatus,
                         clientConf,

@@ -36,6 +36,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
@@ -49,8 +50,10 @@ import org.apache.fluss.rpc.messages.PbFetchLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForTable;
+import org.apache.fluss.rpc.messages.PbPredicate;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.rpc.util.PredicateMessageUtils;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.Projection;
 
@@ -92,6 +95,9 @@ public class LogFetcher implements Closeable {
     //  bytes from remote file.
     private final LogRecordReadContext remoteReadContext;
     @Nullable private final Projection projection;
+    @Nullable private final Predicate recordBatchFilter;
+    @Nullable private final PbPredicate cachedPbPredicate;
+    private final int filterSchemaId;
     private final int maxFetchBytes;
     private final int maxBucketFetchBytes;
     private final int minFetchBytes;
@@ -114,6 +120,7 @@ public class LogFetcher implements Closeable {
     public LogFetcher(
             TableInfo tableInfo,
             @Nullable Projection projection,
+            @Nullable Predicate recordBatchFilter,
             LogScannerStatus logScannerStatus,
             Configuration conf,
             MetadataUpdater metadataUpdater,
@@ -127,6 +134,13 @@ public class LogFetcher implements Closeable {
         this.remoteReadContext =
                 LogRecordReadContext.createReadContext(tableInfo, true, projection, schemaGetter);
         this.projection = projection;
+        this.recordBatchFilter = recordBatchFilter;
+        this.cachedPbPredicate =
+                recordBatchFilter != null
+                        ? PredicateMessageUtils.toPbPredicate(
+                                recordBatchFilter, tableInfo.getRowType())
+                        : null;
+        this.filterSchemaId = tableInfo.getSchemaId();
         this.logScannerStatus = logScannerStatus;
         this.maxFetchBytes =
                 (int) conf.get(ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MAX_BYTES).getBytes();
@@ -385,9 +399,10 @@ public class LogFetcher implements Closeable {
                         } else {
                             LogRecords logRecords = fetchResultForBucket.recordsOrEmpty();
                             if (!MemoryLogRecords.EMPTY.equals(logRecords)
-                                    || fetchResultForBucket.getErrorCode() != Errors.NONE.code()) {
-                                // In oder to not signal notEmptyCondition, add completed
-                                // fetch to buffer until log records is not empty.
+                                    || fetchResultForBucket.getErrorCode() != Errors.NONE.code()
+                                    || fetchResultForBucket.hasFilteredEndOffset()) {
+                                // In order to not signal notEmptyCondition, add completed fetch to
+                                // buffer until log records is not empty.
                                 DefaultCompletedFetch completedFetch =
                                         new DefaultCompletedFetch(
                                                 tb,
@@ -533,6 +548,10 @@ public class LogFetcher implements Closeable {
                         } else {
                             reqForTable.setProjectionPushdownEnabled(false);
                         }
+                        if (cachedPbPredicate != null) {
+                            reqForTable.setFilterPredicate(cachedPbPredicate);
+                            reqForTable.setFilterSchemaId(filterSchemaId);
+                        }
                         reqForTable.addAllBucketsReqs(reqForBuckets);
                         fetchLogRequest.addAllTablesReqs(Collections.singletonList(reqForTable));
                         fetchLogRequests.put(leaderId, fetchLogRequest);
@@ -574,6 +593,11 @@ public class LogFetcher implements Closeable {
             isClosed = true;
             LOG.info("Fetcher for {} is closed.", tablePath);
         }
+    }
+
+    @VisibleForTesting
+    LogScannerStatus getLogScannerStatus() {
+        return logScannerStatus;
     }
 
     @VisibleForTesting

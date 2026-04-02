@@ -171,7 +171,14 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
     public static LogRecordReadContext createCompactedRowReadContext(
             RowType rowType, int schemaId) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
-        return createCompactedRowReadContext(rowType, schemaId, selectedFields);
+        return createCompactedRowReadContext(rowType, schemaId, selectedFields, null);
+    }
+
+    /** Creates a LogRecordReadContext for COMPACTED log format with schema evolution support. */
+    public static LogRecordReadContext createCompactedRowReadContext(
+            RowType rowType, int schemaId, SchemaGetter schemaGetter) {
+        int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
+        return createCompactedRowReadContext(rowType, schemaId, selectedFields, schemaGetter);
     }
 
     /**
@@ -199,10 +206,26 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
      */
     public static LogRecordReadContext createCompactedRowReadContext(
             RowType rowType, int schemaId, int[] selectedFields) {
+        return createCompactedRowReadContext(rowType, schemaId, selectedFields, null);
+    }
+
+    /**
+     * Creates a LogRecordReadContext for COMPACTED log format.
+     *
+     * @param rowType the schema of the read data
+     * @param schemaId the schemaId of the table
+     * @param selectedFields the final selected fields of the read data
+     * @param schemaGetter the schema getter to resolve evolved batch schemas
+     */
+    public static LogRecordReadContext createCompactedRowReadContext(
+            RowType rowType,
+            int schemaId,
+            int[] selectedFields,
+            @Nullable SchemaGetter schemaGetter) {
         FieldGetter[] fieldGetters = buildProjectedFieldGetters(rowType, selectedFields);
         // for COMPACTED log format, the projection is NEVER push downed to the server side
         return new LogRecordReadContext(
-                LogFormat.COMPACTED, rowType, schemaId, null, fieldGetters, false, null);
+                LogFormat.COMPACTED, rowType, schemaId, null, fieldGetters, false, schemaGetter);
     }
 
     private LogRecordReadContext(
@@ -247,6 +270,12 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         return projectionPushDowned;
     }
 
+    /** Get the schema getter. */
+    @Nullable
+    public SchemaGetter getSchemaGetter() {
+        return schemaGetter;
+    }
+
     @Override
     public VectorSchemaRoot getVectorSchemaRoot(int schemaId) {
         if (logFormat != LogFormat.ARROW) {
@@ -275,6 +304,9 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
     @Override
     public ProjectedRow getOutputProjectedRow(int schemaId) {
         if (isSameRowType(schemaId)) {
+            return null;
+        }
+        if (schemaGetter == null) {
             return null;
         }
         // TODO: should we cache the projection?

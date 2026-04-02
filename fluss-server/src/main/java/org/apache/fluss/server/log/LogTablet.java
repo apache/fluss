@@ -32,6 +32,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.record.DefaultLogRecordBatch;
 import org.apache.fluss.record.FileLogProjection;
 import org.apache.fluss.record.FileLogRecords;
@@ -395,13 +396,29 @@ public final class LogTablet {
         return append(records, false);
     }
 
-    /** Read messages from the local log. */
+    /**
+     * Read messages from the local log.
+     *
+     * @param readOffset the offset to start reading from
+     * @param maxLength the maximum number of bytes to read
+     * @param fetchIsolation the fetch isolation level
+     * @param minOneMessage if true, at least one message is returned even if it exceeds maxLength
+     * @param projection the column projection to apply, or null for no projection
+     * @param recordBatchFilter the batch-level filter predicate, or null for no filtering
+     * @param readContext the read context for batch statistics extraction (must be non-null iff
+     *     recordBatchFilter is non-null)
+     * @param predicateResolver resolves predicates for evolved schemas, or null to use the original
+     *     predicate for all batches
+     */
     public FetchDataInfo read(
             long readOffset,
             int maxLength,
             FetchIsolation fetchIsolation,
             boolean minOneMessage,
-            @Nullable FileLogProjection projection)
+            @Nullable FileLogProjection projection,
+            @Nullable Predicate recordBatchFilter,
+            @Nullable LogRecordBatch.ReadContext readContext,
+            @Nullable PredicateSchemaResolver predicateResolver)
             throws IOException {
         LogOffsetMetadata maxOffsetMetadata = null;
         if (fetchIsolation == FetchIsolation.LOG_END) {
@@ -410,7 +427,15 @@ public final class LogTablet {
             maxOffsetMetadata = fetchHighWatermarkMetadata();
         }
 
-        return localLog.read(readOffset, maxLength, minOneMessage, maxOffsetMetadata, projection);
+        return localLog.read(
+                readOffset,
+                maxLength,
+                minOneMessage,
+                maxOffsetMetadata,
+                projection,
+                recordBatchFilter,
+                readContext,
+                predicateResolver);
     }
 
     /**

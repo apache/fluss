@@ -522,14 +522,85 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             }
 
             int statsDataOffset = statisticsDataOffset(magic);
-            LogRecordBatchStatistics statistics =
+            DefaultLogRecordBatchStatistics parsedStatistics =
                     LogRecordBatchStatisticsParser.parseStatistics(
                             segment, position + statsDataOffset, rowType, schemaId());
-            return Optional.ofNullable(statistics);
+            if (parsedStatistics == null) {
+                return Optional.empty();
+            }
+
+            // V2: null counts not in statistics — extract from Arrow metadata
+            if (parsedStatistics.getNullCounts() == null) {
+                try {
+                    readAndSetNullCountsFromArrowMetadata(
+                            parsedStatistics, statisticsLength, rowType);
+                } catch (Exception e) {
+                    LOG.warn(
+                            "Failed to extract Arrow null counts for batch at position {}",
+                            position,
+                            e);
+                    // Fall through — statistics without null counts still useful for
+                    // min/max filtering
+                }
+            }
+
+            return Optional.of(parsedStatistics);
         } catch (Exception e) {
             LOG.warn("Failed to parse statistics", e);
             return Optional.empty();
         }
+    }
+
+    private void readAndSetNullCountsFromArrowMetadata(
+            DefaultLogRecordBatchStatistics stats, int statisticsLength, RowType rowType) {
+        int recordBatchHeaderSize = recordBatchHeaderSize(magic);
+        boolean isAppendOnly = (attributes() & APPEND_ONLY_FLAG_MASK) > 0;
+        int changeTypeBytes = isAppendOnly ? 0 : getRecordCount();
+
+        // Arrow IPC header starts after: batch header + statistics + changeTypes
+        int arrowHeaderPos = position + recordBatchHeaderSize + statisticsLength + changeTypeBytes;
+
+        // Bounds check: need at least 8 bytes for Arrow IPC continuation + metadataSize
+        int segmentSize = segment.size();
+        if (arrowHeaderPos + 8 > segmentSize) {
+            LOG.debug(
+                    "Arrow IPC header at offset {} exceeds segment size {}",
+                    arrowHeaderPos,
+                    segmentSize);
+            return;
+        }
+
+        // Arrow IPC format: continuation(4B, little-endian 0xFFFFFFFF) + metadataSize(4B,
+        // little-endian). MemorySegment.getInt() reads little-endian.
+        int metadataSize = segment.getInt(arrowHeaderPos + 4); // skip 4-byte continuation
+
+        if (metadataSize <= 0) {
+            return;
+        }
+
+        // Bounds check: need metadataSize bytes after the 8-byte header
+        if (arrowHeaderPos + 8 + metadataSize > segmentSize) {
+            LOG.debug(
+                    "Arrow metadata (size={}) at offset {} exceeds segment size {}",
+                    metadataSize,
+                    arrowHeaderPos + 8,
+                    segmentSize);
+            return;
+        }
+
+        // Read Arrow FlatBuffer metadata
+        byte[] arrowMetadataBytes = new byte[metadataSize];
+        segment.get(arrowHeaderPos + 8, arrowMetadataBytes);
+
+        // Compute FieldNode mapping and extract null counts
+        int[] statsIndexMapping = stats.getStatsIndexMapping();
+        int[] fieldNodeMapping =
+                ArrowNullCountReader.computeFieldNodeMappingCached(
+                        rowType, statsIndexMapping, schemaId());
+        Long[] nullCounts =
+                ArrowNullCountReader.extractNullCounts(arrowMetadataBytes, fieldNodeMapping);
+
+        stats.setNullCounts(nullCounts);
     }
 
     /**

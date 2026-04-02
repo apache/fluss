@@ -205,6 +205,9 @@ public class KvRecoverHelper {
                                         recoverContext.maxFetchLogSizeInRecoverKv,
                                         fetchIsolation,
                                         true,
+                                        null,
+                                        null,
+                                        null,
                                         null)
                                 .getRecords();
                 if (logRecords == MemoryLogRecords.EMPTY) {

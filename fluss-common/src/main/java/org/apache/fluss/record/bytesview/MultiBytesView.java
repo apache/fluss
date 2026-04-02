@@ -150,6 +150,30 @@ public class MultiBytesView implements BytesView {
             return views.isEmpty();
         }
 
+        /**
+         * Adds a {@link BytesView} directly. If the view is a {@link MultiBytesView}, its inner
+         * views are added individually. {@link FileRegionBytesView} instances are handled through
+         * {@link #addBytes(FileChannel, long, int)} to preserve file region merging.
+         *
+         * @param bytesView the bytes view to add
+         * @return this builder instance for method chaining
+         */
+        public Builder addBytes(BytesView bytesView) {
+            if (bytesView instanceof MultiBytesView) {
+                MultiBytesView multi = (MultiBytesView) bytesView;
+                for (BytesView inner : multi.views) {
+                    addBytes(inner);
+                }
+            } else if (bytesView instanceof FileRegionBytesView) {
+                FileRegionBytesView fileView = (FileRegionBytesView) bytesView;
+                addBytes(fileView.fileChannel, fileView.position, fileView.size);
+            } else {
+                views.add(bytesView);
+                lastFileRegionView = null;
+            }
+            return this;
+        }
+
         /** Builds a {@link MultiBytesView}. */
         public MultiBytesView build() {
             return new MultiBytesView(views.toArray(new BytesView[0]));

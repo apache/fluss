@@ -202,8 +202,18 @@ public class CommonRpcMessageUtils {
                         respForBucket.hasRecords()
                                 ? MemoryLogRecords.pointToByteBuffer(recordsBuffer)
                                 : MemoryLogRecords.EMPTY;
-                fetchLogResultForBucket =
-                        new FetchLogResultForBucket(tb, records, respForBucket.getHighWatermark());
+                if (respForBucket.hasFilteredEndOffset()
+                        && respForBucket.getFilteredEndOffset() >= 0) {
+                    fetchLogResultForBucket =
+                            new FetchLogResultForBucket(
+                                    tb,
+                                    respForBucket.getHighWatermark(),
+                                    respForBucket.getFilteredEndOffset());
+                } else {
+                    fetchLogResultForBucket =
+                            new FetchLogResultForBucket(
+                                    tb, records, respForBucket.getHighWatermark());
+                }
             }
         }
 
