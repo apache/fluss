@@ -91,7 +91,7 @@ class CoordinatorHighAvailabilityITCase {
     @BeforeEach
     void setUp() throws Exception {
         Configuration clientConf = new Configuration();
-        rpcClient = RpcClient.create(clientConf, TestingClientMetricGroup.newInstance(), false);
+        rpcClient = RpcClient.create(clientConf, TestingClientMetricGroup.newInstance());
     }
 
     @AfterEach
