@@ -648,6 +648,14 @@ public class MemoryLogRecordsArrowBuilderTest {
         readContext.close();
     }
 
+    private org.apache.arrow.memory.BufferAllocator getAllocator(
+            ArrowRecordBatchContext.UnshadedArrowBatchAccess batchAccess) throws Exception {
+        java.lang.reflect.Field allocatorField =
+                batchAccess.getClass().getDeclaredField("allocator");
+        allocatorField.setAccessible(true);
+        return (org.apache.arrow.memory.BufferAllocator) allocatorField.get(batchAccess);
+    }
+
     private static List<ArrowCompressionInfo> compressionInfos() {
         return Arrays.asList(
                 new ArrowCompressionInfo(ArrowCompressionType.LZ4_FRAME, -1),
