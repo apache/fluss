@@ -211,6 +211,37 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
     }
 
     @Test
+    void testFetchWithEmptyRange() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        makeLogTableAsLeader(tb, false);
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        List<RemoteLogSegment> segments = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(segments).isNotEmpty();
+
+        // Use the same offset for both startOffset and localLogStartOffset,
+        // creating an empty range [x, x). No batches should be returned.
+        // This guards against the >= comparison in advance() being accidentally
+        // changed to >, which would leak batches and cause duplicate records
+        // during KV recovery.
+        long sameOffset = segments.get(0).remoteLogStartOffset();
+
+        File dataDir = logManager.getDataDir();
+        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, dataDir)) {
+            Iterable<LogRecordBatch> batches = fetcher.fetch(sameOffset, sameOffset);
+            List<LogRecordBatch> batchList = new ArrayList<>();
+            for (LogRecordBatch batch : batches) {
+                batchList.add(batch);
+            }
+            assertThat(batchList).isEmpty();
+        }
+    }
+
+    @Test
     void testFetchDownloadsFilesToTempDir() throws Exception {
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
         makeLogTableAsLeader(tb, false);

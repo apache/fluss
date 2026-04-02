@@ -125,15 +125,13 @@ public class KvRecoverHelper {
     }
 
     public void recover() throws Exception {
-        // first step: read to high watermark and apply them to kv directly; that
-        // 's for the data acked
+        // first step: read to high watermark and apply them to kv directly; that's for the data
+        // acked
 
         // second step: read from high watermark to log end offset which is not acked, and write
         // them into pre-write buffer to make the data in kv(underlying kv + pre-write buffer)
-        // align with the local log;
-        // the data in pre-write will be flush
-        // after the corresponding log offset is acked(when high watermark is advanced to the
-        // offset)
+        // align with the local log; the data in pre-write will be flush after the corresponding log
+        // offset is acked(when high watermark is advanced to the offset)
 
         initSchema(schemaGetter.getLatestSchemaInfo().getSchemaId());
 
@@ -151,11 +149,11 @@ public class KvRecoverHelper {
                         : new NoOpAutoIncIDRangeUpdater();
 
         // Phase 0: If remoteLogFetcher is provided, it means the recover point offset
-        // is before local log start offset, we need to recover from remote log first.
+        // is before localLogStartOffset, we need to recover from remote log first.
         long localLogStartOffset = logTablet.localLogStartOffset();
         if (remoteLogFetcher != null && nextLogOffset < localLogStartOffset) {
             LOG.info(
-                    "Recover point offset {} is before local log start offset {}, "
+                    "Recover point offset {} is before localLogStartOffset {}, "
                             + "recovering from remote log for tablet '{}'",
                     nextLogOffset,
                     localLogStartOffset,

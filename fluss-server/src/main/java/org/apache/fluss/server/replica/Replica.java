@@ -180,7 +180,7 @@ public final class Replica {
     private final AtomicReference<Integer> leaderReplicaIdOpt = new AtomicReference<>();
     private final ReadWriteLock leaderIsrUpdateLock = new ReentrantReadWriteLock();
     private final Clock clock;
-    @Nullable private final RemoteLogManager remoteLogManager;
+    private final RemoteLogManager remoteLogManager;
 
     private static final int INIT_KV_TABLET_MAX_RETRY_TIMES = 5;
     /**
@@ -226,48 +226,8 @@ public final class Replica {
             FatalErrorHandler fatalErrorHandler,
             BucketMetricGroup bucketMetricGroup,
             TableInfo tableInfo,
-            Clock clock)
-            throws Exception {
-        this(
-                physicalPath,
-                tableBucket,
-                logManager,
-                kvManager,
-                replicaMaxLagTime,
-                minInSyncReplicasSupplier,
-                localTabletServerId,
-                lazyHighWatermarkCheckpoint,
-                delayedWriteManager,
-                delayedFetchLogManager,
-                adjustIsrManager,
-                snapshotContext,
-                metadataCache,
-                fatalErrorHandler,
-                bucketMetricGroup,
-                tableInfo,
-                clock,
-                null);
-    }
-
-    public Replica(
-            PhysicalTablePath physicalPath,
-            TableBucket tableBucket,
-            LogManager logManager,
-            @Nullable KvManager kvManager,
-            long replicaMaxLagTime,
-            IntSupplier minInSyncReplicasSupplier,
-            int localTabletServerId,
-            OffsetCheckpointFile.LazyOffsetCheckpoints lazyHighWatermarkCheckpoint,
-            DelayedOperationManager<DelayedWrite<?>> delayedWriteManager,
-            DelayedOperationManager<DelayedFetchLog> delayedFetchLogManager,
-            AdjustIsrManager adjustIsrManager,
-            SnapshotContext snapshotContext,
-            TabletServerMetadataCache metadataCache,
-            FatalErrorHandler fatalErrorHandler,
-            BucketMetricGroup bucketMetricGroup,
-            TableInfo tableInfo,
             Clock clock,
-            @Nullable RemoteLogManager remoteLogManager)
+            RemoteLogManager remoteLogManager)
             throws Exception {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
@@ -874,15 +834,13 @@ public final class Replica {
                             snapshotContext.getZooKeeperClient(),
                             snapshotContext.maxFetchLogSizeInRecoverKv());
 
-            // Create RemoteLogFetcher if remote log manager is available and the recover point
-            // offset is before the local log start offset, meaning we need to fetch logs from
-            // remote storage to fill the gap.
+            // Create RemoteLogFetcher if the recover point offset is before the localLogStartOffset
+            // meaning we need to fetch logs from remote storage to fill the gap.
             RemoteLogFetcher remoteLogFetcher = null;
-            if (remoteLogManager != null
-                    && startRecoverLogOffset < logTablet.localLogStartOffset()) {
+            if (startRecoverLogOffset < logTablet.localLogStartOffset()) {
                 LOG.info(
                         "Creating RemoteLogFetcher for {} of table {} because recover offset {} "
-                                + "is before local log start offset {}",
+                                + "is before localLogStartOffset {}",
                         tableBucket,
                         physicalPath,
                         startRecoverLogOffset,

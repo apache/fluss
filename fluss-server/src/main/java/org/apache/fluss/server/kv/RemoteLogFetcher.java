@@ -31,6 +31,8 @@ import org.apache.fluss.utils.IOUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.concurrent.NotThreadSafe;
+
 import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
@@ -40,6 +42,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Iterator;
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.UUID;
 
 import static org.apache.fluss.utils.FileUtils.deleteDirectoryQuietly;
@@ -64,6 +67,7 @@ import static org.apache.fluss.utils.FileUtils.deleteDirectoryQuietly;
  * <p><b>Note:</b> This class is NOT thread-safe. Each instance should be used by a single thread
  * only.
  */
+@NotThreadSafe
 public class RemoteLogFetcher implements Closeable {
     private static final Logger LOG = LoggerFactory.getLogger(RemoteLogFetcher.class);
 
@@ -113,6 +117,13 @@ public class RemoteLogFetcher implements Closeable {
      */
     public Iterable<LogRecordBatch> fetch(long startOffset, long localLogStartOffset)
             throws Exception {
+        // Close any previously active iterator before creating a new one to avoid leaking file
+        // descriptors.
+        RemoteLogBatchIterator prev = this.activeIterator;
+        if (prev != null) {
+            prev.close();
+        }
+
         List<RemoteLogSegment> segments =
                 remoteLogManager.relevantRemoteLogSegments(tableBucket, startOffset);
         if (segments.isEmpty()) {
@@ -123,7 +134,7 @@ public class RemoteLogFetcher implements Closeable {
         }
 
         LOG.info(
-                "Found {} remote log segments for table bucket {} from offset {} to local log start offset {}",
+                "Found {} remote log segments for table bucket {} from offset {} to localLogStartOffset {}",
                 segments.size(),
                 tableBucket,
                 startOffset,
@@ -229,7 +240,7 @@ public class RemoteLogFetcher implements Closeable {
         @Override
         public LogRecordBatch next() {
             if (!hasNext()) {
-                throw new java.util.NoSuchElementException();
+                throw new NoSuchElementException();
             }
             LogRecordBatch result = nextBatch;
             nextBatch = null;
@@ -268,8 +279,8 @@ public class RemoteLogFetcher implements Closeable {
                 }
 
                 RemoteLogSegment segment = segments.get(currentSegmentIndex++);
-                // skip segments entirely before currentOffset
-                if (segment.remoteLogEndOffset() <= currentOffset) {
+                // remoteLogEndOffset() is inclusive — last offset in segment
+                if (segment.remoteLogEndOffset() < currentOffset) {
                     continue;
                 }
                 // skip segments that start at or after localLogStartOffset
