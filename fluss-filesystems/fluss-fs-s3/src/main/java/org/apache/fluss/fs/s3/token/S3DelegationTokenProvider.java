@@ -20,15 +20,15 @@ package org.apache.fluss.fs.s3.token;
 import org.apache.fluss.fs.token.CredentialsJsonSerde;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 
-import com.amazonaws.auth.AWSStaticCredentialsProvider;
-import com.amazonaws.auth.BasicAWSCredentials;
-import com.amazonaws.services.securitytoken.AWSSecurityTokenService;
-import com.amazonaws.services.securitytoken.AWSSecurityTokenServiceClientBuilder;
-import com.amazonaws.services.securitytoken.model.Credentials;
-import com.amazonaws.services.securitytoken.model.GetSessionTokenResult;
 import org.apache.hadoop.conf.Configuration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
+import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.sts.StsClient;
+import software.amazon.awssdk.services.sts.model.Credentials;
+import software.amazon.awssdk.services.sts.model.GetSessionTokenResponse;
 
 import java.util.Arrays;
 import java.util.HashMap;
@@ -70,31 +70,34 @@ public class S3DelegationTokenProvider {
     public ObtainedSecurityToken obtainSecurityToken() {
         LOG.info("Obtaining session credentials token with access key: {}", accessKey);
 
-        AWSSecurityTokenService stsClient =
-                AWSSecurityTokenServiceClientBuilder.standard()
-                        .withRegion(region)
-                        .withCredentials(
-                                new AWSStaticCredentialsProvider(
-                                        new BasicAWSCredentials(accessKey, secretKey)))
+        StsClient stsClient =
+                StsClient.builder()
+                        .region(Region.of(region))
+                        .credentialsProvider(
+                                StaticCredentialsProvider.create(
+                                        AwsBasicCredentials.create(accessKey, secretKey)))
                         .build();
-        GetSessionTokenResult sessionTokenResult = stsClient.getSessionToken();
-        Credentials credentials = sessionTokenResult.getCredentials();
+        GetSessionTokenResponse sessionTokenResponse = stsClient.getSessionToken();
+        Credentials credentials = sessionTokenResponse.credentials();
 
         LOG.info(
                 "Session credentials obtained successfully with access key: {} expiration: {}",
-                credentials.getAccessKeyId(),
-                credentials.getExpiration());
+                credentials.accessKeyId(),
+                credentials.expiration());
 
         return new ObtainedSecurityToken(
-                scheme, toJson(credentials), credentials.getExpiration().getTime(), additionInfos);
+                scheme,
+                toJson(credentials),
+                credentials.expiration().toEpochMilli(),
+                additionInfos);
     }
 
     private byte[] toJson(Credentials credentials) {
         org.apache.fluss.fs.token.Credentials flussCredentials =
                 new org.apache.fluss.fs.token.Credentials(
-                        credentials.getAccessKeyId(),
-                        credentials.getSecretAccessKey(),
-                        credentials.getSessionToken());
+                        credentials.accessKeyId(),
+                        credentials.secretAccessKey(),
+                        credentials.sessionToken());
         return CredentialsJsonSerde.toJson(flussCredentials);
     }
 }
