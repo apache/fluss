@@ -488,50 +488,50 @@ public final class KvTablet {
                 KvRecordReadContext.createReadContext(kvFormat, schemaGetter);
         ValueDecoder valueDecoder = new ValueDecoder(schemaGetter, kvFormat);
 
-        for (KvRecord kvRecord : kvRecords.records(readContext)) {
-            byte[] keyBytes = BytesUtils.toArray(kvRecord.getKey());
-            KvPreWriteBuffer.Key key = KvPreWriteBuffer.Key.of(keyBytes);
-            BinaryRow row = kvRecord.getRow();
-            BinaryValue currentValue = row == null ? null : new BinaryValue(schemaIdOfNewData, row);
+        try (SchemaAlignmentContext alignmentContext =
+                new SchemaAlignmentContext(latestSchemaId, latestSchema, kvFormat)) {
+            for (KvRecord kvRecord : kvRecords.records(readContext)) {
+                byte[] keyBytes = BytesUtils.toArray(kvRecord.getKey());
+                KvPreWriteBuffer.Key key = KvPreWriteBuffer.Key.of(keyBytes);
+                BinaryRow row = kvRecord.getRow();
+                BinaryValue currentValue =
+                        row == null ? null : new BinaryValue(schemaIdOfNewData, row);
 
-            // Align incoming row to latest schema if it was written with an older schema.
-            if (currentValue != null && schemaIdOfNewData != latestSchemaId) {
-                currentValue = alignToLatestSchema(currentValue, latestSchemaId, latestSchema);
-            }
+                if (currentValue != null && schemaIdOfNewData != latestSchemaId) {
+                    currentValue = alignToLatestSchema(currentValue, alignmentContext);
+                }
 
-            if (currentValue == null) {
-                logOffset =
-                        processDeletion(
-                                key,
-                                latestSchemaId,
-                                latestSchema,
-                                currentMerger,
-                                valueDecoder,
-                                walBuilder,
-                                latestSchemaRow,
-                                logOffset);
-            } else {
-                logOffset =
-                        processUpsert(
-                                key,
-                                currentValue,
-                                latestSchemaId,
-                                latestSchema,
-                                currentMerger,
-                                autoIncrementUpdater,
-                                valueDecoder,
-                                walBuilder,
-                                latestSchemaRow,
-                                logOffset);
+                if (currentValue == null) {
+                    logOffset =
+                            processDeletion(
+                                    key,
+                                    currentMerger,
+                                    alignmentContext,
+                                    valueDecoder,
+                                    walBuilder,
+                                    latestSchemaRow,
+                                    logOffset);
+                } else {
+                    logOffset =
+                            processUpsert(
+                                    key,
+                                    currentValue,
+                                    currentMerger,
+                                    alignmentContext,
+                                    autoIncrementUpdater,
+                                    valueDecoder,
+                                    walBuilder,
+                                    latestSchemaRow,
+                                    logOffset);
+                }
             }
         }
     }
 
     private long processDeletion(
             KvPreWriteBuffer.Key key,
-            short latestSchemaId,
-            Schema latestSchema,
             RowMerger currentMerger,
+            SchemaAlignmentContext alignmentContext,
             ValueDecoder valueDecoder,
             WalBuilder walBuilder,
             PaddingRow latestSchemaRow,
@@ -556,9 +556,8 @@ public final class KvTablet {
         }
 
         BinaryValue oldValue = valueDecoder.decodeValue(oldValueBytes);
-        // Align old KV row to latest schema if it was stored with an older schema.
-        if (oldValue.schemaId != latestSchemaId) {
-            oldValue = alignToLatestSchema(oldValue, latestSchemaId, latestSchema);
+        if (oldValue.schemaId != alignmentContext.latestSchemaId) {
+            oldValue = alignToLatestSchema(oldValue, alignmentContext);
         }
         BinaryValue newValue = currentMerger.delete(oldValue);
 
@@ -573,9 +572,8 @@ public final class KvTablet {
     private long processUpsert(
             KvPreWriteBuffer.Key key,
             BinaryValue currentValue,
-            short latestSchemaId,
-            Schema latestSchema,
             RowMerger currentMerger,
+            SchemaAlignmentContext alignmentContext,
             AutoIncrementUpdater autoIncrementUpdater,
             ValueDecoder valueDecoder,
             WalBuilder walBuilder,
@@ -604,9 +602,8 @@ public final class KvTablet {
         }
 
         BinaryValue oldValue = valueDecoder.decodeValue(oldValueBytes);
-        // Align old KV row to latest schema if it was stored with an older schema.
-        if (oldValue.schemaId != latestSchemaId) {
-            oldValue = alignToLatestSchema(oldValue, latestSchemaId, latestSchema);
+        if (oldValue.schemaId != alignmentContext.latestSchemaId) {
+            oldValue = alignToLatestSchema(oldValue, alignmentContext);
         }
         BinaryValue newValue = currentMerger.merge(oldValue, currentValue);
 
@@ -664,40 +661,67 @@ public final class KvTablet {
         }
     }
 
+    /** Batch-constant state for aligning rows to the latest schema. */
+    private static class SchemaAlignmentContext implements AutoCloseable {
+        final short latestSchemaId;
+        final List<Integer> targetColIds;
+        final RowEncoder encoder;
+        final Map<Short, SourceSchemaMapping> cache = new HashMap<>();
+
+        SchemaAlignmentContext(short latestSchemaId, Schema latestSchema, KvFormat kvFormat) {
+            this.latestSchemaId = latestSchemaId;
+            this.targetColIds = latestSchema.getColumnIds();
+            this.encoder = RowEncoder.create(kvFormat, latestSchema.getRowType());
+        }
+
+        @Override
+        public void close() throws Exception {
+            encoder.close();
+        }
+
+        /** Cached field getters and column-id→position map for a single source schema. */
+        private static class SourceSchemaMapping {
+            final Map<Integer, Integer> idToPos;
+            final InternalRow.FieldGetter[] getters;
+
+            SourceSchemaMapping(Schema sourceSchema) {
+                List<Integer> sourceColIds = sourceSchema.getColumnIds();
+                this.idToPos = new HashMap<>();
+                for (int i = 0; i < sourceColIds.size(); i++) {
+                    idToPos.put(sourceColIds.get(i), i);
+                }
+                this.getters = InternalRow.createFieldGetters(sourceSchema.getRowType());
+            }
+        }
+    }
+
     /**
      * Converts a {@link BinaryValue} from its source schema layout to the latest schema layout
      * using column IDs to map positions. New columns (present in latest but not in source) are
-     * filled with null. This only runs when schemas differ; the common case short-circuits.
+     * filled with null. Only call when {@code value.schemaId != latestSchemaId}.
      */
-    private BinaryValue alignToLatestSchema(
-            BinaryValue value, short latestSchemaId, Schema latestSchema) {
-        if (value.schemaId == latestSchemaId) {
-            return value;
-        }
+    private BinaryValue alignToLatestSchema(BinaryValue value, SchemaAlignmentContext ctx) {
+        SchemaAlignmentContext.SourceSchemaMapping mapping =
+                ctx.cache.computeIfAbsent(
+                        value.schemaId,
+                        id ->
+                                new SchemaAlignmentContext.SourceSchemaMapping(
+                                        schemaGetter.getSchema(id)));
 
-        Schema sourceSchema = schemaGetter.getSchema(value.schemaId);
-        List<Integer> sourceColIds = sourceSchema.getColumnIds();
-        List<Integer> targetColIds = latestSchema.getColumnIds();
-
-        Map<Integer, Integer> sourceIdToPos = new HashMap<>();
-        for (int i = 0; i < sourceColIds.size(); i++) {
-            sourceIdToPos.put(sourceColIds.get(i), i);
-        }
-
-        InternalRow.FieldGetter[] sourceGetters =
-                InternalRow.createFieldGetters(sourceSchema.getRowType());
-        RowEncoder encoder = RowEncoder.create(kvFormat, latestSchema.getRowType());
-        encoder.startNewRow();
-        for (int targetPos = 0; targetPos < targetColIds.size(); targetPos++) {
-            Integer sourcePos = sourceIdToPos.get(targetColIds.get(targetPos));
+        ctx.encoder.startNewRow();
+        for (int targetPos = 0; targetPos < ctx.targetColIds.size(); targetPos++) {
+            Integer sourcePos = mapping.idToPos.get(ctx.targetColIds.get(targetPos));
             if (sourcePos == null) {
                 // Column added after the source schema — fill with null.
-                encoder.encodeField(targetPos, null);
+                ctx.encoder.encodeField(targetPos, null);
             } else {
-                encoder.encodeField(targetPos, sourceGetters[sourcePos].getFieldOrNull(value.row));
+                ctx.encoder.encodeField(
+                        targetPos, mapping.getters[sourcePos].getFieldOrNull(value.row));
             }
         }
-        return new BinaryValue(latestSchemaId, encoder.finishRow());
+        // copy() is required: the encoder reuses its internal buffer, so the next
+        // startNewRow() would overwrite the row returned here.
+        return new BinaryValue(ctx.latestSchemaId, ctx.encoder.finishRow().copy());
     }
 
     /**
