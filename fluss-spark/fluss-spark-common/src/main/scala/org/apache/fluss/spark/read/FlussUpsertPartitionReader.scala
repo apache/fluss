@@ -27,6 +27,7 @@ import org.apache.fluss.record.LogRecord
 import org.apache.fluss.row.{encode, InternalRow, KeyValueRow}
 import org.apache.fluss.spark.SparkFlussConf
 import org.apache.fluss.spark.utils.LogChangesIterator
+import org.apache.fluss.types.{DataField, RowType}
 import org.apache.fluss.utils.CloseableIterator
 
 import org.apache.spark.internal.Logging
@@ -65,13 +66,12 @@ class FlussUpsertPartitionReader(
     extraProjections ++= projection
     pkIndexes.foreach {
       pkIndex =>
-        projection.find(p => p == pkIndex) match {
-          case Some(index) =>
-            _pkProjection += index
-          case _ =>
+        projection.indexOf(pkIndex) match {
+          case -1 =>
             extraProjections += pkIndex
             _pkProjection += projection.length + i
             i += 1
+          case idx => _pkProjection += idx
         }
     }
     (extraProjections.toArray, _pkProjection.toArray)
@@ -99,9 +99,13 @@ class FlussUpsertPartitionReader(
 
   private def createSortMergeReader(): SortMergeReader = {
     // Create key encoder for primary keys
+    val pkIndexes = tableInfo.getSchema.getPrimaryKeyIndexes
+    val pkFields = new java.util.ArrayList[DataField]()
+    pkIndexes.foreach(i => pkFields.add(rowType.getFields.get(i)))
+    val pkRowType = new RowType(pkFields)
     val keyEncoder =
       encode.KeyEncoder.ofPrimaryKeyEncoder(
-        rowType,
+        pkRowType,
         tableInfo.getPhysicalPrimaryKeys,
         tableInfo.getTableConfig,
         tableInfo.isDefaultBucketKey)
