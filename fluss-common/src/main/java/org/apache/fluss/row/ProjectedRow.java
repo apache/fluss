@@ -19,10 +19,9 @@ package org.apache.fluss.row;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.utils.SchemaUtil;
 
 import java.util.Arrays;
-
-import static org.apache.fluss.utils.SchemaUtil.getIndexMapping;
 
 /**
  * An implementation of {@link InternalRow} which provides a projected view of the underlying {@link
@@ -190,8 +189,13 @@ public class ProjectedRow implements InternalRow {
     }
 
     public static ProjectedRow from(Schema originSchema, Schema expectedSchema) {
-        int[] indexMapping = getIndexMapping(originSchema, expectedSchema);
+        int[] indexMapping = SchemaUtil.getIndexMapping(originSchema, expectedSchema);
         return new ProjectedRow(indexMapping);
+    }
+
+    /** Returns the index mapping used by this projected row. */
+    public int[] getIndexMapping() {
+        return indexMapping;
     }
 
     /**

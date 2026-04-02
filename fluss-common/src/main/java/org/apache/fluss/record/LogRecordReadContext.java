@@ -37,6 +37,7 @@ import org.apache.fluss.utils.Projection;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.IntStream;
@@ -56,7 +57,9 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
     // the Arrow memory buffer allocator for the table, should be null if not ARROW log format
     @Nullable private final BufferAllocator bufferAllocator;
     // the final selected fields of the read data
+    private final int[] selectedFields;
     private final FieldGetter[] selectedFieldGetters;
+    private final RowType selectedRowType;
     // whether the projection is push downed to the server side and the returned data is pruned.
     private final boolean projectionPushDowned;
     private final SchemaGetter schemaGetter;
@@ -122,6 +125,7 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
                 dataRowType,
                 schemaId,
                 allocator,
+                selectedFields,
                 fieldGetters,
                 projectionPushDowned,
                 schemaGetter);
@@ -187,7 +191,14 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         FieldGetter[] fieldGetters = buildProjectedFieldGetters(rowType, selectedFields);
         // for INDEXED log format, the projection is NEVER push downed to the server side
         return new LogRecordReadContext(
-                LogFormat.INDEXED, rowType, schemaId, null, fieldGetters, false, schemaGetter);
+                LogFormat.INDEXED,
+                rowType,
+                schemaId,
+                null,
+                selectedFields,
+                fieldGetters,
+                false,
+                schemaGetter);
     }
 
     /**
@@ -202,7 +213,14 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         FieldGetter[] fieldGetters = buildProjectedFieldGetters(rowType, selectedFields);
         // for COMPACTED log format, the projection is NEVER push downed to the server side
         return new LogRecordReadContext(
-                LogFormat.COMPACTED, rowType, schemaId, null, fieldGetters, false, null);
+                LogFormat.COMPACTED,
+                rowType,
+                schemaId,
+                null,
+                selectedFields,
+                fieldGetters,
+                false,
+                null);
     }
 
     private LogRecordReadContext(
@@ -210,6 +228,7 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
             RowType targetDataRowType,
             int targetSchemaId,
             BufferAllocator bufferAllocator,
+            int[] selectedFields,
             FieldGetter[] selectedFieldGetters,
             boolean projectionPushDowned,
             SchemaGetter schemaGetter) {
@@ -217,7 +236,9 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         this.dataRowType = targetDataRowType;
         this.targetSchemaId = targetSchemaId;
         this.bufferAllocator = bufferAllocator;
+        this.selectedFields = Arrays.copyOf(selectedFields, selectedFields.length);
         this.selectedFieldGetters = selectedFieldGetters;
+        this.selectedRowType = targetDataRowType.project(this.selectedFields);
         this.projectionPushDowned = projectionPushDowned;
         this.schemaGetter = schemaGetter;
     }
@@ -242,9 +263,49 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         return selectedFieldGetters;
     }
 
+    /** Returns the selected row type after projection and reordering. */
+    public RowType getSelectedRowType() {
+        return selectedRowType;
+    }
+
     /** Whether the projection is push downed to the server side and the returned data is pruned. */
     public boolean isProjectionPushDowned() {
         return projectionPushDowned;
+    }
+
+    /**
+     * Returns the output Arrow column projection for the given schema id, or {@code null} if no
+     * client-side projection is needed (i.e., the projection is identity).
+     *
+     * <p>The returned indexes describe which columns from the read batch should be exposed in the
+     * final output order. A value of {@code -1} means the output column does not exist in the read
+     * schema and should be filled with nulls.
+     */
+    @Nullable
+    public int[] getArrowColumnProjection(int schemaId) {
+        int[] projection;
+        ProjectedRow projectedRow = getOutputProjectedRow(schemaId);
+        if (projectedRow == null) {
+            projection = selectedFields;
+        } else {
+            int[] indexMapping = projectedRow.getIndexMapping();
+            projection = new int[selectedFields.length];
+            for (int i = 0; i < selectedFields.length; i++) {
+                projection[i] = indexMapping[selectedFields[i]];
+            }
+        }
+        return isIdentityProjection(projection)
+                ? null
+                : Arrays.copyOf(projection, projection.length);
+    }
+
+    private static boolean isIdentityProjection(int[] projection) {
+        for (int i = 0; i < projection.length; i++) {
+            if (projection[i] != i) {
+                return false;
+            }
+        }
+        return true;
     }
 
     @Override

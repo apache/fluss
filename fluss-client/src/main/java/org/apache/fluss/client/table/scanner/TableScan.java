@@ -24,12 +24,15 @@ import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.scanner.batch.CompositeBatchScanner;
 import org.apache.fluss.client.table.scanner.batch.KvSnapshotBatchScanner;
 import org.apache.fluss.client.table.scanner.batch.LimitBatchScanner;
+import org.apache.fluss.client.table.scanner.log.ArrowLogScanner;
+import org.apache.fluss.client.table.scanner.log.ArrowLogScannerImpl;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.LogScannerImpl;
 import org.apache.fluss.client.table.scanner.log.TypedLogScanner;
 import org.apache.fluss.client.table.scanner.log.TypedLogScannerImpl;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
@@ -123,6 +126,33 @@ public class TableScan implements Scan {
     public <T> TypedLogScanner<T> createTypedLogScanner(Class<T> pojoClass) {
         LogScanner base = createLogScanner();
         return new TypedLogScannerImpl<>(base, pojoClass, tableInfo, projectedColumns);
+    }
+
+    @Override
+    public ArrowLogScanner createArrowLogScanner() {
+        if (limit != null) {
+            throw new UnsupportedOperationException(
+                    String.format(
+                            "ArrowLogScanner doesn't support limit pushdown. Table: %s, requested limit: %d",
+                            tableInfo.getTablePath(), limit));
+        }
+
+        LogFormat logFormat = tableInfo.getTableConfig().getLogFormat();
+        if (logFormat != LogFormat.ARROW) {
+            throw new UnsupportedOperationException(
+                    String.format(
+                            "ArrowLogScanner is only supported for tables whose log format is ARROW. Table: %s, actual log format: %s",
+                            tableInfo.getTablePath(), logFormat));
+        }
+
+        return new ArrowLogScannerImpl(
+                conn.getConfiguration(),
+                tableInfo,
+                conn.getMetadataUpdater(),
+                conn.getClientMetricGroup(),
+                conn.getOrCreateRemoteFileDownloader(),
+                projectedColumns,
+                schemaGetter);
     }
 
     @Override

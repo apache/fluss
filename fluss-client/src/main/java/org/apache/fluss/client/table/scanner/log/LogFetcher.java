@@ -100,6 +100,7 @@ public class LogFetcher implements Closeable {
     private final LogScannerStatus logScannerStatus;
     private final LogFetchBuffer logFetchBuffer;
     private final LogFetchCollector logFetchCollector;
+    private final ArrowLogFetchCollector arrowLogFetchCollector;
     private final RemoteLogDownloader remoteLogDownloader;
 
     @GuardedBy("this")
@@ -145,6 +146,8 @@ public class LogFetcher implements Closeable {
         this.metadataUpdater = metadataUpdater;
         this.logFetchCollector =
                 new LogFetchCollector(tablePath, logScannerStatus, conf, metadataUpdater);
+        this.arrowLogFetchCollector =
+                new ArrowLogFetchCollector(tablePath, logScannerStatus, conf, metadataUpdater);
         this.scannerMetricGroup = scannerMetricGroup;
         this.remoteLogDownloader =
                 new RemoteLogDownloader(tablePath, conf, remoteFileDownloader, scannerMetricGroup);
@@ -162,6 +165,10 @@ public class LogFetcher implements Closeable {
 
     public ScanRecords collectFetch() {
         return logFetchCollector.collectFetch(logFetchBuffer);
+    }
+
+    public ArrowScanRecords collectArrowFetch() {
+        return arrowLogFetchCollector.collectFetch(logFetchBuffer);
     }
 
     /**

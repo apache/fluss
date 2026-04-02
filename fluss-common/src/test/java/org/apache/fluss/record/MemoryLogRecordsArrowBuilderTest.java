@@ -24,6 +24,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.memory.ManagedPagedOutputView;
 import org.apache.fluss.memory.TestingMemorySegmentPool;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.arrow.ArrowWriter;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
@@ -316,6 +317,41 @@ public class MemoryLogRecordsArrowBuilderTest {
                                 DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, schemaGetter);
                 CloseableIterator<LogRecord> iter = logRecordBatch.records(readContext)) {
             assertThat(iter.hasNext()).isFalse();
+        }
+    }
+
+    @Test
+    void testLoadArrowBatchWithMissingProjectedColumns() throws Exception {
+        ArrowWriter writer =
+                provider.getOrCreateWriter(
+                        1L, DEFAULT_SCHEMA_ID, 1024 * 10, DATA1_ROW_TYPE, DEFAULT_COMPRESSION);
+        MemoryLogRecordsArrowBuilder builder =
+                createMemoryLogRecordsArrowBuilder(0, writer, 10, 1024, CURRENT_LOG_MAGIC_VALUE);
+        for (Object[] row : DATA1) {
+            builder.append(ChangeType.APPEND_ONLY, row(row));
+        }
+        builder.setWriterState(1L, 0);
+        builder.close();
+
+        MemoryLogRecords records = MemoryLogRecords.pointToBytesView(builder.build());
+        LogRecordBatch batch = records.batches().iterator().next();
+
+        TestingSchemaGetter schemaGetter =
+                new TestingSchemaGetter(new SchemaInfo(TestData.DATA1_SCHEMA, 1));
+        schemaGetter.updateLatestSchemaInfo(new SchemaInfo(TestData.DATA2_SCHEMA, 2));
+
+        try (LogRecordReadContext readContext =
+                        LogRecordReadContext.createArrowReadContext(
+                                TestData.DATA2_ROW_TYPE, 2, schemaGetter);
+                ArrowBatchData arrowBatchData = batch.loadArrowBatch(readContext)) {
+            assertThat(arrowBatchData.getRecordCount()).isEqualTo(DATA1.size());
+            assertThat(arrowBatchData.getVectorSchemaRoot().getFieldVectors()).hasSize(3);
+            assertThat(arrowBatchData.getVectorSchemaRoot().getVector(0).getObject(0)).isEqualTo(1);
+            assertThat(arrowBatchData.getVectorSchemaRoot().getVector(1).getObject(0).toString())
+                    .isEqualTo("a");
+            for (int i = 0; i < arrowBatchData.getRecordCount(); i++) {
+                assertThat(arrowBatchData.getVectorSchemaRoot().getVector(2).isNull(i)).isTrue();
+            }
         }
     }
 
