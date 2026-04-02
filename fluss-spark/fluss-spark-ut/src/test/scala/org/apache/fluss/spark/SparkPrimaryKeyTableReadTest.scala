@@ -242,6 +242,19 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
     }
   }
 
+  test("Spark Read: primary key table with random project") {
+    withTable("t") {
+      sql(
+        "CREATE TABLE t (id int, name string, pk int, pk2 string) TBLPROPERTIES('primary.key'='pk,pk2')")
+      checkAnswer(sql("SELECT * FROM t"), Nil)
+      sql("INSERT INTO t VALUES (1, 'a', 10, 'x'), (2, 'b', 20, 'y')")
+      checkAnswer(
+        sql("SELECT * FROM t ORDER BY id"),
+        Row(1, "a", 10, "x") :: Row(2, "b", 20, "y") :: Nil)
+      checkAnswer(sql("SELECT pk, id FROM t ORDER BY id"), Row(10, 1) :: Row(20, 2) :: Nil)
+    }
+  }
+
   private def genInputPartition(
       tablePath: TablePath,
       partitionName: String): Array[FlussUpsertInputPartition] = {
