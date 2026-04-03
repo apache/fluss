@@ -42,8 +42,6 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.IntStream;
 
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
-
 /** A simple implementation for {@link LogRecordBatch.ReadContext}. */
 @ThreadSafe
 public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoCloseable {
@@ -55,7 +53,7 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
     // the static schemaId of the table, should support dynamic schema evolution in the future
     private final int targetSchemaId;
     // the Arrow memory buffer allocator for the table, should be null if not ARROW log format
-    @Nullable private final BufferAllocator bufferAllocator;
+    @Nullable private volatile BufferAllocator bufferAllocator;
     // the final selected fields of the read data
     private final int[] selectedFields;
     private final FieldGetter[] selectedFieldGetters;
@@ -65,6 +63,7 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
     private final SchemaGetter schemaGetter;
     private final ConcurrentHashMap<Integer, VectorSchemaRoot> vectorSchemaRootMap =
             MapUtils.newConcurrentHashMap();
+    private final Object arrowResourceLock = new Object();
 
     public static LogRecordReadContext createReadContext(
             TableInfo tableInfo,
@@ -117,14 +116,12 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
             int[] selectedFields,
             boolean projectionPushDowned,
             SchemaGetter schemaGetter) {
-        // TODO: use a more reasonable memory limit
-        BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE);
         FieldGetter[] fieldGetters = buildProjectedFieldGetters(dataRowType, selectedFields);
         return new LogRecordReadContext(
                 LogFormat.ARROW,
                 dataRowType,
                 schemaId,
-                allocator,
+                null,
                 selectedFields,
                 fieldGetters,
                 projectionPushDowned,
@@ -315,12 +312,19 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
                     "Only Arrow log format provides vector schema root.");
         }
 
-        RowType rowType = getRowType(schemaId);
-        return vectorSchemaRootMap.computeIfAbsent(
-                schemaId,
-                (id) ->
-                        VectorSchemaRoot.create(
-                                ArrowUtils.toArrowSchema(rowType), bufferAllocator));
+        synchronized (arrowResourceLock) {
+            VectorSchemaRoot vectorSchemaRoot = vectorSchemaRootMap.get(schemaId);
+            if (vectorSchemaRoot != null) {
+                return vectorSchemaRoot;
+            }
+
+            RowType rowType = getRowType(schemaId);
+            vectorSchemaRoot =
+                    VectorSchemaRoot.create(
+                            ArrowUtils.toArrowSchema(rowType), getOrCreateBufferAllocator());
+            vectorSchemaRootMap.put(schemaId, vectorSchemaRoot);
+            return vectorSchemaRoot;
+        }
     }
 
     @Override
@@ -328,8 +332,7 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         if (logFormat != LogFormat.ARROW) {
             throw new IllegalArgumentException("Only Arrow log format provides buffer allocator.");
         }
-        checkNotNull(bufferAllocator, "The buffer allocator is not available.");
-        return bufferAllocator;
+        return getOrCreateBufferAllocator();
     }
 
     @Nullable
@@ -345,9 +348,27 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
     }
 
     public void close() {
-        vectorSchemaRootMap.values().forEach(VectorSchemaRoot::close);
-        if (bufferAllocator != null) {
-            bufferAllocator.close();
+        synchronized (arrowResourceLock) {
+            vectorSchemaRootMap.values().forEach(VectorSchemaRoot::close);
+            vectorSchemaRootMap.clear();
+            if (bufferAllocator != null) {
+                bufferAllocator.close();
+                bufferAllocator = null;
+            }
+        }
+    }
+
+    private BufferAllocator getOrCreateBufferAllocator() {
+        BufferAllocator allocator = bufferAllocator;
+        if (allocator != null) {
+            return allocator;
+        }
+
+        synchronized (arrowResourceLock) {
+            if (bufferAllocator == null) {
+                bufferAllocator = new RootAllocator(Long.MAX_VALUE);
+            }
+            return bufferAllocator;
         }
     }
 

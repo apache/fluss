@@ -20,30 +20,20 @@ package org.apache.fluss.record;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.exception.CorruptMessageException;
-import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.arrow.ArrowReader;
 import org.apache.fluss.row.columnar.ColumnarRow;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.BaseFixedWidthVector;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.BaseVariableWidthVector;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorUnloader;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.WriteChannel;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.MessageSerializer;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Schema;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.ArrowUtils;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.MurmurHashUtils;
+import org.apache.fluss.utils.UnshadedArrowReadUtils;
 import org.apache.fluss.utils.crc.Crc32C;
 
 import org.slf4j.Logger;
@@ -51,11 +41,7 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.channels.Channels;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 
@@ -279,7 +265,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     }
 
     @Override
-    public ArrowBatchData loadArrowBatch(LogRecordReadContext context) {
+    public ArrowBatchData loadArrowBatch(ReadContext context) {
         if (context.getLogFormat() != LogFormat.ARROW) {
             throw new UnsupportedOperationException(
                     "loadArrowBatch is only supported for ARROW log format.");
@@ -287,10 +273,12 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
         int schemaId = schemaId();
         RowType rowType = context.getRowType(schemaId);
-        BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE);
-        VectorSchemaRoot readRoot =
-                VectorSchemaRoot.create(ArrowUtils.toArrowSchema(rowType), allocator);
-        VectorSchemaRoot outputRoot = readRoot;
+        org.apache.arrow.memory.BufferAllocator allocator =
+                new org.apache.arrow.memory.RootAllocator(Long.MAX_VALUE);
+        org.apache.arrow.vector.VectorSchemaRoot readRoot =
+                org.apache.arrow.vector.VectorSchemaRoot.create(
+                        UnshadedArrowReadUtils.toArrowSchema(rowType), allocator);
+        org.apache.arrow.vector.VectorSchemaRoot outputRoot = readRoot;
 
         try {
             ChangeType[] changeTypes = null;
@@ -298,8 +286,8 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             if (isAppendOnly()) {
                 int arrowOffset = position + recordsDataOffset;
                 int arrowLength = sizeInBytes() - recordsDataOffset;
-                ArrowUtils.createArrowReader(
-                        segment, arrowOffset, arrowLength, readRoot, allocator, rowType);
+                UnshadedArrowReadUtils.loadArrowBatch(
+                        segment, arrowOffset, arrowLength, readRoot, allocator);
             } else {
                 int changeTypeOffset = position + recordsDataOffset;
                 ChangeTypeVector changeTypeVector =
@@ -312,14 +300,14 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
                 int arrowOffset = changeTypeOffset + changeTypeVector.sizeInBytes();
                 int arrowLength =
                         sizeInBytes() - recordsDataOffset - changeTypeVector.sizeInBytes();
-                ArrowUtils.createArrowReader(
-                        segment, arrowOffset, arrowLength, readRoot, allocator, rowType);
+                UnshadedArrowReadUtils.loadArrowBatch(
+                        segment, arrowOffset, arrowLength, readRoot, allocator);
             }
 
             int[] columnProjection = context.getArrowColumnProjection(schemaId);
             if (columnProjection != null) {
                 outputRoot =
-                        projectVectorSchemaRoot(
+                        UnshadedArrowReadUtils.projectVectorSchemaRoot(
                                 readRoot,
                                 context.getSelectedRowType(),
                                 columnProjection,
@@ -329,17 +317,21 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             }
 
             ArrowBatchData arrowBatchData =
-                    convertToUnshadedArrowBatchData(
-                            outputRoot, changeTypes, baseLogOffset(), commitTimestamp(), schemaId);
-            outputRoot.close();
+                    new ArrowBatchData(
+                            outputRoot,
+                            allocator,
+                            changeTypes,
+                            baseLogOffset(),
+                            commitTimestamp(),
+                            schemaId);
             outputRoot = null;
-            allocator.close();
+            allocator = null;
             return arrowBatchData;
         } catch (Throwable t) {
+            IOUtils.closeQuietly(outputRoot);
             if (outputRoot != readRoot) {
-                IOUtils.closeQuietly(outputRoot);
+                IOUtils.closeQuietly(readRoot);
             }
-            IOUtils.closeQuietly(readRoot);
             IOUtils.closeQuietly(allocator);
             throw t;
         }
@@ -473,101 +465,6 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
     private boolean isAppendOnly() {
         return (attributes() & APPEND_ONLY_FLAG_MASK) > 0;
-    }
-
-    private static VectorSchemaRoot projectVectorSchemaRoot(
-            VectorSchemaRoot sourceRoot,
-            RowType targetRowType,
-            int[] columnProjection,
-            BufferAllocator allocator) {
-        int rowCount = sourceRoot.getRowCount();
-        Schema targetSchema = ArrowUtils.toArrowSchema(targetRowType);
-        VectorSchemaRoot targetRoot = VectorSchemaRoot.create(targetSchema, allocator);
-        for (int i = 0; i < columnProjection.length; i++) {
-            FieldVector targetVector = targetRoot.getVector(i);
-            initFieldVector(targetVector, rowCount);
-            if (columnProjection[i] < 0) {
-                fillNullVector(targetVector, rowCount);
-            } else {
-                FieldVector sourceVector = sourceRoot.getVector(columnProjection[i]);
-                for (int rowId = 0; rowId < rowCount; rowId++) {
-                    targetVector.copyFromSafe(rowId, rowId, sourceVector);
-                }
-                targetVector.setValueCount(rowCount);
-            }
-        }
-        targetRoot.setRowCount(rowCount);
-        return targetRoot;
-    }
-
-    private static void fillNullVector(FieldVector fieldVector, int rowCount) {
-        for (int i = 0; i < rowCount; i++) {
-            fieldVector.setNull(i);
-        }
-        fieldVector.setValueCount(rowCount);
-    }
-
-    private static void initFieldVector(FieldVector fieldVector, int rowCount) {
-        fieldVector.setInitialCapacity(rowCount);
-        if (fieldVector instanceof BaseFixedWidthVector) {
-            ((BaseFixedWidthVector) fieldVector).allocateNew(rowCount);
-        } else if (fieldVector instanceof BaseVariableWidthVector) {
-            ((BaseVariableWidthVector) fieldVector).allocateNew(rowCount);
-        } else if (fieldVector instanceof ListVector) {
-            ListVector listVector = (ListVector) fieldVector;
-            listVector.allocateNew();
-            FieldVector dataVector = listVector.getDataVector();
-            if (dataVector != null) {
-                initFieldVector(dataVector, rowCount);
-            }
-        } else {
-            fieldVector.allocateNew();
-        }
-    }
-
-    private static ArrowBatchData convertToUnshadedArrowBatchData(
-            VectorSchemaRoot shadedRoot,
-            @Nullable ChangeType[] changeTypes,
-            long baseLogOffset,
-            long timestamp,
-            int schemaId) {
-        org.apache.arrow.memory.BufferAllocator allocator =
-                new org.apache.arrow.memory.RootAllocator(Long.MAX_VALUE);
-        try {
-            org.apache.arrow.vector.types.pojo.Schema schema =
-                    org.apache.arrow.vector.types.pojo.Schema.fromJSON(
-                            shadedRoot.getSchema().toJson());
-            org.apache.arrow.vector.VectorSchemaRoot unshadedRoot =
-                    org.apache.arrow.vector.VectorSchemaRoot.create(schema, allocator);
-            byte[] payload = serializeShadedArrowBatch(shadedRoot);
-            try (org.apache.arrow.vector.ipc.ReadChannel channel =
-                            new org.apache.arrow.vector.ipc.ReadChannel(
-                                    Channels.newChannel(new ByteArrayInputStream(payload)));
-                    org.apache.arrow.vector.ipc.message.ArrowRecordBatch recordBatch =
-                            org.apache.arrow.vector.ipc.message.MessageSerializer
-                                    .deserializeRecordBatch(channel, allocator)) {
-                new org.apache.arrow.vector.VectorLoader(unshadedRoot).load(recordBatch);
-            }
-            return new ArrowBatchData(
-                    unshadedRoot, allocator, changeTypes, baseLogOffset, timestamp, schemaId);
-        } catch (Exception e) {
-            allocator.close();
-            throw new FlussRuntimeException(
-                    "Failed to convert shaded Arrow batch to unshaded VectorSchemaRoot", e);
-        } catch (Throwable t) {
-            allocator.close();
-            throw t;
-        }
-    }
-
-    private static byte[] serializeShadedArrowBatch(VectorSchemaRoot shadedRoot)
-            throws IOException {
-        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-        try (WriteChannel writeChannel = new WriteChannel(Channels.newChannel(outputStream));
-                ArrowRecordBatch recordBatch = new VectorUnloader(shadedRoot).getRecordBatch()) {
-            MessageSerializer.serialize(writeChannel, recordBatch);
-            return outputStream.toByteArray();
-        }
     }
 
     /** The basic implementation for Arrow log record iterator. */

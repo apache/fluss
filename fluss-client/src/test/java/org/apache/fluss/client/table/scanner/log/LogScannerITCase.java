@@ -112,7 +112,8 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
         try (Table table = conn.getTable(tablePath)) {
             assertThatThrownBy(() -> table.newScan().createArrowLogScanner())
                     .isInstanceOf(UnsupportedOperationException.class)
-                    .hasMessageContaining("ArrowLogScanner is only supported for ARROW log format")
+                    .hasMessageContaining(
+                            "ArrowLogScanner is only supported for tables whose log format is ARROW")
                     .hasMessageContaining(tablePath.toString())
                     .hasMessageContaining(logFormat.name());
         }
@@ -120,15 +121,16 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPollArrowBatchesWithSchemaEvolution() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_arrow_batches_with_schema_evolution");
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(DATA1_SCHEMA)
                         .distributedBy(1)
                         .logFormat(LogFormat.ARROW)
                         .build();
-        createTable(DATA1_TABLE_PATH, tableDescriptor, false);
+        createTable(tablePath, tableDescriptor, false);
 
-        try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
+        try (Table table = conn.getTable(tablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             for (int i = 0; i < 3; i++) {
                 appendWriter.append(row(i, "value-" + i)).get();
@@ -137,7 +139,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
         }
 
         admin.alterTable(
-                        DATA1_TABLE_PATH,
+                        tablePath,
                         Collections.singletonList(
                                 TableChange.addColumn(
                                         "c",
@@ -147,7 +149,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
                         false)
                 .get();
 
-        try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
+        try (Table table = conn.getTable(tablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             for (int i = 3; i < 6; i++) {
                 appendWriter.append(row(i, "value-" + i, "extra-" + i)).get();
