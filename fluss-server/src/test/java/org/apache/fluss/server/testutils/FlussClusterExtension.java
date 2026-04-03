@@ -921,6 +921,11 @@ public final class FlussClusterExtension
         return waitLeaderAndIsrReady(tb).leader();
     }
 
+    public int waitAndGetStandby(TableBucket tb) {
+        List<Integer> standbyReplicas = waitLeaderAndIsrReady(tb).standbyReplicas();
+        return standbyReplicas.get(0);
+    }
+
     public LeaderAndIsr waitLeaderAndIsrReady(TableBucket tb) {
         ZooKeeperClient zkClient = getZooKeeperClient();
         return waitValue(
