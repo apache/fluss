@@ -24,6 +24,9 @@ import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
+import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
+import org.apache.fluss.server.coordinator.remote.RoundRobinRemoteDirSelector;
+import org.apache.fluss.server.coordinator.remote.WeightedRoundRobinRemoteDirSelector;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
@@ -455,6 +458,58 @@ public class DynamicConfigChangeTest {
 
         // Verify the reconfigurable was notified with the new value
         assertThat(reconfiguredInterval.get()).isEqualTo(Duration.ofMinutes(5));
+    }
+
+    @Test
+    void testDynamicReconfigurationOfRemoteDataDirs() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.REMOTE_DATA_DIR, "hdfs://default-dir");
+        configuration.set(
+                ConfigOptions.REMOTE_DATA_DIRS, Arrays.asList("hdfs://dir1", "hdfs://dir2"));
+
+        try (RemoteDirDynamicLoader remoteDirDynamicLoader =
+                new RemoteDirDynamicLoader(configuration)) {
+            DynamicConfigManager dynamicConfigManager =
+                    new DynamicConfigManager(zookeeperClient, configuration, true);
+            dynamicConfigManager.register(remoteDirDynamicLoader);
+            dynamicConfigManager.startup();
+
+            // Verify initial selector is RoundRobin (default strategy)
+            assertThat(remoteDirDynamicLoader.getRemoteDirSelector())
+                    .isInstanceOf(RoundRobinRemoteDirSelector.class);
+
+            // Change multiple configs - generic validation applies to all
+            dynamicConfigManager.alterConfigs(
+                    Arrays.asList(
+                            new AlterConfig(
+                                    ConfigOptions.REMOTE_DATA_DIRS.key(),
+                                    "hdfs://dir1,hdfs://dir2,hdfs://dir3",
+                                    AlterConfigOpType.SET),
+                            new AlterConfig(
+                                    ConfigOptions.REMOTE_DATA_DIRS_STRATEGY.key(),
+                                    ConfigOptions.RemoteDataDirStrategy.WEIGHTED_ROUND_ROBIN.name(),
+                                    AlterConfigOpType.SET),
+                            new AlterConfig(
+                                    ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS.key(),
+                                    "1,2,3",
+                                    AlterConfigOpType.SET)));
+
+            // Verify both configs were applied
+            Map<String, String> zkConfig = zookeeperClient.fetchEntityConfig();
+            assertThat(zkConfig.get(ConfigOptions.REMOTE_DATA_DIRS.key()))
+                    .isEqualTo("hdfs://dir1,hdfs://dir2,hdfs://dir3");
+            assertThat(zkConfig.get(ConfigOptions.REMOTE_DATA_DIRS_STRATEGY.key()))
+                    .isEqualTo(ConfigOptions.RemoteDataDirStrategy.WEIGHTED_ROUND_ROBIN.name());
+            assertThat(zkConfig.get(ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS.key()))
+                    .isEqualTo("1,2,3");
+
+            // Wait for config change to propagate via ZK watcher
+            retry(
+                    Duration.ofMinutes(1),
+                    () ->
+                            assertThat(remoteDirDynamicLoader.getRemoteDirSelector())
+                                    .isInstanceOf(WeightedRoundRobinRemoteDirSelector.class));
+        }
     }
 
     @Test
