@@ -137,6 +137,20 @@ class FlussConfigUtilsTest {
                 .hasMessageContaining(
                         "All weights in 'remote.data.dirs.weights' must be no less than 0");
 
+        // Test all zero weights
+        Configuration zeroWeightsConf = new Configuration();
+        zeroWeightsConf.set(
+                ConfigOptions.REMOTE_DATA_DIRS_STRATEGY,
+                ConfigOptions.RemoteDataDirStrategy.WEIGHTED_ROUND_ROBIN);
+        zeroWeightsConf.set(
+                ConfigOptions.REMOTE_DATA_DIRS, Arrays.asList("s3://bucket1", "s3://bucket2"));
+        zeroWeightsConf.set(ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS, Arrays.asList(0, 0));
+        assertThatThrownBy(() -> validateCoordinatorConfigs(zeroWeightsConf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining("The sum of all weights")
+                .hasMessageContaining(ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS.key())
+                .hasMessageContaining("must be greater than 0");
+
         // Test invalid DEFAULT_REPLICATION_FACTOR
         Configuration invalidReplicationConf = new Configuration();
         invalidReplicationConf.set(ConfigOptions.REMOTE_DATA_DIR, "s3://bucket/path");

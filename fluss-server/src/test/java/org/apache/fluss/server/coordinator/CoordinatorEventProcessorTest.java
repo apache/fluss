@@ -52,6 +52,7 @@ import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
+import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.coordinator.statemachine.BucketState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
@@ -94,7 +95,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 
-import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Arrays;
@@ -196,17 +196,21 @@ class CoordinatorEventProcessorTest {
     }
 
     @BeforeEach
-    void beforeEach() throws IOException {
+    void beforeEach() {
         serverMetadataCache = new CoordinatorMetadataCache();
         // set a test channel manager for the context
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
-        autoPartitionManager =
-                new AutoPartitionManager(serverMetadataCache, metadataManager, new Configuration());
         lakeTableTieringManager =
                 new LakeTableTieringManager(TestingMetricGroups.LAKE_TIERING_METRICS);
-        Configuration conf = new Configuration();
         remoteDataDir = zookeeperClient.getDefaultRemoteDataDir();
+        Configuration conf = new Configuration();
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        autoPartitionManager =
+                new AutoPartitionManager(
+                        serverMetadataCache,
+                        metadataManager,
+                        new RemoteDirDynamicLoader(conf),
+                        new Configuration());
         kvSnapshotLeaseManager =
                 new KvSnapshotLeaseManager(
                         Duration.ofMinutes(10).toMillis(),
@@ -250,10 +254,14 @@ class CoordinatorEventProcessorTest {
                             new TabletServerInfo(1, "rack1"),
                             new TabletServerInfo(2, "rack2")
                         });
-        long t1Id = metadataManager.createTable(t1, tableDescriptor, tableAssignment, false);
+        long t1Id =
+                metadataManager.createTable(
+                        t1, remoteDataDir, tableDescriptor, tableAssignment, false);
 
         TablePath t2 = TablePath.of(defaultDatabase, "create_drop_t2");
-        long t2Id = metadataManager.createTable(t2, tableDescriptor, tableAssignment, false);
+        long t2Id =
+                metadataManager.createTable(
+                        t2, remoteDataDir, tableDescriptor, tableAssignment, false);
 
         verifyTableCreated(t2Id, tableAssignment, nBuckets, replicationFactor);
 
@@ -383,13 +391,15 @@ class CoordinatorEventProcessorTest {
 
         TablePath table1Path = TablePath.of(defaultDatabase, "t1");
         long table1Id =
-                metadataManager.createTable(table1Path, TEST_TABLE, table1Assignment, false);
+                metadataManager.createTable(
+                        table1Path, remoteDataDir, TEST_TABLE, table1Assignment, false);
 
         TableAssignment table2Assignment =
                 TableAssignment.builder().add(0, BucketAssignment.of(3)).build();
         TablePath table2Path = TablePath.of(defaultDatabase, "t2");
         long table2Id =
-                metadataManager.createTable(table2Path, TEST_TABLE, table2Assignment, false);
+                metadataManager.createTable(
+                        table2Path, remoteDataDir, TEST_TABLE, table2Assignment, false);
 
         // retry until the table2 been created
         retryVerifyContext(
@@ -494,7 +504,9 @@ class CoordinatorEventProcessorTest {
                         .add(1, BucketAssignment.of(1, 2, 0))
                         .build();
         TablePath tablePath = TablePath.of(defaultDatabase, "t_restart");
-        long table1Id = metadataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
+        long table1Id =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
 
         // let's restart
         initCoordinatorChannel();
@@ -618,7 +630,8 @@ class CoordinatorEventProcessorTest {
         // create a partitioned table
         TableDescriptor tablePartitionTableDescriptor = getPartitionedTable();
         long tableId =
-                metadataManager.createTable(tablePath, tablePartitionTableDescriptor, null, false);
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, tablePartitionTableDescriptor, null, false);
 
         int nBuckets = 3;
         int replicationFactor = 3;
@@ -690,7 +703,8 @@ class CoordinatorEventProcessorTest {
         // create a partitioned table
         TableDescriptor tablePartitionTableDescriptor = getPartitionedTable();
         long tableId =
-                metadataManager.createTable(tablePath, tablePartitionTableDescriptor, null, false);
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, tablePartitionTableDescriptor, null, false);
 
         int nBuckets = 3;
         int replicationFactor = 3;
@@ -837,7 +851,8 @@ class CoordinatorEventProcessorTest {
                             new TabletServerInfo(1, "rack1"),
                             new TabletServerInfo(2, "rack2")
                         });
-        long t1Id = metadataManager.createTable(t1, TEST_TABLE, tableAssignment, false);
+        long t1Id =
+                metadataManager.createTable(t1, remoteDataDir, TEST_TABLE, tableAssignment, false);
         verifyTableCreated(t1Id, tableAssignment, nBuckets, replicationFactor);
 
         // get the origin bucket leaderAndIsr
@@ -891,7 +906,7 @@ class CoordinatorEventProcessorTest {
                         });
         // create table
         List<Integer> replicas = tableAssignment.getBucketAssignment(0).getReplicas();
-        metadataManager.createTable(t1, TEST_TABLE, tableAssignment, false);
+        metadataManager.createTable(t1, remoteDataDir, TEST_TABLE, tableAssignment, false);
         TableInfo tableInfo = metadataManager.getTable(t1);
 
         retry(
@@ -950,7 +965,7 @@ class CoordinatorEventProcessorTest {
                         });
         // create table
         List<Integer> replicas = tableAssignment.getBucketAssignment(0).getReplicas();
-        metadataManager.createTable(t1, TEST_TABLE, tableAssignment, false);
+        metadataManager.createTable(t1, remoteDataDir, TEST_TABLE, tableAssignment, false);
         TableInfo tableInfo = metadataManager.getTable(t1);
 
         retry(
@@ -1012,7 +1027,11 @@ class CoordinatorEventProcessorTest {
         TableAssignment tableAssignment = new TableAssignment(bucketAssignments);
         long t1Id =
                 metadataManager.createTable(
-                        t1, CoordinatorEventProcessorTest.TEST_TABLE, tableAssignment, false);
+                        t1,
+                        remoteDataDir,
+                        CoordinatorEventProcessorTest.TEST_TABLE,
+                        tableAssignment,
+                        false);
         TableBucket tb0 = new TableBucket(t1Id, 0);
         verifyIsr(tb0, 0, Arrays.asList(0, 1, 3));
 
@@ -1073,7 +1092,8 @@ class CoordinatorEventProcessorTest {
         bucketAssignments.put(1, BucketAssignment.of(0, 1, 2));
         bucketAssignments.put(2, BucketAssignment.of(0, 1, 2));
         TableAssignment tableAssignment = new TableAssignment(bucketAssignments);
-        long t1Id = metadataManager.createTable(t1, TEST_TABLE, tableAssignment, false);
+        long t1Id =
+                metadataManager.createTable(t1, remoteDataDir, TEST_TABLE, tableAssignment, false);
 
         TableBucket tb0 = new TableBucket(t1Id, 0);
         TableBucket tb1 = new TableBucket(t1Id, 1);
@@ -1172,6 +1192,8 @@ class CoordinatorEventProcessorTest {
     }
 
     private CoordinatorEventProcessor buildCoordinatorEventProcessor() {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
         return new CoordinatorEventProcessor(
                 zookeeperClient,
                 serverMetadataCache,
@@ -1180,7 +1202,7 @@ class CoordinatorEventProcessorTest {
                 autoPartitionManager,
                 lakeTableTieringManager,
                 TestingMetricGroups.COORDINATOR_METRICS,
-                new Configuration(),
+                conf,
                 Executors.newFixedThreadPool(1, new ExecutorThreadFactory("test-coordinator-io")),
                 metadataManager,
                 kvSnapshotLeaseManager);
@@ -1508,7 +1530,11 @@ class CoordinatorEventProcessorTest {
         TableAssignment tableAssignment =
                 generateAssignment(N_BUCKETS, REPLICATION_FACTOR, servers);
         return metadataManager.createTable(
-                tablePath, CoordinatorEventProcessorTest.TEST_TABLE, tableAssignment, false);
+                tablePath,
+                remoteDataDir,
+                CoordinatorEventProcessorTest.TEST_TABLE,
+                tableAssignment,
+                false);
     }
 
     private void alterTable(TablePath tablePath, List<TableChange> schemaChanges) {

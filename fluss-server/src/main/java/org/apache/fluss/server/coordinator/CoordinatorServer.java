@@ -34,6 +34,7 @@ import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.authorizer.AuthorizerLoader;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
+import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metrics.ServerMetricUtils;
@@ -149,6 +150,9 @@ public class CoordinatorServer extends ServerBase {
     private LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
 
     @GuardedBy("lock")
+    private RemoteDirDynamicLoader remoteDirDynamicLoader;
+
+    @GuardedBy("lock")
     private CoordinatorLeaderElection coordinatorLeaderElection;
 
     @GuardedBy("lock")
@@ -225,10 +229,13 @@ public class CoordinatorServer extends ServerBase {
             this.coordinatorLeaderElection = new CoordinatorLeaderElection(zkClient, serverId);
 
             this.lakeCatalogDynamicLoader = new LakeCatalogDynamicLoader(conf, pluginManager, true);
+            this.remoteDirDynamicLoader = new RemoteDirDynamicLoader(conf);
+
             this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf, true);
 
             // Register server reconfigurable components
             dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            dynamicConfigManager.register(remoteDirDynamicLoader);
 
             // Register stateless validators for coordinator-side upfront validation
             dynamicConfigManager.registerValidator(new DiskWriteLimitRatioValidator());
@@ -274,6 +281,7 @@ public class CoordinatorServer extends ServerBase {
                             authorizer,
                             lakeCatalogDynamicLoader,
                             lakeTableTieringManager,
+                            remoteDirDynamicLoader,
                             dynamicConfigManager,
                             ioExecutor,
                             kvSnapshotLeaseManager,
@@ -307,7 +315,8 @@ public class CoordinatorServer extends ServerBase {
             this.coordinatorChannelManager = new CoordinatorChannelManager(rpcClient);
 
             this.autoPartitionManager =
-                    new AutoPartitionManager(metadataCache, metadataManager, conf);
+                    new AutoPartitionManager(
+                            metadataCache, metadataManager, remoteDirDynamicLoader, conf);
             autoPartitionManager.start();
 
             // start coordinator event processor after we register coordinator leader to zk
@@ -618,6 +627,10 @@ public class CoordinatorServer extends ServerBase {
 
                 if (lakeCatalogDynamicLoader != null) {
                     lakeCatalogDynamicLoader.close();
+                }
+
+                if (remoteDirDynamicLoader != null) {
+                    remoteDirDynamicLoader.close();
                 }
 
                 if (kvSnapshotLeaseManager != null) {
