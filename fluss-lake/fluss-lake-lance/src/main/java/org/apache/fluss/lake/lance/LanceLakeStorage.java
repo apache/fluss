@@ -19,6 +19,7 @@ package org.apache.fluss.lake.lance;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
+import org.apache.fluss.lake.lance.source.LanceLakeSource;
 import org.apache.fluss.lake.lance.tiering.LanceCommittable;
 import org.apache.fluss.lake.lance.tiering.LanceLakeTieringFactory;
 import org.apache.fluss.lake.lance.tiering.LanceWriteResult;
@@ -46,6 +47,6 @@ public class LanceLakeStorage implements LakeStorage {
 
     @Override
     public LakeSource<?> createLakeSource(TablePath tablePath) {
-        throw new UnsupportedOperationException("Not implemented");
+        return new LanceLakeSource(config, tablePath);
     }
 }
