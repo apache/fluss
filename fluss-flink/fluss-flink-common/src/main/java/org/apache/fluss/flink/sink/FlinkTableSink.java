@@ -87,6 +87,13 @@ public class FlinkTableSink
     private final @Nullable DataLakeFormat lakeFormat;
     @Nullable private final String producerId;
 
+    /**
+     * The row type of data actually consumed by the sink. This may differ from {@link
+     * #tableRowType} when the Flink planner sends computed columns (e.g., during UPDATE with tables
+     * that have computed columns like {@code ptime AS PROCTIME()}).
+     */
+    private RowType consumedRowType;
+
     private boolean appliedUpdates = false;
     @Nullable private GenericRow deleteRow;
 
@@ -108,6 +115,7 @@ public class FlinkTableSink
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableRowType = tableRowType;
+        this.consumedRowType = tableRowType;
         this.primaryKeyIndexes = primaryKeyIndexes;
         this.partitionKeys = partitionKeys;
         this.streaming = streaming;
@@ -216,6 +224,7 @@ public class FlinkTableSink
                                 tablePath,
                                 flussConfig,
                                 tableRowType,
+                                consumedRowType,
                                 targetColumnIndexes,
                                 numBucket,
                                 bucketKeys,
@@ -229,6 +238,7 @@ public class FlinkTableSink
                                 tablePath,
                                 flussConfig,
                                 tableRowType,
+                                consumedRowType,
                                 numBucket,
                                 bucketKeys,
                                 partitionKeys,
@@ -265,6 +275,7 @@ public class FlinkTableSink
                         bucketKeys,
                         distributionMode,
                         producerId);
+        sink.consumedRowType = consumedRowType;
         sink.appliedUpdates = appliedUpdates;
         sink.deleteRow = deleteRow;
         return sink;
