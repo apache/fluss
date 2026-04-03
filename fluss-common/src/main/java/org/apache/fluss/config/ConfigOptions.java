@@ -2007,6 +2007,41 @@ public class ConfigOptions {
                                     + "like 9990-9999.");
 
     // ------------------------------------------------------------------------
+    //  ConfigOptions for influxdb reporter
+    // ------------------------------------------------------------------------
+    public static final ConfigOption<String> METRICS_REPORTER_INFLUXDB_HOST_URL =
+            key("metrics.reporter.influxdb.host-url")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The InfluxDB server host URL including scheme, host name, and port.");
+
+    public static final ConfigOption<String> METRICS_REPORTER_INFLUXDB_BUCKET =
+            key("metrics.reporter.influxdb.bucket")
+                    .stringType()
+                    .noDefaultValue()
+                    .withFallbackKeys("metrics.reporter.influxdb.database")
+                    .withDescription("The InfluxDB bucket/database name.");
+
+    public static final ConfigOption<String> METRICS_REPORTER_INFLUXDB_ORG =
+            key("metrics.reporter.influxdb.org")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("The InfluxDB organization name.");
+
+    public static final ConfigOption<String> METRICS_REPORTER_INFLUXDB_TOKEN =
+            key("metrics.reporter.influxdb.token")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("The InfluxDB authentication token.");
+
+    public static final ConfigOption<Duration> METRICS_REPORTER_INFLUXDB_PUSH_INTERVAL =
+            key("metrics.reporter.influxdb.push-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(10))
+                    .withDescription("The interval of reporting metrics to InfluxDB.");
+
+    // ------------------------------------------------------------------------
     //  ConfigOptions for lakehouse storage
     // ------------------------------------------------------------------------
     public static final ConfigOption<DataLakeFormat> DATALAKE_FORMAT =
