@@ -93,6 +93,7 @@ services:
         s3.access-key: rustfsadmin
         s3.secret-key: rustfsadmin
         s3.path-style-access: true
+        s3.region: us-east-1 # default region of rustfs
   tablet-server:
     image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
@@ -109,6 +110,7 @@ services:
         s3.access-key: rustfsadmin
         s3.secret-key: rustfsadmin
         s3.path-style-access: true
+        s3.region: us-east-1 # default region of rustfs
         kv.snapshot.interval: 0s
   zookeeper:
     restart: always
