@@ -411,6 +411,9 @@ public final class LogSegment {
             return baseOffset;
         } else {
             Iterable<LogRecordBatch> batches = fetchData.getRecords().batches();
+            if (Iterables.isEmpty(batches)) {
+                return baseOffset;
+            }
             LogRecordBatch lastBatch = Iterables.getLast(batches);
             if (lastBatch != null) {
                 return lastBatch.nextLogOffset();
