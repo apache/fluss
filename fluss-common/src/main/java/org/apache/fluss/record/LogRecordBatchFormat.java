@@ -59,11 +59,8 @@ public class LogRecordBatchFormat {
     public static final int LOG_OVERHEAD = LENGTH_OFFSET + LENGTH_LENGTH;
     public static final int HEADER_SIZE_UP_TO_MAGIC = MAGIC_OFFSET + MAGIC_LENGTH;
 
-    // Statistics format versions
-    public static final byte STATISTICS_VERSION_V1 = 1;
-    public static final byte STATISTICS_VERSION_V2 = 2;
-    // V2 omits null counts from the statistics binary format (they come from Arrow metadata)
-    public static final byte CURRENT_STATISTICS_VERSION = STATISTICS_VERSION_V2;
+    // Statistics format version
+    public static final byte STATISTICS_VERSION = 1;
 
     // ----------------------------------------------------------------------------------------
     // Format of Magic Version: V2

@@ -39,15 +39,13 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
  *
  * <h3>Statistics Layout Format</h3>
  *
- * <p>Two binary layout versions exist:
- *
- * <h4>V1 Layout (null counts stored inline)</h4>
+ * <p>The binary format of statistics data stored in memory segment:
  *
  * <pre>
  * +------------------+---------+-------------------------------------------------------+
  * | Field            | Size    | Description                                           |
  * +------------------+---------+-------------------------------------------------------+
- * | Version          | 1 byte  | Statistics format version (1)                         |
+ * | Version          | 1 byte  | Statistics format version                             |
  * | Column Count     | 2 bytes | Number of columns with statistics                     |
  * | Column Indexes   | 2*N     | Field indexes in original schema (2 bytes each)      |
  * | Null Counts      | 4*N     | Null counts for each stats column (4 bytes each)     |
@@ -57,25 +55,6 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
  * | Max Values Data  | Variable| AlignedRow containing maximum values                  |
  * +------------------+---------+-------------------------------------------------------+
  * </pre>
- *
- * <h4>V2 Layout (null counts from Arrow metadata)</h4>
- *
- * <pre>
- * +------------------+---------+-------------------------------------------------------+
- * | Field            | Size    | Description                                           |
- * +------------------+---------+-------------------------------------------------------+
- * | Version          | 1 byte  | Statistics format version (2)                         |
- * | Column Count     | 2 bytes | Number of columns with statistics                     |
- * | Column Indexes   | 2*N     | Field indexes in original schema (2 bytes each)      |
- * | Min Values Size  | 4 bytes | Size of min values AlignedRow data                   |
- * | Min Values Data  | Variable| AlignedRow containing minimum values                  |
- * | Max Values Size  | 4 bytes | Size of max values AlignedRow data                   |
- * | Max Values Data  | Variable| AlignedRow containing maximum values                  |
- * +------------------+---------+-------------------------------------------------------+
- * </pre>
- *
- * <p>V2 omits the Null Counts segment; null counts are extracted from Arrow RecordBatch FlatBuffer
- * metadata via {@link ArrowNullCountReader} instead.
  *
  * <p>The statistics support partial column statistics through statsIndexMapping, which maps
  * statistics column positions to the original table schema field indexes. This allows efficient
@@ -91,7 +70,7 @@ public class DefaultLogRecordBatchStatistics implements LogRecordBatchStatistics
 
     private final int[] statsIndexMapping;
 
-    private Long[] statsNullCounts;
+    private final Long[] statsNullCounts;
 
     // Offsets for min/max values in the byte array
     private final int minValuesOffset;
@@ -168,9 +147,6 @@ public class DefaultLogRecordBatchStatistics implements LogRecordBatchStatistics
 
     @Override
     public Long[] getNullCounts() {
-        if (statsNullCounts == null) {
-            return null;
-        }
         if (cachedNullCounts != null) {
             return cachedNullCounts;
         }
@@ -183,20 +159,6 @@ public class DefaultLogRecordBatchStatistics implements LogRecordBatchStatistics
             }
         }
         return cachedNullCounts;
-    }
-
-    /** Set null counts from external source (Arrow metadata for V2 format). */
-    void setNullCounts(Long[] nullCounts) {
-        this.cachedNullCounts = null; // invalidate cache
-        this.statsNullCounts = new Long[nullCounts.length];
-        for (int i = 0; i < nullCounts.length; i++) {
-            this.statsNullCounts[i] = nullCounts[i];
-        }
-    }
-
-    /** Get the statistics index mapping (stats position to schema field index). */
-    int[] getStatsIndexMapping() {
-        return statsIndexMapping;
     }
 
     @Override

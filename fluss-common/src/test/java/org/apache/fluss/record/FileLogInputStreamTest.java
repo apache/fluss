@@ -228,4 +228,33 @@ public class FileLogInputStreamTest extends LogTestBase {
             }
         }
     }
+
+    @Test
+    void testStatisticsCreation() throws Exception {
+        // Create test data with statistics using V2 format
+        MemoryLogRecords memoryLogRecords =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        TestData.DATA1, DATA1_ROW_TYPE, 0L, DEFAULT_SCHEMA_ID);
+
+        // Get the batch
+        LogRecordBatch memoryBatch = memoryLogRecords.batches().iterator().next();
+        assertThat(memoryBatch.magic()).isEqualTo(LOG_MAGIC_VALUE_V2);
+
+        // Test that the memory batch has statistics
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            Optional<LogRecordBatchStatistics> memoryStatsOpt =
+                    memoryBatch.getStatistics(readContext);
+            assertThat(memoryStatsOpt).isPresent();
+
+            LogRecordBatchStatistics memoryStats = memoryStatsOpt.get();
+
+            // Verify statistics content
+            assertThat(memoryStats.getMinValues().getInt(0)).isEqualTo(1);
+            assertThat(memoryStats.getMaxValues().getInt(0)).isEqualTo(10);
+            assertThat(memoryStats.getMinValues().getString(1).toString()).isEqualTo("a");
+            assertThat(memoryStats.getMaxValues().getString(1).toString()).isEqualTo("j");
+        }
+    }
 }

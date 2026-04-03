@@ -30,21 +30,21 @@ import org.apache.fluss.types.TimestampType;
 
 import java.io.IOException;
 
-import static org.apache.fluss.record.LogRecordBatchFormat.CURRENT_STATISTICS_VERSION;
+import static org.apache.fluss.record.LogRecordBatchFormat.STATISTICS_VERSION;
 
 /**
  * A high-performance writer for LogRecordBatch statistics that efficiently serializes statistical
  * information directly to memory streams without creating intermediate heap objects.
  *
  * <p>This writer provides schema-aware statistics serialization capabilities, supporting selective
- * column statistics based on index mappings. It can write min/max values and other statistical
- * metadata for log record batches in a compact binary format.
+ * column statistics based on index mappings. It can write min/max values, null counts, and other
+ * statistical metadata for log record batches in a compact binary format.
  *
- * <h3>Binary Format Structure (V2):</h3>
+ * <h3>Binary Format Structure:</h3>
  *
  * <pre>
  * [Version(1 byte)] [Column Count(2 bytes)] [Column Indexes(2*N bytes)]
- * [Min Values Row] [Max Values Row]
+ * [Null Counts(4*N bytes)] [Min Values Row] [Max Values Row]
  * </pre>
  *
  * <h3>Usage Example:</h3>
@@ -56,8 +56,9 @@ import static org.apache.fluss.record.LogRecordBatchFormat.CURRENT_STATISTICS_VE
  *
  * InternalRow minValues = ...;
  * InternalRow maxValues = ...;
+ * Long[] nullCounts = ...;
  *
- * int bytesWritten = writer.writeStatistics(minValues, maxValues, outputView);
+ * int bytesWritten = writer.writeStatistics(minValues, maxValues, nullCounts, outputView);
  * </pre>
  *
  * <p><b>Thread Safety:</b> This class is NOT thread-safe. Each thread should use its own instance.
@@ -103,21 +104,23 @@ public class LogRecordBatchStatisticsWriter {
     }
 
     /**
-     * Write statistics to an OutputView in schema-aware format (V2: no null counts).
+     * Write statistics to an OutputView in schema-aware format.
      *
      * @param minValues The minimum values as InternalRow, can be null
      * @param maxValues The maximum values as InternalRow, can be null
+     * @param nullCounts The null counts array
      * @param outputView The target output view
      * @return The number of bytes written
      * @throws IOException If writing fails
      */
-    public int writeStatistics(InternalRow minValues, InternalRow maxValues, OutputView outputView)
+    public int writeStatistics(
+            InternalRow minValues, InternalRow maxValues, Long[] nullCounts, OutputView outputView)
             throws IOException {
 
         int totalBytesWritten = 0;
 
         // Write version (1 byte)
-        outputView.writeByte(CURRENT_STATISTICS_VERSION);
+        outputView.writeByte(STATISTICS_VERSION);
         totalBytesWritten += 1;
 
         // Write statistics column count (2 bytes)
@@ -128,6 +131,13 @@ public class LogRecordBatchStatisticsWriter {
         for (int fullRowIndex : statsIndexMapping) {
             outputView.writeShort(fullRowIndex);
             totalBytesWritten += 2;
+        }
+
+        // Write null counts for statistics columns only (4 bytes per count)
+        for (Long count : nullCounts) {
+            long nullCount = count != null ? count : 0;
+            outputView.writeInt((int) nullCount);
+            totalBytesWritten += 4;
         }
 
         // Write min values
@@ -255,6 +265,9 @@ public class LogRecordBatchStatisticsWriter {
 
         // Column indexes (2 bytes per index)
         totalEstimatedBytes += statsIndexMapping.length * 2;
+
+        // Null counts (4 bytes per count)
+        totalEstimatedBytes += statsIndexMapping.length * 4;
 
         // Estimate min values size: 4 bytes for size field + row data
         totalEstimatedBytes += 4 + (minValues != null ? getRowSizeEstimate() : 0);

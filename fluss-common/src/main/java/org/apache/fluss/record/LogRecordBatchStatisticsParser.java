@@ -27,8 +27,7 @@ import javax.annotation.Nullable;
 
 import java.nio.ByteBuffer;
 
-import static org.apache.fluss.record.LogRecordBatchFormat.STATISTICS_VERSION_V1;
-import static org.apache.fluss.record.LogRecordBatchFormat.STATISTICS_VERSION_V2;
+import static org.apache.fluss.record.LogRecordBatchFormat.STATISTICS_VERSION;
 
 /**
  * A parser for LogRecordBatch statistics that reads statistical metadata directly from various
@@ -57,10 +56,8 @@ public class LogRecordBatchStatisticsParser {
     private static final Logger LOG = LoggerFactory.getLogger(LogRecordBatchStatisticsParser.class);
 
     // Fixed offsets within the statistics binary format.
-    // V1 Format: Version(1B) | ColumnCount(2B) | ColumnIndexes(2*N B) | NullCounts(4*N B)
-    //            | MinValuesSize(4B) | MinValues(...) | MaxValuesSize(4B) | MaxValues(...)
-    // V2 Format: Version(1B) | ColumnCount(2B) | ColumnIndexes(2*N B)
-    //            | MinValuesSize(4B) | MinValues(...) | MaxValuesSize(4B) | MaxValues(...)
+    // Format: Version(1B) | ColumnCount(2B) | ColumnIndexes(2*N B) | NullCounts(4*N B)
+    //         | MinValuesSize(4B) | MinValues(...) | MaxValuesSize(4B) | MaxValues(...)
     private static final int VERSION_OFFSET = 0;
     private static final int COLUMN_COUNT_OFFSET = 1;
     private static final int COLUMN_INDEXES_OFFSET = 3;
@@ -97,7 +94,7 @@ public class LogRecordBatchStatisticsParser {
         try {
             // Read version at fixed offset
             byte version = segment.get(position + VERSION_OFFSET);
-            if (version != STATISTICS_VERSION_V1 && version != STATISTICS_VERSION_V2) {
+            if (version != STATISTICS_VERSION) {
                 return null;
             }
 
@@ -114,29 +111,15 @@ public class LogRecordBatchStatisticsParser {
                 statsIndexMapping[i] = segment.getShort(indexesStart + 2 * i);
             }
 
-            // Read null counts — V1 has them embedded, V2 does not (caller provides from Arrow
-            // metadata)
-            Long[] nullCounts;
-            if (version == STATISTICS_VERSION_V1) {
-                int nullCountsStart = position + nullCountsOffset(statisticsColumnCount);
-                nullCounts = new Long[statisticsColumnCount];
-                for (int i = 0; i < statisticsColumnCount; i++) {
-                    nullCounts[i] = (long) segment.getInt(nullCountsStart + 4 * i);
-                }
-            } else {
-                // V2: null counts not in statistics binary — will be provided by caller from Arrow
-                // metadata
-                nullCounts = null;
+            // Read null counts at fixed offset
+            int nullCountsStart = position + nullCountsOffset(statisticsColumnCount);
+            Long[] nullCounts = new Long[statisticsColumnCount];
+            for (int i = 0; i < statisticsColumnCount; i++) {
+                nullCounts[i] = (long) segment.getInt(nullCountsStart + 4 * i);
             }
 
-            // V1: min values start after null counts (includes 4*N bytes for null counts)
-            // V2: min values start right after column indexes (no null counts segment)
-            int minSizeFieldOffset;
-            if (version == STATISTICS_VERSION_V1) {
-                minSizeFieldOffset = minValuesSizeOffset(statisticsColumnCount);
-            } else {
-                minSizeFieldOffset = nullCountsOffset(statisticsColumnCount);
-            }
+            // Read min values size at fixed offset
+            int minSizeFieldOffset = minValuesSizeOffset(statisticsColumnCount);
             int minValuesSize = segment.getInt(position + minSizeFieldOffset);
 
             // Min values data starts right after the min-values size field
@@ -244,7 +227,7 @@ public class LogRecordBatchStatisticsParser {
         try {
             // Check version at fixed offset
             byte version = segment.get(position + VERSION_OFFSET);
-            if (version != STATISTICS_VERSION_V1 && version != STATISTICS_VERSION_V2) {
+            if (version != STATISTICS_VERSION) {
                 return false;
             }
 
@@ -315,21 +298,14 @@ public class LogRecordBatchStatisticsParser {
         }
 
         try {
-            byte version = segment.get(position + VERSION_OFFSET);
+            // Read column count at fixed offset (skip version byte)
             short statisticsColumnCount = segment.getShort(position + COLUMN_COUNT_OFFSET);
             if (statisticsColumnCount <= 0) {
                 return -1;
             }
 
-            // V1 includes null counts in layout, V2 does not
-            int minSizeFieldOffset;
-            if (version == STATISTICS_VERSION_V1) {
-                minSizeFieldOffset = minValuesSizeOffset(statisticsColumnCount);
-            } else if (version == STATISTICS_VERSION_V2) {
-                minSizeFieldOffset = nullCountsOffset(statisticsColumnCount);
-            } else {
-                return -1;
-            }
+            // Calculate offset to min-values size field using fixed layout
+            int minSizeFieldOffset = minValuesSizeOffset(statisticsColumnCount);
             int minValuesSize = segment.getInt(position + minSizeFieldOffset);
 
             // Max-values size field follows min values data

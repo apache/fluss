@@ -321,86 +321,14 @@ public class FileLogInputStream
                         loadByteBufferWithSize(
                                 statisticsLength, position + statsDataOffset, "statistics");
 
-                DefaultLogRecordBatchStatistics parsedStatistics =
+                LogRecordBatchStatistics parsedStatistics =
                         LogRecordBatchStatisticsParser.parseStatistics(
                                 statisticsData.array(), rowType, schemaId());
-                if (parsedStatistics == null) {
-                    return Optional.empty();
-                }
-
-                // V2: null counts not in statistics — extract from Arrow metadata
-                if (parsedStatistics.getNullCounts() == null) {
-                    try {
-                        readAndSetNullCountsFromArrowMetadata(parsedStatistics, header, rowType);
-                    } catch (Exception e) {
-                        LOG.warn(
-                                "Failed to read Arrow metadata for null counts at position {}",
-                                position,
-                                e);
-                        // Fall through — statistics without null counts still useful for
-                        // min/max filtering
-                    }
-                }
-
-                return Optional.of(parsedStatistics);
+                return Optional.ofNullable(parsedStatistics);
             } catch (Exception e) {
                 LOG.error("Failed to load statistics for record batch at position {}", position, e);
                 return Optional.empty();
             }
-        }
-
-        private void readAndSetNullCountsFromArrowMetadata(
-                DefaultLogRecordBatchStatistics stats,
-                DefaultLogRecordBatch header,
-                RowType rowType)
-                throws IOException {
-            int statisticsLength = header.getStatisticsLength();
-            int recordBatchHeaderSize = recordBatchHeaderSize(magic);
-
-            // Determine append-only flag from the batch header's attribute byte.
-            // Use the header's segment directly since attributes() is private.
-            byte attributes =
-                    header.segment()
-                            .get(header.position() + LogRecordBatchFormat.attributeOffset(magic));
-            boolean isAppendOnly = (attributes & DefaultLogRecordBatch.APPEND_ONLY_FLAG_MASK) > 0;
-            int changeTypeBytes = isAppendOnly ? 0 : header.getRecordCount();
-
-            // Arrow IPC header starts after: batch header + statistics + changeTypes
-            long arrowHeaderOffset =
-                    position + recordBatchHeaderSize + statisticsLength + changeTypeBytes;
-
-            FileChannel channel = fileRecords.channel();
-
-            // Arrow IPC format: continuation(4B) + metadataSize(4B)
-            ByteBuffer arrowHeader = ByteBuffer.allocate(8);
-            arrowHeader.order(ByteOrder.LITTLE_ENDIAN);
-            FileUtils.readFullyOrFail(
-                    channel, arrowHeader, arrowHeaderOffset, "arrow IPC header for null counts");
-            arrowHeader.position(4); // skip continuation token
-            int metadataSize = arrowHeader.getInt();
-
-            if (metadataSize <= 0) {
-                return;
-            }
-
-            // Read Arrow FlatBuffer metadata
-            ByteBuffer arrowMetadata = ByteBuffer.allocate(metadataSize);
-            arrowMetadata.order(ByteOrder.LITTLE_ENDIAN);
-            FileUtils.readFullyOrFail(
-                    channel,
-                    arrowMetadata,
-                    arrowHeaderOffset + 8,
-                    "arrow metadata for null counts");
-
-            // Compute FieldNode mapping and extract null counts
-            int[] statsIndexMapping = stats.getStatsIndexMapping();
-            int[] fieldNodeMapping =
-                    ArrowNullCountReader.computeFieldNodeMappingCached(
-                            rowType, statsIndexMapping, schemaId());
-            Long[] nullCounts =
-                    ArrowNullCountReader.extractNullCounts(arrowMetadata.array(), fieldNodeMapping);
-
-            stats.setNullCounts(nullCounts);
         }
     }
 }
