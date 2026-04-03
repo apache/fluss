@@ -21,10 +21,14 @@ import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
+import org.apache.fluss.client.initializer.SnapshotOffsetsInitializer;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
+import org.apache.fluss.flink.source.reader.LeaseContext;
+import org.apache.fluss.lake.source.LakeSource;
+import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.RowType;
@@ -38,6 +42,7 @@ import java.util.Map;
 import java.util.concurrent.ExecutionException;
 
 import static org.apache.flink.util.Preconditions.checkNotNull;
+import static org.apache.fluss.flink.utils.LakeSourceUtils.createLakeSource;
 
 /**
  * Builder class for creating {@link FlussSource} instances.
@@ -60,6 +65,7 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  * }</pre>
  *
  * @param <OUT> The type of records produced by the source being built
+ * @see FlussSource
  */
 public class FlussSourceBuilder<OUT> {
     private static final Logger LOG = LoggerFactory.getLogger(FlussSourceBuilder.class);
@@ -76,6 +82,12 @@ public class FlussSourceBuilder<OUT> {
 
     private String database;
     private String tableName;
+
+    // whether to enable lake source for union read
+    private boolean lakeEnabled = false;
+
+    // whether this is a streaming source (default: true for unbounded streaming mode)
+    private boolean streaming = true;
 
     /**
      * Sets the bootstrap servers for the Fluss source connection.
@@ -113,6 +125,36 @@ public class FlussSourceBuilder<OUT> {
      */
     public FlussSourceBuilder<OUT> setTable(String table) {
         this.tableName = table;
+        return this;
+    }
+
+    /**
+     * Enables or disables lake source for union read.
+     *
+     * <p>When enabled and the table has data lake configured (e.g., Paimon/Iceberg), the source
+     * will read historical data from the lake and real-time data from Fluss. Union read only takes
+     * effect when the starting offset is {@link OffsetsInitializer#full()}.
+     *
+     * @param lakeEnabled true to enable lake source for union read, false to disable
+     * @return this builder
+     */
+    public FlussSourceBuilder<OUT> setLakeEnabled(boolean lakeEnabled) {
+        this.lakeEnabled = lakeEnabled;
+        return this;
+    }
+
+    /**
+     * Sets whether this source should run in streaming mode or batch mode.
+     *
+     * <p>In streaming mode (default), the source is unbounded. In batch mode, the source is bounded
+     * and terminates after reading all available data. For Flink BATCH execution mode with lake
+     * enabled, set this to {@code false}.
+     *
+     * @param streaming true for streaming (unbounded) mode, false for batch (bounded) mode
+     * @return this builder
+     */
+    public FlussSourceBuilder<OUT> setStreaming(boolean streaming) {
+        this.streaming = streaming;
         return this;
     }
 
@@ -288,6 +330,41 @@ public class FlussSourceBuilder<OUT> {
                         ? tableInfo.getRowType().project(projectedFields)
                         : tableInfo.getRowType();
 
+        // create lake source if lake is enabled and table has data lake configured
+        LakeSource<LakeSplit> lakeSource = null;
+        if (lakeEnabled) {
+            // check if table has data lake format configured
+            Map<String, String> tableOptions = new HashMap<>();
+            tableOptions.putAll(tableInfo.getCustomProperties().toMap());
+            tableOptions.putAll(tableInfo.getProperties().toMap());
+
+            org.apache.fluss.metadata.DataLakeFormat dataLakeFormat =
+                    flussConf.get(ConfigOptions.TABLE_DATALAKE_FORMAT);
+            if (dataLakeFormat != null) {
+                // only enable union read when startup mode is FULL
+                // OffsetsInitializer.full() is the default and enables union read
+                if (offsetsInitializer instanceof SnapshotOffsetsInitializer) {
+                    try {
+                        lakeSource = createLakeSource(tablePath, tableOptions);
+                        LOG.info("Lake source created for union read on table: {}", tablePath);
+                    } catch (Exception e) {
+                        LOG.warn(
+                                "Failed to create lake source for table {}, union read will be disabled: {}",
+                                tablePath,
+                                e.getMessage());
+                    }
+                } else {
+                    LOG.info(
+                            "Lake is enabled but startup mode is not FULL, union read is disabled. "
+                                    + "Use OffsetsInitializer.full() to enable union read.");
+                }
+            } else {
+                LOG.info(
+                        "Lake is enabled but table {} does not have data lake configured, union read is disabled.",
+                        tablePath);
+            }
+        }
+
         LOG.info("Creating Fluss Source with Configuration: {}", flussConf);
 
         return new FlussSource<>(
@@ -300,6 +377,8 @@ public class FlussSourceBuilder<OUT> {
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 deserializationSchema,
-                true);
+                streaming,
+                lakeSource,
+                LeaseContext.DEFAULT);
     }
 }

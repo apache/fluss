@@ -169,14 +169,24 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
     public CloseableIterator<InternalRow> pollBatch(Duration timeout) throws IOException {
         if (logScanFinished) {
             if (lakeRecordIterators.isEmpty()) {
+                List<RecordReader> recordReaders = new ArrayList<>();
                 if (lakeSnapshotSplitAndFlussLogSplit.getLakeSplits() == null
                         || lakeSnapshotSplitAndFlussLogSplit.getLakeSplits().isEmpty()) {
-                    lakeRecordIterators = Collections.emptyList();
+                    // pass null split to get rowComparator
+                    recordReaders.add(lakeSource.createRecordReader(() -> null));
                 } else {
                     for (LakeSplit lakeSplit : lakeSnapshotSplitAndFlussLogSplit.getLakeSplits()) {
-                        lakeRecordIterators.add(
-                                lakeSource.createRecordReader(() -> lakeSplit).read());
+                        recordReaders.add(lakeSource.createRecordReader(() -> lakeSplit));
                     }
+                }
+                for (RecordReader reader : recordReaders) {
+                    if (reader instanceof SortedRecordReader) {
+                        rowComparator = ((SortedRecordReader) reader).order();
+                    } else {
+                        throw new UnsupportedOperationException(
+                                "lake records must instance of sorted view.");
+                    }
+                    lakeRecordIterators.add(reader.read());
                 }
             }
             if (currentSortMergeReader == null) {
