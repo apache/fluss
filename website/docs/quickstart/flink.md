@@ -483,3 +483,31 @@ to stop all containers.
 
 ## Learn more
 Now that you're up and running with Fluss and Flink, check out the [Apache Flink Engine](engine-flink/getting-started.md) docs to learn more features with Flink or [this guide](/maintenance/observability/quickstart.md) to learn how to set up an observability stack for Fluss and Flink.
+
+## Flink CDC Integration
+
+Flink CDC (Change Data Capture) provides rich connectors to easily capture changes from databases like **PostgreSQL** and bring them into **Fluss**.
+
+For more details, see the official Flink CDC documentation:  
+🔗 https://nightlies.apache.org/flink/flink-cdc-docs-release-3.5/docs/connectors/pipeline-connectors/fluss/
+
+You can use Flink CDC with Fluss in two ways:
+
+### 1. Flink CDC Pipeline Connector
+
+Use a **YAML pipeline** file to define synchronization between PostgreSQL and Fluss.
+
+**Example:**
+
+```yaml
+source:
+  type: postgresql
+  hostname: localhost
+  port: 5432
+  database: mydb
+  username: user
+  password: pass
+
+sink:
+  type: fluss
+  topic: my-topic
