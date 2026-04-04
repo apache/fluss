@@ -102,6 +102,11 @@ public class DefaultRowMerger implements RowMerger {
             return partialUpdater.updateRow(oldValue, newValue);
         }
 
+        @Override
+        public BinaryValue mergeInsert(BinaryValue newValue) {
+            return partialUpdater.updateRow(null, newValue);
+        }
+
         @Nullable
         @Override
         public BinaryValue delete(BinaryValue oldRow) {
