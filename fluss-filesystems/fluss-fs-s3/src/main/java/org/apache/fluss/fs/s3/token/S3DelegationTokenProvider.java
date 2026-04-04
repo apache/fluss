@@ -82,34 +82,41 @@ public class S3DelegationTokenProvider {
 
     public ObtainedSecurityToken obtainSecurityToken() {
         AWSSecurityTokenService stsClient = buildStsClient();
-        Credentials credentials;
+        try {
+            Credentials credentials;
 
-        if (roleArn != null) {
+            if (roleArn != null) {
+                LOG.info(
+                        "Obtaining session credentials via AssumeRole with access key: {}, role: {}",
+                        accessKey,
+                        roleArn);
+                AssumeRoleRequest request =
+                        new AssumeRoleRequest()
+                                .withRoleArn(roleArn)
+                                .withRoleSessionName("fluss-" + UUID.randomUUID());
+                AssumeRoleResult result = stsClient.assumeRole(request);
+                credentials = result.getCredentials();
+            } else {
+                LOG.info(
+                        "Obtaining session credentials via GetSessionToken with access key: {}",
+                        accessKey);
+                GetSessionTokenResult result = stsClient.getSessionToken();
+                credentials = result.getCredentials();
+            }
+
             LOG.info(
-                    "Obtaining session credentials via AssumeRole with access key: {}, role: {}",
-                    accessKey,
-                    roleArn);
-            AssumeRoleRequest request =
-                    new AssumeRoleRequest()
-                            .withRoleArn(roleArn)
-                            .withRoleSessionName("fluss-" + UUID.randomUUID());
-            AssumeRoleResult result = stsClient.assumeRole(request);
-            credentials = result.getCredentials();
-        } else {
-            LOG.info(
-                    "Obtaining session credentials via GetSessionToken with access key: {}",
-                    accessKey);
-            GetSessionTokenResult result = stsClient.getSessionToken();
-            credentials = result.getCredentials();
+                    "Session credentials obtained successfully with access key: {} expiration: {}",
+                    credentials.getAccessKeyId(),
+                    credentials.getExpiration());
+
+            return new ObtainedSecurityToken(
+                    scheme,
+                    toJson(credentials),
+                    credentials.getExpiration().getTime(),
+                    additionInfos);
+        } finally {
+            stsClient.shutdown();
         }
-
-        LOG.info(
-                "Session credentials obtained successfully with access key: {} expiration: {}",
-                credentials.getAccessKeyId(),
-                credentials.getExpiration());
-
-        return new ObtainedSecurityToken(
-                scheme, toJson(credentials), credentials.getExpiration().getTime(), additionInfos);
     }
 
     private AWSSecurityTokenService buildStsClient() {
