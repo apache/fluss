@@ -214,6 +214,10 @@ The result may look like this:
 - The auto-increment column must be of type `INT` or `BIGINT`.
 - Fluss does not support specifying the starting value and step size for the auto-increment column.
 
+### Building Dictionary Tables with Lookup Join
+
+By combining auto-increment columns with the `lookup.insert-if-not-exists` option in Flink Lookup Join, you can automatically build dictionary tables during stream processing — when a lookup key is not found, Fluss inserts a new row and assigns an auto-incremented ID automatically. This is especially useful for mapping high-cardinality string identifiers to compact integer IDs for efficient aggregation. For details and examples, see [Lookup Join - Insert If Not Exists](engine-flink/lookups.md#insert-if-not-exists).
+
 
 ## Data Queries
 
