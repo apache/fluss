@@ -59,11 +59,13 @@ class IcebergSourceTestBase {
     private static @TempDir File tempWarehouseDir;
     protected static IcebergLakeStorage lakeStorage;
     protected static Catalog icebergCatalog;
+    protected static String warehousePath;
 
     @BeforeAll
     protected static void beforeAll() {
+        warehousePath = "file://" + tempWarehouseDir.toString();
         Configuration configuration = new Configuration();
-        configuration.setString("warehouse", "file://" + tempWarehouseDir.toString());
+        configuration.setString("warehouse", warehousePath);
         configuration.setString("type", "hadoop");
         configuration.setString("name", "fluss_test_catalog");
         lakeStorage = new IcebergLakeStorage(configuration);
