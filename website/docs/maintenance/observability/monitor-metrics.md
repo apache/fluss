@@ -570,6 +570,22 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Meter</td>
     </tr>
     <tr>
+      <td rowspan="3">kvLazyOpen</td>
+      <td>kvTabletOpenCount</td>
+      <td>The number of KvTablets currently in OPEN state (RocksDB loaded).</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>kvTabletLazyCount</td>
+      <td>The number of KvTablets currently in LAZY state (RocksDB not loaded).</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>kvTabletFailedCount</td>
+      <td>The number of KvTablets currently in FAILED state (open attempt failed, in backoff cooldown).</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
       <td rowspan="2">logicalStorage</td>
       <td>logSize</td>
       <td>The logical storage size of log managed by this TabletServer.</td>

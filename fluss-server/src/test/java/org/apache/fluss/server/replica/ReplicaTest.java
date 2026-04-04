@@ -19,6 +19,7 @@ package org.apache.fluss.server.replica;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -36,16 +37,21 @@ import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
+import org.apache.fluss.server.kv.snapshot.KvSnapshotDownloadSpec;
+import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.TestingCompletedKvSnapshotCommitter;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogReadInfo;
+import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.testutils.DataTestUtils;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.function.FunctionWithException;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.Test;
@@ -892,6 +898,85 @@ final class ReplicaTest extends ReplicaTestBase {
             expectValues.add(expectedKeyValue.f1);
         }
         assertThat(kvTablet.multiGet(keys)).containsExactlyElementsOf(expectValues);
+    }
+
+    @Test
+    void testGetRowCountPkTableWithNullKvTablet() throws Exception {
+        // Create a PK table replica but do NOT make it leader, so kvTablet stays null.
+        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        Replica kvReplica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket);
+
+        // Verify preconditions: this is a PK table and kvTablet is null.
+        assertThat(kvReplica.isKvTable()).isTrue();
+        assertThat(kvReplica.getKvTablet()).isNull();
+
+        // Append some log records so logTablet has a non-zero row count.
+        LogTablet logTablet = kvReplica.getLogTablet();
+        MemoryLogRecords records = genMemoryLogRecordsByObject(DATA1);
+        logTablet.appendAsLeader(records);
+        logTablet.updateHighWatermark(logTablet.localLogEndOffset());
+        assertThat(logTablet.getRowCount()).isGreaterThan(0);
+
+        // getRowCount() should return 0 for a PK table when kvTablet is null,
+        // NOT the logTablet row count.
+        assertThat(kvReplica.getRowCount()).isEqualTo(0L);
+    }
+
+    @Test
+    void testCreateKvRollbackOnAllRetriesFailed() throws Exception {
+        // Create a SnapshotContext whose getSnapshotDataDownloader always throws.
+        // This forces initKvTablet() to fail on every retry attempt because the
+        // snapshot download will always fail.
+        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        TestSnapshotContext failingSnapshotContext =
+                new TestSnapshotContext(conf.getString(ConfigOptions.REMOTE_DATA_DIR)) {
+                    @Override
+                    public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
+                            getLatestCompletedSnapshotProvider() {
+                        // Return a provider that always returns a fake snapshot,
+                        // so initKvTablet takes the snapshot-restore path
+                        return tb ->
+                                new CompletedSnapshot(
+                                        tb,
+                                        1L,
+                                        new FsPath("file:///non-existent-path/snapshot-1"),
+                                        new KvSnapshotHandle(
+                                                Collections.emptyList(),
+                                                Collections.emptyList(),
+                                                0),
+                                        0L,
+                                        null,
+                                        null);
+                    }
+
+                    @Override
+                    public KvSnapshotDataDownloader getSnapshotDataDownloader() {
+                        // Return a downloader that always throws to simulate download failure
+                        return new KvSnapshotDataDownloader(
+                                java.util.concurrent.Executors.newSingleThreadExecutor()) {
+                            @Override
+                            public void transferAllDataToDirectory(
+                                    KvSnapshotDownloadSpec kvSnapshotDownloadSpec,
+                                    org.apache.fluss.utils.CloseableRegistry closeableRegistry)
+                                    throws Exception {
+                                throw new IOException("Simulated snapshot download failure");
+                            }
+                        };
+                    }
+                };
+
+        Replica kvReplica =
+                makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, failingSnapshotContext);
+
+        // Before the fix, makeLeader would NPE at checkNotNull(kvTablet) in
+        // startPeriodicKvSnapshot. After the fix, it should gracefully handle the failure.
+        makeKvReplicaAsLeader(kvReplica);
+
+        // kvTablet should be null since all retries failed
+        assertThat(kvReplica.getKvTablet()).isNull();
+
+        // KvManager should not have a half-initialized entry for this bucket
+        assertThat(kvManager.getKv(tableBucket)).isEmpty();
     }
 
     /** A scheduledExecutorService that will execute the scheduled task immediately. */

@@ -1920,6 +1920,23 @@ public class ConfigOptions {
                             "The max fetch size for fetching log to apply to kv during recovering kv.");
 
     // ------------------------------------------------------------------------
+    //  ConfigOptions for KV lazy open
+    // ------------------------------------------------------------------------
+
+    public static final ConfigOption<Boolean> KV_LAZY_OPEN_ENABLED =
+            key("kv.lazy-open.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription("Whether to enable KvTablet lazy open.");
+
+    public static final ConfigOption<Duration> KV_LAZY_OPEN_IDLE_TIMEOUT =
+            key("kv.lazy-open.idle-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofHours(24))
+                    .withDescription(
+                            "Idle time before an open KvTablet is eligible for release back to lazy state.");
+
+    // ------------------------------------------------------------------------
     //  ConfigOptions for metrics
     // ------------------------------------------------------------------------
     public static final ConfigOption<List<String>> METRICS_REPORTERS =
