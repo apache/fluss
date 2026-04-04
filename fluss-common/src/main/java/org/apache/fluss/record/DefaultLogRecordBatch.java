@@ -22,6 +22,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.exception.CorruptMessageException;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.arrow.ArrowReader;
 import org.apache.fluss.row.columnar.ColumnarRow;
@@ -40,6 +41,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.NoSuchElementException;
 import java.util.Optional;
 
@@ -87,6 +89,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     private static final Logger LOG = LoggerFactory.getLogger(DefaultLogRecordBatch.class);
 
     public static final byte APPEND_ONLY_FLAG_MASK = 0x01;
+    public static final byte PRUNED_FLAG_MASK = 0x02;
 
     private MemorySegment segment;
     private int position;
@@ -183,8 +186,31 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     }
 
     private byte attributes() {
-        // note we're not using the byte of attributes now.
         return segment.get(attributeOffset(magic) + position);
+    }
+
+    private boolean isPruned() {
+        return (attributes() & PRUNED_FLAG_MASK) != 0;
+    }
+
+    /**
+     * Read the target column indexes from the batch data. The target columns section is located
+     * after the fixed header + statistics data (for V1+). Format: [numTargetColumns (int)] [colIdx0
+     * (int)] [colIdx1 (int)] ...
+     */
+    private int[] readTargetColumns() {
+        int headerSize = recordBatchHeaderSize(magic);
+        int sectionStart = position + headerSize;
+        if (magic >= LOG_MAGIC_VALUE_V1) {
+            int statsLength = segment.getInt(position + statisticsLengthOffset(magic));
+            sectionStart += statsLength;
+        }
+        int numTargetColumns = segment.getInt(sectionStart);
+        int[] targetColumns = new int[numTargetColumns];
+        for (int i = 0; i < numTargetColumns; i++) {
+            targetColumns[i] = segment.getInt(sectionStart + 4 + i * 4);
+        }
+        return targetColumns;
     }
 
     @Override
@@ -353,7 +379,35 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             BufferAllocator allocator,
             long timestamp) {
         boolean isAppendOnly = (attributes() & APPEND_ONLY_FLAG_MASK) > 0;
+        boolean pruned = isPruned();
         int recordsDataOffset = recordsDataOffset();
+
+        // For pruned batches, create a pruned VectorSchemaRoot matching the Arrow data,
+        // and build an expand projection to map pruned rows back to full schema with nulls.
+        VectorSchemaRoot effectiveRoot = root;
+        RowType effectiveRowType = rowType;
+        ProjectedRow expandProjection = null;
+        VectorSchemaRoot prunedRoot = null;
+
+        if (pruned) {
+            int[] targetCols = readTargetColumns();
+            effectiveRowType = rowType.project(targetCols);
+            prunedRoot =
+                    VectorSchemaRoot.create(ArrowUtils.toArrowSchema(effectiveRowType), allocator);
+            effectiveRoot = prunedRoot;
+
+            // Build inverse mapping: fullPos -> prunedPos (or -1 for absent columns)
+            int[] expandMapping = new int[rowType.getFieldCount()];
+            Arrays.fill(expandMapping, ProjectedRow.UNEXIST_MAPPING);
+            for (int i = 0; i < targetCols.length; i++) {
+                expandMapping[targetCols[i]] = i;
+            }
+            expandProjection = ProjectedRow.from(expandMapping);
+        }
+
+        final ProjectedRow finalExpandProjection = expandProjection;
+        final VectorSchemaRoot finalPrunedRoot = prunedRoot;
+
         if (isAppendOnly) {
             // append only batch, no change type vector,
             // the start of the arrow data is the beginning of the batch records
@@ -361,8 +415,14 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             int arrowLength = sizeInBytes() - recordsDataOffset;
             ArrowReader reader =
                     ArrowUtils.createArrowReader(
-                            segment, arrowOffset, arrowLength, root, allocator, rowType);
-            return new ArrowLogRecordIterator(reader, timestamp, outputProjection) {
+                            segment,
+                            arrowOffset,
+                            arrowLength,
+                            effectiveRoot,
+                            allocator,
+                            effectiveRowType);
+            return new ArrowLogRecordIterator(
+                    reader, timestamp, outputProjection, finalExpandProjection, finalPrunedRoot) {
                 @Override
                 protected ChangeType getChangeType(int rowId) {
                     return ChangeType.APPEND_ONLY;
@@ -378,8 +438,14 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             int arrowLength = sizeInBytes() - recordsDataOffset - changeTypeVector.sizeInBytes();
             ArrowReader reader =
                     ArrowUtils.createArrowReader(
-                            segment, arrowOffset, arrowLength, root, allocator, rowType);
-            return new ArrowLogRecordIterator(reader, timestamp, outputProjection) {
+                            segment,
+                            arrowOffset,
+                            arrowLength,
+                            effectiveRoot,
+                            allocator,
+                            effectiveRowType);
+            return new ArrowLogRecordIterator(
+                    reader, timestamp, outputProjection, finalExpandProjection, finalPrunedRoot) {
                 @Override
                 protected ChangeType getChangeType(int rowId) {
                     return changeTypeVector.getChangeType(rowId);
@@ -394,12 +460,20 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         private final long timestamp;
         private int rowId = 0;
         @Nullable private final ProjectedRow outputProjection;
+        @Nullable private final ProjectedRow expandProjection;
+        @Nullable private final VectorSchemaRoot prunedRoot;
 
         private ArrowLogRecordIterator(
-                ArrowReader reader, long timestamp, @Nullable ProjectedRow outputProjection) {
+                ArrowReader reader,
+                long timestamp,
+                @Nullable ProjectedRow outputProjection,
+                @Nullable ProjectedRow expandProjection,
+                @Nullable VectorSchemaRoot prunedRoot) {
             this.reader = reader;
             this.timestamp = timestamp;
             this.outputProjection = outputProjection;
+            this.expandProjection = expandProjection;
+            this.prunedRoot = prunedRoot;
         }
 
         protected abstract ChangeType getChangeType(int rowId);
@@ -412,14 +486,21 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         @Override
         protected LogRecord readNext(long baseOffset) {
             ColumnarRow originalRow = reader.read(rowId);
+            InternalRow resultRow = originalRow;
+
+            // For pruned batches, expand the pruned row back to full schema with nulls
+            if (expandProjection != null) {
+                resultRow = expandProjection.replaceRow(originalRow);
+            }
+
+            // Apply output projection (e.g. for schema evolution)
+            if (outputProjection != null) {
+                resultRow = outputProjection.replaceRow(resultRow);
+            }
+
             LogRecord record =
                     new GenericRecord(
-                            baseOffset + rowId,
-                            timestamp,
-                            getChangeType(rowId),
-                            outputProjection == null
-                                    ? originalRow
-                                    : outputProjection.replaceRow(originalRow));
+                            baseOffset + rowId, timestamp, getChangeType(rowId), resultRow);
             rowId++;
             return record;
         }
@@ -431,7 +512,9 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
         @Override
         public void close() {
-            // reader has no resources to release
+            if (prunedRoot != null) {
+                prunedRoot.close();
+            }
         }
     }
 
@@ -534,15 +617,21 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
     /**
      * Get the offset where records data starts, relative to the batch start. For V1+, records start
-     * after the fixed header + statistics data. For V0, records start right after the header.
+     * after the fixed header + statistics data + optional target columns section. For V0, records
+     * start right after the header + optional target columns section.
      */
     private int recordsDataOffset() {
         int headerSize = recordBatchHeaderSize(magic);
+        int offset = headerSize;
         if (magic >= LOG_MAGIC_VALUE_V1) {
             int statsLength = segment.getInt(position + statisticsLengthOffset(magic));
-            return headerSize + statsLength;
+            offset += statsLength;
         }
-        return headerSize;
+        if (isPruned()) {
+            int numTargetColumns = segment.getInt(position + offset);
+            offset += 4 + numTargetColumns * 4;
+        }
+        return offset;
     }
 
     // -----------------------------------------------------------------------

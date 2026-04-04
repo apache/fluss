@@ -27,6 +27,7 @@ import org.apache.fluss.record.LogRecordBatchStatisticsCollector;
 import org.apache.fluss.record.MemoryLogRecordsArrowBuilder;
 import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.arrow.ArrowWriter;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 
@@ -34,6 +35,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -43,6 +45,15 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * A batch of log records managed in ARROW format that is or will be sent to server by {@link
  * ProduceLogRequest}.
  *
+ * <p>Each batch has a fixed schema determined by {@code targetColumns}. When {@code targetColumns}
+ * is null, the batch accepts full-schema rows. When non-null, the batch accepts only rows with the
+ * same target columns and uses {@link ProjectedRow} to project the full row to the target columns
+ * before writing.
+ *
+ * <p>If a record with different target columns is appended, {@link #tryAppend} returns false,
+ * triggering the {@link org.apache.fluss.client.write.RecordAccumulator} to close this batch and
+ * create a new one with the matching schema.
+ *
  * <p>This class is not thread safe and external synchronization must be used when modifying it.
  */
 @NotThreadSafe
@@ -50,6 +61,8 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 public class ArrowLogWriteBatch extends WriteBatch {
     private final MemoryLogRecordsArrowBuilder recordsBuilder;
     private final AbstractPagedOutputView outputView;
+    private final @Nullable int[] targetColumns;
+    private final @Nullable ProjectedRow projectedRow;
 
     public ArrowLogWriteBatch(
             int bucketId,
@@ -59,11 +72,38 @@ public class ArrowLogWriteBatch extends WriteBatch {
             AbstractPagedOutputView outputView,
             long createdMs,
             @Nullable LogRecordBatchStatisticsCollector statisticsCollector) {
+        this(
+                bucketId,
+                physicalTablePath,
+                schemaId,
+                arrowWriter,
+                outputView,
+                createdMs,
+                statisticsCollector,
+                null);
+    }
+
+    public ArrowLogWriteBatch(
+            int bucketId,
+            PhysicalTablePath physicalTablePath,
+            int schemaId,
+            ArrowWriter arrowWriter,
+            AbstractPagedOutputView outputView,
+            long createdMs,
+            @Nullable LogRecordBatchStatisticsCollector statisticsCollector,
+            @Nullable int[] targetColumns) {
         super(bucketId, physicalTablePath, createdMs);
         this.outputView = outputView;
         this.recordsBuilder =
                 MemoryLogRecordsArrowBuilder.builder(
-                        schemaId, arrowWriter, outputView, true, statisticsCollector);
+                        schemaId,
+                        arrowWriter,
+                        outputView,
+                        true,
+                        statisticsCollector,
+                        targetColumns);
+        this.targetColumns = targetColumns;
+        this.projectedRow = targetColumns != null ? ProjectedRow.from(targetColumns) : null;
     }
 
     @Override
@@ -74,20 +114,35 @@ public class ArrowLogWriteBatch extends WriteBatch {
     @Override
     public boolean tryAppend(WriteRecord writeRecord, WriteCallback callback) throws Exception {
         InternalRow row = writeRecord.getRow();
-        checkArgument(
-                writeRecord.getTargetColumns() == null,
-                "target columns must be null for log record");
         checkArgument(writeRecord.getKey() == null, "key must be null for log record");
         checkNotNull(row != null, "row must not be null for log record");
         checkNotNull(callback, "write callback must be not null");
+
+        // If targetColumns don't match, signal that this batch cannot accept the record.
+        // The RecordAccumulator will close this batch and create a new one.
+        if (!Arrays.equals(this.targetColumns, writeRecord.getTargetColumns())) {
+            return false;
+        }
+
         if (recordsBuilder.isClosed() || recordsBuilder.isFull()) {
             return false;
-        } else {
-            recordsBuilder.append(ChangeType.APPEND_ONLY, row);
-            recordCount++;
-            callbacks.add(callback);
-            return true;
         }
+
+        // When this is a pruned batch, project the full row to only the target columns.
+        InternalRow rowToWrite = row;
+        if (projectedRow != null) {
+            rowToWrite = projectedRow.replaceRow(row);
+        }
+
+        recordsBuilder.append(ChangeType.APPEND_ONLY, rowToWrite);
+        recordCount++;
+        callbacks.add(callback);
+        return true;
+    }
+
+    @Nullable
+    public int[] getTargetColumns() {
+        return targetColumns;
     }
 
     @Override

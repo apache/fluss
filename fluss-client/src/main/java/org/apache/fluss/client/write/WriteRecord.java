@@ -161,6 +161,16 @@ public final class WriteRecord {
             PhysicalTablePath tablePath,
             InternalRow row,
             @Nullable byte[] bucketKey) {
+        return forArrowAppend(tableInfo, tablePath, row, bucketKey, null);
+    }
+
+    /** Creates a write record for append operation for Arrow format with target columns. */
+    public static WriteRecord forArrowAppend(
+            TableInfo tableInfo,
+            PhysicalTablePath tablePath,
+            InternalRow row,
+            @Nullable byte[] bucketKey,
+            @Nullable int[] targetColumns) {
         checkNotNull(row);
         // the write row maybe GenericRow, can't estimate the size.
         // it is not necessary to estimate size for Arrow format.
@@ -172,7 +182,7 @@ public final class WriteRecord {
                 bucketKey,
                 row,
                 WriteFormat.ARROW_LOG,
-                null,
+                targetColumns,
                 estimatedSizeInBytes,
                 MergeMode.DEFAULT);
     }

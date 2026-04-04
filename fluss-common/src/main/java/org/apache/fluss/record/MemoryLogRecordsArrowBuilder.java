@@ -63,6 +63,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
     private final AbstractPagedOutputView pagedOutputView;
     private final boolean appendOnly;
     @Nullable private final LogRecordBatchStatisticsCollector statisticsCollector;
+    @Nullable private final int[] targetColumns;
 
     private volatile MultiBytesView bytesView = null;
 
@@ -76,6 +77,8 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
     private boolean aborted = false;
     // Length of statistics bytes written directly to pagedOutputView (V1+)
     private int statisticsBytesLength = 0;
+    // Length of target columns section bytes written to pagedOutputView
+    private int targetColumnsBytesLength = 0;
 
     private MemoryLogRecordsArrowBuilder(
             long baseLogOffset,
@@ -84,7 +87,8 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
             ArrowWriter arrowWriter,
             AbstractPagedOutputView pagedOutputView,
             boolean appendOnly,
-            @Nullable LogRecordBatchStatisticsCollector statisticsCollector) {
+            @Nullable LogRecordBatchStatisticsCollector statisticsCollector,
+            @Nullable int[] targetColumns) {
         this.appendOnly = appendOnly;
         checkArgument(
                 schemaId <= Short.MAX_VALUE,
@@ -111,6 +115,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
         this.estimatedSizeInBytes = headerSize;
         this.recordCount = 0;
         this.statisticsCollector = statisticsCollector;
+        this.targetColumns = targetColumns;
     }
 
     @VisibleForTesting
@@ -128,7 +133,8 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
                 arrowWriter,
                 outputView,
                 false,
-                statisticsCollector);
+                statisticsCollector,
+                null);
     }
 
     @VisibleForTesting
@@ -139,7 +145,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
             ArrowWriter arrowWriter,
             AbstractPagedOutputView outputView) {
         return new MemoryLogRecordsArrowBuilder(
-                baseLogOffset, schemaId, magic, arrowWriter, outputView, false, null);
+                baseLogOffset, schemaId, magic, arrowWriter, outputView, false, null, null);
     }
 
     /** Builder with limited write size and the memory segment used to serialize records. */
@@ -158,7 +164,29 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
                 arrowWriter,
                 outputView,
                 appendOnly,
-                statisticsCollector);
+                statisticsCollector,
+                null);
+    }
+
+    /** Builder with target columns for pruned (sub-batch) records. */
+    public static MemoryLogRecordsArrowBuilder builder(
+            int schemaId,
+            ArrowWriter arrowWriter,
+            AbstractPagedOutputView outputView,
+            boolean appendOnly,
+            @Nullable LogRecordBatchStatisticsCollector statisticsCollector,
+            @Nullable int[] targetColumns) {
+        // Use V1 when statistics collector is provided, V0 otherwise
+        byte magic = statisticsCollector != null ? LOG_MAGIC_VALUE_V1 : LOG_MAGIC_VALUE_V0;
+        return new MemoryLogRecordsArrowBuilder(
+                BUILDER_DEFAULT_OFFSET,
+                schemaId,
+                magic,
+                arrowWriter,
+                outputView,
+                appendOnly,
+                statisticsCollector,
+                targetColumns);
     }
 
     public MultiBytesView build() throws IOException {
@@ -179,7 +207,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
         int changeTypeSize = changeTypeWriter.sizeInBytes();
 
         // For V1+ with statistics, write everything sequentially to pagedOutputView:
-        // [header] [statistics] [changeTypes] [arrow data]
+        // [header] [statistics] [targetColumns?] [changeTypes] [arrow data]
         // This makes CRC computation zero-copy over contiguous memory segments.
         if (magic >= LOG_MAGIC_VALUE_V1 && statisticsCollector != null && recordCount > 0) {
             // Save changeType bytes before they get overwritten. The changeType data lives
@@ -204,14 +232,35 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
                 pagedOutputView.setPosition(headerSize);
             }
 
+            // Write target columns section if this is a pruned batch
+            writeTargetColumnsSection();
+
             // Write saved changeType bytes to pagedOutputView
             pagedOutputView.write(changeTypeBytes);
 
             // Write arrow data to pagedOutputView at current position.
             // Use the no-position overload since pages may have advanced.
             arrowWriter.serializeToOutputView(pagedOutputView);
+        } else if (targetColumns != null) {
+            // V0 or no stats but with target columns:
+            // layout is [header] [targetColumns] [changeTypes] [arrow data]
+            // Save changeType bytes before overwriting
+            byte[] changeTypeBytes = new byte[changeTypeSize];
+            firstSegment.get(headerSize, changeTypeBytes, 0, changeTypeSize);
+
+            pagedOutputView.setPosition(headerSize);
+
+            // Write target columns section
+            writeTargetColumnsSection();
+
+            // Write saved changeType bytes
+            pagedOutputView.write(changeTypeBytes);
+
+            // Write arrow data
+            arrowWriter.serializeToOutputView(pagedOutputView);
         } else {
-            // V0 path or no stats: layout is [header] [changeTypes] [arrow data]
+            // V0 path or no stats, no target columns:
+            // layout is [header] [changeTypes] [arrow data]
             // changeTypes are already in firstSegment at headerSize offset
             arrowWriter.serializeToOutputView(pagedOutputView, headerSize + changeTypeSize);
         }
@@ -330,6 +379,10 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
             if (magic >= LOG_MAGIC_VALUE_V1 && statisticsCollector != null) {
                 estimatedSizeInBytes += statisticsCollector.estimatedSizeInBytes();
             }
+            // Add target columns section size if present
+            if (targetColumns != null) {
+                estimatedSizeInBytes += 4 + targetColumns.length * 4;
+            }
         }
 
         reCalculateSizeInBytes = false;
@@ -337,6 +390,24 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
     }
 
     // ----------------------- internal methods -------------------------------
+
+    /**
+     * Write the target columns section to pagedOutputView at the current position. Format:
+     * [numTargetColumns (int)] [colIdx0 (int)] [colIdx1 (int)] ... Does nothing if targetColumns is
+     * null.
+     */
+    private void writeTargetColumnsSection() throws IOException {
+        if (targetColumns == null) {
+            targetColumnsBytesLength = 0;
+            return;
+        }
+        pagedOutputView.writeInt(targetColumns.length);
+        for (int col : targetColumns) {
+            pagedOutputView.writeInt(col);
+        }
+        targetColumnsBytesLength = 4 + targetColumns.length * 4;
+    }
+
     private void writeBatchHeader() throws IOException {
         // pagedOutputView doesn't support seek to previous segment,
         // so we create a new output view on the first segment
@@ -360,10 +431,13 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
         // write schema id
         outputView.writeShort((short) schemaId);
 
-        // write attributes (appendOnly flag)
+        // write attributes
         byte attributes = 0;
         if (appendOnly) {
             attributes |= 0x01; // set appendOnly flag
+        }
+        if (targetColumns != null) {
+            attributes |= 0x02; // set pruned flag
         }
 
         outputView.writeByte(attributes);

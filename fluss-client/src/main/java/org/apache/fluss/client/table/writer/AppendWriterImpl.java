@@ -100,6 +100,29 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
         return send(record).thenApply(ignored -> APPEND_SUCCESS);
     }
 
+    @Override
+    public CompletableFuture<AppendResult> append(
+            InternalRow row, int[] targetColumnIndexes, boolean pruning) {
+        if (!pruning) {
+            return append(row);
+        }
+
+        if (logFormat != LogFormat.ARROW) {
+            throw new UnsupportedOperationException(
+                    "Column pruning is only supported for ARROW log format, but got " + logFormat);
+        }
+
+        checkFieldCount(row);
+
+        PhysicalTablePath physicalPath = getPhysicalPath(row);
+        byte[] bucketKey = bucketKeyEncoder != null ? bucketKeyEncoder.encodeKey(row) : null;
+
+        final WriteRecord record =
+                WriteRecord.forArrowAppend(
+                        tableInfo, physicalPath, row, bucketKey, targetColumnIndexes);
+        return send(record).thenApply(ignored -> APPEND_SUCCESS);
+    }
+
     private CompactedRow encodeCompactedRow(InternalRow row) {
         if (row instanceof CompactedRow) {
             return (CompactedRow) row;

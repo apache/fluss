@@ -31,5 +31,16 @@ public interface ArrowWriterProvider extends AutoCloseable {
             RowType schema,
             ArrowCompressionInfo compressionInfo);
 
+    /** Get or create writer with an additional key suffix to disambiguate different schemas. */
+    default ArrowWriter getOrCreateWriter(
+            long tableId,
+            int schemaId,
+            int bufferSizeInBytes,
+            RowType schema,
+            ArrowCompressionInfo compressionInfo,
+            String keySuffix) {
+        return getOrCreateWriter(tableId, schemaId, bufferSizeInBytes, schema, compressionInfo);
+    }
+
     void recycleWriter(ArrowWriter arrowWriter);
 }
