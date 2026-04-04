@@ -61,6 +61,30 @@ case class FlussAppendScan(
   }
 }
 
+/** Fluss Lake Append Scan. */
+case class FlussLakeAppendScan(
+    tablePath: TablePath,
+    tableInfo: TableInfo,
+    requiredSchema: Option[StructType],
+    options: CaseInsensitiveStringMap,
+    flussConfig: Configuration)
+  extends FlussScan {
+
+  override def toBatch: Batch = {
+    new FlussLakeAppendBatch(tablePath, tableInfo, readSchema, options, flussConfig)
+  }
+
+  override def toMicroBatchStream(checkpointLocation: String): MicroBatchStream = {
+    new FlussAppendMicroBatchStream(
+      tablePath,
+      tableInfo,
+      readSchema,
+      options,
+      flussConfig,
+      checkpointLocation)
+  }
+}
+
 /** Fluss Upsert Scan. */
 case class FlussUpsertScan(
     tablePath: TablePath,

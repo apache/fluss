@@ -47,6 +47,19 @@ class FlussAppendScanBuilder(
   }
 }
 
+/** Fluss Lake Append Scan Builder. */
+class FlussLakeAppendScanBuilder(
+    tablePath: TablePath,
+    tableInfo: TableInfo,
+    options: CaseInsensitiveStringMap,
+    flussConfig: FlussConfiguration)
+  extends FlussScanBuilder {
+
+  override def build(): Scan = {
+    FlussLakeAppendScan(tablePath, tableInfo, requiredSchema, options, flussConfig)
+  }
+}
+
 /** Fluss Upsert Scan Builder. */
 class FlussUpsertScanBuilder(
     tablePath: TablePath,
