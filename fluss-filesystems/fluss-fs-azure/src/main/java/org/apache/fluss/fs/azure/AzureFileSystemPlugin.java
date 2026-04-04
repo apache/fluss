@@ -43,7 +43,7 @@ import static org.apache.fluss.fs.azure.AzureFileSystemOptions.PROVIDER_CONFIG_N
  * (abfs, abfss, wasb, wasbs) based on Azure HDFS support in the hadoop-azure module.
  */
 abstract class AzureFileSystemPlugin implements FileSystemPlugin {
-    private static final String[] FLUSS_CONFIG_PREFIXES = {"fs.azure."};
+    private static final String[] FLUSS_CONFIG_PREFIXES = {"azure.", "fs.azure."};
 
     private static final String HADOOP_CONFIG_PREFIX = "fs.azure.";
 

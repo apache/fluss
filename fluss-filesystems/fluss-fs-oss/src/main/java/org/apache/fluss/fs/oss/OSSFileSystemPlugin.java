@@ -54,7 +54,9 @@ public class OSSFileSystemPlugin implements FileSystemPlugin {
      * In order to simplify, we make fluss oss configuration keys same with hadoop oss module. So,
      * we add all configuration key with prefix `fs.oss` in fluss conf to hadoop conf
      */
-    private static final String[] FLUSS_CONFIG_PREFIXES = {"fs.oss."};
+    private static final String[] FLUSS_CONFIG_PREFIXES = {"oss.", "fs.oss."};
+
+    private static final String HADOOP_CONFIG_PREFIX = "fs.oss.";
 
     public static final String REGION_KEY = "fs.oss.region";
 
@@ -127,15 +129,14 @@ public class OSSFileSystemPlugin implements FileSystemPlugin {
         for (String key : flussConfig.keySet()) {
             for (String prefix : FLUSS_CONFIG_PREFIXES) {
                 if (key.startsWith(prefix)) {
+                    String newKey = HADOOP_CONFIG_PREFIX + key.substring(prefix.length());
                     String value =
                             flussConfig.getString(
                                     ConfigBuilder.key(key).stringType().noDefaultValue(), null);
-                    conf.set(key, value);
+                    conf.set(newKey, value);
 
                     LOG.debug(
-                            "Adding Fluss config entry for {} as {} to Hadoop config",
-                            key,
-                            conf.get(key));
+                            "Adding Fluss config entry for {} as {} to Hadoop config", key, newKey);
                 }
             }
         }
