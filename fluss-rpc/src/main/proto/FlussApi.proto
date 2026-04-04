@@ -300,6 +300,43 @@ message LimitScanResponse{
 }
 
 
+// Full KV scan request and response.
+// A new scan is initiated with bucket_scan_req; subsequent batches use scanner_id.
+message PbScanReqForBucket {
+  required int64 table_id = 1;
+  optional int64 partition_id = 2;
+  required int32 bucket_id = 3;
+  // If set, stops returning rows after this many records.
+  optional int64 limit = 4;
+}
+
+message ScanKvRequest {
+  // Mutually exclusive: either scanner_id (continuation) or bucket_scan_req (new scan).
+  optional bytes scanner_id = 1;
+  optional PbScanReqForBucket bucket_scan_req = 2;
+  // Monotonically increasing sequence number for in-order delivery validation.
+  optional int32 call_seq_id = 3;
+  // Maximum number of bytes of record data to return in this batch.
+  optional int32 batch_size_bytes = 4;
+  // If true, the server closes the scanner session immediately.
+  optional bool close_scanner = 5;
+}
+
+message ScanKvResponse {
+  optional int32 error_code = 1;
+  optional string error_message = 2;
+  // Opaque server-assigned session identifier; echoed on every response.
+  optional bytes scanner_id = 3;
+  // False when the scan is complete and the scanner session has been closed.
+  optional bool has_more_results = 4;
+  // Serialised DefaultValueRecordBatch; absent when the batch is empty.
+  optional bytes records = 5;
+  // Log high-watermark at the time the RocksDB snapshot was opened.
+  // Only set on the first response (new scan initiation).
+  optional int64 log_offset = 6;
+}
+
+
 // Get table statistics request and response.
 // Sent to TabletServer to get per-bucket statistics.
 message GetTableStatsRequest {

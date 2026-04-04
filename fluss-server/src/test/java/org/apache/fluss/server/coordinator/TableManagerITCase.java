@@ -701,35 +701,46 @@ class TableManagerITCase {
         FLUSS_CLUSTER_EXTENSION.stopCoordinatorServer();
         FLUSS_CLUSTER_EXTENSION.startCoordinatorServer();
 
-        // check metadata response
-        MetadataResponse metadataResponse =
-                gateway.metadata(newMetadataRequest(Collections.singletonList(tablePath))).get();
-        assertThat(metadataResponse.getTableMetadatasCount()).isEqualTo(1);
-        PbTableMetadata pbTableMetadata = metadataResponse.getTableMetadataAt(0);
-        assertThat(pbTableMetadata.getSchemaId()).isEqualTo(2);
-        TableInfo tableInfo =
-                TableInfo.of(
-                        tablePath,
-                        pbTableMetadata.getTableId(),
-                        pbTableMetadata.getSchemaId(),
-                        TableDescriptor.fromJsonBytes(pbTableMetadata.getTableJson()),
-                        pbTableMetadata.getRemoteDataDir(),
-                        pbTableMetadata.getCreatedTime(),
-                        pbTableMetadata.getModifiedTime());
-        List<Schema.Column> columns = tableInfo.getSchema().getColumns();
-        assertThat(columns.size()).isEqualTo(4);
-        assertThat(tableInfo.getSchema().getColumnIds()).containsExactly(0, 1, 2, 5);
-        // check nested row's field_id.
-        assertThat(columns.get(2).getName()).isEqualTo("new_nested_column");
-        assertThat(
-                        DataTypeChecks.equalsWithFieldId(
-                                columns.get(2).getDataType(),
-                                new RowType(
-                                        true,
-                                        Arrays.asList(
-                                                DataTypes.FIELD("f0", DataTypes.STRING(), 3),
-                                                DataTypes.FIELD("f1", DataTypes.INT(), 4)))))
-                .isTrue();
+        // check metadata response - retry since coordinator needs time to fully load its state
+        // after restart (waitUntilCoordinatorServerElected only waits for ZK election, not for
+        // the full metadata/schema load to complete)
+        retry(
+                Duration.ofSeconds(20),
+                () -> {
+                    MetadataResponse metadataResponse =
+                            gateway.metadata(
+                                            newMetadataRequest(
+                                                    Collections.singletonList(tablePath)))
+                                    .get();
+                    assertThat(metadataResponse.getTableMetadatasCount()).isEqualTo(1);
+                    PbTableMetadata pbTableMetadata = metadataResponse.getTableMetadataAt(0);
+                    assertThat(pbTableMetadata.getSchemaId()).isEqualTo(2);
+                    TableInfo tableInfo =
+                            TableInfo.of(
+                                    tablePath,
+                                    pbTableMetadata.getTableId(),
+                                    pbTableMetadata.getSchemaId(),
+                                    TableDescriptor.fromJsonBytes(pbTableMetadata.getTableJson()),
+                                    pbTableMetadata.getRemoteDataDir(),
+                                    pbTableMetadata.getCreatedTime(),
+                                    pbTableMetadata.getModifiedTime());
+                    List<Schema.Column> columns = tableInfo.getSchema().getColumns();
+                    assertThat(columns.size()).isEqualTo(4);
+                    assertThat(tableInfo.getSchema().getColumnIds()).containsExactly(0, 1, 2, 5);
+                    // check nested row's field_id.
+                    assertThat(columns.get(2).getName()).isEqualTo("new_nested_column");
+                    assertThat(
+                                    DataTypeChecks.equalsWithFieldId(
+                                            columns.get(2).getDataType(),
+                                            new RowType(
+                                                    true,
+                                                    Arrays.asList(
+                                                            DataTypes.FIELD(
+                                                                    "f0", DataTypes.STRING(), 3),
+                                                            DataTypes.FIELD(
+                                                                    "f1", DataTypes.INT(), 4)))))
+                            .isTrue();
+                });
     }
 
     private void checkBucketMetadata(int expectBucketCount, List<PbBucketMetadata> bucketMetadata) {

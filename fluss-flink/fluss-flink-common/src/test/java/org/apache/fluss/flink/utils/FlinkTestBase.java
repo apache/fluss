@@ -70,9 +70,15 @@ public class FlinkTestBase extends AbstractTestBase {
                     .setClusterConf(
                             new Configuration()
                                     // not to clean snapshots for test purpose
+                                    .set(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, Integer.MAX_VALUE)
+                                    // use a short interval so that if the initial 0ms
+                                    // auto-partition
+                                    // task is skipped (e.g. transient ZK error in CI), the retry
+                                    // fires quickly and partitions are created within the
+                                    // waitUntilPartitionsCreated timeout
                                     .set(
-                                            ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS,
-                                            Integer.MAX_VALUE))
+                                            ConfigOptions.AUTO_PARTITION_CHECK_INTERVAL,
+                                            Duration.ofSeconds(5)))
                     .setNumOfTabletServers(3)
                     .build();
 

@@ -44,6 +44,8 @@ import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.ScanKvRequest;
+import org.apache.fluss.rpc.messages.ScanKvResponse;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
@@ -182,4 +184,14 @@ public interface TabletServerGateway extends RpcGateway, AdminReadOnlyGateway {
     @RPC(api = ApiKeys.NOTIFY_LAKE_TABLE_OFFSET)
     CompletableFuture<NotifyLakeTableOffsetResponse> notifyLakeTableOffset(
             NotifyLakeTableOffsetRequest request);
+
+    /**
+     * Perform a full KV scan over a primary key table bucket. The first request opens a server-side
+     * scanner session backed by a RocksDB point-in-time snapshot; subsequent requests continue the
+     * scan using the returned {@code scanner_id}.
+     *
+     * @return the scan response containing a batch of records and scan state
+     */
+    @RPC(api = ApiKeys.SCAN_KV)
+    CompletableFuture<ScanKvResponse> scanKv(ScanKvRequest request);
 }
