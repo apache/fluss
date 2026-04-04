@@ -37,6 +37,7 @@ import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.LimitScanRequest;
 import org.apache.fluss.rpc.messages.LimitScanResponse;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.SchemaUtil;
@@ -124,16 +125,27 @@ public class LimitBatchScanner implements BatchScanner {
         if (endOfInput) {
             return null;
         }
+        LimitScanResponse response;
         try {
-            LimitScanResponse response = scanFuture.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
-            List<InternalRow> scanRows = parseLimitScanResponse(response);
-            endOfInput = true;
-            return CloseableIterator.wrap(scanRows.iterator());
+            response = scanFuture.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
             // poll next time
             return CloseableIterator.emptyIterator();
         } catch (Exception e) {
             throw new IOException(e);
+        }
+
+        ByteBuf parsedByteBuf = response.getParsedByteBuf();
+        try {
+            List<InternalRow> scanRows = parseLimitScanResponse(response);
+            endOfInput = true;
+            return CloseableIterator.wrap(scanRows.iterator());
+        } catch (Exception e) {
+            throw new IOException(e);
+        } finally {
+            if (parsedByteBuf != null) {
+                parsedByteBuf.release();
+            }
         }
     }
 
