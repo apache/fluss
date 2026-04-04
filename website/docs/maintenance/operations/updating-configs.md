@@ -13,7 +13,8 @@ Fluss allows you to update cluster or table configurations dynamically without r
 From Fluss version 0.8 onwards, some of the server configs can be updated without restarting the server.
 
 Currently, the supported dynamically updatable server configurations include:
-- `datalake.format`: Enable lakehouse storage by specifying the lakehouse format, e.g., `paimon`, `iceberg`.
+- `datalake.enabled`: Control whether the cluster is ready to create and manage lakehouse tables. When this option is explicitly configured to true, `datalake.format` must also be configured.
+- `datalake.format`: Specify the lakehouse format, e.g., `paimon`, `iceberg`. When enabling lakehouse storage explicitly, use it together with `datalake.enabled = true`.
 - Options with prefix `datalake.${datalake.format}`
 - `kv.rocksdb.shared-rate-limiter.bytes-per-sec`: Control RocksDB flush and compaction write rate shared across all RocksDB instances on the TabletServer. The rate limiter is always enabled. Set to a lower value (e.g., 100MB) to limit the rate, or a very high value to effectively disable rate limiting.
 
@@ -27,13 +28,14 @@ Here is a code snippet to demonstrate how to update the cluster configurations u
 ```java
 // Enable lakehouse storage with Paimon format
 admin.alterClusterConfigs(
-        Collections.singletonList(
+        Arrays.asList(
+                new AlterConfig(DATALAKE_ENABLED.key(), "true", AlterConfigOpType.SET),
                 new AlterConfig(DATALAKE_FORMAT.key(), "paimon", AlterConfigOpType.SET)));
 
 // Disable lakehouse storage
 admin.alterClusterConfigs(
         Collections.singletonList(
-                new AlterConfig(DATALAKE_FORMAT.key(), "paimon", AlterConfigOpType.DELETE)));
+                new AlterConfig(DATALAKE_ENABLED.key(), "false", AlterConfigOpType.SET)));
 
 // Set RocksDB shared rate limiter to 200MB/sec
 admin.alterClusterConfigs(

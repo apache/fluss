@@ -2009,12 +2009,24 @@ public class ConfigOptions {
     // ------------------------------------------------------------------------
     //  ConfigOptions for lakehouse storage
     // ------------------------------------------------------------------------
+    public static final ConfigOption<Boolean> DATALAKE_ENABLED =
+            key("datalake.enabled")
+                    .booleanType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Whether the Fluss cluster is ready to create and manage lakehouse tables. "
+                                    + "If unset, Fluss keeps the legacy behavior where configuring `datalake.format` "
+                                    + "also enables lakehouse tables. If set to `false`, Fluss pre-binds the lake format "
+                                    + "for newly created tables but does not allow lakehouse tables yet. If set to `true`, "
+                                    + "Fluss fully enables lakehouse tables. When this option is explicitly set to `true`, "
+                                    + "`datalake.format` must also be configured.");
+
     public static final ConfigOption<DataLakeFormat> DATALAKE_FORMAT =
             key("datalake.format")
                     .enumType(DataLakeFormat.class)
                     .noDefaultValue()
                     .withDescription(
-                            "The datalake format used by of Fluss to be as lakehouse storage. Currently, supported formats are Paimon, Iceberg, and Lance. "
+                            "The datalake format used by Fluss as lakehouse storage. Currently, supported formats are Paimon, Iceberg, and Lance. "
                                     + "In the future, more kinds of data lake format will be supported, such as DeltaLake or Hudi.");
 
     // ------------------------------------------------------------------------

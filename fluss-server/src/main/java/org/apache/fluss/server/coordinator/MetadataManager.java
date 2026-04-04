@@ -368,7 +368,10 @@ public class MetadataManager {
             boolean ignoreIfExists)
             throws TableAlreadyExistException, DatabaseNotExistException {
         // validate table properties before creating table
-        validateTableDescriptor(tableToCreate, maxBucketNum);
+        validateTableDescriptor(
+                tableToCreate,
+                maxBucketNum,
+                lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat());
 
         if (!databaseExists(tablePath.getDatabaseName())) {
             throw new DatabaseNotExistException(
@@ -535,8 +538,10 @@ public class MetadataManager {
                 }
 
                 // reuse the same validate logic with the createTable() method
-                validateTableDescriptor(newDescriptor, maxBucketNum);
-
+                validateTableDescriptor(
+                        newDescriptor,
+                        maxBucketNum,
+                        lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat());
                 // pre alter table properties, e.g. create lake table in lake storage if it's to
                 // enable datalake for the table
                 preAlterTableProperties(
