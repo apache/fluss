@@ -554,9 +554,15 @@ public class LogFetcher implements Closeable {
                                 new PbFetchLogReqForTable().setTableId(finalTableId);
                         if (readContext.isProjectionPushDowned()) {
                             assert projection != null;
+                            // When shredding is enabled, use the expanded projection
+                            // that includes shredded columns for the server request
+                            int[] projectedFields =
+                                    readContext.getStorageProjectionInOrder() != null
+                                            ? readContext.getStorageProjectionInOrder()
+                                            : projection.getProjectionInOrder();
                             reqForTable
                                     .setProjectionPushdownEnabled(true)
-                                    .setProjectedFields(projection.getProjectionInOrder());
+                                    .setProjectedFields(projectedFields);
                         } else {
                             reqForTable.setProjectionPushdownEnabled(false);
                         }

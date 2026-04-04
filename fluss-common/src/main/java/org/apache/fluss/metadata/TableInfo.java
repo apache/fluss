@@ -23,12 +23,17 @@ import org.apache.fluss.config.StatisticsColumnsConfig;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeChecks;
+import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.variant.ShreddingSchema;
 
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -69,7 +74,16 @@ public final class TableInfo {
     private final long createdTime;
     private final long modifiedTime;
 
-    private int[] cachedStatsIndexMapping = null;
+    private volatile int[] cachedStatsIndexMapping = null;
+
+    /** Cached indices (into {@link #rowType}) of Variant-type columns. Computed lazily. */
+    private volatile int[] cachedVariantColumnIndices = null;
+
+    /** Cached shredding schemas. Computed lazily. */
+    private volatile Map<String, ShreddingSchema> cachedShreddingSchemas = null;
+
+    /** Cached user-visible row type (excluding shredded columns). Computed lazily. */
+    private volatile RowType cachedUserRowType = null;
 
     public TableInfo(
             TablePath tablePath,
@@ -315,6 +329,96 @@ public final class TableInfo {
         // Cache the result
         cachedStatsIndexMapping = mapping;
         return mapping;
+    }
+
+    /**
+     * Returns whether automatic Variant shredding is enabled for this table.
+     *
+     * <p>Shredding is only meaningful for ARROW_LOG tables that contain at least one Variant
+     * column. Callers should also check {@link #getVariantColumnIndices()} to confirm there are
+     * Variant columns before setting up shredding infrastructure.
+     */
+    public boolean isVariantShreddingEnabled() {
+        return tableConfig.isVariantShreddingEnabled();
+    }
+
+    /**
+     * Returns the column indices (into {@link #getRowType()}) of all Variant-type columns.
+     *
+     * <p>The result is cached after the first call.
+     *
+     * @return an array of zero-based column indices; empty if there are no Variant columns.
+     */
+    public int[] getVariantColumnIndices() {
+        if (cachedVariantColumnIndices != null) {
+            return cachedVariantColumnIndices;
+        }
+        List<Integer> indices = new ArrayList<>();
+        for (int i = 0; i < rowType.getFieldCount(); i++) {
+            if (rowType.getTypeAt(i).getTypeRoot() == DataTypeRoot.VARIANT) {
+                indices.add(i);
+            }
+        }
+        cachedVariantColumnIndices = indices.stream().mapToInt(Integer::intValue).toArray();
+        return cachedVariantColumnIndices;
+    }
+
+    /**
+     * Returns the shredding schemas for all Variant columns in this table, keyed by the Variant
+     * column name. Returns an empty map if no shredding schemas are configured.
+     *
+     * <p>The result is cached after the first call.
+     */
+    public Map<String, ShreddingSchema> getShreddingSchemas() {
+        if (cachedShreddingSchemas != null) {
+            return cachedShreddingSchemas;
+        }
+        Map<String, ShreddingSchema> schemas = new HashMap<>();
+        for (int idx : getVariantColumnIndices()) {
+            String variantName = rowType.getFields().get(idx).getName();
+            String propKey = ShreddingSchema.PROPERTY_KEY_PREFIX + variantName;
+            Optional<Object> rawValue = properties.getRawValue(propKey);
+            if (rawValue.isPresent()) {
+                schemas.put(variantName, ShreddingSchema.fromJson(String.valueOf(rawValue.get())));
+            }
+        }
+        cachedShreddingSchemas =
+                schemas.isEmpty() ? Collections.emptyMap() : Collections.unmodifiableMap(schemas);
+        return cachedShreddingSchemas;
+    }
+
+    /**
+     * Returns the user-visible row type, which excludes shredded columns (columns with names
+     * starting with "$"). Shredded columns are internal storage columns managed by Variant
+     * shredding.
+     *
+     * <p>The result is cached after the first call.
+     */
+    public RowType getUserRowType() {
+        if (cachedUserRowType != null) {
+            return cachedUserRowType;
+        }
+        boolean hasShreddedColumns = false;
+        for (int i = 0; i < rowType.getFieldCount(); i++) {
+            if (ShreddingSchema.isAnyShreddedColumn(rowType.getFields().get(i).getName())) {
+                hasShreddedColumns = true;
+                break;
+            }
+        }
+        if (!hasShreddedColumns) {
+            cachedUserRowType = rowType;
+        } else {
+            List<Integer> userFieldIndices = new ArrayList<>();
+            for (int i = 0; i < rowType.getFieldCount(); i++) {
+                if (!ShreddingSchema.isAnyShreddedColumn(rowType.getFields().get(i).getName())) {
+                    userFieldIndices.add(i);
+                }
+            }
+            cachedUserRowType =
+                    rowType.project(
+                            userFieldIndices.stream().mapToInt(Integer::intValue).toArray());
+        }
+        return cachedUserRowType;
     }
 
     /**

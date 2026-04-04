@@ -29,7 +29,9 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.variant.ShreddingSchema;
 import org.apache.fluss.utils.ArrowUtils;
 import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.Projection;
@@ -37,7 +39,10 @@ import org.apache.fluss.utils.Projection;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.IntStream;
 
@@ -49,7 +54,7 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
 
     // the log format of the table
     private final LogFormat logFormat;
-    // the schema of the date read form server or remote. (which is projected in the server side)
+    // the schema of the data read from server or remote (which may include shredded columns)
     private final RowType dataRowType;
     // the static schemaId of the table, should support dynamic schema evolution in the future
     private final int targetSchemaId;
@@ -62,20 +67,25 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
     private final SchemaGetter schemaGetter;
     private final ConcurrentHashMap<Integer, VectorSchemaRoot> vectorSchemaRootMap =
             MapUtils.newConcurrentHashMap();
+    // the expanded projection indices (in order) for the server, including shredded columns.
+    // null if no projection pushdown or no expansion needed.
+    @Nullable private final int[] storageProjectionInOrder;
 
     public static LogRecordReadContext createReadContext(
             TableInfo tableInfo,
             boolean readFromRemote,
             @Nullable Projection projection,
             SchemaGetter schemaGetter) {
-        RowType rowType = tableInfo.getRowType();
+        RowType fullRowType = tableInfo.getRowType();
+        RowType userRowType = tableInfo.getUserRowType();
+        boolean hasShreddedColumns = fullRowType.getFieldCount() != userRowType.getFieldCount();
         LogFormat logFormat = tableInfo.getTableConfig().getLogFormat();
         // only for arrow log format, the projection can be push downed to the server side
         boolean projectionPushDowned = projection != null && logFormat == LogFormat.ARROW;
         int schemaId = tableInfo.getSchemaId();
         if (projection == null) {
-            // set a default dummy projection to simplify code
-            projection = Projection.of(IntStream.range(0, rowType.getFieldCount()).toArray());
+            // set a default dummy projection based on user-visible columns
+            projection = Projection.of(IntStream.range(0, userRowType.getFieldCount()).toArray());
         }
 
         if (logFormat == LogFormat.ARROW) {
@@ -83,26 +93,60 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
                 // currently, for remote read, arrow log doesn't support projection pushdown,
                 // so set the rowType as is.
                 int[] selectedFields = projection.getProjection();
+                if (hasShreddedColumns) {
+                    // For remote read with shredded columns: VectorSchemaRoot uses full schema,
+                    // field getters use user-visible schema
+                    return createArrowReadContext(
+                            fullRowType,
+                            userRowType,
+                            schemaId,
+                            selectedFields,
+                            false,
+                            schemaGetter,
+                            null);
+                }
                 return createArrowReadContext(
-                        rowType, schemaId, selectedFields, false, schemaGetter);
+                        fullRowType, schemaId, selectedFields, false, schemaGetter);
             } else {
-                // arrow data that returned from server has been projected (in order)
-                RowType projectedRowType = projection.projectInOrder(rowType);
-                // need to reorder the fields for final output
-                int[] selectedFields = projection.getReorderingIndexes();
-                return createArrowReadContext(
-                        projectedRowType,
-                        schemaId,
-                        selectedFields,
-                        projectionPushDowned,
-                        schemaGetter);
+                if (hasShreddedColumns) {
+                    // Expand projection to include shredded columns for server request
+                    int[] expandedInOrder =
+                            expandProjectionForShredding(
+                                    projection.getProjectionInOrder(),
+                                    fullRowType,
+                                    tableInfo.getShreddingSchemas());
+                    // projected storage type (includes shredded) for VectorSchemaRoot
+                    RowType projectedStorageType = fullRowType.project(expandedInOrder);
+                    // projected user type for field getters
+                    RowType projectedUserType = projection.projectInOrder(userRowType);
+                    int[] selectedFields = projection.getReorderingIndexes();
+                    return createArrowReadContext(
+                            projectedStorageType,
+                            projectedUserType,
+                            schemaId,
+                            selectedFields,
+                            projectionPushDowned,
+                            schemaGetter,
+                            expandedInOrder);
+                } else {
+                    // arrow data that returned from server has been projected (in order)
+                    RowType projectedRowType = projection.projectInOrder(fullRowType);
+                    // need to reorder the fields for final output
+                    int[] selectedFields = projection.getReorderingIndexes();
+                    return createArrowReadContext(
+                            projectedRowType,
+                            schemaId,
+                            selectedFields,
+                            projectionPushDowned,
+                            schemaGetter);
+                }
             }
         } else if (logFormat == LogFormat.INDEXED) {
             int[] selectedFields = projection.getProjection();
-            return createIndexedReadContext(rowType, schemaId, selectedFields, schemaGetter);
+            return createIndexedReadContext(userRowType, schemaId, selectedFields, schemaGetter);
         } else if (logFormat == LogFormat.COMPACTED) {
             int[] selectedFields = projection.getProjection();
-            return createCompactedRowReadContext(rowType, schemaId, selectedFields);
+            return createCompactedRowReadContext(userRowType, schemaId, selectedFields);
         } else {
             throw new IllegalArgumentException("Unsupported log format: " + logFormat);
         }
@@ -124,7 +168,34 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
                 allocator,
                 fieldGetters,
                 projectionPushDowned,
-                schemaGetter);
+                schemaGetter,
+                null);
+    }
+
+    /**
+     * Creates an Arrow read context with shredding support. The storageRowType is used for
+     * VectorSchemaRoot creation (includes shredded columns), while the userRowType is used for
+     * field getters (user-visible columns only).
+     */
+    private static LogRecordReadContext createArrowReadContext(
+            RowType storageRowType,
+            RowType userRowType,
+            int schemaId,
+            int[] selectedFields,
+            boolean projectionPushDowned,
+            SchemaGetter schemaGetter,
+            @Nullable int[] storageProjectionInOrder) {
+        BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+        FieldGetter[] fieldGetters = buildProjectedFieldGetters(userRowType, selectedFields);
+        return new LogRecordReadContext(
+                LogFormat.ARROW,
+                storageRowType,
+                schemaId,
+                allocator,
+                fieldGetters,
+                projectionPushDowned,
+                schemaGetter,
+                storageProjectionInOrder);
     }
 
     /**
@@ -187,7 +258,14 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         FieldGetter[] fieldGetters = buildProjectedFieldGetters(rowType, selectedFields);
         // for INDEXED log format, the projection is NEVER push downed to the server side
         return new LogRecordReadContext(
-                LogFormat.INDEXED, rowType, schemaId, null, fieldGetters, false, schemaGetter);
+                LogFormat.INDEXED,
+                rowType,
+                schemaId,
+                null,
+                fieldGetters,
+                false,
+                schemaGetter,
+                null);
     }
 
     /**
@@ -202,7 +280,7 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         FieldGetter[] fieldGetters = buildProjectedFieldGetters(rowType, selectedFields);
         // for COMPACTED log format, the projection is NEVER push downed to the server side
         return new LogRecordReadContext(
-                LogFormat.COMPACTED, rowType, schemaId, null, fieldGetters, false, null);
+                LogFormat.COMPACTED, rowType, schemaId, null, fieldGetters, false, null, null);
     }
 
     private LogRecordReadContext(
@@ -212,7 +290,8 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
             BufferAllocator bufferAllocator,
             FieldGetter[] selectedFieldGetters,
             boolean projectionPushDowned,
-            SchemaGetter schemaGetter) {
+            SchemaGetter schemaGetter,
+            @Nullable int[] storageProjectionInOrder) {
         this.logFormat = logFormat;
         this.dataRowType = targetDataRowType;
         this.targetSchemaId = targetSchemaId;
@@ -220,6 +299,7 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         this.selectedFieldGetters = selectedFieldGetters;
         this.projectionPushDowned = projectionPushDowned;
         this.schemaGetter = schemaGetter;
+        this.storageProjectionInOrder = storageProjectionInOrder;
     }
 
     @Override
@@ -245,6 +325,15 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
     /** Whether the projection is push downed to the server side and the returned data is pruned. */
     public boolean isProjectionPushDowned() {
         return projectionPushDowned;
+    }
+
+    /**
+     * Returns the expanded projection indices (in order) for the server, which includes shredded
+     * columns for any selected Variant columns. Returns null if no expansion was needed.
+     */
+    @Nullable
+    public int[] getStorageProjectionInOrder() {
+        return storageProjectionInOrder;
     }
 
     @Override
@@ -304,5 +393,42 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
                             dataTypeList.get(selectedFields[i]), selectedFields[i]);
         }
         return fieldGetters;
+    }
+
+    /**
+     * Expands projection indices to include shredded columns for any selected Variant columns. For
+     * example, if the user selects column 2 (a Variant) and the full schema has shredded columns at
+     * indices 3 and 4 for that Variant, the result will include [2, 3, 4] (sorted).
+     *
+     * @param projectionInOrder the user's projection indices in sorted order
+     * @param fullRowType the full row type including shredded columns
+     * @param shreddingSchemas the shredding schemas keyed by variant column name
+     * @return expanded projection indices in sorted order
+     */
+    static int[] expandProjectionForShredding(
+            int[] projectionInOrder,
+            RowType fullRowType,
+            Map<String, ShreddingSchema> shreddingSchemas) {
+        if (shreddingSchemas.isEmpty()) {
+            return projectionInOrder;
+        }
+        List<Integer> expanded = new ArrayList<>();
+        for (int idx : projectionInOrder) {
+            expanded.add(idx);
+            String fieldName = fullRowType.getFields().get(idx).getName();
+            if (fullRowType.getTypeAt(idx).getTypeRoot() == DataTypeRoot.VARIANT
+                    && shreddingSchemas.containsKey(fieldName)) {
+                // Find all shredded column indices for this variant
+                ShreddingSchema schema = shreddingSchemas.get(fieldName);
+                for (int i = 0; i < fullRowType.getFieldCount(); i++) {
+                    if (schema.isShreddedColumn(fullRowType.getFields().get(i).getName())) {
+                        expanded.add(i);
+                    }
+                }
+            }
+        }
+        int[] result = expanded.stream().mapToInt(Integer::intValue).toArray();
+        Arrays.sort(result);
+        return result;
     }
 }

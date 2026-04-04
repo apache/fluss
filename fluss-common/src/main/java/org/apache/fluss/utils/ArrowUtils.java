@@ -41,6 +41,8 @@ import org.apache.fluss.row.arrow.vectors.ArrowTimestampNtzColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowTinyIntColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowVarBinaryColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowVarCharColumnVector;
+import org.apache.fluss.row.arrow.vectors.ArrowVariantColumnVector;
+import org.apache.fluss.row.arrow.vectors.ShreddedVariantColumnVector;
 import org.apache.fluss.row.arrow.writers.ArrowArrayWriter;
 import org.apache.fluss.row.arrow.writers.ArrowBigIntWriter;
 import org.apache.fluss.row.arrow.writers.ArrowBinaryWriter;
@@ -53,6 +55,7 @@ import org.apache.fluss.row.arrow.writers.ArrowFloatWriter;
 import org.apache.fluss.row.arrow.writers.ArrowIntWriter;
 import org.apache.fluss.row.arrow.writers.ArrowMapWriter;
 import org.apache.fluss.row.arrow.writers.ArrowRowWriter;
+import org.apache.fluss.row.arrow.writers.ArrowShreddedVariantWriter;
 import org.apache.fluss.row.arrow.writers.ArrowSmallIntWriter;
 import org.apache.fluss.row.arrow.writers.ArrowTimeWriter;
 import org.apache.fluss.row.arrow.writers.ArrowTimestampLtzWriter;
@@ -60,6 +63,7 @@ import org.apache.fluss.row.arrow.writers.ArrowTimestampNtzWriter;
 import org.apache.fluss.row.arrow.writers.ArrowTinyIntWriter;
 import org.apache.fluss.row.arrow.writers.ArrowVarBinaryWriter;
 import org.apache.fluss.row.arrow.writers.ArrowVarCharWriter;
+import org.apache.fluss.row.arrow.writers.ArrowVariantWriter;
 import org.apache.fluss.row.columnar.ColumnVector;
 import org.apache.fluss.row.columnar.VectorizedColumnBatch;
 import org.apache.fluss.shaded.arrow.com.google.flatbuffers.FlatBufferBuilder;
@@ -132,6 +136,9 @@ import org.apache.fluss.types.StringType;
 import org.apache.fluss.types.TimeType;
 import org.apache.fluss.types.TimestampType;
 import org.apache.fluss.types.TinyIntType;
+import org.apache.fluss.types.VariantType;
+import org.apache.fluss.types.variant.ShreddedField;
+import org.apache.fluss.types.variant.ShreddingSchema;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -139,7 +146,11 @@ import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.MessageSerializer.deserializeRecordBatch;
@@ -160,6 +171,10 @@ public class ArrowUtils {
 
     /**
      * Creates an {@link ArrowReader} for the specified memory segment and {@link VectorSchemaRoot}.
+     *
+     * <p>When the rowType contains shredded columns (prefixed with "$"), they are automatically
+     * merged with their parent Variant column into a {@link ShreddedVariantColumnVector}. The
+     * returned ArrowReader only contains user-visible columns.
      */
     public static ArrowReader createArrowReader(
             MemorySegment segment,
@@ -175,12 +190,95 @@ public class ArrowUtils {
             FlussVectorLoader vectorLoader =
                     new FlussVectorLoader(schemaRoot, ArrowCompressionFactory.INSTANCE);
             vectorLoader.load(batch);
-            List<ColumnVector> columnVectors = new ArrayList<>();
+
             List<FieldVector> fieldVectors = schemaRoot.getFieldVectors();
-            for (int i = 0; i < fieldVectors.size(); i++) {
-                columnVectors.add(
-                        createArrowColumnVector(fieldVectors.get(i), rowType.getTypeAt(i)));
+            int fieldCount = rowType.getFieldCount();
+
+            // Check if there are any shredded columns
+            boolean hasShredded = false;
+            for (int i = 0; i < fieldCount; i++) {
+                if (ShreddingSchema.isAnyShreddedColumn(rowType.getFields().get(i).getName())) {
+                    hasShredded = true;
+                    break;
+                }
             }
+
+            if (!hasShredded) {
+                // Fast path: no shredded columns, create column vectors directly
+                List<ColumnVector> columnVectors = new ArrayList<>();
+                for (int i = 0; i < fieldVectors.size(); i++) {
+                    columnVectors.add(
+                            createArrowColumnVector(fieldVectors.get(i), rowType.getTypeAt(i)));
+                }
+                return new ArrowReader(
+                        columnVectors.toArray(new ColumnVector[0]), schemaRoot.getRowCount());
+            }
+
+            // Group shredded columns by their parent variant column
+            // Map: variant column index -> list of (shredded column index)
+            Map<Integer, List<Integer>> variantToShreddedIndices = new LinkedHashMap<>();
+            Set<Integer> shreddedColumnIndices = new HashSet<>();
+
+            for (int i = 0; i < fieldCount; i++) {
+                String fieldName = rowType.getFields().get(i).getName();
+                if (ShreddingSchema.isAnyShreddedColumn(fieldName)) {
+                    shreddedColumnIndices.add(i);
+                    // Extract parent variant name: "$variantName.fieldPath" -> "variantName"
+                    String withoutPrefix =
+                            fieldName.substring(ShreddingSchema.SHREDDED_COLUMN_PREFIX.length());
+                    int dotIndex = withoutPrefix.indexOf('.');
+                    if (dotIndex > 0) {
+                        String variantName = withoutPrefix.substring(0, dotIndex);
+                        // Find the variant column index
+                        for (int vi = 0; vi < fieldCount; vi++) {
+                            if (rowType.getFields().get(vi).getName().equals(variantName)) {
+                                variantToShreddedIndices
+                                        .computeIfAbsent(vi, k -> new ArrayList<>())
+                                        .add(i);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Build user-visible column vectors
+            List<ColumnVector> columnVectors = new ArrayList<>();
+            for (int i = 0; i < fieldCount; i++) {
+                if (shreddedColumnIndices.contains(i)) {
+                    // Skip shredded columns - handled by their parent variant
+                    continue;
+                }
+                if (variantToShreddedIndices.containsKey(i)) {
+                    // This is a variant column with shredded columns
+                    List<Integer> shreddedIndices = variantToShreddedIndices.get(i);
+                    VarBinaryVector residualVector = (VarBinaryVector) fieldVectors.get(i);
+
+                    // Build ShreddingSchema from column info
+                    String variantName = rowType.getFields().get(i).getName();
+                    List<ShreddedField> shreddedFields = new ArrayList<>();
+                    ValueVector[] shreddedValueVectors = new ValueVector[shreddedIndices.size()];
+                    for (int si = 0; si < shreddedIndices.size(); si++) {
+                        int shreddedIdx = shreddedIndices.get(si);
+                        String shreddedColName = rowType.getFields().get(shreddedIdx).getName();
+                        // Extract field path: "$variantName.fieldPath" -> "fieldPath"
+                        String prefix = ShreddingSchema.SHREDDED_COLUMN_PREFIX + variantName + ".";
+                        String fieldPath = shreddedColName.substring(prefix.length());
+                        DataType shreddedType = rowType.getTypeAt(shreddedIdx);
+                        shreddedFields.add(new ShreddedField(fieldPath, shreddedType, shreddedIdx));
+                        shreddedValueVectors[si] = (ValueVector) fieldVectors.get(shreddedIdx);
+                    }
+
+                    ShreddingSchema schema = new ShreddingSchema(variantName, shreddedFields);
+                    columnVectors.add(
+                            createShreddedVariantColumnVector(
+                                    residualVector, shreddedValueVectors, schema));
+                } else {
+                    columnVectors.add(
+                            createArrowColumnVector(fieldVectors.get(i), rowType.getTypeAt(i)));
+                }
+            }
+
             return new ArrowReader(
                     columnVectors.toArray(new ColumnVector[0]), schemaRoot.getRowCount());
         } catch (IOException e) {
@@ -314,6 +412,8 @@ public class ArrowUtils {
             return new ArrowVarCharWriter((VarCharVector) vector);
         } else if (vector instanceof FixedSizeBinaryVector) {
             return new ArrowBinaryWriter((FixedSizeBinaryVector) vector);
+        } else if (vector instanceof VarBinaryVector && dataType instanceof VariantType) {
+            return new ArrowVariantWriter((VarBinaryVector) vector);
         } else if (vector instanceof VarBinaryVector) {
             return new ArrowVarBinaryWriter((VarBinaryVector) vector);
         } else if (vector instanceof DecimalVector) {
@@ -388,6 +488,8 @@ public class ArrowUtils {
             return new ArrowVarCharColumnVector((VarCharVector) vector);
         } else if (vector instanceof FixedSizeBinaryVector) {
             return new ArrowBinaryColumnVector((FixedSizeBinaryVector) vector);
+        } else if (vector instanceof VarBinaryVector && dataType instanceof VariantType) {
+            return new ArrowVariantColumnVector((VarBinaryVector) vector);
         } else if (vector instanceof VarBinaryVector) {
             return new ArrowVarBinaryColumnVector((VarBinaryVector) vector);
         } else if (vector instanceof DecimalVector) {
@@ -431,6 +533,74 @@ public class ArrowUtils {
             throw new UnsupportedOperationException(
                     String.format("Unsupported type %s.", dataType));
         }
+    }
+
+    /**
+     * Returns the Arrow schema for a RowType with shredding support. For each Variant column with a
+     * ShreddingSchema, additional typed columns are appended for the shredded fields.
+     *
+     * @param rowType the row type
+     * @param shreddingSchemas map of variant column name to its shredding schema
+     * @return the Arrow schema including shredded columns
+     */
+    public static Schema toArrowSchemaWithShredding(
+            RowType rowType, Map<String, ShreddingSchema> shreddingSchemas) {
+        List<Field> fields = new ArrayList<>();
+        for (DataField f : rowType.getFields()) {
+            fields.add(toArrowField(f.getName(), f.getType()));
+            if (f.getType() instanceof VariantType && shreddingSchemas.containsKey(f.getName())) {
+                ShreddingSchema schema = shreddingSchemas.get(f.getName());
+                for (ShreddedField sf : schema.getFields()) {
+                    String columnName = schema.shreddedColumnName(sf.getFieldPath());
+                    // Shredded columns are always nullable (field may not be present)
+                    DataType shreddedType = sf.getShreddedType().copy(true);
+                    fields.add(toArrowField(columnName, shreddedType));
+                }
+            }
+        }
+        return new Schema(fields);
+    }
+
+    /**
+     * Creates an {@link ArrowShreddedVariantWriter} for a Variant column with shredding.
+     *
+     * @param residualVector the VarBinaryVector for residual Variant data
+     * @param shreddingSchema the shredding schema describing which fields to extract
+     * @param shreddedVectors the FieldVectors for each shredded column
+     * @return the shredded variant writer
+     */
+    public static ArrowFieldWriter createArrowShreddedVariantWriter(
+            VarBinaryVector residualVector,
+            ShreddingSchema shreddingSchema,
+            FieldVector[] shreddedVectors) {
+        List<ShreddedField> fields = shreddingSchema.getFields();
+        DataType[] shreddedTypes = new DataType[fields.size()];
+        for (int i = 0; i < fields.size(); i++) {
+            shreddedTypes[i] = fields.get(i).getShreddedType();
+        }
+        return new ArrowShreddedVariantWriter(
+                residualVector, shreddingSchema, shreddedVectors, shreddedTypes);
+    }
+
+    /**
+     * Creates a {@link ShreddedVariantColumnVector} for reading shredded Variant columns.
+     *
+     * @param residualVector the VarBinaryVector containing residual Variant data
+     * @param shreddedValueVectors the ValueVectors for each shredded column
+     * @param shreddingSchema the shredding schema
+     * @return the shredded variant column vector
+     */
+    public static ColumnVector createShreddedVariantColumnVector(
+            VarBinaryVector residualVector,
+            ValueVector[] shreddedValueVectors,
+            ShreddingSchema shreddingSchema) {
+        List<ShreddedField> fields = shreddingSchema.getFields();
+        DataType[] shreddedTypes = new DataType[fields.size()];
+        for (int i = 0; i < fields.size(); i++) {
+            shreddedTypes[i] = fields.get(i).getShreddedType();
+        }
+        return new ShreddedVariantColumnVector(
+                residualVector, shreddedValueVectors, shreddingSchema, shreddedTypes);
     }
 
     private static Field toArrowField(String fieldName, DataType logicalType) {
@@ -590,6 +760,11 @@ public class ArrowUtils {
         @Override
         public ArrowType visit(RowType rowType) {
             return ArrowType.Struct.INSTANCE;
+        }
+
+        @Override
+        public ArrowType visit(VariantType variantType) {
+            return ArrowType.Binary.INSTANCE;
         }
 
         @Override

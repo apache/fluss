@@ -27,6 +27,7 @@ import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.row.aligned.AlignedRow;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.variant.Variant;
 
 import java.util.Arrays;
 
@@ -461,6 +462,12 @@ public class DefaultLogRecordBatchStatistics implements LogRecordBatchStatistics
         public InternalRow getRow(int pos, int numFields) {
             ensureColumnExists(pos);
             return internalRow.getRow(reversedStatsIndexMapping[pos], numFields);
+        }
+
+        @Override
+        public Variant getVariant(int pos) {
+            ensureColumnExists(pos);
+            return internalRow.getVariant(reversedStatsIndexMapping[pos]);
         }
     }
 }

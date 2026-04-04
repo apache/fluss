@@ -248,7 +248,8 @@ public class FlussSourceBuilder<OUT> {
         }
 
         if (this.projectedFieldNames != null && this.projectedFieldNames.length > 0) {
-            RowType rowType = tableInfo.getRowType();
+            // Use user-visible row type (excludes internal shredded columns like $v.x)
+            RowType rowType = tableInfo.getUserRowType();
             List<String> allFieldNames = rowType.getFieldNames();
 
             // Create a map of field name to index
@@ -283,10 +284,11 @@ public class FlussSourceBuilder<OUT> {
         boolean isPartitioned = !tableInfo.getPartitionKeys().isEmpty();
         boolean hasPrimaryKey = !tableInfo.getPrimaryKeys().isEmpty();
 
+        // Use user-visible row type (excludes internal shredded columns like $v.x)
         RowType sourceOutputType =
                 projectedFields != null
-                        ? tableInfo.getRowType().project(projectedFields)
-                        : tableInfo.getRowType();
+                        ? tableInfo.getUserRowType().project(projectedFields)
+                        : tableInfo.getUserRowType();
 
         LOG.info("Creating Fluss Source with Configuration: {}", flussConf);
 

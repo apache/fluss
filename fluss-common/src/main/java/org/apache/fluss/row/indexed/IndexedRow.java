@@ -42,6 +42,7 @@ import org.apache.fluss.types.IntType;
 import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.StringType;
+import org.apache.fluss.types.variant.Variant;
 import org.apache.fluss.utils.MurmurHashUtils;
 
 import java.util.Arrays;
@@ -438,6 +439,12 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
         }
     }
 
+    @Override
+    public Variant getVariant(int pos) {
+        byte[] bytes = getBytes(pos);
+        return Variant.fromBytes(bytes);
+    }
+
     private void assertIndexIsValid(int index) {
         assert index >= 0 : "index (" + index + ") should >= 0";
         assert index < arity : "index (" + index + ") should < " + arity;
@@ -516,6 +523,7 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
             case ARRAY:
             case MAP:
             case ROW:
+            case VARIANT:
                 return false;
             case DECIMAL:
                 return Decimal.isCompact(((DecimalType) dataType).getPrecision());

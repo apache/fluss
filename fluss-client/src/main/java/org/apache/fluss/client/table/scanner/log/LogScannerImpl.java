@@ -109,7 +109,9 @@ public class LogScannerImpl implements LogScanner {
      */
     @Nullable
     private Projection sanityProjection(@Nullable int[] projectedFields, TableInfo tableInfo) {
-        RowType tableRowType = tableInfo.getRowType();
+        // Validate against the user-visible row type (excludes internal shredded columns like $v.x)
+        // so that projection indices from callers (e.g. Flink) stay within user-visible bounds.
+        RowType tableRowType = tableInfo.getUserRowType();
         if (projectedFields != null) {
             for (int projectedField : projectedFields) {
                 if (projectedField < 0 || projectedField >= tableRowType.getFieldCount()) {

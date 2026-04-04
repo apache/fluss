@@ -56,6 +56,8 @@ import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
+import org.apache.fluss.types.variant.ShreddedField;
+import org.apache.fluss.types.variant.ShreddingSchema;
 import org.apache.fluss.utils.function.RunnableWithException;
 import org.apache.fluss.utils.function.ThrowingRunnable;
 
@@ -64,6 +66,7 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -489,6 +492,94 @@ public class MetadataManager {
                             + tablePath
                             + ", which shouldn't happen. Please check if the lake table was deleted manually.",
                     e);
+        }
+    }
+
+    /**
+     * Applies shredding schema evolution for a Variant column. This is triggered by the shredding
+     * inference algorithm when it determines that certain fields should be extracted into typed
+     * columns.
+     *
+     * <p>The method performs two operations:
+     *
+     * <ol>
+     *   <li>Adds shredded columns as hidden columns (prefixed with "$") via schema evolution
+     *   <li>Stores the shredding schema as a table property for subsequent read/write operations
+     * </ol>
+     *
+     * @param tablePath the path of the table
+     * @param shreddingSchema the inferred shredding schema to apply
+     * @param flussPrincipal the principal performing the operation
+     * @throws TableNotExistException if the table does not exist
+     */
+    public void applyShreddingSchemaEvolution(
+            TablePath tablePath, ShreddingSchema shreddingSchema, FlussPrincipal flussPrincipal)
+            throws TableNotExistException {
+        try {
+            TableInfo table = getTable(tablePath);
+            Schema currentSchema = table.getSchema();
+
+            // Build the list of schema changes: add shredded columns as hidden nullable columns
+            List<TableChange> schemaChanges = new ArrayList<>();
+            for (ShreddedField field : shreddingSchema.getFields()) {
+                String columnName = shreddingSchema.shreddedColumnName(field.getFieldPath());
+                // Check if the column already exists
+                boolean columnExists = false;
+                for (Schema.Column col : currentSchema.getColumns()) {
+                    if (col.getName().equals(columnName)) {
+                        columnExists = true;
+                        break;
+                    }
+                }
+                if (!columnExists) {
+                    // Shredded columns must be nullable since not all Variant rows contain the
+                    // field
+                    schemaChanges.add(
+                            TableChange.addColumn(
+                                    columnName,
+                                    field.getShreddedType().copy(true),
+                                    "Shredded from variant column '"
+                                            + shreddingSchema.getVariantColumnName()
+                                            + "', field path: "
+                                            + field.getFieldPath(),
+                                    TableChange.ColumnPosition.last()));
+                }
+            }
+
+            // Apply schema changes if there are new columns to add
+            if (!schemaChanges.isEmpty()) {
+                Schema newSchema = SchemaUpdate.applySchemaChanges(currentSchema, schemaChanges);
+
+                if (!newSchema.equals(currentSchema)) {
+                    // Register the new schema
+                    zookeeperClient.registerSchema(tablePath, newSchema, table.getSchemaId() + 1);
+                    LOG.info(
+                            "Applied shredding schema evolution for table {}, "
+                                    + "variant column '{}', added {} shredded column(s).",
+                            tablePath,
+                            shreddingSchema.getVariantColumnName(),
+                            schemaChanges.size());
+                }
+            }
+
+            // Store the shredding schema as a table property
+            TableRegistration tableReg = getTableRegistration(tablePath);
+            Map<String, String> updatedProperties =
+                    new HashMap<>(table.toTableDescriptor().getProperties());
+            updatedProperties.put(shreddingSchema.propertyKey(), shreddingSchema.toJson());
+            TableRegistration updatedReg =
+                    tableReg.newProperties(
+                            updatedProperties, table.toTableDescriptor().getCustomProperties());
+            zookeeperClient.updateTable(tablePath, updatedReg);
+            LOG.info(
+                    "Stored shredding schema for table {}, variant column '{}'.",
+                    tablePath,
+                    shreddingSchema.getVariantColumnName());
+        } catch (TableNotExistException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    "Failed to apply shredding schema evolution for table " + tablePath, e);
         }
     }
 
