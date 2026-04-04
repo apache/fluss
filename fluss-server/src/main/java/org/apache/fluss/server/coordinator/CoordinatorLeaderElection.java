@@ -18,6 +18,8 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.exception.CoordinatorEpochFencedException;
+import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.leader.LeaderLatch;
@@ -26,6 +28,7 @@ import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.lea
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -51,6 +54,8 @@ public class CoordinatorLeaderElection implements AutoCloseable {
     private static final Logger LOG = LoggerFactory.getLogger(CoordinatorLeaderElection.class);
 
     private final String serverId;
+    private final ZooKeeperClient zkClient;
+    private final CoordinatorContext coordinatorContext;
     private final LeaderLatch leaderLatch;
     private final AtomicBoolean isLeader = new AtomicBoolean(false);
     // Cached thread pool to run leader init/cleanup callbacks outside Curator's EventThread.
@@ -63,8 +68,11 @@ public class CoordinatorLeaderElection implements AutoCloseable {
     private final AtomicReference<CompletableFuture<Void>> pendingCleanup =
             new AtomicReference<>(CompletableFuture.completedFuture(null));
 
-    public CoordinatorLeaderElection(ZooKeeperClient zkClient, String serverId) {
+    public CoordinatorLeaderElection(
+            ZooKeeperClient zkClient, String serverId, CoordinatorContext coordinatorContext) {
         this.serverId = serverId;
+        this.zkClient = zkClient;
+        this.coordinatorContext = coordinatorContext;
         this.leaderLatch =
                 new LeaderLatch(
                         zkClient.getCuratorClient(),
@@ -122,7 +130,25 @@ public class CoordinatorLeaderElection implements AutoCloseable {
                                                 e);
                                     }
                                     try {
+                                        // to avoid split-brain
+                                        Optional<ZkEpoch> optionalEpoch =
+                                                zkClient.fenceBecomeCoordinatorLeader(serverId);
+                                        optionalEpoch.ifPresent(
+                                                integer ->
+                                                        coordinatorContext
+                                                                .setCoordinatorEpochAndZkVersion(
+                                                                        optionalEpoch
+                                                                                .get()
+                                                                                .getCoordinatorEpoch(),
+                                                                        optionalEpoch
+                                                                                .get()
+                                                                                .getCoordinatorEpochZkVersion()));
                                         initLeaderServices.run();
+                                    } catch (CoordinatorEpochFencedException e) {
+                                        LOG.warn(
+                                                "Coordinator server {} has been fenced and not become leader successfully.",
+                                                serverId);
+                                        throw e;
                                     } catch (Exception e) {
                                         LOG.error(
                                                 "Failed to initialize leader services for server {}",

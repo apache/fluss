@@ -220,9 +220,11 @@ public class CoordinatorServer extends ServerBase {
                             serverId);
 
             this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
+            this.coordinatorContext = new CoordinatorContext();
 
             // CoordinatorLeaderElection must be created after zkClient is initialized.
-            this.coordinatorLeaderElection = new CoordinatorLeaderElection(zkClient, serverId);
+            this.coordinatorLeaderElection =
+                    new CoordinatorLeaderElection(zkClient, serverId, coordinatorContext);
 
             this.lakeCatalogDynamicLoader = new LakeCatalogDynamicLoader(conf, pluginManager, true);
             this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf, true);
@@ -232,7 +234,6 @@ public class CoordinatorServer extends ServerBase {
 
             dynamicConfigManager.startup();
 
-            this.coordinatorContext = new CoordinatorContext();
             this.metadataCache = new CoordinatorMetadataCache();
 
             this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);

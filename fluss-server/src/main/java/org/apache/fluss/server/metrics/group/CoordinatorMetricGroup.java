@@ -71,7 +71,7 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
     protected final void putVariables(Map<String, String> variables) {
         variables.put("cluster_id", clusterId);
         variables.put("host", hostname);
-        variables.put("server_id", serverId);
+        variables.put("server_id", String.valueOf(serverId));
     }
 
     public CoordinatorEventMetricGroup getOrAddEventTypeMetricGroup(

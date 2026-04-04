@@ -1060,7 +1060,7 @@ class CoordinatorEventProcessorTest {
                 zookeeperClient,
                 serverMetadataCache,
                 testCoordinatorChannelManager,
-                new CoordinatorContext(),
+                new TestCoordinatorContext(),
                 autoPartitionManager,
                 lakeTableTieringManager,
                 TestingMetricGroups.COORDINATOR_METRICS,

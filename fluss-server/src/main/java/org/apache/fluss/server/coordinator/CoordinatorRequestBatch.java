@@ -683,6 +683,7 @@ public class CoordinatorRequestBatch {
         // tablet servers.
         return makeUpdateMetadataRequest(
                 coordinatorContext.getCoordinatorServerInfo(),
+                coordinatorContext.getCoordinatorEpoch(),
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
                 tableMetadataList,
                 partitionMetadataList);

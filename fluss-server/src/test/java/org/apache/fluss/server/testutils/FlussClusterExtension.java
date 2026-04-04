@@ -200,6 +200,10 @@ public final class FlussClusterExtension
             }
         }
         CompletableFuture.allOf(dropFutures.toArray(new CompletableFuture[0])).join();
+
+        for (TabletServer tabletServer : tabletServers.values()) {
+            tabletServer.getReplicaManager().resetCoordinatorEpoch();
+        }
     }
 
     public void start() throws Exception {

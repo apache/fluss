@@ -514,6 +514,7 @@ class TableManagerITCase {
                     .updateMetadata(
                             makeUpdateMetadataRequest(
                                     coordinatorServerInfo,
+                                    null,
                                     new HashSet<>(tabletServerInfos),
                                     Collections.emptyList(),
                                     Collections.emptyList()))

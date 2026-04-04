@@ -30,6 +30,7 @@ import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.CoordinatorRequestBatch;
 import org.apache.fluss.server.coordinator.CoordinatorTestUtils;
 import org.apache.fluss.server.coordinator.TestCoordinatorChannelManager;
+import org.apache.fluss.server.coordinator.TestCoordinatorContext;
 import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
 import org.apache.fluss.server.entity.DeleteReplicaResultForBucket;
 import org.apache.fluss.server.metadata.ServerInfo;
@@ -37,6 +38,7 @@ import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.ZkVersion;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 
 import org.junit.jupiter.api.BeforeAll;
@@ -80,7 +82,7 @@ class ReplicaStateMachineTest {
 
     @Test
     void testStartup() {
-        CoordinatorContext coordinatorContext = new CoordinatorContext();
+        CoordinatorContext coordinatorContext = new TestCoordinatorContext();
 
         // init coordinator server context with a table assignment
         TableBucket tableBucket = new TableBucket(1, 0);
@@ -105,7 +107,7 @@ class ReplicaStateMachineTest {
 
     @Test
     void testReplicaStateChange() {
-        CoordinatorContext coordinatorContext = new CoordinatorContext();
+        CoordinatorContext coordinatorContext = new TestCoordinatorContext();
         ReplicaStateMachine replicaStateMachine = createReplicaStateMachine(coordinatorContext);
 
         // test check valid replica state change
@@ -134,7 +136,7 @@ class ReplicaStateMachineTest {
     @Test
     void testDeleteReplicaStateChange() {
         Map<TableBucketReplica, Boolean> isReplicaDeleteSuccess = new HashMap<>();
-        CoordinatorContext coordinatorContext = new CoordinatorContext();
+        CoordinatorContext coordinatorContext = new TestCoordinatorContext();
         coordinatorContext.setLiveTabletServers(
                 CoordinatorTestUtils.createServers(Arrays.asList(0, 1)));
         // use a context that will return a gateway that always get success ack
@@ -191,7 +193,7 @@ class ReplicaStateMachineTest {
 
     @Test
     void testOfflineReplicasShouldBeRemovedFromIsr() throws Exception {
-        CoordinatorContext coordinatorContext = new CoordinatorContext();
+        CoordinatorContext coordinatorContext = new TestCoordinatorContext();
         coordinatorContext.setLiveTabletServers(createServers(new int[] {0, 1, 2}));
         ReplicaStateMachine replicaStateMachine = createReplicaStateMachine(coordinatorContext);
 
@@ -216,7 +218,8 @@ class ReplicaStateMachineTest {
         }
         // put leader and isr
         LeaderAndIsr leaderAndIsr = new LeaderAndIsr(0, 0, Arrays.asList(0, 1, 2), 0, 0);
-        zookeeperClient.registerLeaderAndIsr(tableBucket, leaderAndIsr);
+        zookeeperClient.registerLeaderAndIsr(
+                tableBucket, leaderAndIsr, ZkVersion.MATCH_ANY_VERSION.getVersion());
         coordinatorContext.updateBucketReplicaAssignment(tableBucket, Arrays.asList(0, 1, 2));
         coordinatorContext.putBucketLeaderAndIsr(tableBucket, leaderAndIsr);
 
@@ -230,7 +233,7 @@ class ReplicaStateMachineTest {
 
     @Test
     void testOfflineReplicaShouldBeRemovedFromIsr() throws Exception {
-        CoordinatorContext coordinatorContext = new CoordinatorContext();
+        CoordinatorContext coordinatorContext = new TestCoordinatorContext();
         coordinatorContext.setLiveTabletServers(createServers(new int[] {0, 1, 2}));
         ReplicaStateMachine replicaStateMachine = createReplicaStateMachine(coordinatorContext);
 
@@ -253,7 +256,8 @@ class ReplicaStateMachineTest {
         }
         // put leader and isr
         LeaderAndIsr leaderAndIsr = new LeaderAndIsr(0, 0, Arrays.asList(0, 1, 2), 0, 0);
-        zookeeperClient.registerLeaderAndIsr(tableBucket, leaderAndIsr);
+        zookeeperClient.registerLeaderAndIsr(
+                tableBucket, leaderAndIsr, ZkVersion.MATCH_ANY_VERSION.getVersion());
         coordinatorContext.updateBucketReplicaAssignment(tableBucket, Arrays.asList(0, 1, 2));
         coordinatorContext.putBucketLeaderAndIsr(tableBucket, leaderAndIsr);
 

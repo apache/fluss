@@ -55,6 +55,7 @@ public class CoordinatorContext {
     private static final Logger LOG = LoggerFactory.getLogger(CoordinatorContext.class);
 
     public static final int INITIAL_COORDINATOR_EPOCH = 0;
+    public static final int INITIAL_COORDINATOR_EPOCH_ZK_VERSION = 0;
 
     // for simplicity, we just use retry time, may consider make it a configurable value
     // and use combine retry times and retry delay
@@ -109,11 +110,21 @@ public class CoordinatorContext {
 
     private ServerInfo coordinatorServerInfo = null;
     private int coordinatorEpoch = INITIAL_COORDINATOR_EPOCH;
+    private int coordinatorEpochZkVersion = INITIAL_COORDINATOR_EPOCH_ZK_VERSION;
 
     public CoordinatorContext() {}
 
     public int getCoordinatorEpoch() {
         return coordinatorEpoch;
+    }
+
+    public int getCoordinatorEpochZkVersion() {
+        return coordinatorEpochZkVersion;
+    }
+
+    public void setCoordinatorEpochAndZkVersion(int newEpoch, int newZkVersion) {
+        this.coordinatorEpoch = newEpoch;
+        this.coordinatorEpochZkVersion = newZkVersion;
     }
 
     public Set<String> getLiveCoordinatorServers() {
@@ -709,11 +720,12 @@ public class CoordinatorContext {
     public void resetContext() {
         tablesToBeDeleted.clear();
         coordinatorEpoch = 0;
+        coordinatorEpochZkVersion = INITIAL_COORDINATOR_EPOCH_ZK_VERSION;
         clearTablesState();
         liveTabletServers.clear();
+        liveCoordinatorServers.clear();
         shuttingDownTabletServers.clear();
         serverTags.clear();
-        liveCoordinatorServers.clear();
     }
 
     public int getTotalPartitionCount() {

@@ -1602,7 +1602,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
             tableAssignment.forEach(
                     (bucket, replicas) ->
                             newTableAssignment.put(bucket, new BucketAssignment(replicas)));
-            zooKeeperClient.updateTableAssignment(tableId, new TableAssignment(newTableAssignment));
+            zooKeeperClient.updateTableAssignment(
+                    tableId,
+                    new TableAssignment(newTableAssignment),
+                    coordinatorContext.getCoordinatorEpochZkVersion());
         } else {
             Map<Integer, List<Integer>> partitionAssignment =
                     coordinatorContext.getPartitionAssignment(
@@ -1659,7 +1662,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         }
 
         try {
-            zooKeeperClient.batchUpdateLeaderAndIsr(newLeaderAndIsrList);
+            zooKeeperClient.batchUpdateLeaderAndIsr(
+                    newLeaderAndIsrList, coordinatorContext.getCoordinatorEpochZkVersion());
             newLeaderAndIsrList.forEach(
                     (tableBucket, newLeaderAndIsr) ->
                             result.add(new AdjustIsrResultForBucket(tableBucket, newLeaderAndIsr)));
@@ -1670,7 +1674,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 TableBucket tableBucket = entry.getKey();
                 LeaderAndIsr newLeaderAndIsr = entry.getValue();
                 try {
-                    zooKeeperClient.updateLeaderAndIsr(tableBucket, newLeaderAndIsr);
+                    zooKeeperClient.updateLeaderAndIsr(
+                            tableBucket,
+                            newLeaderAndIsr,
+                            coordinatorContext.getCoordinatorEpochZkVersion());
                 } catch (Exception e) {
                     LOG.error("Error when register leader and isr.", e);
                     result.add(
@@ -2196,7 +2203,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         LeaderAndIsr newLeaderAndIsr = leaderAndIsr.newLeaderAndIsr(leaderAndIsr.isr());
 
         coordinatorContext.putBucketLeaderAndIsr(tableBucket, newLeaderAndIsr);
-        zooKeeperClient.updateLeaderAndIsr(tableBucket, newLeaderAndIsr);
+        zooKeeperClient.updateLeaderAndIsr(
+                tableBucket, newLeaderAndIsr, coordinatorContext.getCoordinatorEpochZkVersion());
 
         coordinatorRequestBatch.newBatch();
         coordinatorRequestBatch.addNotifyLeaderRequestForTabletServers(
