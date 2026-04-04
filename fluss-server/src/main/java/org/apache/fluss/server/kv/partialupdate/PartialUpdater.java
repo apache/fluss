@@ -115,7 +115,7 @@ public class PartialUpdater {
                 rowEncoder.encodeField(i, flussFieldGetters[i].getFieldOrNull(partialValue.row));
             } else {
                 // use the old row value
-                if (oldValue == null) {
+                if (oldValue == null || oldValue.row.getFieldCount() < i + 1) {
                     rowEncoder.encodeField(i, null);
                 } else {
                     rowEncoder.encodeField(i, flussFieldGetters[i].getFieldOrNull(oldValue.row));
@@ -147,7 +147,11 @@ public class PartialUpdater {
                     rowEncoder.encodeField(i, null);
                 } else {
                     // use the old row value
-                    rowEncoder.encodeField(i, flussFieldGetters[i].getFieldOrNull(value.row));
+                    if (value.row.getFieldCount() < i + 1) {
+                        rowEncoder.encodeField(i, null);
+                    } else {
+                        rowEncoder.encodeField(i, flussFieldGetters[i].getFieldOrNull(value.row));
+                    }
                 }
             }
             return new BinaryValue(targetSchemaId, rowEncoder.finishRow());
