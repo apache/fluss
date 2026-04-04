@@ -136,7 +136,8 @@ class TableChangeWatcherTest {
                                 new TabletServerInfo(2, "rack2")
                             });
             long tableId =
-                    metadataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
+                    metadataManager.createTable(
+                            tablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
             SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
             long currentMillis = System.currentTimeMillis();
             expectedEvents.add(
@@ -197,7 +198,9 @@ class TableChangeWatcherTest {
                         .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key(), "DAY")
                         .build()
                         .withReplicationFactor(3);
-        long tableId = metadataManager.createTable(tablePath, partitionedTable, null, false);
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, partitionedTable, null, false);
         List<CoordinatorEvent> expectedEvents = new ArrayList<>();
         SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
         // create table event
@@ -277,7 +280,8 @@ class TableChangeWatcherTest {
                                 new TabletServerInfo(2, "rack2")
                             });
             long tableId =
-                    metadataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
+                    metadataManager.createTable(
+                            tablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
             SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
             long currentMillis = System.currentTimeMillis();
             expectedEvents.add(
@@ -350,7 +354,9 @@ class TableChangeWatcherTest {
                             new TabletServerInfo(1, "rack1"),
                             new TabletServerInfo(2, "rack2")
                         });
-        long tableId = metadataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
         SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
         long currentMillis = System.currentTimeMillis();
 
