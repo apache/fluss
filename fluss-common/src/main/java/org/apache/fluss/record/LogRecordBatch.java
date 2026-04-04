@@ -173,6 +173,16 @@ public interface LogRecordBatch {
      */
     CloseableIterator<LogRecord> records(ReadContext context);
 
+    /**
+     * Loads the underlying Arrow batch directly.
+     *
+     * <p>This method is only supported for Arrow log batches.
+     */
+    default ArrowBatchData loadArrowBatch(ReadContext context) {
+        throw new UnsupportedOperationException(
+                "loadArrowBatch is only supported for ARROW log format.");
+    }
+
     /** The read context of a {@link LogRecordBatch} to read records. */
     interface ReadContext {
 
@@ -219,5 +229,15 @@ public interface LogRecordBatch {
          */
         @Nullable
         ProjectedRow getOutputProjectedRow(int schemaId);
+
+        /** Returns the final selected row type after projection and reordering. */
+        RowType getSelectedRowType();
+
+        /**
+         * Returns the output Arrow column projection for the given schema id, or {@code null} if no
+         * client-side projection is needed.
+         */
+        @Nullable
+        int[] getArrowColumnProjection(int schemaId);
     }
 }

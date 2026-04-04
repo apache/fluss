@@ -37,11 +37,10 @@ import org.apache.fluss.utils.Projection;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.IntStream;
-
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** A simple implementation for {@link LogRecordBatch.ReadContext}. */
 @ThreadSafe
@@ -54,14 +53,17 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
     // the static schemaId of the table, should support dynamic schema evolution in the future
     private final int targetSchemaId;
     // the Arrow memory buffer allocator for the table, should be null if not ARROW log format
-    @Nullable private final BufferAllocator bufferAllocator;
+    @Nullable private volatile BufferAllocator bufferAllocator;
     // the final selected fields of the read data
+    private final int[] selectedFields;
     private final FieldGetter[] selectedFieldGetters;
+    private final RowType selectedRowType;
     // whether the projection is push downed to the server side and the returned data is pruned.
     private final boolean projectionPushDowned;
     private final SchemaGetter schemaGetter;
     private final ConcurrentHashMap<Integer, VectorSchemaRoot> vectorSchemaRootMap =
             MapUtils.newConcurrentHashMap();
+    private final Object arrowResourceLock = new Object();
 
     public static LogRecordReadContext createReadContext(
             TableInfo tableInfo,
@@ -114,14 +116,13 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
             int[] selectedFields,
             boolean projectionPushDowned,
             SchemaGetter schemaGetter) {
-        // TODO: use a more reasonable memory limit
-        BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE);
         FieldGetter[] fieldGetters = buildProjectedFieldGetters(dataRowType, selectedFields);
         return new LogRecordReadContext(
                 LogFormat.ARROW,
                 dataRowType,
                 schemaId,
-                allocator,
+                null,
+                selectedFields,
                 fieldGetters,
                 projectionPushDowned,
                 schemaGetter);
@@ -187,7 +188,14 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         FieldGetter[] fieldGetters = buildProjectedFieldGetters(rowType, selectedFields);
         // for INDEXED log format, the projection is NEVER push downed to the server side
         return new LogRecordReadContext(
-                LogFormat.INDEXED, rowType, schemaId, null, fieldGetters, false, schemaGetter);
+                LogFormat.INDEXED,
+                rowType,
+                schemaId,
+                null,
+                selectedFields,
+                fieldGetters,
+                false,
+                schemaGetter);
     }
 
     /**
@@ -202,7 +210,14 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         FieldGetter[] fieldGetters = buildProjectedFieldGetters(rowType, selectedFields);
         // for COMPACTED log format, the projection is NEVER push downed to the server side
         return new LogRecordReadContext(
-                LogFormat.COMPACTED, rowType, schemaId, null, fieldGetters, false, null);
+                LogFormat.COMPACTED,
+                rowType,
+                schemaId,
+                null,
+                selectedFields,
+                fieldGetters,
+                false,
+                null);
     }
 
     private LogRecordReadContext(
@@ -210,6 +225,7 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
             RowType targetDataRowType,
             int targetSchemaId,
             BufferAllocator bufferAllocator,
+            int[] selectedFields,
             FieldGetter[] selectedFieldGetters,
             boolean projectionPushDowned,
             SchemaGetter schemaGetter) {
@@ -217,7 +233,9 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         this.dataRowType = targetDataRowType;
         this.targetSchemaId = targetSchemaId;
         this.bufferAllocator = bufferAllocator;
+        this.selectedFields = Arrays.copyOf(selectedFields, selectedFields.length);
         this.selectedFieldGetters = selectedFieldGetters;
+        this.selectedRowType = targetDataRowType.project(this.selectedFields);
         this.projectionPushDowned = projectionPushDowned;
         this.schemaGetter = schemaGetter;
     }
@@ -242,9 +260,49 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         return selectedFieldGetters;
     }
 
+    /** Returns the selected row type after projection and reordering. */
+    public RowType getSelectedRowType() {
+        return selectedRowType;
+    }
+
     /** Whether the projection is push downed to the server side and the returned data is pruned. */
     public boolean isProjectionPushDowned() {
         return projectionPushDowned;
+    }
+
+    /**
+     * Returns the output Arrow column projection for the given schema id, or {@code null} if no
+     * client-side projection is needed (i.e., the projection is identity).
+     *
+     * <p>The returned indexes describe which columns from the read batch should be exposed in the
+     * final output order. A value of {@code -1} means the output column does not exist in the read
+     * schema and should be filled with nulls.
+     */
+    @Nullable
+    public int[] getArrowColumnProjection(int schemaId) {
+        int[] projection;
+        ProjectedRow projectedRow = getOutputProjectedRow(schemaId);
+        if (projectedRow == null) {
+            projection = selectedFields;
+        } else {
+            int[] indexMapping = projectedRow.getIndexMapping();
+            projection = new int[selectedFields.length];
+            for (int i = 0; i < selectedFields.length; i++) {
+                projection[i] = indexMapping[selectedFields[i]];
+            }
+        }
+        return isIdentityProjection(projection)
+                ? null
+                : Arrays.copyOf(projection, projection.length);
+    }
+
+    private static boolean isIdentityProjection(int[] projection) {
+        for (int i = 0; i < projection.length; i++) {
+            if (projection[i] != i) {
+                return false;
+            }
+        }
+        return true;
     }
 
     @Override
@@ -254,12 +312,19 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
                     "Only Arrow log format provides vector schema root.");
         }
 
-        RowType rowType = getRowType(schemaId);
-        return vectorSchemaRootMap.computeIfAbsent(
-                schemaId,
-                (id) ->
-                        VectorSchemaRoot.create(
-                                ArrowUtils.toArrowSchema(rowType), bufferAllocator));
+        synchronized (arrowResourceLock) {
+            VectorSchemaRoot vectorSchemaRoot = vectorSchemaRootMap.get(schemaId);
+            if (vectorSchemaRoot != null) {
+                return vectorSchemaRoot;
+            }
+
+            RowType rowType = getRowType(schemaId);
+            vectorSchemaRoot =
+                    VectorSchemaRoot.create(
+                            ArrowUtils.toArrowSchema(rowType), getOrCreateBufferAllocator());
+            vectorSchemaRootMap.put(schemaId, vectorSchemaRoot);
+            return vectorSchemaRoot;
+        }
     }
 
     @Override
@@ -267,8 +332,7 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         if (logFormat != LogFormat.ARROW) {
             throw new IllegalArgumentException("Only Arrow log format provides buffer allocator.");
         }
-        checkNotNull(bufferAllocator, "The buffer allocator is not available.");
-        return bufferAllocator;
+        return getOrCreateBufferAllocator();
     }
 
     @Nullable
@@ -284,9 +348,27 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
     }
 
     public void close() {
-        vectorSchemaRootMap.values().forEach(VectorSchemaRoot::close);
-        if (bufferAllocator != null) {
-            bufferAllocator.close();
+        synchronized (arrowResourceLock) {
+            vectorSchemaRootMap.values().forEach(VectorSchemaRoot::close);
+            vectorSchemaRootMap.clear();
+            if (bufferAllocator != null) {
+                bufferAllocator.close();
+                bufferAllocator = null;
+            }
+        }
+    }
+
+    private BufferAllocator getOrCreateBufferAllocator() {
+        BufferAllocator allocator = bufferAllocator;
+        if (allocator != null) {
+            return allocator;
+        }
+
+        synchronized (arrowResourceLock) {
+            if (bufferAllocator == null) {
+                bufferAllocator = new RootAllocator(Long.MAX_VALUE);
+            }
+            return bufferAllocator;
         }
     }
 

@@ -19,6 +19,7 @@ package org.apache.fluss.client.table.scanner;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
+import org.apache.fluss.client.table.scanner.log.ArrowLogScanner;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.TypedLogScanner;
 import org.apache.fluss.metadata.TableBucket;
@@ -73,6 +74,15 @@ public interface Scan {
      * <p>Note: this API doesn't support pre-configured with {@link #limit(int)}.
      */
     <T> TypedLogScanner<T> createTypedLogScanner(Class<T> pojoClass);
+
+    /**
+     * Creates an {@link ArrowLogScanner} to continuously read log data as Arrow batches.
+     *
+     * <p>This API is only supported for tables whose log format is {@code ARROW}.
+     *
+     * <p>Note: this API doesn't support pre-configured with {@link #limit(int)}.
+     */
+    ArrowLogScanner createArrowLogScanner();
 
     /**
      * Creates a {@link BatchScanner} to read current data in the given table bucket for this scan.

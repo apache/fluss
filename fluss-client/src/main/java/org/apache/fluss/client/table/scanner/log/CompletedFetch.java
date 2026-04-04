@@ -22,6 +22,7 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.exception.CorruptRecordException;
 import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.record.CompactedLogRecord;
 import org.apache.fluss.record.IndexedLogRecord;
 import org.apache.fluss.record.LogRecord;
@@ -224,29 +225,71 @@ abstract class CompletedFetch {
         return scanRecords;
     }
 
+    /**
+     * The {@link LogRecordBatch batches} are loaded as {@link ArrowBatchData Arrow batches} and
+     * returned.
+     *
+     * @param maxRecords The maximum number of records to return; the actual number returned may be
+     *     less
+     * @return {@link ArrowBatchData Arrow batches}
+     */
+    public List<ArrowBatchData> fetchArrowBatches(int maxRecords) {
+        if (isConsumed) {
+            return Collections.emptyList();
+        }
+
+        List<ArrowBatchData> arrowBatches = new ArrayList<>();
+        int recordsFetched = 0;
+        try {
+            while (recordsFetched < maxRecords || arrowBatches.isEmpty()) {
+                LogRecordBatch batch = nextFetchedBatch();
+                if (batch == null) {
+                    break;
+                }
+
+                ArrowBatchData arrowBatchData = batch.loadArrowBatch(readContext);
+                if (arrowBatchData.getRecordCount() == 0) {
+                    arrowBatchData.close();
+                    nextFetchOffset = batch.nextLogOffset();
+                    continue;
+                }
+
+                arrowBatches.add(arrowBatchData);
+                recordsRead += arrowBatchData.getRecordCount();
+                recordsFetched += arrowBatchData.getRecordCount();
+                nextFetchOffset = batch.nextLogOffset();
+            }
+        } catch (Exception e) {
+            closeArrowBatches(arrowBatches);
+            throw new FetchException(
+                    "Received exception when fetching the next Arrow batch from "
+                            + tableBucket
+                            + ". If needed, please back to past the batch to continue scanning.",
+                    e);
+        }
+
+        return arrowBatches;
+    }
+
+    private void closeArrowBatches(List<ArrowBatchData> arrowBatches) {
+        for (ArrowBatchData arrowBatch : arrowBatches) {
+            try {
+                arrowBatch.close();
+            } catch (Exception e) {
+                LOG.warn("Failed to close Arrow batch for bucket {}", tableBucket, e);
+            }
+        }
+    }
+
     private LogRecord nextFetchedRecord() throws Exception {
         while (true) {
             if (records == null || !records.hasNext()) {
-                maybeCloseRecordStream();
-
-                if (!batches.hasNext()) {
-                    // In batch, we preserve the last offset in a batch. By using the next offset
-                    // computed from the last offset in the batch, we ensure that the offset of the
-                    // next fetch will point to the next batch, which avoids unnecessary re-fetching
-                    // of the same batch (in the worst case, the scanner could get stuck fetching
-                    // the same batch repeatedly).
-                    if (currentBatch != null) {
-                        nextFetchOffset = currentBatch.nextLogOffset();
-                    }
-                    drain();
+                LogRecordBatch batch = nextFetchedBatch();
+                if (batch == null) {
                     return null;
                 }
 
-                currentBatch = batches.next();
-                // TODO get last epoch.
-                maybeEnsureValid(currentBatch);
-
-                records = currentBatch.records(readContext);
+                records = batch.records(readContext);
             } else {
                 LogRecord record = records.next();
                 // skip any records out of range.
@@ -255,6 +298,31 @@ abstract class CompletedFetch {
                 }
             }
         }
+    }
+
+    private LogRecordBatch nextFetchedBatch() {
+        maybeCloseRecordStream();
+        if (!batches.hasNext()) {
+            finishFetchedBatches();
+            return null;
+        }
+
+        currentBatch = batches.next();
+        // TODO get last epoch.
+        maybeEnsureValid(currentBatch);
+        return currentBatch;
+    }
+
+    private void finishFetchedBatches() {
+        // In batch, we preserve the last offset in a batch. By using the next offset
+        // computed from the last offset in the batch, we ensure that the offset of the
+        // next fetch will point to the next batch, which avoids unnecessary re-fetching
+        // of the same batch (in the worst case, the scanner could get stuck fetching
+        // the same batch repeatedly).
+        if (currentBatch != null) {
+            nextFetchOffset = currentBatch.nextLogOffset();
+        }
+        drain();
     }
 
     private void maybeEnsureValid(LogRecordBatch batch) {

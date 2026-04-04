@@ -20,6 +20,7 @@ package org.apache.fluss.record;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.utils.CloseableIterator;
 
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -72,6 +73,46 @@ public class FileLogInputStreamTest extends LogTestBase {
                 LogRecord record = iterator.next();
                 assertThat(record.getRow().getFieldCount()).isEqualTo(2);
                 assertThat(iterator.hasNext()).isFalse();
+            }
+        }
+    }
+
+    @Test
+    void testLoadArrowBatchFromFileLogInputStream() throws Exception {
+        try (FileLogRecords fileLogRecords =
+                FileLogRecords.open(new File(tempDir, "test-arrow.tmp"))) {
+            fileLogRecords.append(
+                    createRecordsWithoutBaseLogOffset(
+                            DATA1_ROW_TYPE,
+                            DEFAULT_SCHEMA_ID,
+                            0L,
+                            -1L,
+                            LOG_MAGIC_VALUE_V0,
+                            Collections.singletonList(new Object[] {0, "abc"}),
+                            LogFormat.ARROW));
+            fileLogRecords.flush();
+
+            FileLogInputStream logInputStream =
+                    new FileLogInputStream(fileLogRecords, 0, fileLogRecords.sizeInBytes());
+            FileLogInputStream.FileChannelLogRecordBatch batch = logInputStream.nextBatch();
+            assertThat(batch).isNotNull();
+
+            TestingSchemaGetter schemaGetter = new TestingSchemaGetter(schemaId, DATA1_SCHEMA);
+            try (LogRecordReadContext readContext =
+                            LogRecordReadContext.createArrowReadContext(
+                                    DATA1_ROW_TYPE, schemaId, schemaGetter);
+                    ArrowBatchData arrowBatchData = batch.loadArrowBatch(readContext)) {
+                assertThat(arrowBatchData.getRecordCount()).isEqualTo(1);
+                assertThat(arrowBatchData.getVectorSchemaRoot().getFieldVectors()).hasSize(2);
+                assertThat(arrowBatchData.getVectorSchemaRoot().getVector(0).getObject(0))
+                        .isEqualTo(0);
+                assertThat(
+                                arrowBatchData
+                                        .getVectorSchemaRoot()
+                                        .getVector(1)
+                                        .getObject(0)
+                                        .toString())
+                        .isEqualTo("abc");
             }
         }
     }

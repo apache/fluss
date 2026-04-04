@@ -23,21 +23,28 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.exception.FetchException;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
+import org.apache.arrow.vector.IntVector;
+import org.apache.arrow.vector.VarCharVector;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -83,6 +90,151 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             }
             assertThat(rowList).hasSize(recordSize);
             assertThat(rowList).containsExactlyInAnyOrderElementsOf(expectedRows);
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(
+            value = LogFormat.class,
+            names = {"INDEXED", "COMPACTED"})
+    void testCreateArrowLogScannerOnNonArrowTable(LogFormat logFormat) throws Exception {
+        TablePath tablePath =
+                TablePath.of(
+                        "test_db_1", "test_non_arrow_create_arrow_scanner_" + logFormat.name());
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA)
+                        .distributedBy(1)
+                        .logFormat(logFormat)
+                        .build();
+        createTable(tablePath, tableDescriptor, false);
+
+        try (Table table = conn.getTable(tablePath)) {
+            assertThatThrownBy(() -> table.newScan().createArrowLogScanner())
+                    .isInstanceOf(UnsupportedOperationException.class)
+                    .hasMessageContaining(
+                            "ArrowLogScanner is only supported for tables whose log format is ARROW")
+                    .hasMessageContaining(tablePath.toString())
+                    .hasMessageContaining(logFormat.name());
+        }
+    }
+
+    @Test
+    void testPollArrowBatchesWithSchemaEvolution() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_arrow_batches_with_schema_evolution");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA)
+                        .distributedBy(1)
+                        .logFormat(LogFormat.ARROW)
+                        .build();
+        createTable(tablePath, tableDescriptor, false);
+
+        try (Table table = conn.getTable(tablePath)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            for (int i = 0; i < 3; i++) {
+                appendWriter.append(row(i, "value-" + i)).get();
+            }
+            appendWriter.flush();
+        }
+
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "c",
+                                        DataTypes.STRING(),
+                                        null,
+                                        TableChange.ColumnPosition.last())),
+                        false)
+                .get();
+
+        try (Table table = conn.getTable(tablePath)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            for (int i = 3; i < 6; i++) {
+                appendWriter.append(row(i, "value-" + i, "extra-" + i)).get();
+            }
+            appendWriter.flush();
+
+            ArrowLogScanner scanner = table.newScan().createArrowLogScanner();
+            scanner.subscribeFromBeginning(0);
+
+            int count = 0;
+            while (count < 6) {
+                ArrowScanRecords records = scanner.poll(Duration.ofSeconds(1));
+                for (ArrowBatchData batch : records) {
+                    try (batch) {
+                        IntVector intVector = (IntVector) batch.getVectorSchemaRoot().getVector(0);
+                        VarCharVector stringVector =
+                                (VarCharVector) batch.getVectorSchemaRoot().getVector(1);
+                        VarCharVector extraVector =
+                                (VarCharVector) batch.getVectorSchemaRoot().getVector(2);
+                        for (int rowId = 0; rowId < batch.getRecordCount(); rowId++) {
+                            assertThat(batch.getChangeType(rowId))
+                                    .isEqualTo(ChangeType.APPEND_ONLY);
+                            assertThat(intVector.get(rowId)).isEqualTo(count);
+                            assertThat(stringVector.getObject(rowId).toString())
+                                    .isEqualTo("value-" + count);
+                            if (count < 3) {
+                                assertThat(extraVector.isNull(rowId)).isTrue();
+                            } else {
+                                assertThat(extraVector.getObject(rowId).toString())
+                                        .isEqualTo("extra-" + count);
+                            }
+                            assertThat(batch.getLogOffset(rowId)).isEqualTo(count);
+                            count++;
+                        }
+                    }
+                }
+            }
+            assertThat(count).isEqualTo(6);
+            scanner.close();
+        }
+    }
+
+    @Test
+    void testPollArrowBatchesWithProjectionReorder() throws Exception {
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA)
+                        .distributedBy(1)
+                        .logFormat(LogFormat.ARROW)
+                        .build();
+        createTable(DATA1_TABLE_PATH, tableDescriptor, false);
+
+        try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            for (int i = 0; i < 6; i++) {
+                appendWriter.append(row(i, "value-" + i)).get();
+            }
+            appendWriter.flush();
+
+            ArrowLogScanner scanner =
+                    table.newScan().project(new int[] {1, 0}).createArrowLogScanner();
+            scanner.subscribeFromBeginning(0);
+
+            int count = 0;
+            while (count < 6) {
+                ArrowScanRecords records = scanner.poll(Duration.ofSeconds(1));
+                for (ArrowBatchData batch : records) {
+                    try (batch) {
+                        VarCharVector stringVector =
+                                (VarCharVector) batch.getVectorSchemaRoot().getVector(0);
+                        IntVector intVector = (IntVector) batch.getVectorSchemaRoot().getVector(1);
+                        for (int rowId = 0; rowId < batch.getRecordCount(); rowId++) {
+                            assertThat(batch.getChangeType(rowId))
+                                    .isEqualTo(ChangeType.APPEND_ONLY);
+                            assertThat(stringVector.getObject(rowId).toString())
+                                    .isEqualTo("value-" + count);
+                            assertThat(intVector.get(rowId)).isEqualTo(count);
+                            assertThat(batch.getLogOffset(rowId)).isEqualTo(count);
+                            count++;
+                        }
+                    }
+                }
+            }
+            assertThat(count).isEqualTo(6);
+            scanner.close();
         }
     }
 

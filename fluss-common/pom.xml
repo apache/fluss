@@ -62,6 +62,20 @@
             <artifactId>fluss-shaded-arrow</artifactId>
         </dependency>
 
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-vector</artifactId>
+            <version>${arrow.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-memory-netty</artifactId>
+            <version>${arrow.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- TODO: these two dependencies need to be shaded. -->
         <dependency>
             <groupId>at.yawk.lz4</groupId>

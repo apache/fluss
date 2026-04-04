@@ -17,7 +17,6 @@
 
 package org.apache.fluss.client.table.scanner.log;
 
-import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.config.Configuration;
@@ -34,19 +33,17 @@ import java.time.Duration;
 import java.util.ConcurrentModificationException;
 
 /**
- * The default impl of {@link LogScanner}.
+ * The default impl of {@link ArrowLogScanner}.
  *
- * <p>The {@link LogScannerImpl} is NOT thread-safe. It is the responsibility of the user to ensure
- * that multithreaded access is properly synchronized. Un-synchronized access will result in {@link
- * ConcurrentModificationException}.
- *
- * @since 0.1
+ * <p>The {@link ArrowLogScannerImpl} is NOT thread-safe. It is the responsibility of the user to
+ * ensure that multithreaded access is properly synchronized. Un-synchronized access will result in
+ * {@link ConcurrentModificationException}.
  */
-@PublicEvolving
-public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements LogScanner {
-    private static final Logger LOG = LoggerFactory.getLogger(LogScannerImpl.class);
+public class ArrowLogScannerImpl extends AbstractLogScanner<ArrowScanRecords>
+        implements ArrowLogScanner {
+    private static final Logger LOG = LoggerFactory.getLogger(ArrowLogScannerImpl.class);
 
-    public LogScannerImpl(
+    public ArrowLogScannerImpl(
             Configuration conf,
             TableInfo tableInfo,
             MetadataUpdater metadataUpdater,
@@ -63,33 +60,33 @@ public class LogScannerImpl extends AbstractLogScanner<ScanRecords> implements L
                 projectedFields,
                 schemaGetter,
                 LOG,
-                "log scanner");
+                "arrow log scanner");
     }
 
     @Override
-    public ScanRecords poll(Duration timeout) {
+    public ArrowScanRecords poll(Duration timeout) {
         return doPoll(timeout);
     }
 
     @Override
-    protected ScanRecords pollForFetches() {
-        ScanRecords scanRecords = logFetcher.collectFetch();
+    protected ArrowScanRecords pollForFetches() {
+        ArrowScanRecords scanRecords = logFetcher.collectArrowFetch();
         if (!scanRecords.isEmpty()) {
             return scanRecords;
         }
 
         // send any new fetches (won't resend pending fetches).
         logFetcher.sendFetches();
-        return logFetcher.collectFetch();
+        return logFetcher.collectArrowFetch();
     }
 
     @Override
-    protected ScanRecords emptyResult() {
-        return ScanRecords.EMPTY;
+    protected ArrowScanRecords emptyResult() {
+        return ArrowScanRecords.EMPTY;
     }
 
     @Override
-    protected boolean isEmpty(ScanRecords result) {
+    protected boolean isEmpty(ArrowScanRecords result) {
         return result.isEmpty();
     }
 }

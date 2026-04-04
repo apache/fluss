@@ -31,7 +31,9 @@ import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.ArrowUtils;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.MurmurHashUtils;
+import org.apache.fluss.utils.UnshadedArrowReadUtils;
 import org.apache.fluss.utils.crc.Crc32C;
 
 import org.slf4j.Logger;
@@ -263,6 +265,79 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     }
 
     @Override
+    public ArrowBatchData loadArrowBatch(ReadContext context) {
+        if (context.getLogFormat() != LogFormat.ARROW) {
+            throw new UnsupportedOperationException(
+                    "loadArrowBatch is only supported for ARROW log format.");
+        }
+
+        int schemaId = schemaId();
+        RowType rowType = context.getRowType(schemaId);
+        org.apache.arrow.memory.BufferAllocator allocator =
+                new org.apache.arrow.memory.RootAllocator(Long.MAX_VALUE);
+        org.apache.arrow.vector.VectorSchemaRoot readRoot =
+                org.apache.arrow.vector.VectorSchemaRoot.create(
+                        UnshadedArrowReadUtils.toArrowSchema(rowType), allocator);
+        org.apache.arrow.vector.VectorSchemaRoot outputRoot = readRoot;
+
+        try {
+            ChangeType[] changeTypes = null;
+            int recordsDataOffset = recordsDataOffset();
+            if (isAppendOnly()) {
+                int arrowOffset = position + recordsDataOffset;
+                int arrowLength = sizeInBytes() - recordsDataOffset;
+                UnshadedArrowReadUtils.loadArrowBatch(
+                        segment, arrowOffset, arrowLength, readRoot, allocator);
+            } else {
+                int changeTypeOffset = position + recordsDataOffset;
+                ChangeTypeVector changeTypeVector =
+                        new ChangeTypeVector(segment, changeTypeOffset, getRecordCount());
+                changeTypes = new ChangeType[getRecordCount()];
+                for (int i = 0; i < changeTypes.length; i++) {
+                    changeTypes[i] = changeTypeVector.getChangeType(i);
+                }
+
+                int arrowOffset = changeTypeOffset + changeTypeVector.sizeInBytes();
+                int arrowLength =
+                        sizeInBytes() - recordsDataOffset - changeTypeVector.sizeInBytes();
+                UnshadedArrowReadUtils.loadArrowBatch(
+                        segment, arrowOffset, arrowLength, readRoot, allocator);
+            }
+
+            int[] columnProjection = context.getArrowColumnProjection(schemaId);
+            if (columnProjection != null) {
+                outputRoot =
+                        UnshadedArrowReadUtils.projectVectorSchemaRoot(
+                                readRoot,
+                                context.getSelectedRowType(),
+                                columnProjection,
+                                allocator);
+                readRoot.close();
+                readRoot = null;
+            }
+
+            ArrowBatchData arrowBatchData =
+                    new ArrowBatchData(
+                            outputRoot,
+                            allocator,
+                            changeTypes,
+                            baseLogOffset(),
+                            commitTimestamp(),
+                            schemaId);
+            outputRoot = null;
+            allocator = null;
+            return arrowBatchData;
+        } catch (Throwable t) {
+            IOUtils.closeQuietly(outputRoot);
+            if (outputRoot != readRoot) {
+                IOUtils.closeQuietly(readRoot);
+            }
+            IOUtils.closeQuietly(allocator);
+            throw t;
+        }
+    }
+
+    @Override
     public boolean equals(Object o) {
         if (this == o) {
             return true;
@@ -352,7 +427,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             VectorSchemaRoot root,
             BufferAllocator allocator,
             long timestamp) {
-        boolean isAppendOnly = (attributes() & APPEND_ONLY_FLAG_MASK) > 0;
+        boolean isAppendOnly = isAppendOnly();
         int recordsDataOffset = recordsDataOffset();
         if (isAppendOnly) {
             // append only batch, no change type vector,
@@ -386,6 +461,10 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
                 }
             };
         }
+    }
+
+    private boolean isAppendOnly() {
+        return (attributes() & APPEND_ONLY_FLAG_MASK) > 0;
     }
 
     /** The basic implementation for Arrow log record iterator. */
