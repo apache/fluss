@@ -1,20 +1,5 @@
-<!--
- Licensed to the Apache Software Foundation (ASF) under one
- or more contributor license agreements.  See the NOTICE file
- distributed with this work for additional information
- regarding copyright ownership.  The ASF licenses this file
- to you under the Apache License, Version 2.0 (the
- "License"); you may not use this file except in compliance
- with the License.  You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
+ <!-- SPDX-License-Identifier: Apache-2.0
+      https://www.apache.org/licenses/LICENSE-2.0 -->
 
 # Apache Fluss - AI Agent Coding Guide
 
@@ -260,10 +245,6 @@ fluss/
 | **Test utility** | Prefix `Testing` | `TestingRemoteLogStorage` |
 | **Exception** | Suffix `Exception` | `TableNotExistException` |
 
-### Package Structure
-
-See CLAUDE.md for full module/package organization. Key modules: `fluss-common`, `fluss-rpc`, `fluss-client`, `fluss-server`.
-
 ### Class Member Order
 
 **Fields:** Static constants → static fields → instance fields
@@ -374,12 +355,9 @@ public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
 
 ## 10. Module Boundaries
 
-**Module structure:** See CLAUDE.md for full module organization
-
 **Core:** `fluss-common` (foundation) → `fluss-rpc` → `fluss-client`/`fluss-server` (peers, cannot cross-depend)
 **Connectors:** `fluss-flink` (1.18/1.19/1.20/2.2), `fluss-spark` (3.4/3.5), `fluss-kafka` - depend on `fluss-client`
 **Lake:** `fluss-lake-iceberg`, `fluss-lake-paimon`, `fluss-lake-lance`
-
 **Rules:** Define interfaces in lower modules, implementations in higher modules; no circular dependencies
 
 ---
@@ -547,7 +525,3 @@ The `--web` flag opens browser for final review before submission.
 5. Self-review completed (Section 12)
 
 **When in doubt:** Ask the user before proceeding with potentially destructive or far-reaching changes.
-
----
-
-**Version:** 0.10-SNAPSHOT | **License:** Apache License 2.0
