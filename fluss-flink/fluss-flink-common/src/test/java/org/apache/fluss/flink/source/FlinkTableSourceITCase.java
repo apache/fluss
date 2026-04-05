@@ -1151,6 +1151,52 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     }
 
     @Test
+    void testStreamingReadPartitionPushDownWithWatermark() throws Exception {
+        tEnv.executeSql(
+                "create table watermark_partitioned_table"
+                        + " (a int not null, b varchar, ts timestamp(3),"
+                        + " c string,"
+                        + " primary key (a, c) NOT ENFORCED,"
+                        + " WATERMARK FOR ts AS ts - INTERVAL '5' SECOND)"
+                        + " partitioned by (c) ");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "watermark_partitioned_table");
+        tEnv.executeSql("alter table watermark_partitioned_table add partition (c=2025)");
+        tEnv.executeSql("alter table watermark_partitioned_table add partition (c=2026)");
+
+        // write data with 4 columns (a, b, ts, c), ts is nullable
+        List<InternalRow> rows = new ArrayList<>();
+        List<String> expectedRowValues = new ArrayList<>();
+        for (String partition : Arrays.asList("2025", "2026")) {
+            for (int i = 0; i < 10; i++) {
+                rows.add(row(i, "v1", null, partition));
+                if (partition.equals("2025")) {
+                    expectedRowValues.add(String.format("+I[%d, v1, %s]", i, partition));
+                }
+            }
+        }
+        writeRows(conn, tablePath, rows, false);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
+
+        // verify partition filter is pushed down in the execution plan
+        String plan =
+                tEnv.explainSql("select a, b, c from watermark_partitioned_table where c ='2025'");
+        assertThat(plan)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, watermark_partitioned_table, "
+                                + "watermark=[-(ts, 5000:INTERVAL SECOND)], "
+                                + "watermarkEmitStrategy=[on-periodic], "
+                                + "filter=[=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")]]], "
+                                + "fields=[a, b, ts, c])");
+
+        // verify query results only contain data from the matching partition
+        org.apache.flink.util.CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select a, b, c from watermark_partitioned_table where c ='2025'")
+                        .collect();
+
+        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+    }
+
+    @Test
     void testStreamingReadAllPartitionTypePushDown() throws Exception {
         tEnv.executeSql(
                 "CREATE TABLE all_type_partitioned_table"
