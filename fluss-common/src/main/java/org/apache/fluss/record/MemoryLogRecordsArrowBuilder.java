@@ -107,7 +107,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
                 "The size of first segment of pagedOutputView is too small, need at least "
                         + headerSize
                         + " bytes.");
-        this.changeTypeWriter = new ChangeTypeVectorWriter(firstSegment, headerSize);
+        this.changeTypeWriter = new ChangeTypeVectorWriter();
         this.estimatedSizeInBytes = headerSize;
         this.recordCount = 0;
         this.statisticsCollector = statisticsCollector;
@@ -178,43 +178,31 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
         recordCount = arrowWriter.getRecordsCount();
         int changeTypeSize = changeTypeWriter.sizeInBytes();
 
-        // For V1+ with statistics, write everything sequentially to pagedOutputView:
-        // [header] [statistics] [changeTypes] [arrow data]
-        // This makes CRC computation zero-copy over contiguous memory segments.
+        // Position pagedOutputView right after the header.
+        // setPosition() only works before any pages have been advanced, which is
+        // guaranteed here because we have not written to pagedOutputView yet.
+        pagedOutputView.setPosition(headerSize);
+
+        // V1+: write statistics between header and change-type bytes.
         if (magic >= LOG_MAGIC_VALUE_V1 && statisticsCollector != null && recordCount > 0) {
-            // Save changeType bytes before they get overwritten. The changeType data lives
-            // in firstSegment at offset headerSize, which is the same memory backing
-            // pagedOutputView — so writing statistics there would clobber it.
-            byte[] changeTypeBytes = new byte[changeTypeSize];
-            firstSegment.get(headerSize, changeTypeBytes, 0, changeTypeSize);
-
-            // Position pagedOutputView right after the header
-            pagedOutputView.setPosition(headerSize);
-
-            // Write statistics directly to pagedOutputView (no temp byte[])
             try {
                 statisticsBytesLength = statisticsCollector.writeStatistics(pagedOutputView);
             } catch (Exception e) {
                 LOG.error("Failed to serialize statistics for record batch", e);
                 statisticsBytesLength = 0;
-                // Rewind to undo any partial writes from writeStatistics().
-                // This is safe because statistics data is typically small (a few hundred
-                // bytes) and the first page is usually 1MB+, so no page boundary has
-                // been crossed and setPosition() can rewind within the same page.
+                // Rewind to undo any partial write. Safe: statistics are small and
+                // never cross a page boundary on the first (typically 1 MB) page.
                 pagedOutputView.setPosition(headerSize);
             }
-
-            // Write saved changeType bytes to pagedOutputView
-            pagedOutputView.write(changeTypeBytes);
-
-            // Write arrow data to pagedOutputView at current position.
-            // Use the no-position overload since pages may have advanced.
-            arrowWriter.serializeToOutputView(pagedOutputView);
-        } else {
-            // V0 path or no stats: layout is [header] [changeTypes] [arrow data]
-            // changeTypes are already in firstSegment at headerSize offset
-            arrowWriter.serializeToOutputView(pagedOutputView, headerSize + changeTypeSize);
         }
+
+        // Write change-type bytes (growable buffer → transparent page crossing).
+        if (!appendOnly) {
+            changeTypeWriter.writeTo(pagedOutputView);
+        }
+
+        // Write Arrow data at the current pagedOutputView position.
+        arrowWriter.serializeToOutputView(pagedOutputView);
 
         // Reset the statistics collector for reuse
         if (statisticsCollector != null) {
