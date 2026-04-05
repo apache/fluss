@@ -48,6 +48,20 @@ public class FetchLogResultForBucket extends ResultForBucket {
                 ApiError.NONE);
     }
 
+    public FetchLogResultForBucket(
+            TableBucket tableBucket,
+            LogRecords records,
+            long highWatermark,
+            long filteredEndOffset) {
+        this(
+                tableBucket,
+                null,
+                checkNotNull(records, "records can not be null"),
+                highWatermark,
+                filteredEndOffset,
+                ApiError.NONE);
+    }
+
     public FetchLogResultForBucket(TableBucket tableBucket, ApiError error) {
         this(tableBucket, null, null, -1L, -1L, error);
     }

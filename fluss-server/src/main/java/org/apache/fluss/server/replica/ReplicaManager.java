@@ -1417,6 +1417,7 @@ public class ReplicaManager implements ServerReconfigurable {
                     fetchLogResult =
                             new FetchLogResultForBucket(
                                     tb,
+                                    fetchedData.getRecords(),
                                     readInfo.getHighWatermark(),
                                     fetchedData.getFilteredEndOffset());
                 } else {

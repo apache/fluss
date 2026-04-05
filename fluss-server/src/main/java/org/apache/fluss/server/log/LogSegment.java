@@ -668,9 +668,11 @@ public final class LogSegment {
         MultiBytesView.Builder builder = null;
         int accumulatedSize = 0;
         FileChannelLogRecordBatch firstIncludedBatch = null;
+        FileChannelLogRecordBatch lastIncludedBatch = null;
         FileChannelLogRecordBatch lastScannedBatch = null;
         int adjustedMaxSize = maxSize;
         int filterEvalFailures = 0;
+        boolean sizeBreak = false;
 
         while (iter.hasNext()) {
             FileChannelLogRecordBatch batch = iter.next();
@@ -725,6 +727,7 @@ public final class LogSegment {
                     firstIncludedBatch = batch;
                     adjustedMaxSize = minOneMessage ? Math.max(maxSize, batchSize) : maxSize;
                 } else if (accumulatedSize + batchSize > adjustedMaxSize) {
+                    sizeBreak = true;
                     break;
                 }
                 if (builder == null) {
@@ -732,6 +735,7 @@ public final class LogSegment {
                 }
                 builder.addBytes(fileLogRecords.channel(), batch.position(), batchSize);
                 accumulatedSize += batchSize;
+                lastIncludedBatch = batch;
             } else {
                 // With projection: project first, then check size with projected size
                 BytesView projectedBytesView = projection.projectRecordBatch(batch);
@@ -742,6 +746,7 @@ public final class LogSegment {
                         adjustedMaxSize =
                                 minOneMessage ? Math.max(maxSize, projectedSize) : maxSize;
                     } else if (accumulatedSize + projectedSize > adjustedMaxSize) {
+                        sizeBreak = true;
                         break;
                     }
                     if (builder == null) {
@@ -749,6 +754,7 @@ public final class LogSegment {
                     }
                     builder.addBytes(projectedBytesView);
                     accumulatedSize += projectedSize;
+                    lastIncludedBatch = batch;
                 }
             }
         }
@@ -775,7 +781,19 @@ public final class LogSegment {
         LogOffsetMetadata offsetMetadata =
                 new LogOffsetMetadata(startOffset, this.baseOffset, startPosition);
 
-        return new FetchDataInfo(offsetMetadata, new BytesViewLogRecords(builder.build()));
+        // When the loop exhausted naturally (not by size break) and the last scanned batch
+        // extends beyond the last included batch, trailing batches were filtered out.
+        // Set filteredEndOffset so the client can skip these already-scanned filtered batches.
+        long filteredEndOffset = -1L;
+        if (!sizeBreak
+                && lastScannedBatch != null
+                && lastIncludedBatch != null
+                && lastScannedBatch.nextLogOffset() > lastIncludedBatch.nextLogOffset()) {
+            filteredEndOffset = lastScannedBatch.nextLogOffset();
+        }
+
+        return new FetchDataInfo(
+                offsetMetadata, new BytesViewLogRecords(builder.build()), filteredEndOffset);
     }
 
     private void ensureOffsetInRange(long offset) throws IOException {

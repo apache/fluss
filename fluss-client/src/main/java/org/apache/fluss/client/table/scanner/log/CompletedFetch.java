@@ -56,6 +56,7 @@ abstract class CompletedFetch {
     final int sizeInBytes;
     final long highWatermark;
     private final long fetchOffset;
+    private final long filteredEndOffset;
 
     private final boolean isCheckCrcs;
     private final Iterator<LogRecordBatch> batches;
@@ -83,7 +84,7 @@ abstract class CompletedFetch {
             LogScannerStatus logScannerStatus,
             boolean isCheckCrcs,
             long fetchOffset,
-            long nextFetchOffset) {
+            long filteredEndOffset) {
         this.tableBucket = tableBucket;
         this.error = error;
         this.sizeInBytes = sizeInBytes;
@@ -95,20 +96,14 @@ abstract class CompletedFetch {
         this.selectedFieldGetters = readContext.getSelectedFieldGetters();
         this.fetchOffset = fetchOffset;
         checkArgument(
-                nextFetchOffset == NO_FILTERED_END_OFFSET || nextFetchOffset >= fetchOffset,
-                "nextFetchOffset (%s) must be %s (NO_FILTERED_END_OFFSET) or >= fetchOffset (%s) for bucket %s.",
-                nextFetchOffset,
+                filteredEndOffset == NO_FILTERED_END_OFFSET || filteredEndOffset >= fetchOffset,
+                "filteredEndOffset (%s) must be %s (NO_FILTERED_END_OFFSET) or >= fetchOffset (%s) for bucket %s.",
+                filteredEndOffset,
                 NO_FILTERED_END_OFFSET,
                 fetchOffset,
                 tableBucket);
-        checkArgument(
-                nextFetchOffset == NO_FILTERED_END_OFFSET || sizeInBytes == 0,
-                "When nextFetchOffset is set (%s), records must be empty (sizeInBytes=%s) for bucket %s.",
-                nextFetchOffset,
-                sizeInBytes,
-                tableBucket);
-        this.nextFetchOffset =
-                nextFetchOffset != NO_FILTERED_END_OFFSET ? nextFetchOffset : fetchOffset;
+        this.filteredEndOffset = filteredEndOffset;
+        this.nextFetchOffset = fetchOffset;
     }
 
     // TODO: optimize this to avoid deep copying the record.
@@ -231,8 +226,12 @@ abstract class CompletedFetch {
                     // next fetch will point to the next batch, which avoids unnecessary re-fetching
                     // of the same batch (in the worst case, the scanner could get stuck fetching
                     // the same batch repeatedly).
+                    // When filteredEndOffset is set, use the max of the batch-derived offset and
+                    // filteredEndOffset to skip already-scanned-and-filtered trailing batches.
                     if (currentBatch != null) {
-                        nextFetchOffset = currentBatch.nextLogOffset();
+                        nextFetchOffset = Math.max(currentBatch.nextLogOffset(), filteredEndOffset);
+                    } else if (filteredEndOffset != NO_FILTERED_END_OFFSET) {
+                        nextFetchOffset = filteredEndOffset;
                     }
                     drain();
                     return null;

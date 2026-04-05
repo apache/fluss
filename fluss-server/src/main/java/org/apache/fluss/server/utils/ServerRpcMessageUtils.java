@@ -961,16 +961,7 @@ public class ServerRpcMessageUtils {
             PbFetchLogRespForBucket fetchLogRespForBucket =
                     new PbFetchLogRespForBucket().setBucketId(tb.getBucket());
             if (bucketResult.hasFilteredEndOffset()) {
-                // filteredEndOffset and records are mutually exclusive: when all batches are
-                // filtered out, there should be no record data to send.
-                if (bucketResult.recordsOrEmpty().sizeInBytes() != 0) {
-                    LOG.warn(
-                            "filteredEndOffset is set but records are not empty for bucket {}, "
-                                    + "clearing filteredEndOffset as fallback.",
-                            tb);
-                } else {
-                    fetchLogRespForBucket.setFilteredEndOffset(bucketResult.getFilteredEndOffset());
-                }
+                fetchLogRespForBucket.setFilteredEndOffset(bucketResult.getFilteredEndOffset());
             }
             if (tb.getPartitionId() != null) {
                 fetchLogRespForBucket.setPartitionId(tb.getPartitionId());

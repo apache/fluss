@@ -937,6 +937,251 @@ final class LogSegmentTest extends LogTestBase {
         }
     }
 
+    @Test
+    void testReadWithFilterSetsFilteredEndOffsetWhenTrailingBatchesFiltered() throws Exception {
+        // Scenario from review #11: first batch matches filter, trailing batches are filtered out.
+        // After scanning all batches, filteredEndOffset should be set so the client can skip
+        // the already-scanned-and-filtered trailing batches on the next fetch.
+        LogSegment segment = createSegment(40);
+
+        // Batch 1: values [7,8,9] — passes filter "a > 5"
+        List<Object[]> batch1Data =
+                Arrays.asList(new Object[] {7, "a"}, new Object[] {8, "b"}, new Object[] {9, "c"});
+        // Batch 2: values [1,2,3] — filtered out by "a > 5"
+        List<Object[]> batch2Data =
+                Arrays.asList(new Object[] {1, "d"}, new Object[] {2, "e"}, new Object[] {3, "f"});
+        // Batch 3: values [1,1,1] — filtered out by "a > 5"
+        List<Object[]> batch3Data =
+                Arrays.asList(new Object[] {1, "g"}, new Object[] {1, "h"}, new Object[] {1, "i"});
+
+        MemoryLogRecords batch1 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        batch1Data, DATA1_ROW_TYPE, 50, DEFAULT_SCHEMA_ID);
+        MemoryLogRecords batch2 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        batch2Data, DATA1_ROW_TYPE, 53, DEFAULT_SCHEMA_ID);
+        MemoryLogRecords batch3 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        batch3Data, DATA1_ROW_TYPE, 56, DEFAULT_SCHEMA_ID);
+
+        segment.append(52, -1L, -1L, batch1);
+        segment.append(55, -1L, -1L, batch2);
+        segment.append(58, -1L, -1L, batch3);
+
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate filter = builder.greaterThan(0, 5);
+
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            FetchDataInfo read =
+                    segment.read(
+                            50, 1000, segment.getSizeInBytes(), true, null, filter, readContext);
+            assertThat(read).isNotNull();
+            // Should return batch 1 data
+            assertThat(read.getRecords().sizeInBytes()).isGreaterThan(0);
+
+            // Verify only batch 1 records are returned
+            List<Integer> values = new ArrayList<>();
+            for (LogRecordBatch batch : read.getRecords().batches()) {
+                try (CloseableIterator<LogRecord> iter = batch.records(readContext)) {
+                    while (iter.hasNext()) {
+                        values.add(iter.next().getRow().getInt(0));
+                    }
+                }
+            }
+            assertThat(values).containsExactly(7, 8, 9);
+
+            // filteredEndOffset should be set to the next offset after the last scanned batch
+            // (batch3's nextLogOffset = 59), so the client can skip batches 2 and 3
+            assertThat(read.hasFilteredEndOffset()).isTrue();
+            assertThat(read.getFilteredEndOffset()).isEqualTo(59);
+        }
+    }
+
+    @Test
+    void testReadWithFilterNoFilteredEndOffsetWhenAllBatchesMatch() throws Exception {
+        // When all batches pass the filter, filteredEndOffset should NOT be set
+        // because there are no trailing filtered batches to skip.
+        LogSegment segment = createSegment(40);
+
+        List<Object[]> batch1Data =
+                Arrays.asList(new Object[] {7, "a"}, new Object[] {8, "b"}, new Object[] {9, "c"});
+        List<Object[]> batch2Data =
+                Arrays.asList(
+                        new Object[] {10, "d"}, new Object[] {11, "e"}, new Object[] {12, "f"});
+
+        MemoryLogRecords batch1 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        batch1Data, DATA1_ROW_TYPE, 50, DEFAULT_SCHEMA_ID);
+        MemoryLogRecords batch2 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        batch2Data, DATA1_ROW_TYPE, 53, DEFAULT_SCHEMA_ID);
+
+        segment.append(52, -1L, -1L, batch1);
+        segment.append(55, -1L, -1L, batch2);
+
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate filter = builder.greaterThan(0, 5);
+
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            FetchDataInfo read =
+                    segment.read(
+                            50, 1000, segment.getSizeInBytes(), true, null, filter, readContext);
+            assertThat(read).isNotNull();
+            assertThat(read.getRecords().sizeInBytes()).isGreaterThan(0);
+            // No trailing filtered batches — filteredEndOffset should NOT be set
+            assertThat(read.hasFilteredEndOffset()).isFalse();
+        }
+    }
+
+    @Test
+    void testReadWithFilterNoFilteredEndOffsetOnSizeBreak() throws Exception {
+        // When the loop exits due to maxSize (size break), we haven't scanned all batches,
+        // so filteredEndOffset should NOT be set — there may be unscanned matching batches.
+        LogSegment segment = createSegment(40);
+
+        // Batch 1: passes filter
+        List<Object[]> batch1Data =
+                Arrays.asList(new Object[] {7, "a"}, new Object[] {8, "b"}, new Object[] {9, "c"});
+        // Batch 2: also passes filter but won't fit in maxSize
+        List<Object[]> batch2Data =
+                Arrays.asList(
+                        new Object[] {10, "d"}, new Object[] {11, "e"}, new Object[] {12, "f"});
+
+        MemoryLogRecords batch1 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        batch1Data, DATA1_ROW_TYPE, 50, DEFAULT_SCHEMA_ID);
+        MemoryLogRecords batch2 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        batch2Data, DATA1_ROW_TYPE, 53, DEFAULT_SCHEMA_ID);
+
+        segment.append(52, -1L, -1L, batch1);
+        segment.append(55, -1L, -1L, batch2);
+
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate filter = builder.greaterThan(0, 5);
+
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            // Set maxSize to only fit batch 1 — batch 2 will trigger size break
+            FetchDataInfo read =
+                    segment.read(
+                            50,
+                            batch1.sizeInBytes(),
+                            segment.getSizeInBytes(),
+                            false,
+                            null,
+                            filter,
+                            readContext);
+            assertThat(read).isNotNull();
+            assertThat(read.getRecords().sizeInBytes()).isGreaterThan(0);
+            // Size break — not all batches scanned, so no filteredEndOffset
+            assertThat(read.hasFilteredEndOffset()).isFalse();
+        }
+    }
+
+    @Test
+    void testReadWithFilterFilteredEndOffsetWithLeadingFilteredBatches() throws Exception {
+        // Leading batches filtered, middle batch matches, trailing batches filtered.
+        // filteredEndOffset should be set to skip the trailing filtered batches.
+        LogSegment segment = createSegment(40);
+
+        // Batch 1: values [1,2,3] — filtered out
+        List<Object[]> batch1Data =
+                Arrays.asList(new Object[] {1, "a"}, new Object[] {2, "b"}, new Object[] {3, "c"});
+        // Batch 2: values [7,8,9] — passes filter
+        List<Object[]> batch2Data =
+                Arrays.asList(new Object[] {7, "d"}, new Object[] {8, "e"}, new Object[] {9, "f"});
+        // Batch 3: values [1,2,3] — filtered out (trailing)
+        List<Object[]> batch3Data =
+                Arrays.asList(new Object[] {1, "g"}, new Object[] {2, "h"}, new Object[] {3, "i"});
+
+        MemoryLogRecords batch1 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        batch1Data, DATA1_ROW_TYPE, 50, DEFAULT_SCHEMA_ID);
+        MemoryLogRecords batch2 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        batch2Data, DATA1_ROW_TYPE, 53, DEFAULT_SCHEMA_ID);
+        MemoryLogRecords batch3 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        batch3Data, DATA1_ROW_TYPE, 56, DEFAULT_SCHEMA_ID);
+
+        segment.append(52, -1L, -1L, batch1);
+        segment.append(55, -1L, -1L, batch2);
+        segment.append(58, -1L, -1L, batch3);
+
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate filter = builder.greaterThan(0, 5);
+
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            FetchDataInfo read =
+                    segment.read(
+                            50, 1000, segment.getSizeInBytes(), true, null, filter, readContext);
+            assertThat(read).isNotNull();
+            assertThat(read.getRecords().sizeInBytes()).isGreaterThan(0);
+
+            // Verify only batch 2 records returned
+            List<Integer> values = new ArrayList<>();
+            for (LogRecordBatch batch : read.getRecords().batches()) {
+                try (CloseableIterator<LogRecord> iter = batch.records(readContext)) {
+                    while (iter.hasNext()) {
+                        values.add(iter.next().getRow().getInt(0));
+                    }
+                }
+            }
+            assertThat(values).containsExactly(7, 8, 9);
+
+            // filteredEndOffset should be set because batch 3 was scanned and filtered
+            assertThat(read.hasFilteredEndOffset()).isTrue();
+            assertThat(read.getFilteredEndOffset()).isEqualTo(59);
+        }
+    }
+
+    @Test
+    void testReadWithFilterNoFilteredEndOffsetWhenLastBatchMatches() throws Exception {
+        // Leading batches filtered, last batch matches.
+        // No trailing filtered batches, so filteredEndOffset should NOT be set.
+        LogSegment segment = createSegment(40);
+
+        // Batch 1: values [1,2,3] — filtered out
+        List<Object[]> batch1Data =
+                Arrays.asList(new Object[] {1, "a"}, new Object[] {2, "b"}, new Object[] {3, "c"});
+        // Batch 2: values [7,8,9] — passes filter (last batch)
+        List<Object[]> batch2Data =
+                Arrays.asList(new Object[] {7, "d"}, new Object[] {8, "e"}, new Object[] {9, "f"});
+
+        MemoryLogRecords batch1 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        batch1Data, DATA1_ROW_TYPE, 50, DEFAULT_SCHEMA_ID);
+        MemoryLogRecords batch2 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        batch2Data, DATA1_ROW_TYPE, 53, DEFAULT_SCHEMA_ID);
+
+        segment.append(52, -1L, -1L, batch1);
+        segment.append(55, -1L, -1L, batch2);
+
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate filter = builder.greaterThan(0, 5);
+
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            FetchDataInfo read =
+                    segment.read(
+                            50, 1000, segment.getSizeInBytes(), true, null, filter, readContext);
+            assertThat(read).isNotNull();
+            assertThat(read.getRecords().sizeInBytes()).isGreaterThan(0);
+            // Last batch matches — no trailing filtered batches
+            assertThat(read.hasFilteredEndOffset()).isFalse();
+        }
+    }
+
     private LogSegment createSegment(long baseOffset) throws IOException {
         return createSegment(baseOffset, 10);
     }
