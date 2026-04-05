@@ -648,6 +648,39 @@ public class MemoryLogRecordsArrowBuilderTest {
         readContext.close();
     }
 
+    @Test
+    void testChangeTypeVectorOverflowsToMultiplePages() throws Exception {
+        // V0 header = 48 bytes; page size = 50 → 2 CT bytes fit on first page.
+        // 5 rows → 5 CT bytes → overflow to a second page.
+        int pageSizeInBytes = 50;
+        int maxSizeInBytes = 1024;
+        ArrowWriter writer =
+                provider.getOrCreateWriter(
+                        1L, DEFAULT_SCHEMA_ID, maxSizeInBytes, DATA1_ROW_TYPE, NO_COMPRESSION);
+
+        MemoryLogRecordsArrowBuilder builder =
+                MemoryLogRecordsArrowBuilder.builder(
+                        DEFAULT_SCHEMA_ID,
+                        writer,
+                        new ManagedPagedOutputView(new TestingMemorySegmentPool(pageSizeInBytes)),
+                        false,
+                        null);
+
+        List<Object[]> appended = new ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            Object[] row = DATA1.get(i % DATA1.size());
+            builder.append(ChangeType.INSERT, DataTestUtils.row(row));
+            appended.add(row);
+        }
+        builder.close();
+
+        MemoryLogRecords records = MemoryLogRecords.pointToBytesView(builder.build());
+
+        // Verify all rows and change types round-trip correctly
+        assertLogRecordsEquals(
+                DATA1_ROW_TYPE, records, appended, ChangeType.INSERT, TEST_SCHEMA_GETTER);
+    }
+
     private static List<ArrowCompressionInfo> compressionInfos() {
         return Arrays.asList(
                 new ArrowCompressionInfo(ArrowCompressionType.LZ4_FRAME, -1),
