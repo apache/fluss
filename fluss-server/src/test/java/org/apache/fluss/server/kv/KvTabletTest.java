@@ -1399,8 +1399,6 @@ class KvTabletTest {
                         FetchIsolation.LOG_END,
                         false,
                         projection,
-                        null,
-                        null,
                         null)
                 .getRecords();
     }

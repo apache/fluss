@@ -70,9 +70,7 @@ public interface Scan {
      *
      * @param predicate the predicate to apply for record batch level filtering
      */
-    default Scan filter(@Nullable Predicate predicate) {
-        throw new UnsupportedOperationException("Filter pushdown is not supported by this Scan.");
-    }
+    Scan filter(@Nullable Predicate predicate);
 
     /**
      * Creates a {@link LogScanner} to continuously read log data for this scan.

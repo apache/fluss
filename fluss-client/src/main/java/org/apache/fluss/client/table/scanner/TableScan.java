@@ -143,6 +143,12 @@ public class TableScan implements Scan {
 
     @Override
     public BatchScanner createBatchScanner(TableBucket tableBucket) {
+        if (recordBatchFilter != null) {
+            throw new UnsupportedOperationException(
+                    String.format(
+                            "BatchScanner doesn't support filter pushdown. Table: %s, bucket: %s",
+                            tableInfo.getTablePath(), tableBucket));
+        }
         if (limit == null) {
             throw new UnsupportedOperationException(
                     String.format(
@@ -160,6 +166,12 @@ public class TableScan implements Scan {
 
     @Override
     public BatchScanner createBatchScanner(TableBucket tableBucket, long snapshotId) {
+        if (recordBatchFilter != null) {
+            throw new UnsupportedOperationException(
+                    String.format(
+                            "SnapshotBatchScanner doesn't support filter pushdown. Table: %s, bucket: %s, snapshot ID: %d",
+                            tableInfo.getTablePath(), tableBucket, snapshotId));
+        }
         if (limit != null) {
             throw new UnsupportedOperationException(
                     String.format(
@@ -194,6 +206,12 @@ public class TableScan implements Scan {
 
     @Override
     public BatchScanner createBatchScanner() throws IOException {
+        if (recordBatchFilter != null) {
+            throw new UnsupportedOperationException(
+                    String.format(
+                            "BatchScanner doesn't support filter pushdown. Table: %s",
+                            tableInfo.getTablePath()));
+        }
         int bucketCount = tableInfo.getNumBuckets();
         List<TableBucket> tableBuckets;
         if (tableInfo.isPartitioned()) {

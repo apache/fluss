@@ -26,9 +26,7 @@ import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.Histogram;
-import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.record.FileLogProjection;
-import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.utils.FileUtils;
@@ -347,8 +345,7 @@ public final class LocalLog {
      * offset is out of range, throw an OffsetOutOfRangeException.
      */
     LogOffsetMetadata convertToOffsetMetadataOrThrow(long offset) throws IOException {
-        FetchDataInfo fetchDataInfo =
-                read(offset, 1, false, nextOffsetMetadata, null, null, null, null);
+        FetchDataInfo fetchDataInfo = read(offset, 1, false, nextOffsetMetadata, null, null);
         return fetchDataInfo.getFetchOffsetMetadata();
     }
 
@@ -376,15 +373,8 @@ public final class LocalLog {
             boolean minOneMessage,
             LogOffsetMetadata maxOffsetMetadata,
             @Nullable FileLogProjection projection,
-            @Nullable Predicate recordBatchFilter,
-            @Nullable LogRecordBatch.ReadContext readContext,
-            @Nullable PredicateSchemaResolver predicateResolver)
+            @Nullable FilterContext filterContext)
             throws IOException {
-        // Validate that recordBatchFilter and readContext are either both null or both non-null
-        if ((recordBatchFilter == null) != (readContext == null)) {
-            throw new IllegalArgumentException(
-                    "recordBatchFilter and readContext must be either both null or both non-null");
-        }
 
         if (LOG.isTraceEnabled()) {
             LOG.trace(
@@ -446,12 +436,10 @@ public final class LocalLog {
                                 maxPosition,
                                 minOneMessage,
                                 projection,
-                                recordBatchFilter,
-                                readContext,
-                                predicateResolver);
+                                filterContext);
                 if (fetchDataInfo == null) {
                     segmentOpt = segments.higherSegment(baseOffset);
-                } else if (recordBatchFilter != null
+                } else if (filterContext != null
                         && fetchDataInfo.hasFilteredEndOffset()
                         && fetchDataInfo.getRecords().sizeInBytes() == 0) {
                     // All batches in this segment were filtered out. Record the skip offset
@@ -489,7 +477,7 @@ public final class LocalLog {
                     // advances past all the filtered data.
                     return FetchDataInfo.createFilteredEmptyResponse(
                             nextOffsetMetadata, lastFilteredEndOffset);
-                } else if (recordBatchFilter != null) {
+                } else if (filterContext != null) {
                     return FetchDataInfo.createFilteredEmptyResponse(
                             nextOffsetMetadata, nextOffsetMetadata.getMessageOffset());
                 } else {

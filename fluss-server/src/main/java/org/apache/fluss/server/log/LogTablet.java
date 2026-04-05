@@ -32,7 +32,6 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
-import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.record.DefaultLogRecordBatch;
 import org.apache.fluss.record.FileLogProjection;
 import org.apache.fluss.record.FileLogRecords;
@@ -404,11 +403,8 @@ public final class LogTablet {
      * @param fetchIsolation the fetch isolation level
      * @param minOneMessage if true, at least one message is returned even if it exceeds maxLength
      * @param projection the column projection to apply, or null for no projection
-     * @param recordBatchFilter the batch-level filter predicate, or null for no filtering
-     * @param readContext the read context for batch statistics extraction (must be non-null iff
-     *     recordBatchFilter is non-null)
-     * @param predicateResolver resolves predicates for evolved schemas, or null to use the original
-     *     predicate for all batches
+     * @param filterContext the filter context for server-side filter pushdown, or null for no
+     *     filtering
      */
     public FetchDataInfo read(
             long readOffset,
@@ -416,9 +412,7 @@ public final class LogTablet {
             FetchIsolation fetchIsolation,
             boolean minOneMessage,
             @Nullable FileLogProjection projection,
-            @Nullable Predicate recordBatchFilter,
-            @Nullable LogRecordBatch.ReadContext readContext,
-            @Nullable PredicateSchemaResolver predicateResolver)
+            @Nullable FilterContext filterContext)
             throws IOException {
         LogOffsetMetadata maxOffsetMetadata = null;
         if (fetchIsolation == FetchIsolation.LOG_END) {
@@ -428,14 +422,7 @@ public final class LogTablet {
         }
 
         return localLog.read(
-                readOffset,
-                maxLength,
-                minOneMessage,
-                maxOffsetMetadata,
-                projection,
-                recordBatchFilter,
-                readContext,
-                predicateResolver);
+                readOffset, maxLength, minOneMessage, maxOffsetMetadata, projection, filterContext);
     }
 
     /**

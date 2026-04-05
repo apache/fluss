@@ -78,27 +78,15 @@ class PredicateSchemaResolverTest {
     @Test
     void testNegativePredicateSchemaIdAlwaysReturnsOriginal() {
         Predicate predicate = new PredicateBuilder(ROW_TYPE_V1).equal(0, 42);
+        TestingSchemaGetter schemaGetter = new TestingSchemaGetter(SCHEMA_ID_1, SCHEMA_V1);
 
         // Negative predicate schema ID means schema tracking is disabled
-        PredicateSchemaResolver resolver = new PredicateSchemaResolver(predicate, -1, null);
+        PredicateSchemaResolver resolver = new PredicateSchemaResolver(predicate, -1, schemaGetter);
 
         // Should return original predicate regardless of batch schema ID
         assertThat(resolver.resolve(SCHEMA_ID_1)).isSameAs(predicate);
         assertThat(resolver.resolve(SCHEMA_ID_2)).isSameAs(predicate);
         assertThat(resolver.resolve(999)).isSameAs(predicate);
-    }
-
-    @Test
-    void testNullSchemaGetterDifferentSchemaReturnsNull() {
-        Predicate predicate = new PredicateBuilder(ROW_TYPE_V1).equal(0, 42);
-
-        PredicateSchemaResolver resolver =
-                new PredicateSchemaResolver(predicate, SCHEMA_ID_1, null);
-
-        // Same schema still works
-        assertThat(resolver.resolve(SCHEMA_ID_1)).isSameAs(predicate);
-        // Different schema returns null (safe fallback: include batch)
-        assertThat(resolver.resolve(SCHEMA_ID_2)).isNull();
     }
 
     @Test

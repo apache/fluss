@@ -584,7 +584,7 @@ final class LogTabletTest extends LogTestBase {
             FetchIsolation isolation,
             boolean minOneMessage)
             throws Exception {
-        return logTablet.read(offset, maxLength, isolation, minOneMessage, null, null, null, null);
+        return logTablet.read(offset, maxLength, isolation, minOneMessage, null, null);
     }
 
     private void assertValidLogOffsetMetadata(LogOffsetMetadata offsetMetadata) throws IOException {

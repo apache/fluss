@@ -874,9 +874,9 @@ class FileLogProjectionTest {
     }
 
     @ParameterizedTest
-    @ValueSource(bytes = {LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1})
+    @ValueSource(bytes = {LOG_MAGIC_VALUE_V0})
     void testProjectRecordBatchNoStatisticsClearing(byte recordBatchMagic) throws Exception {
-        // Test that statistics clearing only happens for V2+ versions
+        // Test that statistics clearing only happens for V1+ versions (V0 has no statistics)
         FileLogRecords fileLogRecords =
                 createFileLogRecords(recordBatchMagic, TestData.DATA2_ROW_TYPE, TestData.DATA2);
 

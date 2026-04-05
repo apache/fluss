@@ -51,19 +51,19 @@ public final class PredicateSchemaResolver {
     private final Predicate predicate;
     private final int predicateSchemaId;
     @Nullable private final Schema predicateSchema;
-    @Nullable private final SchemaGetter schemaGetter;
+    private final SchemaGetter schemaGetter;
 
     private final Map<Integer, Optional<Predicate>> cache = new HashMap<>();
 
     public PredicateSchemaResolver(
-            Predicate predicate, int predicateSchemaId, @Nullable SchemaGetter schemaGetter) {
+            Predicate predicate, int predicateSchemaId, SchemaGetter schemaGetter) {
         this.predicate = predicate;
         this.predicateSchemaId = predicateSchemaId;
         this.schemaGetter = schemaGetter;
 
         // Pre-resolve predicate schema once
         Schema resolved = null;
-        if (schemaGetter != null && predicateSchemaId >= 0) {
+        if (predicateSchemaId >= 0) {
             try {
                 resolved = schemaGetter.getSchema(predicateSchemaId);
             } catch (Exception e) {
@@ -96,8 +96,8 @@ public final class PredicateSchemaResolver {
             return cached.orElse(null);
         }
 
-        // No schema getter or predicate schema, cannot adapt
-        if (schemaGetter == null || predicateSchema == null) {
+        // No predicate schema available, cannot adapt
+        if (predicateSchema == null) {
             LOG.warn(
                     "Cannot adapt predicate for batch schemaId={}: "
                             + "schema getter or predicate schema unavailable, "

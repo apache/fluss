@@ -35,6 +35,7 @@ import org.apache.fluss.record.FileLogProjection;
 import org.apache.fluss.record.FileLogRecords;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordBatchStatistics;
+import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.TimestampAndOffset;
@@ -518,17 +519,13 @@ public final class LogSegment {
             boolean minOneMessage,
             @Nullable FileLogProjection projection,
             @Nullable Predicate recordBatchFilter,
-            @Nullable LogRecordBatch.ReadContext readContext)
+            @Nullable LogRecordReadContext readContext)
             throws IOException {
-        return read(
-                startOffset,
-                maxSize,
-                maxPosition,
-                minOneMessage,
-                projection,
-                recordBatchFilter,
-                readContext,
-                null);
+        FilterContext filterContext = null;
+        if (recordBatchFilter != null && readContext != null) {
+            filterContext = new FilterContext(recordBatchFilter, readContext, null);
+        }
+        return read(startOffset, maxSize, maxPosition, minOneMessage, projection, filterContext);
     }
 
     /**
@@ -542,13 +539,8 @@ public final class LogSegment {
      * @param minOneMessage If this is true, the first message will be returned even if it exceeds
      *     `maxSize` (if one exists)
      * @param projection The column projection to apply to the log records
-     * @param recordBatchFilter The filter to apply to the log records (must be null if readContext
-     *     is null)
-     * @param readContext The read context for batch statistics retrieval (must be null if
-     *     recordBatchFilter is null)
-     * @param predicateResolver Resolves the effective predicate for a given batch schema ID,
-     *     handling schema evolution transparently. If null when filter is active, the original
-     *     predicate is used for all batches.
+     * @param filterContext The filter context for server-side filter pushdown, or null for no
+     *     filtering
      * @throws LogOffsetOutOfRangeException If startOffset is beyond the log start and end offset
      * @return The fetch data information including fetch starting offset metadata and messages
      *     read.
@@ -559,26 +551,11 @@ public final class LogSegment {
             long maxPosition,
             boolean minOneMessage,
             @Nullable FileLogProjection projection,
-            @Nullable Predicate recordBatchFilter,
-            @Nullable LogRecordBatch.ReadContext readContext,
-            @Nullable PredicateSchemaResolver predicateResolver)
+            @Nullable FilterContext filterContext)
             throws IOException {
-        // Validate that recordBatchFilter and readContext are either both null or both non-null
-        if ((recordBatchFilter == null) != (readContext == null)) {
-            throw new IllegalArgumentException(
-                    "recordBatchFilter and readContext must be either both null or both non-null");
-        }
-
-        if (recordBatchFilter != null) {
+        if (filterContext != null) {
             return readWithFilter(
-                    startOffset,
-                    maxSize,
-                    maxPosition,
-                    minOneMessage,
-                    projection,
-                    recordBatchFilter,
-                    readContext,
-                    predicateResolver);
+                    startOffset, maxSize, maxPosition, minOneMessage, projection, filterContext);
         } else {
             return readWithoutFilter(startOffset, maxSize, maxPosition, minOneMessage, projection);
         }
@@ -658,10 +635,17 @@ public final class LogSegment {
             long maxPosition,
             boolean minOneMessage,
             @Nullable FileLogProjection projection,
-            Predicate recordBatchFilter,
-            LogRecordBatch.ReadContext readContext,
-            @Nullable PredicateSchemaResolver predicateResolver)
+            FilterContext filterContext)
             throws IOException {
+
+        if (logFormat != LogFormat.ARROW) {
+            throw new IllegalStateException(
+                    "Only Arrow log format supports filter pushdown, but is: " + logFormat);
+        }
+
+        Predicate recordBatchFilter = filterContext.getRecordBatchFilter();
+        LogRecordBatch.ReadContext readContext = filterContext.getReadContext();
+        PredicateSchemaResolver predicateResolver = filterContext.getPredicateResolver();
 
         if (maxSize < 0) {
             throw new IllegalArgumentException(
@@ -684,7 +668,6 @@ public final class LogSegment {
         MultiBytesView.Builder builder = null;
         int accumulatedSize = 0;
         FileChannelLogRecordBatch firstIncludedBatch = null;
-        FileChannelLogRecordBatch lastIncludedBatch = null;
         FileChannelLogRecordBatch lastScannedBatch = null;
         int adjustedMaxSize = maxSize;
         int filterEvalFailures = 0;
@@ -744,7 +727,6 @@ public final class LogSegment {
                 } else if (accumulatedSize + batchSize > adjustedMaxSize) {
                     break;
                 }
-                lastIncludedBatch = batch;
                 if (builder == null) {
                     builder = MultiBytesView.builder();
                 }
@@ -762,7 +744,6 @@ public final class LogSegment {
                     } else if (accumulatedSize + projectedSize > adjustedMaxSize) {
                         break;
                     }
-                    lastIncludedBatch = batch;
                     if (builder == null) {
                         builder = MultiBytesView.builder();
                     }

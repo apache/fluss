@@ -294,21 +294,14 @@ public class FileLogRecords implements LogRecords, Closeable {
      * @return An iterator over batches starting from {@code start}
      */
     private Iterable<FileChannelLogRecordBatch> batchesFrom(final int start) {
-        return () -> {
-            try {
-                return batchIterator(start);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-        };
+        return () -> batchIterator(start);
     }
 
     public FileChannelChunk toChunk() {
         return new FileChannelChunk(channel, start, sizeInBytes());
     }
 
-    private AbstractIterator<FileChannelLogRecordBatch> batchIterator(int start)
-            throws IOException {
+    private AbstractIterator<FileChannelLogRecordBatch> batchIterator(int start) {
         return batchIterator(start, -1);
     }
 
@@ -320,8 +313,7 @@ public class FileLogRecords implements LogRecords, Closeable {
      * @param endPosition the end position in the file, or -1 to use the default end
      * @return An iterator over batches starting from {@code start}
      */
-    public AbstractIterator<FileChannelLogRecordBatch> batchIterator(int start, int endPosition)
-            throws IOException {
+    public AbstractIterator<FileChannelLogRecordBatch> batchIterator(int start, int endPosition) {
         if (endPosition >= 0 && start > endPosition) {
             throw new IllegalArgumentException(
                     "start (" + start + ") must be <= endPosition (" + endPosition + ")");

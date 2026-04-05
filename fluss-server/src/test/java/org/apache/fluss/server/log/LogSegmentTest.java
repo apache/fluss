@@ -937,47 +937,6 @@ final class LogSegmentTest extends LogTestBase {
         }
     }
 
-    @Test
-    void testReadWithFilterRequiresReadContext() throws Exception {
-        LogSegment segment = createSegment(40);
-        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
-        Predicate predicate = builder.greaterThan(0, 3);
-
-        // filter non-null but readContext null → should throw
-        assertThatThrownBy(
-                        () ->
-                                segment.read(
-                                        40,
-                                        300,
-                                        segment.getSizeInBytes(),
-                                        true,
-                                        null,
-                                        predicate,
-                                        null))
-                .isInstanceOf(IllegalArgumentException.class);
-    }
-
-    @Test
-    void testReadWithReadContextRequiresFilter() throws Exception {
-        LogSegment segment = createSegment(40);
-        try (LogRecordReadContext readContext =
-                LogRecordReadContext.createArrowReadContext(
-                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
-            // readContext non-null but filter null → should throw
-            assertThatThrownBy(
-                            () ->
-                                    segment.read(
-                                            40,
-                                            300,
-                                            segment.getSizeInBytes(),
-                                            true,
-                                            null,
-                                            null,
-                                            readContext))
-                    .isInstanceOf(IllegalArgumentException.class);
-        }
-    }
-
     private LogSegment createSegment(long baseOffset) throws IOException {
         return createSegment(baseOffset, 10);
     }

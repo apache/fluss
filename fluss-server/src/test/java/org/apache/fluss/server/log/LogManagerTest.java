@@ -322,7 +322,7 @@ final class LogManagerTest extends LogTestBase {
     }
 
     private FetchDataInfo readLog(LogTablet log) throws Exception {
-        return log.read(0, Integer.MAX_VALUE, FetchIsolation.LOG_END, true, null, null, null, null);
+        return log.read(0, Integer.MAX_VALUE, FetchIsolation.LOG_END, true, null, null);
     }
 
     @AfterEach

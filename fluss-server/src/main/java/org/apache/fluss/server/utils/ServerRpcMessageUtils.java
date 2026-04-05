@@ -897,10 +897,15 @@ public class ServerRpcMessageUtils {
         Map<Long, FilterInfo> result = null;
         for (PbFetchLogReqForTable tableReq : request.getTablesReqsList()) {
             if (tableReq.hasFilterPredicate()) {
+                if (!tableReq.hasFilterSchemaId()) {
+                    throw new IllegalArgumentException(
+                            "Filter predicate is set but filterSchemaId is missing for table "
+                                    + tableReq.getTableId());
+                }
                 if (result == null) {
                     result = new HashMap<>();
                 }
-                int schemaId = tableReq.hasFilterSchemaId() ? tableReq.getFilterSchemaId() : -1;
+                int schemaId = tableReq.getFilterSchemaId();
                 result.put(
                         tableReq.getTableId(),
                         new FilterInfo(tableReq.getFilterPredicate(), schemaId));

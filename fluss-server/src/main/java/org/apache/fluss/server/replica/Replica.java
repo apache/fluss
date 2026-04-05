@@ -71,6 +71,7 @@ import org.apache.fluss.server.kv.snapshot.SnapshotContext;
 import org.apache.fluss.server.log.FetchDataInfo;
 import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.log.FetchParams;
+import org.apache.fluss.server.log.FilterContext;
 import org.apache.fluss.server.log.FilterInfo;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.log.LogAppendInfo;
@@ -1343,8 +1344,6 @@ public final class Replica {
                                         FetchIsolation.HIGH_WATERMARK,
                                         true,
                                         null,
-                                        null,
-                                        null,
                                         null);
                         return dataInfo.getRecords();
                     } catch (IOException e) {
@@ -1504,67 +1503,7 @@ public final class Replica {
 
         // todo validate fetched epoch.
 
-        // Create ReadContext for batch filtering if needed.
-        // Only ARROW format has batch-level statistics (V1+ magic) for filter evaluation.
-        // INDEXED and COMPACTED formats use V0 magic without statistics, so filter pushdown
-        // would be a no-op — skip it entirely to avoid unnecessary overhead.
-        Predicate resolvedFilter = null;
-        LogRecordReadContext readContext = null;
-        PredicateSchemaResolver predicateResolver = null;
-        FilterInfo filterInfo = fetchParams.getFilterInfo(tableBucket.getTableId());
-        if (filterInfo != null && logFormat == LogFormat.ARROW) {
-            try {
-                int filterSchemaId = filterInfo.getSchemaId();
-                RowType rowType = null;
-                int schemaIdForContext = -1;
-                if (filterSchemaId >= 0) {
-                    Schema filterSchema = schemaGetter.getSchema(filterSchemaId);
-                    if (filterSchema == null) {
-                        LOG.warn(
-                                "Filter schema not found (schemaId={}) for {}, falling back to unfiltered read.",
-                                filterSchemaId,
-                                tableBucket);
-                    } else {
-                        rowType = filterSchema.getRowType();
-                        schemaIdForContext = filterSchemaId;
-                    }
-                } else {
-                    rowType = tableInfo.getSchema().getRowType();
-                    schemaIdForContext = tableInfo.getSchemaId();
-                }
-                if (rowType != null) {
-                    resolvedFilter =
-                            PredicateMessageUtils.toPredicate(filterInfo.getPbPredicate(), rowType);
-                    if (resolvedFilter != null) {
-                        readContext =
-                                LogRecordReadContext.createArrowReadContext(
-                                        rowType, schemaIdForContext, schemaGetter);
-                        predicateResolver =
-                                new PredicateSchemaResolver(
-                                        resolvedFilter, schemaIdForContext, schemaGetter);
-                    }
-                }
-            } catch (Exception e) {
-                LOG.warn(
-                        "Failed to initialize filter context for {} ({}), "
-                                + "falling back to unfiltered read.",
-                        tableBucket,
-                        e.getClass().getSimpleName(),
-                        e);
-                // Safe fallback: reset all variables to ensure consistent null state,
-                // so the read proceeds as if no filter was requested.
-                resolvedFilter = null;
-                if (readContext != null) {
-                    try {
-                        readContext.close();
-                    } catch (Exception closeEx) {
-                        LOG.debug("Failed to close readContext for {}", tableBucket, closeEx);
-                    }
-                }
-                readContext = null;
-                predicateResolver = null;
-            }
-        }
+        FilterContext filterContext = createFilterContext(fetchParams);
 
         FetchDataInfo fetchDataInfo;
         try {
@@ -1575,21 +1514,72 @@ public final class Replica {
                             fetchParams.isolation(),
                             fetchParams.minOneMessage(),
                             fetchParams.projection(),
-                            resolvedFilter,
-                            readContext,
-                            predicateResolver);
+                            filterContext);
         } finally {
             // Close readContext eagerly — it is only used for statistics extraction during
             // batch filtering and is NOT referenced by the returned FetchDataInfo records.
-            if (readContext != null) {
-                try {
-                    readContext.close();
-                } catch (Exception e) {
-                    LOG.debug("Failed to close readContext for {}", tableBucket, e);
-                }
+            if (filterContext != null) {
+                IOUtils.closeQuietly(filterContext.getReadContext());
             }
         }
         return new LogReadInfo(fetchDataInfo, initialHighWatermark, initialLogEndOffset);
+    }
+
+    /**
+     * Creates a {@link FilterContext} for batch filtering if a filter is configured for this table
+     * and the log format supports it. Returns null if no filter is applicable.
+     */
+    @Nullable
+    private FilterContext createFilterContext(FetchParams fetchParams) {
+        FilterInfo filterInfo = fetchParams.getFilterInfo(tableBucket.getTableId());
+        if (filterInfo == null || logFormat != LogFormat.ARROW) {
+            return null;
+        }
+
+        LogRecordReadContext readContext = null;
+        try {
+            int filterSchemaId = filterInfo.getSchemaId();
+            RowType rowType = null;
+            int schemaIdForContext = -1;
+            if (filterSchemaId >= 0) {
+                Schema filterSchema = schemaGetter.getSchema(filterSchemaId);
+                if (filterSchema == null) {
+                    LOG.warn(
+                            "Filter schema not found (schemaId={}) for {}, falling back to unfiltered read.",
+                            filterSchemaId,
+                            tableBucket);
+                } else {
+                    rowType = filterSchema.getRowType();
+                    schemaIdForContext = filterSchemaId;
+                }
+            } else {
+                rowType = tableInfo.getSchema().getRowType();
+                schemaIdForContext = tableInfo.getSchemaId();
+            }
+            if (rowType != null) {
+                Predicate resolvedFilter =
+                        PredicateMessageUtils.toPredicate(filterInfo.getPbPredicate(), rowType);
+                if (resolvedFilter != null) {
+                    readContext =
+                            LogRecordReadContext.createArrowReadContext(
+                                    rowType, schemaIdForContext, schemaGetter);
+                    PredicateSchemaResolver predicateResolver =
+                            new PredicateSchemaResolver(
+                                    resolvedFilter, schemaIdForContext, schemaGetter);
+                    return new FilterContext(resolvedFilter, readContext, predicateResolver);
+                }
+            }
+            return null;
+        } catch (Exception e) {
+            LOG.warn(
+                    "Failed to initialize filter context for {} ({}), "
+                            + "falling back to unfiltered read.",
+                    tableBucket,
+                    e.getClass().getSimpleName(),
+                    e);
+            IOUtils.closeQuietly(readContext);
+            return null;
+        }
     }
 
     private void tryCompleteDelayedOperations() {
