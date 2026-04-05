@@ -119,6 +119,16 @@ public interface RemoteLogStorage extends Closeable {
             throws RemoteStorageException;
 
     /**
+     * Returns an input stream of the log data for the respective log segment of {@link
+     * RemoteLogSegment}.
+     *
+     * @param remoteLogSegment the remote log segment.
+     * @return input stream of the requested log data.
+     * @throws RemoteStorageException if there are any errors while fetching the log data.
+     */
+    InputStream fetchLogData(RemoteLogSegment remoteLogSegment) throws RemoteStorageException;
+
+    /**
      * Read the remote log manifest from remote manifest file path.
      *
      * @param remoteLogManifestPath the path of the manifest file to be read in remote storage.
