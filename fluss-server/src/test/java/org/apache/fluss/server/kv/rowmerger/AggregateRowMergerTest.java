@@ -145,6 +145,22 @@ class AggregateRowMergerTest {
     }
 
     @Test
+    void testProductAggregationIsNotRetractSafe() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("value", DataTypes.DOUBLE(), AggFunctions.PRODUCT())
+                        .primaryKey("id")
+                        .build();
+
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(schema, tableConfig);
+        merger.configureTargetColumns(null, SCHEMA_ID, schema);
+
+        assertThat(merger.supportsRetract()).isFalse();
+    }
+
+    @Test
     void testNullValueHandling() {
         Schema schema =
                 Schema.newBuilder()
@@ -1004,5 +1020,402 @@ class AggregateRowMergerTest {
         TestingSchemaGetter schemaGetter =
                 new TestingSchemaGetter(new SchemaInfo(schema, SCHEMA_ID));
         return new AggregateRowMerger(tableConfig, tableConfig.getKvFormat(), schemaGetter);
+    }
+
+    // ========== Retract Tests ==========
+
+    @Test
+    void testBasicRetract() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("sum_count", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .column("sum_total", DataTypes.DOUBLE(), AggFunctions.SUM())
+                        .primaryKey("id")
+                        .build();
+
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(schema, tableConfig);
+        merger.configureTargetColumns(null, SCHEMA_ID, schema);
+        RowType rowType = schema.getRowType();
+
+        // Existing accumulated row: id=1, sum_count=100, sum_total=50.5
+        BinaryRow oldRow = compactedRow(rowType, new Object[] {1, 100L, 50.5});
+        // Retract row: id=1, sum_count=30, sum_total=10.5
+        BinaryRow retractRow = compactedRow(rowType, new Object[] {1, 30L, 10.5});
+
+        BinaryValue result = merger.retract(toBinaryValue(oldRow), toBinaryValue(retractRow));
+
+        assertThat(result.schemaId).isEqualTo(SCHEMA_ID);
+        assertThat(result.row.getInt(0)).isEqualTo(1); // id unchanged
+        assertThat(result.row.getLong(1)).isEqualTo(70L); // 100 - 30
+        assertThat(result.row.getDouble(2)).isEqualTo(40.0); // 50.5 - 10.5
+    }
+
+    @Test
+    void testRetractFirstWrite() {
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(SCHEMA_SUM, tableConfig);
+        merger.configureTargetColumns(null, SCHEMA_ID, SCHEMA_SUM);
+
+        // Retract with no existing row should return null (nothing to retract from)
+        BinaryRow retractRow = compactedRow(ROW_TYPE_SUM, new Object[] {1, 30L, 10.5});
+        BinaryValue result = merger.retract(null, toBinaryValue(retractRow));
+        assertThat(result).isNull();
+    }
+
+    @Test
+    void testRetractToZero() {
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(SCHEMA_SUM, tableConfig);
+        merger.configureTargetColumns(null, SCHEMA_ID, SCHEMA_SUM);
+        RowType rowType = SCHEMA_SUM.getRowType();
+
+        // Existing accumulated row: id=1, sum_count=30, sum_total=10.5
+        BinaryRow oldRow = compactedRow(rowType, new Object[] {1, 30L, 10.5});
+        // Retract the same values — result should be zero, not null
+        BinaryRow retractRow = compactedRow(rowType, new Object[] {1, 30L, 10.5});
+
+        BinaryValue result = merger.retract(toBinaryValue(oldRow), toBinaryValue(retractRow));
+
+        assertThat(result).isNotNull();
+        assertThat(result.row.getInt(0)).isEqualTo(1); // id unchanged
+        assertThat(result.row.getLong(1)).isEqualTo(0L); // 30 - 30 = 0
+        assertThat(result.row.getDouble(2)).isEqualTo(0.0); // 10.5 - 10.5 = 0.0
+    }
+
+    @Test
+    void testRetractBeyondAccumulatorProducesNegative() {
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(SCHEMA_SUM, tableConfig);
+        merger.configureTargetColumns(null, SCHEMA_ID, SCHEMA_SUM);
+        RowType rowType = SCHEMA_SUM.getRowType();
+
+        // Existing accumulated row: id=1, count=5, total=2.0
+        BinaryRow oldRow = compactedRow(rowType, new Object[] {1, 5L, 2.0});
+        // Retract more than accumulated — should produce negative values
+        BinaryRow retractRow = compactedRow(rowType, new Object[] {1, 10L, 7.0});
+
+        BinaryValue result = merger.retract(toBinaryValue(oldRow), toBinaryValue(retractRow));
+
+        assertThat(result).isNotNull();
+        assertThat(result.row.getInt(0)).isEqualTo(1); // id unchanged
+        assertThat(result.row.getLong(1)).isEqualTo(-5L); // 5 - 10 = -5
+        assertThat(result.row.getDouble(2)).isEqualTo(-5.0); // 2.0 - 7.0 = -5.0
+    }
+
+    @Test
+    void testRetractWithNullFields() {
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(SCHEMA_SUM, tableConfig);
+        merger.configureTargetColumns(null, SCHEMA_ID, SCHEMA_SUM);
+
+        // Existing row: id=1, count=100, total=50.5
+        BinaryRow oldRow = compactedRow(ROW_TYPE_SUM, new Object[] {1, 100L, 50.5});
+        // Retract row with null field: id=1, count=null, total=10.5
+        BinaryRow retractRow = compactedRow(ROW_TYPE_SUM, new Object[] {1, null, 10.5});
+
+        BinaryValue result = merger.retract(toBinaryValue(oldRow), toBinaryValue(retractRow));
+
+        assertThat(result.row.getLong(1)).isEqualTo(100L); // null retract -> unchanged
+        assertThat(result.row.getDouble(2)).isEqualTo(40.0); // 50.5 - 10.5
+    }
+
+    @Test
+    void testRetractWithSchemaEvolution() {
+        // Old schema: id(columnId=0), sum_count(columnId=1)
+        Schema oldSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("sum_count", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .primaryKey("id")
+                        .build();
+
+        // New schema: id(columnId=0), sum_count(columnId=1), new_sum(columnId=2)
+        Schema newSchema =
+                Schema.newBuilder()
+                        .fromColumns(
+                                java.util.Arrays.asList(
+                                        new Schema.Column("id", DataTypes.INT(), null, 0),
+                                        new Schema.Column(
+                                                "sum_count",
+                                                DataTypes.BIGINT(),
+                                                null,
+                                                1,
+                                                AggFunctions.SUM()),
+                                        new Schema.Column(
+                                                "new_sum",
+                                                DataTypes.BIGINT(),
+                                                null,
+                                                2,
+                                                AggFunctions.SUM())))
+                        .primaryKey("id")
+                        .build();
+
+        short oldSchemaId = (short) 1;
+        short newSchemaId = (short) 2;
+
+        TestingSchemaGetter schemaGetter =
+                new TestingSchemaGetter(new SchemaInfo(newSchema, newSchemaId));
+        schemaGetter.updateLatestSchemaInfo(new SchemaInfo(oldSchema, oldSchemaId));
+        schemaGetter.updateLatestSchemaInfo(new SchemaInfo(newSchema, newSchemaId));
+
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger =
+                new AggregateRowMerger(tableConfig, tableConfig.getKvFormat(), schemaGetter);
+        merger.configureTargetColumns(null, newSchemaId, newSchema);
+
+        // Old row with old schema (v1): id=1, sum_count=100
+        BinaryRow oldRow = compactedRow(oldSchema.getRowType(), new Object[] {1, 100L});
+        BinaryValue oldValue = new BinaryValue(oldSchemaId, oldRow);
+
+        // Retract row with new schema (v2): id=1, sum_count=30, new_sum=10
+        BinaryRow retractRow = compactedRow(newSchema.getRowType(), new Object[] {1, 30L, 10L});
+        BinaryValue retractValue = new BinaryValue(newSchemaId, retractRow);
+
+        BinaryValue result = merger.retract(oldValue, retractValue);
+
+        assertThat(result.schemaId).isEqualTo(newSchemaId);
+        assertThat(result.row.getFieldCount()).isEqualTo(3);
+        assertThat(result.row.getInt(0)).isEqualTo(1); // id unchanged
+        assertThat(result.row.getLong(1)).isEqualTo(70L); // sum_count: 100 - 30
+        // new_sum: old row didn't have this column (null), retract 10 from null -> null
+        assertThat(result.row.isNullAt(2)).isTrue();
+    }
+
+    @Test
+    void testPartialRetract() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("count", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .column("total", DataTypes.DOUBLE(), AggFunctions.SUM())
+                        .primaryKey("id")
+                        .build();
+
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(schema, tableConfig);
+
+        // Configure partial update for id and count (excluding total)
+        RowMerger partialMerger =
+                merger.configureTargetColumns(new int[] {0, 1}, SCHEMA_ID, schema);
+
+        // Existing row: id=1, count=100, total=50.5
+        BinaryRow oldRow = compactedRow(schema.getRowType(), new Object[] {1, 100L, 50.5});
+        // Retract row: id=1, count=30, total=999.0
+        BinaryRow retractRow = compactedRow(schema.getRowType(), new Object[] {1, 30L, 999.0});
+
+        BinaryValue result =
+                partialMerger.retract(toBinaryValue(oldRow), toBinaryValue(retractRow));
+
+        assertThat(result.row.getInt(0)).isEqualTo(1); // id unchanged
+        assertThat(result.row.getLong(1)).isEqualTo(70L); // count: 100 - 30 (target, retracted)
+        assertThat(result.row.getDouble(2)).isEqualTo(50.5); // total: unchanged (not target)
+    }
+
+    @Test
+    void testRetractWithCompositePrimaryKey() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("pk1", DataTypes.INT())
+                        .column("pk2", DataTypes.STRING())
+                        .column("sum_a", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .column("sum_b", DataTypes.DOUBLE(), AggFunctions.SUM())
+                        .primaryKey("pk1", "pk2")
+                        .build();
+
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(schema, tableConfig);
+        merger.configureTargetColumns(null, SCHEMA_ID, schema);
+        RowType rowType = schema.getRowType();
+
+        // Existing accumulated row
+        BinaryRow oldRow = compactedRow(rowType, new Object[] {1, "key", 100L, 50.5});
+        // Retract row
+        BinaryRow retractRow = compactedRow(rowType, new Object[] {1, "key", 30L, 10.5});
+
+        BinaryValue result = merger.retract(toBinaryValue(oldRow), toBinaryValue(retractRow));
+
+        assertThat(result.schemaId).isEqualTo(SCHEMA_ID);
+        assertThat(result.row.getFieldCount()).isEqualTo(4);
+        // PK columns preserved
+        assertThat(result.row.getInt(0)).isEqualTo(1);
+        assertThat(result.row.getString(1).toString()).isEqualTo("key");
+        // SUM columns retracted
+        assertThat(result.row.getLong(2)).isEqualTo(70L); // 100 - 30
+        assertThat(result.row.getDouble(3)).isEqualTo(40.0); // 50.5 - 10.5
+    }
+
+    @Test
+    void testRetractFastPathMatchesGeneralPath() {
+        // Create two schemas with identical column structures but different schema IDs.
+        // Same-schema path uses the fast path; different-schema IDs force the general path.
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("sum_val", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .primaryKey("id")
+                        .build();
+
+        short schemaId1 = (short) 1;
+        short schemaId2 = (short) 2;
+
+        // Fast path: both old and retract use the same schema ID
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger fastMerger = createMerger(schema, tableConfig);
+        fastMerger.configureTargetColumns(null, schemaId1, schema);
+
+        BinaryRow oldRow = compactedRow(schema.getRowType(), new Object[] {1, 100L});
+        BinaryRow retractRow = compactedRow(schema.getRowType(), new Object[] {1, 30L});
+
+        BinaryValue fastResult =
+                fastMerger.retract(
+                        new BinaryValue(schemaId1, oldRow), new BinaryValue(schemaId1, retractRow));
+
+        // General path: old row uses schemaId1, retract row uses schemaId2
+        // Both schemas have identical column structures
+        TestingSchemaGetter schemaGetter =
+                new TestingSchemaGetter(new SchemaInfo(schema, schemaId2));
+        schemaGetter.updateLatestSchemaInfo(new SchemaInfo(schema, schemaId1));
+        schemaGetter.updateLatestSchemaInfo(new SchemaInfo(schema, schemaId2));
+
+        AggregateRowMerger generalMerger =
+                new AggregateRowMerger(tableConfig, tableConfig.getKvFormat(), schemaGetter);
+        generalMerger.configureTargetColumns(null, schemaId2, schema);
+
+        BinaryValue generalResult =
+                generalMerger.retract(
+                        new BinaryValue(schemaId1, oldRow), new BinaryValue(schemaId2, retractRow));
+
+        // Both paths should produce identical results
+        assertThat(fastResult.row.getInt(0)).isEqualTo(generalResult.row.getInt(0));
+        assertThat(fastResult.row.getLong(1)).isEqualTo(generalResult.row.getLong(1));
+        assertThat(fastResult.row.getInt(0)).isEqualTo(1);
+        assertThat(fastResult.row.getLong(1)).isEqualTo(70L); // 100 - 30
+    }
+
+    @Test
+    void testPartialRetractWithSchemaEvolution() {
+        // Old schema v1: id(columnId=0), sum_a(columnId=1)
+        Schema oldSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("sum_a", DataTypes.BIGINT(), AggFunctions.SUM())
+                        .primaryKey("id")
+                        .build();
+
+        // New schema v2: id(columnId=0), sum_a(columnId=1), sum_b(columnId=2)
+        Schema newSchema =
+                Schema.newBuilder()
+                        .fromColumns(
+                                java.util.Arrays.asList(
+                                        new Schema.Column("id", DataTypes.INT(), null, 0),
+                                        new Schema.Column(
+                                                "sum_a",
+                                                DataTypes.BIGINT(),
+                                                null,
+                                                1,
+                                                AggFunctions.SUM()),
+                                        new Schema.Column(
+                                                "sum_b",
+                                                DataTypes.BIGINT(),
+                                                null,
+                                                2,
+                                                AggFunctions.SUM())))
+                        .primaryKey("id")
+                        .build();
+
+        short oldSchemaId = (short) 1;
+        short newSchemaId = (short) 2;
+
+        TestingSchemaGetter schemaGetter =
+                new TestingSchemaGetter(new SchemaInfo(newSchema, newSchemaId));
+        schemaGetter.updateLatestSchemaInfo(new SchemaInfo(oldSchema, oldSchemaId));
+        schemaGetter.updateLatestSchemaInfo(new SchemaInfo(newSchema, newSchemaId));
+
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger =
+                new AggregateRowMerger(tableConfig, tableConfig.getKvFormat(), schemaGetter);
+
+        // Partial retract: only target id(0) and sum_a(1), excluding sum_b(2)
+        RowMerger partialMerger =
+                merger.configureTargetColumns(new int[] {0, 1}, newSchemaId, newSchema);
+
+        // Old row with old schema v1: id=1, sum_a=100
+        BinaryRow oldRow = compactedRow(oldSchema.getRowType(), new Object[] {1, 100L});
+        BinaryValue oldValue = new BinaryValue(oldSchemaId, oldRow);
+
+        // Retract row with new schema v2: id=1, sum_a=30, sum_b=999
+        BinaryRow retractRow = compactedRow(newSchema.getRowType(), new Object[] {1, 30L, 999L});
+        BinaryValue retractValue = new BinaryValue(newSchemaId, retractRow);
+
+        BinaryValue result = partialMerger.retract(oldValue, retractValue);
+
+        assertThat(result.schemaId).isEqualTo(newSchemaId);
+        assertThat(result.row.getFieldCount()).isEqualTo(3);
+        assertThat(result.row.getInt(0)).isEqualTo(1); // id unchanged
+        assertThat(result.row.getLong(1)).isEqualTo(70L); // sum_a: 100 - 30 (target, retracted)
+        // sum_b: not a target column, old schema didn't have it -> null
+        assertThat(result.row.isNullAt(2)).isTrue();
+    }
+
+    @Test
+    void testRetractProducesNullWhenAllNonPkFieldsBecomeNull() {
+        // Schema where all non-PK columns use last_value (retract-safe).
+        // Retracting the exact same values should null out all non-PK fields,
+        // causing the merger to return null (row removal) instead of a zombie row.
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING(), AggFunctions.LAST_VALUE())
+                        .column("age", DataTypes.INT(), AggFunctions.LAST_VALUE())
+                        .primaryKey("id")
+                        .build();
+
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(schema, tableConfig);
+        merger.configureTargetColumns(null, SCHEMA_ID, schema);
+        RowType rowType = schema.getRowType();
+
+        // Existing row: id=1, name="Alice", age=30
+        BinaryRow oldRow = compactedRow(rowType, new Object[] {1, "Alice", 30});
+        // Retract the same values
+        BinaryRow retractRow = compactedRow(rowType, new Object[] {1, "Alice", 30});
+
+        BinaryValue result = merger.retract(toBinaryValue(oldRow), toBinaryValue(retractRow));
+
+        // All non-PK fields are null after retract -> row should be removed
+        assertThat(result).isNull();
+    }
+
+    @Test
+    void testPartialRetractProducesNullWhenAllNonPkFieldsBecomeNull() {
+        // Schema with partial update: retract on target columns that nulls them out,
+        // while non-target columns are already null -> zombie row should be removed.
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("val", DataTypes.BIGINT(), AggFunctions.LAST_VALUE())
+                        .column("other", DataTypes.STRING(), AggFunctions.LAST_VALUE())
+                        .primaryKey("id")
+                        .build();
+
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(schema, tableConfig);
+
+        // Partial update targeting id and val only
+        RowMerger partialMerger =
+                merger.configureTargetColumns(new int[] {0, 1}, SCHEMA_ID, schema);
+
+        // Existing row: id=1, val=42, other=null (non-target already null)
+        BinaryRow oldRow = compactedRow(schema.getRowType(), new Object[] {1, 42L, null});
+        // Retract val
+        BinaryRow retractRow = compactedRow(schema.getRowType(), new Object[] {1, 42L, null});
+
+        BinaryValue result =
+                partialMerger.retract(toBinaryValue(oldRow), toBinaryValue(retractRow));
+
+        // All non-PK fields are null after retract -> row should be removed
+        assertThat(result).isNull();
     }
 }

@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.sink.shuffle;
 
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
+import org.apache.fluss.flink.sink.serializer.SinkOperationMode;
 
 import org.apache.flink.runtime.operators.coordination.OperatorEvent;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
@@ -47,7 +48,7 @@ public class DataStatisticOperatorTest {
                 new DataStatisticsOperatorFactory<>(
                         DATA1_ROW_TYPE,
                         Collections.singletonList("b"),
-                        new RowDataSerializationSchema(false, false));
+                        new RowDataSerializationSchema(SinkOperationMode.upsert(false)));
         List<StreamRecord<RowData>> inputRecords =
                 Arrays.asList(
                         new StreamRecord<>(GenericRowData.of(1, StringData.fromString("a"))),

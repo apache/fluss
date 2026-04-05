@@ -72,7 +72,8 @@ public class ArrowLogWriteBatch extends WriteBatch {
     }
 
     @Override
-    public boolean tryAppend(WriteRecord writeRecord, WriteCallback callback) throws Exception {
+    public AppendResult tryAppend(WriteRecord writeRecord, WriteCallback callback)
+            throws Exception {
         InternalRow row = writeRecord.getRow();
         checkArgument(
                 writeRecord.getTargetColumns() == null,
@@ -81,12 +82,12 @@ public class ArrowLogWriteBatch extends WriteBatch {
         checkNotNull(row != null, "row must not be null for log record");
         checkNotNull(callback, "write callback must be not null");
         if (recordsBuilder.isClosed() || recordsBuilder.isFull()) {
-            return false;
+            return AppendResult.BATCH_FULL;
         } else {
             recordsBuilder.append(ChangeType.APPEND_ONLY, row);
             recordCount++;
             callbacks.add(callback);
-            return true;
+            return AppendResult.APPENDED;
         }
     }
 

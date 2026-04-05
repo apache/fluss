@@ -21,6 +21,7 @@ import org.apache.fluss.client.write.WriteFormat;
 import org.apache.fluss.client.write.WriteRecord;
 import org.apache.fluss.client.write.WriterClient;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryRow;
@@ -56,6 +57,9 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
 
     /** The merge mode for this writer. This controls how the server handles data merging. */
     private final MergeMode mergeMode;
+
+    /** Whether this table supports retract (only AGGREGATION merge engine). */
+    private final boolean supportsRetract;
 
     UpsertWriterImpl(
             TablePath tablePath,
@@ -102,6 +106,12 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
 
         this.tableInfo = tableInfo;
         this.mergeMode = mergeMode;
+        this.supportsRetract =
+                tableInfo
+                        .getTableConfig()
+                        .getMergeEngineType()
+                        .filter(t -> t == MergeEngineType.AGGREGATION)
+                        .isPresent();
     }
 
     private static void sanityCheck(
@@ -215,6 +225,31 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                         targetColumns,
                         mergeMode);
         return sendWithResult(record, DeleteResult::new);
+    }
+
+    @Override
+    public CompletableFuture<UpsertResult> retract(InternalRow row) {
+        if (!supportsRetract) {
+            throw new IllegalStateException(
+                    "retract() is only supported for tables with AGGREGATION merge engine. "
+                            + "Table: "
+                            + tablePath);
+        }
+        checkFieldCount(row);
+        byte[] key = primaryKeyEncoder.encodeKey(row);
+        byte[] bucketKey =
+                bucketKeyEncoder == primaryKeyEncoder ? key : bucketKeyEncoder.encodeKey(row);
+        WriteRecord record =
+                WriteRecord.forRetract(
+                        tableInfo,
+                        getPhysicalPath(row),
+                        encodeRow(row),
+                        key,
+                        bucketKey,
+                        writeFormat,
+                        targetColumns,
+                        mergeMode);
+        return sendWithResult(record, UpsertResult::new);
     }
 
     private BinaryRow encodeRow(InternalRow row) {

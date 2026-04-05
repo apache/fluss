@@ -57,7 +57,8 @@ abstract class AbstractRowLogWriteBatch<R> extends WriteBatch {
     }
 
     @Override
-    public boolean tryAppend(WriteRecord writeRecord, WriteCallback callback) throws Exception {
+    public AppendResult tryAppend(WriteRecord writeRecord, WriteCallback callback)
+            throws Exception {
         checkNotNull(callback, "write callback must be not null");
         InternalRow rowObj = writeRecord.getRow();
         checkNotNull(rowObj, "row must not be null for log record");
@@ -68,12 +69,12 @@ abstract class AbstractRowLogWriteBatch<R> extends WriteBatch {
 
         R row = requireAndCastRow(rowObj);
         if (!recordsBuilder.hasRoomFor(row) || isClosed()) {
-            return false;
+            return AppendResult.BATCH_FULL;
         }
         recordsBuilder.append(ChangeType.APPEND_ONLY, row);
         recordCount++;
         callbacks.add(callback);
-        return true;
+        return AppendResult.APPENDED;
     }
 
     protected abstract R requireAndCastRow(InternalRow row);

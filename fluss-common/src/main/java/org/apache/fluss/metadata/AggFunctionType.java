@@ -199,6 +199,30 @@ public enum AggFunctionType {
     }
 
     /**
+     * Returns whether this aggregation function has a retract implementation.
+     *
+     * <p>Retract quality varies by function:
+     *
+     * <ul>
+     *   <li><b>Strict inverse</b>: {@link #SUM} — subtraction is mathematically exact.
+     *   <li><b>Best-effort</b>: {@link #LAST_VALUE} and {@link #LAST_VALUE_IGNORE_NULLS} —
+     *       unconditionally clear to null without reconstructing prior history.
+     * </ul>
+     *
+     * @return true if this function has a retract implementation, false otherwise
+     */
+    public boolean supportsRetract() {
+        switch (this) {
+            case SUM:
+            case LAST_VALUE:
+            case LAST_VALUE_IGNORE_NULLS:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /**
      * Converts a string to an AggFunctionType enum value.
      *
      * <p>This method supports multiple naming formats:

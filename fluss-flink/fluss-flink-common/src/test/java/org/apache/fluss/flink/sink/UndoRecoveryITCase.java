@@ -25,6 +25,7 @@ import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
+import org.apache.fluss.flink.sink.serializer.SinkOperationMode;
 import org.apache.fluss.flink.sink.testutils.CountingSource;
 import org.apache.fluss.flink.sink.testutils.FailingCountingSource;
 import org.apache.fluss.metadata.TablePath;
@@ -821,7 +822,8 @@ abstract class UndoRecoveryITCase {
                         .setBootstrapServers(bootstrapServers)
                         .setDatabase(tablePath.getDatabaseName())
                         .setTable(tablePath.getTableName())
-                        .setSerializationSchema(new RowDataSerializationSchema(false, true));
+                        .setSerializationSchema(
+                                new RowDataSerializationSchema(SinkOperationMode.upsert(true)));
         if (producerId != null) {
             sinkBuilder.setProducerId(producerId);
         }
@@ -890,7 +892,8 @@ abstract class UndoRecoveryITCase {
                         .setBootstrapServers(bootstrapServers)
                         .setDatabase(tablePath.getDatabaseName())
                         .setTable(tablePath.getTableName())
-                        .setSerializationSchema(new RowDataSerializationSchema(false, true));
+                        .setSerializationSchema(
+                                new RowDataSerializationSchema(SinkOperationMode.upsert(true)));
         if (producerId != null) {
             sinkBuilder.setProducerId(producerId);
         }

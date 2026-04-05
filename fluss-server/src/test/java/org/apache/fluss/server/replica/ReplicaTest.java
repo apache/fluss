@@ -871,7 +871,8 @@ final class ReplicaTest extends ReplicaTestBase {
             Replica replica, KvRecordBatch kvRecords, int[] targetColumns) throws Exception {
         // Use DEFAULT mode as default for tests
         LogAppendInfo logAppendInfo =
-                replica.putRecordsToLeader(kvRecords, targetColumns, MergeMode.DEFAULT, 0);
+                replica.putRecordsToLeader(
+                        kvRecords, targetColumns, MergeMode.DEFAULT, 0, (short) 0);
         KvTablet kvTablet = checkNotNull(replica.getKvTablet());
         // flush to make data visible
         kvTablet.flush(replica.getLocalLogEndOffset(), NOPErrorHandler.INSTANCE);

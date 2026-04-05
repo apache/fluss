@@ -40,4 +40,21 @@ public class FieldLastNonNullValueAgg extends FieldAggregator {
     public Object agg(Object accumulator, Object inputField) {
         return (inputField == null) ? accumulator : inputField;
     }
+
+    @Override
+    public boolean supportsRetract() {
+        return true;
+    }
+
+    /**
+     * Retracts by clearing the accumulator to {@code null} when {@code retractField} is non-null.
+     * If {@code retractField} is null, the accumulator is unchanged (consistent with the forward
+     * path which ignores null inputs). This is a best-effort semantic aligned with Paimon: since
+     * {@code last_value_ignore_nulls} does not maintain history, precise retraction is not
+     * possible.
+     */
+    @Override
+    public Object retract(Object accumulator, Object retractField) {
+        return retractField != null ? null : accumulator;
+    }
 }

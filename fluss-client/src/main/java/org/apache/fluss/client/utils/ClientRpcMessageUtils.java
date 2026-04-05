@@ -179,7 +179,6 @@ public class ClientRpcMessageUtils {
         if (targetColumns != null) {
             request.setTargetColumns(targetColumns);
         }
-        // Set mergeMode in the request - this is the proper way to pass mergeMode to server
         request.setAggMode(mergeMode.getProtoValue());
 
         readyWriteBatches.forEach(

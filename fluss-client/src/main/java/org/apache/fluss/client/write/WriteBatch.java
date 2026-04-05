@@ -71,14 +71,24 @@ public abstract class WriteBatch {
      */
     public abstract boolean isLogBatch();
 
+    /** Result of a {@link #tryAppend} call. */
+    public enum AppendResult {
+        /** Record was successfully appended to the batch. */
+        APPENDED,
+        /** Batch has no room for the record or is closed. */
+        BATCH_FULL,
+        /** Batch format does not support this record's mutation type (e.g. V0 batch + RETRACT). */
+        FORMAT_MISMATCH
+    }
+
     /**
-     * try to append one write record to the record batch.
+     * Try to append one write record to the record batch.
      *
      * @param writeRecord the record to write
      * @param callback the callback to send back to writer
-     * @return true if append success, false if the batch is full.
+     * @return the result of the append attempt
      */
-    public abstract boolean tryAppend(WriteRecord writeRecord, WriteCallback callback)
+    public abstract AppendResult tryAppend(WriteRecord writeRecord, WriteCallback callback)
             throws Exception;
 
     /**

@@ -520,6 +520,106 @@ public class FlinkConversionsTest {
         assertThat(convertedFlinkTable.getOptions()).containsAllEntriesOf(options);
     }
 
+    // --- computeNonRetractableAggregationColumns() tests ---
+
+    @Test
+    void testComputeSchemaSupportsRetractAllRetractable() {
+        // SUM supports retract — should return true
+        ResolvedSchema schema =
+                new ResolvedSchema(
+                        Arrays.asList(
+                                Column.physical(
+                                        "id", org.apache.flink.table.api.DataTypes.INT().notNull()),
+                                Column.physical(
+                                        "val", org.apache.flink.table.api.DataTypes.BIGINT())),
+                        Collections.emptyList(),
+                        UniqueConstraint.primaryKey("PK_id", Collections.singletonList("id")));
+
+        Map<String, String> options = new HashMap<>();
+        options.put("table.merge-engine", "aggregation");
+        options.put("fields.val.agg", "sum");
+
+        org.apache.flink.configuration.Configuration conf =
+                org.apache.flink.configuration.Configuration.fromMap(options);
+
+        assertThat(FlinkConversions.computeNonRetractableAggregationColumns(schema, conf).isEmpty())
+                .isTrue();
+    }
+
+    @Test
+    void testComputeSchemaSupportsRetractNonRetractableFunction() {
+        // MAX does not support retract — should return false
+        ResolvedSchema schema =
+                new ResolvedSchema(
+                        Arrays.asList(
+                                Column.physical(
+                                        "id", org.apache.flink.table.api.DataTypes.INT().notNull()),
+                                Column.physical("val", org.apache.flink.table.api.DataTypes.INT())),
+                        Collections.emptyList(),
+                        UniqueConstraint.primaryKey("PK_id", Collections.singletonList("id")));
+
+        Map<String, String> options = new HashMap<>();
+        options.put("table.merge-engine", "aggregation");
+        options.put("fields.val.agg", "max");
+
+        org.apache.flink.configuration.Configuration conf =
+                org.apache.flink.configuration.Configuration.fromMap(options);
+
+        assertThat(FlinkConversions.computeNonRetractableAggregationColumns(schema, conf).isEmpty())
+                .isFalse();
+    }
+
+    @Test
+    void testComputeNonRetractableAggregationColumns() {
+        ResolvedSchema schema =
+                new ResolvedSchema(
+                        Arrays.asList(
+                                Column.physical(
+                                        "id", org.apache.flink.table.api.DataTypes.INT().notNull()),
+                                Column.physical(
+                                        "sum_val", org.apache.flink.table.api.DataTypes.BIGINT()),
+                                Column.physical(
+                                        "min_val", org.apache.flink.table.api.DataTypes.INT())),
+                        Collections.emptyList(),
+                        UniqueConstraint.primaryKey("PK_id", Collections.singletonList("id")));
+
+        Map<String, String> options = new HashMap<>();
+        options.put("table.merge-engine", "aggregation");
+        options.put("fields.sum_val.agg", "sum");
+        options.put("fields.min_val.agg", "min");
+
+        org.apache.flink.configuration.Configuration conf =
+                org.apache.flink.configuration.Configuration.fromMap(options);
+
+        assertThat(FlinkConversions.computeNonRetractableAggregationColumns(schema, conf))
+                .containsExactlyInAnyOrder("min_val");
+    }
+
+    @Test
+    void testComputeSchemaSupportsRetractImplicitDefault() {
+        // Non-PK column without explicit agg option: the method mirrors the server
+        // default (LAST_VALUE_IGNORE_NULLS) which supports retract, so returns true.
+        ResolvedSchema schema =
+                new ResolvedSchema(
+                        Arrays.asList(
+                                Column.physical(
+                                        "id", org.apache.flink.table.api.DataTypes.INT().notNull()),
+                                Column.physical(
+                                        "name", org.apache.flink.table.api.DataTypes.STRING())),
+                        Collections.emptyList(),
+                        UniqueConstraint.primaryKey("PK_id", Collections.singletonList("id")));
+
+        Map<String, String> options = new HashMap<>();
+        options.put("table.merge-engine", "aggregation");
+        // No fields.name.agg specified — implicit default
+
+        org.apache.flink.configuration.Configuration conf =
+                org.apache.flink.configuration.Configuration.fromMap(options);
+
+        assertThat(FlinkConversions.computeNonRetractableAggregationColumns(schema, conf).isEmpty())
+                .isTrue();
+    }
+
     /** Test refresh handler for testing purpose. */
     public static class TestRefreshHandler implements RefreshHandler {
 

@@ -82,6 +82,57 @@ public class KvRecordTestUtils {
             builder.close();
             return kvRecords;
         }
+
+        /**
+         * Build a V2 format batch from a list of (MutationType, KvRecord) entries. V2 records carry
+         * an explicit MutationType byte per record.
+         */
+        public KvRecordBatch ofV2Records(List<V2RecordEntry> entries) throws IOException {
+            return ofV2Records(entries, NO_WRITER_ID, NO_BATCH_SEQUENCE);
+        }
+
+        /**
+         * Build a V2 format batch from a list of (MutationType, KvRecord) entries with writer
+         * state.
+         */
+        public KvRecordBatch ofV2Records(
+                List<V2RecordEntry> entries, long writeClientId, int batchSequenceId)
+                throws IOException {
+            KvRecordBatchBuilder builder =
+                    KvRecordBatchBuilder.builder(
+                            schemaId,
+                            Integer.MAX_VALUE,
+                            new UnmanagedPagedOutputView(100),
+                            KvFormat.COMPACTED,
+                            true);
+            for (V2RecordEntry entry : entries) {
+                builder.appendV2(
+                        entry.mutationType,
+                        BytesUtils.toArray(entry.record.getKey()),
+                        entry.record.getRow());
+            }
+
+            builder.setWriterState(writeClientId, batchSequenceId);
+            KvRecordBatch kvRecords = DefaultKvRecordBatch.pointToBytesView(builder.build());
+            kvRecords.ensureValid();
+            builder.close();
+            return kvRecords;
+        }
+    }
+
+    /** An entry pairing a {@link MutationType} with a {@link KvRecord} for V2 batch building. */
+    public static class V2RecordEntry {
+        public final MutationType mutationType;
+        public final KvRecord record;
+
+        public V2RecordEntry(MutationType mutationType, KvRecord record) {
+            this.mutationType = mutationType;
+            this.record = record;
+        }
+
+        public static V2RecordEntry of(MutationType mutationType, KvRecord record) {
+            return new V2RecordEntry(mutationType, record);
+        }
     }
 
     /** A factory to create {@link KvRecord} whose key and value is specified by user. */

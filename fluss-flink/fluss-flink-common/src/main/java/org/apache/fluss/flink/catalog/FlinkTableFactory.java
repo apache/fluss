@@ -29,6 +29,7 @@ import org.apache.fluss.flink.source.ChangelogFlinkTableSource;
 import org.apache.fluss.flink.source.FlinkTableSource;
 import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
+import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TablePath;
 
@@ -192,6 +193,15 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
             validateDistributionModeForMergeEngine(mergeEngineType, distributionMode);
         }
 
+        org.apache.flink.configuration.Configuration resolvedOptions =
+                org.apache.flink.configuration.Configuration.fromMap(
+                        resolvedCatalogTable.getOptions());
+        // Compute retract capability once so planner-time gating and runtime writer configuration
+        // use the same effective aggregation functions.
+        Set<String> nonRetractableColumns =
+                FlinkConversions.computeNonRetractableAggregationColumns(
+                        resolvedCatalogTable.getResolvedSchema(), resolvedOptions);
+
         return new FlinkTableSink(
                 toFlussTablePath(context.getObjectIdentifier()),
                 toFlussClientConfig(
@@ -207,7 +217,8 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 tableOptions.get(FlinkConnectorOptions.BUCKET_NUMBER),
                 getBucketKeys(tableOptions),
                 distributionMode,
-                tableOptions.getOptional(FlinkConnectorOptions.SINK_PRODUCER_ID).orElse(null));
+                tableOptions.getOptional(FlinkConnectorOptions.SINK_PRODUCER_ID).orElse(null),
+                nonRetractableColumns);
     }
 
     @Override

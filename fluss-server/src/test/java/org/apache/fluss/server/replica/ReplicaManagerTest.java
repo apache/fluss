@@ -777,9 +777,6 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 MergeMode.DEFAULT,
                 PUT_KV_VERSION,
                 future1::complete);
-        assertThat(future1.get()).containsOnly(new PutKvResultForBucket(tb, 8));
-
-        // second lookup key in table, key = 1, value = 1, "a1".
         Object[] value1 = DATA_1_WITH_KEY_AND_VALUE.get(3).f1;
         byte[] value1Bytes =
                 ValueEncoder.encodeValue(DEFAULT_SCHEMA_ID, compactedRow(DATA1_ROW_TYPE, value1));

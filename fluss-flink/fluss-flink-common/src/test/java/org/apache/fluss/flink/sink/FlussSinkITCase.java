@@ -26,6 +26,7 @@ import org.apache.fluss.flink.row.OperationType;
 import org.apache.fluss.flink.row.RowWithOp;
 import org.apache.fluss.flink.sink.serializer.FlussSerializationSchema;
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
+import org.apache.fluss.flink.sink.serializer.SinkOperationMode;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.flink.utils.FlussRowToFlinkRowConverter;
 import org.apache.fluss.metadata.Schema;
@@ -132,7 +133,7 @@ public class FlussSinkITCase extends FlinkTestBase {
         inputRows.add(row7);
 
         RowDataSerializationSchema serializationSchema =
-                new RowDataSerializationSchema(false, true);
+                new RowDataSerializationSchema(SinkOperationMode.upsert(true));
 
         DataStream<RowData> stream = env.fromData(inputRows);
 
@@ -205,7 +206,8 @@ public class FlussSinkITCase extends FlinkTestBase {
         inputRows.add(row4);
         inputRows.add(row5);
 
-        RowDataSerializationSchema serializationSchema = new RowDataSerializationSchema(true, true);
+        RowDataSerializationSchema serializationSchema =
+                new RowDataSerializationSchema(SinkOperationMode.appendOnly(true));
 
         DataStream<RowData> stream = env.fromData(inputRows);
 
@@ -449,7 +451,7 @@ public class FlussSinkITCase extends FlinkTestBase {
         StreamExecutionEnvironment insertEnv = StreamExecutionEnvironment.getExecutionEnvironment();
         DataStream<RowData> insertStream = insertEnv.fromData(inserts);
         RowDataSerializationSchema insertSerializationSchema =
-                new RowDataSerializationSchema(false, true);
+                new RowDataSerializationSchema(SinkOperationMode.upsert(true));
         FlinkSink<RowData> insertSink =
                 FlussSink.<RowData>builder()
                         .setBootstrapServers(bootstrapServers)
@@ -469,7 +471,7 @@ public class FlussSinkITCase extends FlinkTestBase {
         DataStream<RowData> streamWriter2 = updatesEnv.fromData(updatesWriter2);
 
         RowDataSerializationSchema updatesSerializationSchema =
-                new RowDataSerializationSchema(false, true);
+                new RowDataSerializationSchema(SinkOperationMode.upsert(true));
 
         // Partial update sink 1: orderId + address
         FlinkSink<RowData> partialSink1 =
@@ -582,7 +584,7 @@ public class FlussSinkITCase extends FlinkTestBase {
         StreamExecutionEnvironment insertEnv = StreamExecutionEnvironment.getExecutionEnvironment();
         DataStream<RowData> insertStream = insertEnv.fromData(inserts);
         RowDataSerializationSchema insertSerializationSchema =
-                new RowDataSerializationSchema(false, true);
+                new RowDataSerializationSchema(SinkOperationMode.upsert(true));
         FlinkSink<RowData> insertSink =
                 FlussSink.<RowData>builder()
                         .setBootstrapServers(bootstrapServers)
@@ -597,7 +599,7 @@ public class FlussSinkITCase extends FlinkTestBase {
         StreamExecutionEnvironment updateEnv = StreamExecutionEnvironment.getExecutionEnvironment();
         DataStream<RowData> updateStream = updateEnv.fromData(updates);
         RowDataSerializationSchema updateSerializationSchema =
-                new RowDataSerializationSchema(false, true);
+                new RowDataSerializationSchema(SinkOperationMode.upsert(true));
         FlinkSink<RowData> partialSink =
                 FlussSink.<RowData>builder()
                         .setBootstrapServers(bootstrapServers)

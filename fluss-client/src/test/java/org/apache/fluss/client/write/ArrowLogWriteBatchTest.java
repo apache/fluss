@@ -43,6 +43,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
+import static org.apache.fluss.client.write.WriteBatch.AppendResult;
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static org.apache.fluss.record.LogRecordReadContext.createArrowReadContext;
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
@@ -80,14 +81,15 @@ public class ArrowLogWriteBatchTest {
                 createArrowLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId), maxSizeInBytes);
         int count = 0;
         while (arrowLogWriteBatch.tryAppend(
-                createWriteRecord(row(count, "a" + count)), newWriteCallback())) {
+                        createWriteRecord(row(count, "a" + count)), newWriteCallback())
+                == AppendResult.APPENDED) {
             count++;
         }
 
         // batch full.
-        boolean appendResult =
+        AppendResult appendResult =
                 arrowLogWriteBatch.tryAppend(createWriteRecord(row(1, "a")), newWriteCallback());
-        assertThat(appendResult).isFalse();
+        assertThat(appendResult).isEqualTo(AppendResult.BATCH_FULL);
 
         // close this batch.
         arrowLogWriteBatch.close();
@@ -142,14 +144,15 @@ public class ArrowLogWriteBatchTest {
 
         int count = 0;
         while (arrowLogWriteBatch.tryAppend(
-                createWriteRecord(row(count, "a" + count)), newWriteCallback())) {
+                        createWriteRecord(row(count, "a" + count)), newWriteCallback())
+                == AppendResult.APPENDED) {
             count++;
         }
 
         // batch full.
-        boolean appendResult =
+        AppendResult appendResult =
                 arrowLogWriteBatch.tryAppend(createWriteRecord(row(1, "a")), newWriteCallback());
-        assertThat(appendResult).isFalse();
+        assertThat(appendResult).isEqualTo(AppendResult.BATCH_FULL);
 
         // close this batch.
         arrowLogWriteBatch.close();
@@ -216,16 +219,17 @@ public class ArrowLogWriteBatchTest {
 
             int recordCount = 0;
             while (arrowLogWriteBatch.tryAppend(
-                    createWriteRecord(row(recordCount, RandomStringUtils.random(100))),
-                    newWriteCallback())) {
+                            createWriteRecord(row(recordCount, RandomStringUtils.random(100))),
+                            newWriteCallback())
+                    == AppendResult.APPENDED) {
                 recordCount++;
             }
 
             // batch full.
-            boolean appendResult =
+            AppendResult appendResult =
                     arrowLogWriteBatch.tryAppend(
                             createWriteRecord(row(1, "a")), newWriteCallback());
-            assertThat(appendResult).isFalse();
+            assertThat(appendResult).isEqualTo(AppendResult.BATCH_FULL);
 
             // close this batch and recycle the writer.
             arrowLogWriteBatch.close();

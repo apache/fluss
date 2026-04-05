@@ -1472,6 +1472,79 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
+    /**
+     * End-to-end test for retract behavior on aggregation tables. Mirrors Paimon's {@code
+     * SumRetractionAggregationITCase}: a Flink streaming GROUP BY produces UPDATE_BEFORE rows that
+     * are mapped to RETRACT operations on the aggregation merge engine.
+     *
+     * <p>Flow: INSERT INTO agg_table SELECT k, SUM(b) FROM pk_input GROUP BY k
+     *
+     * <p>When pk_input is updated, Flink's GROUP BY emits retract (UPDATE_BEFORE) + accumulate
+     * (UPDATE_AFTER). The aggregation table's merge engine applies retract (subtract old SUM) then
+     * accumulate (add new SUM), producing the correct final result.
+     */
+    @Test
+    void testRetractOnAggregationTableEndToEnd() throws Exception {
+        // Step 1: Create a PK input table (updates produce changelog with UPDATE_BEFORE)
+        tEnv.executeSql(
+                "CREATE TABLE retract_input ("
+                        + "k INT NOT NULL, "
+                        + "b BIGINT, "
+                        + "PRIMARY KEY (k) NOT ENFORCED"
+                        + ")");
+
+        // Step 2: Create an aggregation target table with SUM
+        tEnv.executeSql(
+                "CREATE TABLE retract_agg ("
+                        + "k INT NOT NULL, "
+                        + "total BIGINT, "
+                        + "PRIMARY KEY (k) NOT ENFORCED"
+                        + ") WITH ("
+                        + "'table.merge-engine' = 'aggregation', "
+                        + "'fields.total.agg' = 'sum'"
+                        + ")");
+
+        // Step 3: Start streaming pipeline — GROUP BY produces retract changelog
+        TableResult pipelineResult =
+                tEnv.executeSql(
+                        "INSERT INTO retract_agg SELECT k, SUM(b) FROM retract_input GROUP BY k");
+
+        // Step 4: Start reading changelog from the aggregation table
+        CloseableIterator<Row> rowIter = tEnv.executeSql("SELECT * FROM retract_agg").collect();
+
+        try {
+            // Step 5: Insert initial data into the input table
+            tEnv.executeSql("INSERT INTO retract_input VALUES (1, 10), (2, 20)").await();
+
+            // Expect: initial aggregation results (+I for each key)
+            // Flink GROUP BY emits SUM(10)=10 for k=1, SUM(20)=20 for k=2
+            // These arrive as UPSERT at the aggregation table → INSERT changelog
+            List<String> initialExpected = Arrays.asList("+I[1, 10]", "+I[2, 20]");
+            assertResultsIgnoreOrder(rowIter, initialExpected, false);
+
+            // Step 6: Update the input table — triggers retract in the GROUP BY
+            // Updating k=1 from b=10 to b=30:
+            //   Flink GROUP BY emits: UPDATE_BEFORE(k=1, SUM=10), UPDATE_AFTER(k=1, SUM=30)
+            //   The sink sends each record with per-record MutationType (RETRACT / INSERT).
+            //   Server processes: retract 10, then aggregate 30.
+            //   Net effect: total = 10 - 10 + 30 = 30 → changelog: -U[1,10], +U[1,30]
+            // Updating k=2 from b=20 to b=40:
+            //   Net effect: total = 20 - 20 + 40 = 40 → changelog: -U[2,20], +U[2,40]
+            tEnv.executeSql("INSERT INTO retract_input VALUES (1, 30), (2, 40)").await();
+
+            // Expect: each key produces 2 changelog records (UPDATE_BEFORE/UPDATE_AFTER)
+            // No intermediate states because retract and upsert are processed sequentially.
+            List<String> updateExpected =
+                    Arrays.asList(
+                            "-U[1, 10]", "+U[1, 30]",
+                            "-U[2, 20]", "+U[2, 40]");
+            assertResultsIgnoreOrder(rowIter, updateExpected, false);
+        } finally {
+            rowIter.close();
+            pipelineResult.getJobClient().ifPresent(JobClient::cancel);
+        }
+    }
+
     private InsertAndExpectValues rowsToInsertInto(Collection<String> partitions) {
         List<String> insertValues = new ArrayList<>();
         List<String> expectedValues = new ArrayList<>();
