@@ -66,10 +66,10 @@ anton:
   name: Anton Borisov
   title: Contributor of Apache Fluss (Incubating)
   url: https://github.com/fresh-borzoni
-  image_url: https://github.com/fresh-borzoni.png
+  image_url: /img/avatars/fresh-borzoni.png
 
 keithlee:
   name: Keith Lee
   title: Apache Fluss (Incubating) Committer
   url: https://github.com/leekeiabstraction
-  image_url: https://github.com/leekeiabstraction.png
+  image_url: /img/avatars/leekeiabstraction.png

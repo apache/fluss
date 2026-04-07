@@ -14,6 +14,8 @@ We are excited to announce the release of [fluss-rust clients](https://github.co
 
 Under the hood, all three clients share a single Rust core that handles protocol negotiation, batching, retries, and [Apache Arrow](https://arrow.apache.org/)-based data exchange, with thin language-specific bindings on top. This was a deliberate community decision to deliver native performance and feature parity across every language from day one.
 
+<!-- truncate -->
+
 ## Highlights
 
 ### Support for all Fluss table types
