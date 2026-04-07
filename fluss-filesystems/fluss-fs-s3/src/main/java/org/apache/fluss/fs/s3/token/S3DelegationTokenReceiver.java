@@ -21,7 +21,7 @@ import org.apache.fluss.fs.token.Credentials;
 import org.apache.fluss.fs.token.CredentialsJsonSerde;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.fs.token.SecurityTokenReceiver;
-
+import org.apache.fluss.utils.StringUtils;
 import org.apache.hadoop.fs.s3a.auth.NoAwsCredentialsException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -89,7 +89,7 @@ public class S3DelegationTokenReceiver implements SecurityTokenReceiver {
 
         LOG.info(
                 "Session credentials updated successfully with access key: {}.",
-                credentials.getAccessKeyId());
+                StringUtils.maskSecret(credentials.getAccessKeyId()));
     }
 
     public static Credentials getCredentials() {
