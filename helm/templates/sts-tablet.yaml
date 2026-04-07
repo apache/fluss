@@ -39,6 +39,10 @@ spec:
       serviceAccountName: {{ .Values.serviceAccount.name | default (include "fluss.fullname" .) }}
       {{- end }}
       {{- include "fluss.imagePullSecrets" . | nindent 6 }}
+      {{- with .Values.tablet.initContainers }}
+      initContainers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: {{ .Chart.Name }}-tablet
           image: {{ include "fluss.image" . }}
@@ -107,6 +111,9 @@ spec:
               mountPath: /etc/fluss/conf
               readOnly: true
             {{- end }}
+            {{- with .Values.tablet.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: fluss-conf
           configMap:
@@ -119,6 +126,9 @@ spec:
         - name: sasl-config
           secret:
             secretName: {{ include "fluss.security.jaas.configName" . }}
+        {{- end }}
+        {{- with .Values.tablet.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
         {{- end }}
   {{- if .Values.tablet.storage.enabled }}
   volumeClaimTemplates:

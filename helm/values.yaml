@@ -43,6 +43,9 @@ tablet:
     enabled: false
     size: 1Gi
     storageClass:
+  extraVolumes: []
+  extraVolumeMounts: []
+  initContainers: []
 
 coordinator:
   numberOfReplicas: 1
@@ -50,6 +53,9 @@ coordinator:
     enabled: false
     size: 1Gi
     storageClass:
+  extraVolumes: []
+  extraVolumeMounts: []
+  initContainers: []
 
 # Fluss listener configurations
 listeners:

@@ -264,6 +264,16 @@ It is recommended to set these explicitly in production.
 | `resources.tabletServer.limits.cpu` | CPU limits for tablet servers | Not set |
 | `resources.tabletServer.limits.memory` | Memory limits for tablet servers | Not set |
 
+### Pod Extension Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `coordinator.extraVolumes` | Extra volumes to add to the CoordinatorServer pod spec | `[]` |
+| `coordinator.extraVolumeMounts` | Extra volume mounts to add to the coordinator container | `[]` |
+| `coordinator.initContainers` | Init containers to run before the coordinator container starts | `[]` |
+| `tablet.extraVolumes` | Extra volumes to add to TabletServer pod specs | `[]` |
+| `tablet.extraVolumeMounts` | Extra volume mounts to add to the tablet container | `[]` |
+| `tablet.initContainers` | Init containers to run before the tablet container starts | `[]` |
 
 ## Advanced Configuration
 
@@ -432,6 +442,45 @@ Configure remote storage:
 configurationOverrides:
   data.dir: "/data/fluss"
   remote.data.dir: "s3://my-bucket/fluss-data"
+```
+
+### Loading Filesystem Plugins via Init Containers
+
+Fluss discovers filesystem plugins at startup by scanning subdirectories under `$FLUSS_HOME/plugins/`.  
+To load a plugin that is not bundled in the base image, you can use an init container to download the plugin jar
+into a shared `emptyDir` volume before the main container starts.
+
+The example below loads the Azure filesystem plugin (`fluss-fs-azure`)
+so that Fluss can read and write remote data to Azure Blob Storage
+(the example is for version `0.9`, adapt to your necessities):
+
+```yaml
+_fsAzurePlugin: &fsAzurePlugin
+  extraVolumes:
+    - name: azure-plugin
+      emptyDir: {}
+  extraVolumeMounts:
+    - name: azure-plugin
+      mountPath: /opt/fluss/plugins/azure
+      subPath: azure
+  initContainers:
+    - name: download-fs-azure
+      image: alpine:3.20
+      command:
+        - sh
+        - -c
+        - |
+          wget -O /plugins/azure/fluss-fs-azure-0.9.jar \
+            https://repo1.maven.org/maven2/org/apache/fluss/fluss-fs-azure/0.9.0-incubating/fluss-fs-azure-0.9.0-incubating.jar
+      volumeMounts:
+        - name: azure-plugin
+          mountPath: /plugins
+
+coordinator:
+  <<: *fsAzurePlugin
+
+tablet:
+  <<: *fsAzurePlugin
 ```
 
 ## Upgrading
