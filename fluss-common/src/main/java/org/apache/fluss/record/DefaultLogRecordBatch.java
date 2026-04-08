@@ -31,6 +31,7 @@ import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.ArrowUtils;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.MurmurHashUtils;
 import org.apache.fluss.utils.crc.Crc32C;
 
@@ -62,6 +63,7 @@ import static org.apache.fluss.record.LogRecordBatchFormat.schemaIdOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.statisticsDataOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.statisticsLengthOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.writeClientIdOffset;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -263,6 +265,38 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     }
 
     @Override
+    public ArrowBatchData loadArrowBatch(ReadContext context) {
+        if (context.getLogFormat() != LogFormat.ARROW) {
+            throw new UnsupportedOperationException(
+                    "loadArrowBatch is only supported for ARROW log format.");
+        }
+
+        int schemaId = schemaId();
+        checkArgument(
+                context instanceof ArrowRecordBatchContext,
+                "Arrow batch loading requires context to implement ArrowRecordBatchContext, but is %s.",
+                context.getClass().getName());
+        ArrowRecordBatchContext arrowRecordBatchContext = (ArrowRecordBatchContext) context;
+        checkArgument(isAppendOnly(), "Arrow batch loading only supports append-only batches.");
+        ArrowRecordBatchContext.UnshadedArrowBatchAccess batchAccess =
+                arrowRecordBatchContext.createUnshadedArrowBatchAccess(schemaId);
+
+        try {
+            int recordsDataOffset = recordsDataOffset();
+            int arrowOffset = position + recordsDataOffset;
+            int arrowLength = sizeInBytes() - recordsDataOffset;
+            batchAccess.loadArrowBatch(segment, arrowOffset, arrowLength);
+            ArrowBatchData arrowBatchData =
+                    batchAccess.createArrowBatchData(baseLogOffset(), commitTimestamp(), schemaId);
+            batchAccess = null;
+            return arrowBatchData;
+        } catch (Throwable t) {
+            IOUtils.closeQuietly(batchAccess);
+            throw t;
+        }
+    }
+
+    @Override
     public boolean equals(Object o) {
         if (this == o) {
             return true;
@@ -352,7 +386,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             VectorSchemaRoot root,
             BufferAllocator allocator,
             long timestamp) {
-        boolean isAppendOnly = (attributes() & APPEND_ONLY_FLAG_MASK) > 0;
+        boolean isAppendOnly = isAppendOnly();
         int recordsDataOffset = recordsDataOffset();
         if (isAppendOnly) {
             // append only batch, no change type vector,
@@ -386,6 +420,10 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
                 }
             };
         }
+    }
+
+    private boolean isAppendOnly() {
+        return (attributes() & APPEND_ONLY_FLAG_MASK) > 0;
     }
 
     /** The basic implementation for Arrow log record iterator. */
