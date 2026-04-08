@@ -715,7 +715,13 @@ public class CoordinatorEventProcessor implements EventProcessor {
         }
 
         TableInfo oldTableInfo = coordinatorContext.getTableInfoById(tableId);
-        if (oldTableInfo.getSchemaId() == schemaInfo.getSchemaId()) {
+        if (oldTableInfo.getSchemaId() >= schemaInfo.getSchemaId()) {
+            LOG.info(
+                    "Skipping stale schema change event for table {} with schemaId {}"
+                            + " since the current schemaId is already {}.",
+                    tablePath,
+                    schemaInfo.getSchemaId(),
+                    oldTableInfo.getSchemaId());
             return;
         }
 
