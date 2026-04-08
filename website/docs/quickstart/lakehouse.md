@@ -111,6 +111,7 @@ services:
         s3.access-key: rustfsadmin
         s3.secret-key: rustfsadmin
         s3.path.style.access: true
+        s3.region: us-east-1 # default region of rustfs
         datalake.format: paimon
         datalake.paimon.metastore: filesystem
         datalake.paimon.warehouse: s3://fluss/paimon
@@ -136,6 +137,7 @@ services:
         s3.access-key: rustfsadmin
         s3.secret-key: rustfsadmin
         s3.path.style.access: true
+        s3.region: us-east-1 # default region of rustfs
         kv.snapshot.interval: 0s
         datalake.format: paimon
         datalake.paimon.metastore: filesystem
@@ -328,6 +330,7 @@ services:
         s3.access-key: rustfsadmin
         s3.secret-key: rustfsadmin
         s3.path.style.access: true
+        s3.region: us-east-1 # default region of rustfs
         datalake.format: iceberg
         datalake.iceberg.catalog-impl: org.apache.iceberg.jdbc.JdbcCatalog
         datalake.iceberg.name: fluss_catalog
@@ -362,6 +365,7 @@ services:
         s3.access-key: rustfsadmin
         s3.secret-key: rustfsadmin
         s3.path.style.access: true
+        s3.region: us-east-1 # default region of rustfs
         datalake.format: iceberg
         datalake.iceberg.catalog-impl: org.apache.iceberg.jdbc.JdbcCatalog
         datalake.iceberg.name: fluss_catalog
