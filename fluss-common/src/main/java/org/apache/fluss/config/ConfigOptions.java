@@ -1206,6 +1206,29 @@ public class ConfigOptions {
                                     + CLIENT_SCANNER_LOG_FETCH_WAIT_MAX_TIME.key()
                                     + " time to return.");
 
+    public static final ConfigOption<Boolean> CLIENT_SCANNER_LOG_ADAPTIVE_FETCH_ENABLED =
+            key("client.scanner.log.adaptive-fetch.enabled")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription(
+                            "Whether to enable adaptive fetch rate control for LogScanner. "
+                                    + "When enabled, the scanner dynamically adjusts the fetch frequency "
+                                    + "per bucket based on the amount of data returned. Buckets that "
+                                    + "consistently return no data are fetched less frequently, reducing "
+                                    + "CPU and network overhead. This is particularly useful for partitioned "
+                                    + "tables where only the latest partitions have active data.");
+
+    public static final ConfigOption<Integer> CLIENT_SCANNER_LOG_ADAPTIVE_FETCH_MAX_SKIP_ROUNDS =
+            key("client.scanner.log.adaptive-fetch.max-skip-rounds")
+                    .intType()
+                    .defaultValue(32)
+                    .withDescription(
+                            "The maximum number of fetch rounds to skip for a bucket that returns "
+                                    + "no data when adaptive fetch is enabled. Higher values save more "
+                                    + "resources for inactive buckets but increase the latency to detect "
+                                    + "new data arrival. The backoff increases exponentially: 1, 2, 4, 8, "
+                                    + "..., up to this limit.");
+
     public static final ConfigOption<Integer> CLIENT_LOOKUP_QUEUE_SIZE =
             key("client.lookup.queue-size")
                     .intType()
