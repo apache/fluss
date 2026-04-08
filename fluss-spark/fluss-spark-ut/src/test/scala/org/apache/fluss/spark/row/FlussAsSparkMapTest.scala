@@ -104,8 +104,9 @@ class FlussAsSparkMapTest extends FlussSparkTestBase {
     assertThat(sparkMap.numElements()).isEqualTo(2)
 
     val sparkKeyArray = sparkMap.keyArray()
-    assertThat(sparkKeyArray.getUTF8String(0).toString).isEqualTo("arr1")
-    assertThat(sparkKeyArray.getUTF8String(1).toString).isEqualTo("arr2")
+    val key0 = sparkKeyArray.getUTF8String(0).toString
+    val key1 = sparkKeyArray.getUTF8String(1).toString
+    assertThat(Set(key0, key1)).isEqualTo(Set("arr1", "arr2"))
 
     val sparkValueArray = sparkMap.valueArray()
     // Check that we have 2 arrays

@@ -94,6 +94,12 @@ public class InternalRowUtils {
         return new GenericArray(newArray);
     }
 
+    /**
+     * Creates a copy of the given {@link InternalMap}.
+     *
+     * <p>This method is intended for internal use by the Fluss Spark adapter and is not part of the
+     * stable public API. Its signature and behavior may change without notice across releases.
+     */
     public static InternalMap copyMap(InternalMap map, DataType keyType, DataType valueType) {
         if (map instanceof BinaryMap) {
             return ((BinaryMap) map).copy();

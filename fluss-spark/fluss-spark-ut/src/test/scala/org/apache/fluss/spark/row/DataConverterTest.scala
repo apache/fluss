@@ -286,13 +286,16 @@ class DataConverterTest extends AnyFunSuite {
     assertThat(sparkMap.numElements()).isEqualTo(2)
 
     val keyArray = sparkMap.keyArray()
-    assertThat(keyArray.numElements()).isEqualTo(2)
-    assertThat(keyArray.getUTF8String(0).toString).isEqualTo("a")
-    assertThat(keyArray.getUTF8String(1).toString).isEqualTo("b")
     val valueArray = sparkMap.valueArray()
+    assertThat(keyArray.numElements()).isEqualTo(2)
     assertThat(valueArray.numElements()).isEqualTo(2)
-    assertThat(valueArray.getInt(0)).isEqualTo(1)
-    assertThat(valueArray.getInt(1)).isEqualTo(2)
+
+    val actualMap =
+      (0 until sparkMap.numElements())
+        .map(i => keyArray.getUTF8String(i).toString -> valueArray.getInt(i))
+        .toMap
+
+    assertThat(actualMap).isEqualTo(Map("a" -> 1, "b" -> 2))
   }
 
   test("toSparkObject: ROW type") {

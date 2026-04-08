@@ -200,51 +200,108 @@ class SparkAsFlussMapTest extends FlussSparkTestBase {
     assertThat(innerMap2Values.getInt(1)).isEqualTo(40)
   }
 
-  test("copy: creates deep copy") {
+  test("basic accessors return expected keys and values") {
     val keys = toUTF8Strings("key1", "key2")
     val values = Array(100, 200)
     val sparkMap = new ArrayBasedMapData(ArrayData.toArrayData(keys), ArrayData.toArrayData(values))
     val mapType = MapType(StringType, IntegerType)
     val flussMap = SparkAsFlussMap(sparkMap, mapType)
 
-    // Since SparkAsFlussMap doesn't have a copy method, we just test that the same instance works correctly
+    // Verify the wrapped map exposes the expected size, keys, and values.
     assertThat(flussMap.size()).isEqualTo(2)
     assertThat(flussMap.keyArray().getString(0).toString).isEqualTo("key1")
     assertThat(flussMap.valueArray().getInt(1)).isEqualTo(200)
   }
 
-  test("map with various data types as values") {
-    val keys = toUTF8Strings(
-      "int_key",
-      "float_key",
-      "double_key",
-      "long_key",
-      "bool_key",
-      "byte_key",
-      "short_key")
-    val values = Array(
-      100, // int
-      12.34f, // float
-      56.78, // double
-      1000L, // long
-      true, // boolean
-      127.toByte, // byte
-      1000.toShort // short
-    )
+  test("map with integer values") {
+    val keys = toUTF8Strings("int_key1", "int_key2")
+    val values = Array(100, 200)
     val sparkMap = new ArrayBasedMapData(ArrayData.toArrayData(keys), ArrayData.toArrayData(values))
-    // Using StringType for all values since ArrayData handles mixed types
-    val mapType = MapType(StringType, StringType)
+    val mapType = MapType(StringType, IntegerType)
     val flussMap = SparkAsFlussMap(sparkMap, mapType)
 
-    assertThat(flussMap.size()).isEqualTo(7)
+    assertThat(flussMap.size()).isEqualTo(2)
     val valueArray = flussMap.valueArray()
     assertThat(valueArray.getInt(0)).isEqualTo(100)
-    assertThat(valueArray.getFloat(1)).isEqualTo(12.34f)
-    assertThat(valueArray.getDouble(2)).isEqualTo(56.78)
-    assertThat(valueArray.getLong(3)).isEqualTo(1000L)
-    assertThat(valueArray.getBoolean(4)).isTrue()
-    assertThat(valueArray.getByte(5)).isEqualTo(127.toByte)
-    assertThat(valueArray.getShort(6)).isEqualTo(1000.toShort)
+    assertThat(valueArray.getInt(1)).isEqualTo(200)
+  }
+
+  test("map with float values") {
+    val keys = toUTF8Strings("float_key1", "float_key2")
+    val values = Array(12.34f, 56.78f)
+    val sparkMap = new ArrayBasedMapData(ArrayData.toArrayData(keys), ArrayData.toArrayData(values))
+    val mapType = MapType(StringType, org.apache.spark.sql.types.FloatType)
+    val flussMap = SparkAsFlussMap(sparkMap, mapType)
+
+    assertThat(flussMap.size()).isEqualTo(2)
+    val valueArray = flussMap.valueArray()
+    assertThat(valueArray.getFloat(0)).isEqualTo(12.34f)
+    assertThat(valueArray.getFloat(1)).isEqualTo(56.78f)
+  }
+
+  test("map with double values") {
+    val keys = toUTF8Strings("double_key1", "double_key2")
+    val values = Array(56.78, 90.12)
+    val sparkMap = new ArrayBasedMapData(ArrayData.toArrayData(keys), ArrayData.toArrayData(values))
+    val mapType = MapType(StringType, org.apache.spark.sql.types.DoubleType)
+    val flussMap = SparkAsFlussMap(sparkMap, mapType)
+
+    assertThat(flussMap.size()).isEqualTo(2)
+    val valueArray = flussMap.valueArray()
+    assertThat(valueArray.getDouble(0)).isEqualTo(56.78)
+    assertThat(valueArray.getDouble(1)).isEqualTo(90.12)
+  }
+
+  test("map with long values") {
+    val keys = toUTF8Strings("long_key1", "long_key2")
+    val values = Array(1000L, 2000L)
+    val sparkMap = new ArrayBasedMapData(ArrayData.toArrayData(keys), ArrayData.toArrayData(values))
+    val mapType = MapType(StringType, org.apache.spark.sql.types.LongType)
+    val flussMap = SparkAsFlussMap(sparkMap, mapType)
+
+    assertThat(flussMap.size()).isEqualTo(2)
+    val valueArray = flussMap.valueArray()
+    assertThat(valueArray.getLong(0)).isEqualTo(1000L)
+    assertThat(valueArray.getLong(1)).isEqualTo(2000L)
+  }
+
+  test("map with boolean values") {
+    val keys = toUTF8Strings("bool_key1", "bool_key2")
+    val values = Array(true, false)
+    val sparkMap = new ArrayBasedMapData(ArrayData.toArrayData(keys), ArrayData.toArrayData(values))
+    val mapType = MapType(StringType, org.apache.spark.sql.types.BooleanType)
+    val flussMap = SparkAsFlussMap(sparkMap, mapType)
+
+    assertThat(flussMap.size()).isEqualTo(2)
+    val valueArray = flussMap.valueArray()
+    assertThat(valueArray.getBoolean(0)).isTrue()
+    assertThat(valueArray.getBoolean(1)).isFalse()
+  }
+
+  test("map with byte values") {
+    val keys = toUTF8Strings("byte_key1", "byte_key2")
+    val values = Array(127.toByte, 64.toByte)
+    val sparkMap = new ArrayBasedMapData(ArrayData.toArrayData(keys), ArrayData.toArrayData(values))
+    val mapType = MapType(StringType, org.apache.spark.sql.types.ByteType)
+    val flussMap = SparkAsFlussMap(sparkMap, mapType)
+
+    assertThat(flussMap.size()).isEqualTo(2)
+    val valueArray = flussMap.valueArray()
+    assertThat(valueArray.getByte(0)).isEqualTo(127.toByte)
+    assertThat(valueArray.getByte(1)).isEqualTo(64.toByte)
+  }
+
+  test("map with short values") {
+    val keys = toUTF8Strings("short_key1", "short_key2")
+    val values = Array(1000.toShort, 2000.toShort)
+    val sparkMap = new ArrayBasedMapData(ArrayData.toArrayData(keys), ArrayData.toArrayData(values))
+    val mapType = MapType(StringType, org.apache.spark.sql.types.ShortType)
+    val flussMap = SparkAsFlussMap(sparkMap, mapType)
+
+    assertThat(flussMap.size()).isEqualTo(2)
+    val valueArray = flussMap.valueArray()
+    assertThat(valueArray.getShort(0)).isEqualTo(1000.toShort)
+    assertThat(valueArray.getShort(1)).isEqualTo(2000.toShort)
   }
 
   test("map with null values") {

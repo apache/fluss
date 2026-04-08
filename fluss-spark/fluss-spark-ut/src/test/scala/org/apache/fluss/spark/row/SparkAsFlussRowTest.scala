@@ -49,7 +49,7 @@ class SparkAsFlussRowTest extends FlussSparkTestBase {
         Timestamp.valueOf("2025-12-31 10:00:00").getTime * 1000,
         new GenericArrayData(Array(11.11f, 22.22f)),
         ArrayBasedMapData.apply(
-          Array(UTF8String.fromString("k1"), UTF8String.fromString("k2")).asInstanceOf[Array[Any]],
+          Array[Any](UTF8String.fromString("k1"), UTF8String.fromString("k2")),
           Array(111, 222)),
         InternalRow.apply(123L, UTF8String.fromString("apache fluss"))
       ))
