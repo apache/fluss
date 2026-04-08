@@ -21,6 +21,7 @@ import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
+import org.apache.fluss.client.metadata.TestingMetadataUpdater;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
@@ -42,6 +43,7 @@ import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidReplicationFactorException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.PartitionAlreadyExistsException;
 import org.apache.fluss.exception.PartitionNotExistException;
@@ -72,16 +74,20 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.messages.ListOffsetsRequest;
+import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.replica.Replica;
+import org.apache.fluss.server.tablet.TestTabletServerGateway;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.MapUtils;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -100,10 +106,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
 import static org.apache.fluss.config.ConfigOptions.CURRENT_KV_FORMAT_VERSION;
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
@@ -2227,5 +2235,42 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .cause()
                 .isInstanceOf(NonPrimaryKeyTableException.class)
                 .hasMessageContaining("is not a primary key table");
+    }
+
+    @Test
+    void testSendListOffsetsRequestOnGatewayRpcFailure() throws Exception {
+        TestTabletServerGateway failingGateway =
+                new TestTabletServerGateway(false, Collections.emptySet()) {
+                    @Override
+                    public CompletableFuture<ListOffsetsResponse> listOffsets(
+                            ListOffsetsRequest request) {
+                        CompletableFuture<ListOffsetsResponse> future = new CompletableFuture<>();
+                        future.completeExceptionally(new NetworkException("connection timed out"));
+                        return future;
+                    }
+                };
+
+        TestingMetadataUpdater metadataUpdater =
+                TestingMetadataUpdater.builder(Collections.emptyMap())
+                        .withTabletServerGateway(1, failingGateway)
+                        .build();
+
+        ListOffsetsRequest request =
+                makeListOffsetsRequest(
+                        1L, null, Arrays.asList(0, 1, 2), new OffsetSpec.LatestSpec());
+        Map<Integer, ListOffsetsRequest> leaderToRequestMap = new HashMap<>();
+        leaderToRequestMap.put(1, request);
+
+        Map<Integer, CompletableFuture<Long>> bucketToOffsetMap = MapUtils.newConcurrentHashMap();
+        bucketToOffsetMap.put(0, new CompletableFuture<>());
+        bucketToOffsetMap.put(1, new CompletableFuture<>());
+        bucketToOffsetMap.put(2, new CompletableFuture<>());
+
+        FlussAdmin.sendListOffsetsRequest(metadataUpdater, leaderToRequestMap, bucketToOffsetMap);
+        ListOffsetsResult listOffsetsResult = new ListOffsetsResult(bucketToOffsetMap);
+        assertThatThrownBy(() -> listOffsetsResult.all().get())
+                .rootCause()
+                .isInstanceOf(NetworkException.class)
+                .hasMessageContaining("connection timed out");
     }
 }

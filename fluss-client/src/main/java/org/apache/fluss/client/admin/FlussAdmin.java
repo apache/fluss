@@ -80,6 +80,7 @@ import org.apache.fluss.rpc.messages.ListAclsRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
+import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
@@ -827,7 +828,8 @@ public class FlussAdmin implements Admin {
         return listOffsetsRequests;
     }
 
-    private static void sendListOffsetsRequest(
+    @VisibleForTesting
+    static void sendListOffsetsRequest(
             MetadataUpdater metadataUpdater,
             Map<Integer, ListOffsetsRequest> leaderToRequestMap,
             Map<Integer, CompletableFuture<Long>> bucketToOffsetMap) {
@@ -840,25 +842,32 @@ public class FlussAdmin implements Admin {
                                 "Server " + leader + " is not found in metadata cache.");
                     } else {
                         gateway.listOffsets(request)
-                                .thenAccept(
-                                        r -> {
-                                            for (PbListOffsetsRespForBucket resp :
-                                                    r.getBucketsRespsList()) {
-                                                if (resp.hasErrorCode()) {
-                                                    bucketToOffsetMap
-                                                            .get(resp.getBucketId())
-                                                            .completeExceptionally(
-                                                                    ApiError.fromErrorMessage(resp)
-                                                                            .exception());
-                                                } else {
-                                                    bucketToOffsetMap
-                                                            .get(resp.getBucketId())
-                                                            .complete(resp.getOffset());
-                                                }
-                                            }
-                                        });
+                                .whenComplete(
+                                        (response, t) ->
+                                                handleListOffsetsResponse(
+                                                        bucketToOffsetMap, response, t));
                     }
                 });
+    }
+
+    private static void handleListOffsetsResponse(
+            Map<Integer, CompletableFuture<Long>> bucketToOffsetMap,
+            ListOffsetsResponse response,
+            Throwable t) {
+        // fail all futures to fail fast
+        if (t != null) {
+            bucketToOffsetMap.values().forEach(f -> f.completeExceptionally(t));
+            return;
+        }
+        for (PbListOffsetsRespForBucket resp : response.getBucketsRespsList()) {
+            if (resp.hasErrorCode()) {
+                bucketToOffsetMap
+                        .get(resp.getBucketId())
+                        .completeExceptionally(ApiError.fromErrorMessage(resp).exception());
+            } else {
+                bucketToOffsetMap.get(resp.getBucketId()).complete(resp.getOffset());
+            }
+        }
     }
 
     @VisibleForTesting
