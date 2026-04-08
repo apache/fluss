@@ -393,7 +393,7 @@ tests:
     asserts:
       - matchRegex:
           path: data["server.yaml"]
-          pattern: 'zookeeper\.client\.config\.path: /etc/fluss/conf/zookeeper-client\.properties'
+          pattern: 'zookeeper\.client\.config-path: /etc/fluss/conf/zookeeper-client\.properties'
 
 ---
 
@@ -474,7 +474,7 @@ tests:
     asserts:
       - notMatchRegex:
           path: data["server.yaml"]
-          pattern: 'zookeeper\.client\.config\.path'
+          pattern: 'zookeeper\.client\.config-path'
 
 ---
 
