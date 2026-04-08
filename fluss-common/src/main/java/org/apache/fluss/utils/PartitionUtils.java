@@ -233,6 +233,57 @@ public class PartitionUtils {
         return DateTimeFormatter.ofPattern(format).format(zonedDateTime);
     }
 
+    /**
+     * Parses a partition value string back to its typed Fluss internal representation. This is the
+     * reverse operation of {@link #convertValueOfType(Object, DataTypeRoot)}.
+     *
+     * @param value the string representation of the partition value
+     * @param type the data type root of the partition column
+     * @return the typed value as a Fluss internal data structure
+     */
+    public static Object parseValueOfType(String value, DataTypeRoot type) {
+        switch (type) {
+            case CHAR:
+            case STRING:
+                return BinaryString.fromString(value);
+            case BOOLEAN:
+                if ("true".equalsIgnoreCase(value)) {
+                    return true;
+                } else if ("false".equalsIgnoreCase(value)) {
+                    return false;
+                }
+                throw new IllegalArgumentException(
+                        "Invalid boolean partition value: '"
+                                + value
+                                + "'. Expected 'true' or 'false'.");
+            case BINARY:
+            case BYTES:
+                return PartitionNameConverters.parseHexString(value);
+            case TINYINT:
+                return Byte.parseByte(value);
+            case SMALLINT:
+                return Short.parseShort(value);
+            case INTEGER:
+                return Integer.parseInt(value);
+            case BIGINT:
+                return Long.parseLong(value);
+            case DATE:
+                return PartitionNameConverters.parseDayString(value);
+            case TIME_WITHOUT_TIME_ZONE:
+                return PartitionNameConverters.parseMilliString(value);
+            case FLOAT:
+                return PartitionNameConverters.parseFloat(value);
+            case DOUBLE:
+                return PartitionNameConverters.parseDouble(value);
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+                return PartitionNameConverters.parseTimestampNtz(value);
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                return PartitionNameConverters.parseTimestampLtz(value);
+            default:
+                throw new IllegalArgumentException("Unsupported DataTypeRoot: " + type);
+        }
+    }
+
     public static String convertValueOfType(Object value, DataTypeRoot type) {
         String stringPartitionKey = "";
         switch (type) {

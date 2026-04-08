@@ -43,6 +43,7 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.utils.PartitionUtils.convertValueOfType;
 import static org.apache.fluss.utils.PartitionUtils.generateAutoPartition;
+import static org.apache.fluss.utils.PartitionUtils.parseValueOfType;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionValues;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -423,5 +424,134 @@ class PartitionUtilsTest {
         assertThat(toStringResult).isEqualTo("1748662955428");
         String detectInvalid = detectInvalidName(toStringResult);
         assertThat(detectInvalid).isEqualTo(null);
+    }
+
+    // ---- Round-trip tests for parseValueOfType ----
+
+    @Test
+    void testRoundTripString() {
+        assertRoundTrip(BinaryString.fromString("Fluss"), DataTypeRoot.STRING);
+    }
+
+    @Test
+    void testRoundTripChar() {
+        assertRoundTrip(BinaryString.fromString("F"), DataTypeRoot.CHAR);
+    }
+
+    @Test
+    void testRoundTripBoolean() {
+        assertRoundTrip(true, DataTypeRoot.BOOLEAN);
+        assertRoundTrip(false, DataTypeRoot.BOOLEAN);
+    }
+
+    @Test
+    void testRoundTripBytes() {
+        byte[] value = new byte[] {0x10, 0x20, 0x30, 0x40, 0x50, (byte) 0xFF};
+        String str = convertValueOfType(value, DataTypeRoot.BYTES);
+        byte[] parsed = (byte[]) parseValueOfType(str, DataTypeRoot.BYTES);
+        assertThat(parsed).isEqualTo(value);
+    }
+
+    @Test
+    void testRoundTripBinary() {
+        byte[] value = new byte[] {0x10, 0x20, 0x30, 0x40, 0x50, (byte) 0xFF};
+        String str = convertValueOfType(value, DataTypeRoot.BINARY);
+        byte[] parsed = (byte[]) parseValueOfType(str, DataTypeRoot.BINARY);
+        assertThat(parsed).isEqualTo(value);
+    }
+
+    @Test
+    void testRoundTripTinyInt() {
+        assertRoundTrip((byte) 100, DataTypeRoot.TINYINT);
+        assertRoundTrip((byte) -100, DataTypeRoot.TINYINT);
+    }
+
+    @Test
+    void testRoundTripSmallInt() {
+        assertRoundTrip((short) -32760, DataTypeRoot.SMALLINT);
+    }
+
+    @Test
+    void testRoundTripInteger() {
+        assertRoundTrip(299000, DataTypeRoot.INTEGER);
+        assertRoundTrip(-299000, DataTypeRoot.INTEGER);
+    }
+
+    @Test
+    void testRoundTripBigInt() {
+        assertRoundTrip(1748662955428L, DataTypeRoot.BIGINT);
+        assertRoundTrip(-1748662955428L, DataTypeRoot.BIGINT);
+    }
+
+    @Test
+    void testRoundTripDate() {
+        assertRoundTrip(20235, DataTypeRoot.DATE);
+        assertRoundTrip(0, DataTypeRoot.DATE);
+    }
+
+    @Test
+    void testRoundTripTime() {
+        assertRoundTrip(5402199, DataTypeRoot.TIME_WITHOUT_TIME_ZONE);
+        assertRoundTrip(0, DataTypeRoot.TIME_WITHOUT_TIME_ZONE);
+    }
+
+    @Test
+    void testRoundTripFloat() {
+        assertRoundTrip(5.73f, DataTypeRoot.FLOAT);
+        assertRoundTrip(Float.NaN, DataTypeRoot.FLOAT);
+        assertRoundTrip(Float.POSITIVE_INFINITY, DataTypeRoot.FLOAT);
+        assertRoundTrip(Float.NEGATIVE_INFINITY, DataTypeRoot.FLOAT);
+    }
+
+    @Test
+    void testRoundTripDouble() {
+        assertRoundTrip(5.73, DataTypeRoot.DOUBLE);
+        assertRoundTrip(Double.NaN, DataTypeRoot.DOUBLE);
+        assertRoundTrip(Double.POSITIVE_INFINITY, DataTypeRoot.DOUBLE);
+        assertRoundTrip(Double.NEGATIVE_INFINITY, DataTypeRoot.DOUBLE);
+    }
+
+    @Test
+    void testRoundTripTimestampNtz() {
+        // With nanos
+        TimestampNtz ts1 = TimestampNtz.fromMillis(1748662955428L, 99988);
+        assertRoundTrip(ts1, DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE);
+
+        // Zero nanos
+        TimestampNtz ts2 = TimestampNtz.fromMillis(1748662955428L, 0);
+        assertRoundTrip(ts2, DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE);
+
+        // Zero millis-of-second with nanos
+        TimestampNtz ts3 = TimestampNtz.fromMillis(1748662955000L, 99988);
+        assertRoundTrip(ts3, DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE);
+
+        // Zero millis-of-second and zero nanos
+        TimestampNtz ts4 = TimestampNtz.fromMillis(1748662955000L, 0);
+        assertRoundTrip(ts4, DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE);
+
+        // Negative millis
+        TimestampNtz ts5 = TimestampNtz.fromMillis(-1748662955428L, 99988);
+        assertRoundTrip(ts5, DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE);
+    }
+
+    @Test
+    void testRoundTripTimestampLtz() {
+        // With nanos
+        TimestampLtz ts1 = TimestampLtz.fromEpochMillis(1748662955428L, 99988);
+        assertRoundTrip(ts1, DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE);
+
+        // Zero nanos
+        TimestampLtz ts2 = TimestampLtz.fromEpochMillis(1748662955428L, 0);
+        assertRoundTrip(ts2, DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE);
+
+        // Negative millis
+        TimestampLtz ts3 = TimestampLtz.fromEpochMillis(-1748662955428L, 99988);
+        assertRoundTrip(ts3, DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE);
+    }
+
+    private void assertRoundTrip(Object originalValue, DataTypeRoot type) {
+        String str = convertValueOfType(originalValue, type);
+        Object parsed = parseValueOfType(str, type);
+        assertThat(parsed).isEqualTo(originalValue);
     }
 }

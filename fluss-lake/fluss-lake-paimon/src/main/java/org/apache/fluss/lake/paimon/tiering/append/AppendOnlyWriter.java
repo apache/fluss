@@ -20,6 +20,7 @@ package org.apache.fluss.lake.paimon.tiering.append;
 import org.apache.fluss.lake.paimon.tiering.RecordWriter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.types.RowType;
 
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.table.BucketMode;
@@ -41,7 +42,8 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
             FileStoreTable fileStoreTable,
             TableBucket tableBucket,
             @Nullable String partition,
-            List<String> partitionKeys) {
+            List<String> partitionKeys,
+            RowType flussRowType) {
         //noinspection unchecked
         super(
                 (TableWriteImpl<InternalRow>)
@@ -50,18 +52,14 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
                 fileStoreTable.rowType(),
                 tableBucket,
                 partition,
-                partitionKeys); // Pass to parent
+                partitionKeys,
+                flussRowType);
         this.fileStoreTable = fileStoreTable;
     }
 
     @Override
     public void write(LogRecord record) throws Exception {
         flussRecordAsPaimonRow.setFlussRecord(record);
-
-        // get partition once
-        if (partition == null) {
-            partition = tableWrite.getPartition(flussRecordAsPaimonRow);
-        }
 
         // hacky, call internal method tableWrite.getWrite() to support
         // to write to given partition, otherwise, it'll always extract a partition from Paimon row
