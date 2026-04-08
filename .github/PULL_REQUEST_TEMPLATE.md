@@ -17,11 +17,11 @@
     - [ ] No generative AI tools used
     - [ ] Yes (please specify the tool below)
 
-<!--
-Generated-by: [Tool Name and Version] following [the guidelines](https://github.com/apache/fluss/blob/main/AGENTS.md)
+**(The sections below can be removed for hotfixes or typos)**
 -->
 
-**(The sections below can be removed for hotfixes or typos)**
+<!--
+Generated-by: [Tool Name and Version] following [the guidelines](https://github.com/apache/fluss/blob/main/AGENTS.md)
 -->
 
 ### Purpose
