@@ -119,18 +119,21 @@ public class TieringSplitReader<WriteResult>
     private final Set<TieringSplit> currentEmptySplits;
 
     private final TieringMetrics tieringMetrics;
+    private final boolean unshadedArrowAvailable;
 
     public TieringSplitReader(
             Connection connection,
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
+            ClassLoader userClassLoader,
             TieringMetrics tieringMetrics) {
-        this(connection, lakeTieringFactory, DEFAULT_POLL_TIMEOUT, tieringMetrics);
+        this(connection, lakeTieringFactory, userClassLoader, DEFAULT_POLL_TIMEOUT, tieringMetrics);
     }
 
     @VisibleForTesting
     protected TieringSplitReader(
             Connection connection,
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
+            ClassLoader userClassLoader,
             Duration pollTimeout,
             TieringMetrics tieringMetrics) {
         this.lakeTieringFactory = lakeTieringFactory;
@@ -147,6 +150,7 @@ public class TieringSplitReader<WriteResult>
         this.reachTieringMaxDurationTables = new HashSet<>();
         this.pollTimeout = pollTimeout;
         this.tieringMetrics = tieringMetrics;
+        this.unshadedArrowAvailable = checkUnshadedArrowAvailable(userClassLoader);
     }
 
     @Override
@@ -387,7 +391,8 @@ public class TieringSplitReader<WriteResult>
         TableInfo tableInfo = checkNotNull(currentTable).getTableInfo();
 
         currentTableUseRecordBatchPath =
-                !tableInfo.hasPrimaryKey()
+                unshadedArrowAvailable
+                        && !tableInfo.hasPrimaryKey()
                         && tableInfo.getTableConfig().getLogFormat() == LogFormat.ARROW
                         && tableInfo.getTableConfig().getDataLakeFormat().get()
                                 == DataLakeFormat.PAIMON;
@@ -829,6 +834,15 @@ public class TieringSplitReader<WriteResult>
          */
         LogOffsetAndTimestamp handleRecords(
                 List<R> records, LakeWriter<?> lakeWriter, long stoppingOffset) throws IOException;
+    }
+
+    private static boolean checkUnshadedArrowAvailable(ClassLoader classLoader) {
+        try {
+            Class.forName("org.apache.arrow.vector.VectorSchemaRoot", false, classLoader);
+            return true;
+        } catch (ClassNotFoundException e) {
+            return false;
+        }
     }
 
     private static final class LogOffsetAndTimestamp {

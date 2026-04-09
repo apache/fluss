@@ -59,6 +59,11 @@ public class ArrowBatchData implements AutoCloseable {
         return vectorSchemaRoot;
     }
 
+    /** Returns the allocator that owns the Arrow buffers of this batch. */
+    public BufferAllocator getAllocator() {
+        return allocator;
+    }
+
     /** Returns the schema id of this batch. */
     public int getSchemaId() {
         return schemaId;
@@ -83,6 +88,34 @@ public class ArrowBatchData implements AutoCloseable {
     public long getLogOffset(int rowId) {
         validateRowId(rowId);
         return baseLogOffset + rowId;
+    }
+
+    /**
+     * Creates a new {@link ArrowBatchData} containing a contiguous slice of this batch's rows and
+     * releases the original vector data.
+     *
+     * <p>After this method returns, the original {@link ArrowBatchData} instance MUST NOT be used
+     * or closed. The caller is responsible for closing the returned instance, which owns both the
+     * sliced vectors and the shared allocator.
+     *
+     * @param startRow the starting row index (0-based, inclusive)
+     * @param numRows the number of rows in the slice
+     * @return a new {@link ArrowBatchData} containing only the specified rows
+     */
+    public ArrowBatchData sliceAndTransferOwnership(int startRow, int numRows) {
+        checkArgument(startRow >= 0, "startRow must be >= 0, but is %s", startRow);
+        checkArgument(numRows > 0, "numRows must be > 0, but is %s", numRows);
+        checkArgument(
+                startRow + numRows <= getRecordCount(),
+                "startRow(%s) + numRows(%s) must be <= recordCount(%s)",
+                startRow,
+                numRows,
+                getRecordCount());
+        VectorSchemaRoot slicedRoot = vectorSchemaRoot.slice(startRow, numRows);
+        // release original vector buffers; sliced vectors hold independent copies
+        vectorSchemaRoot.close();
+        return new ArrowBatchData(
+                slicedRoot, allocator, baseLogOffset + startRow, timestamp, schemaId);
     }
 
     private void validateRowId(int rowId) {

@@ -24,7 +24,6 @@ import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.record.LogRecord;
 
 import org.apache.arrow.memory.BufferAllocator;
-import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.BigIntVector;
 import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.IntVector;
@@ -53,7 +52,7 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
 
     private final FileStoreTable fileStoreTable;
 
-    // Dedicated allocator for system column vectors, independent of any batch's allocator
+    // Child allocator for system column vectors, sharing the same root as the batch allocator
     @Nullable private BufferAllocator systemColumnAllocator;
 
     // Reusable resources for enriched VectorSchemaRoot with system columns
@@ -116,7 +115,7 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
         long timestamp = arrowBatchData.getTimestamp();
         int rowCount = originalRoot.getRowCount();
 
-        ensureEnrichedRootInitialized(originalRoot);
+        ensureEnrichedRootInitialized(originalRoot, arrowBatchData.getAllocator());
         updateEnrichedVectorSchemaRoot(writtenBucket, baseOffset, timestamp, rowCount);
 
         ArrowBundleRecords arrowBundleRecords =
@@ -137,12 +136,14 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
      * system column vectors if schema matches. The enrichedRoot references the current
      * originalRoot's data vectors plus the system column vectors.
      */
-    private void ensureEnrichedRootInitialized(VectorSchemaRoot originalRoot) {
+    private void ensureEnrichedRootInitialized(
+            VectorSchemaRoot originalRoot, BufferAllocator batchAllocator) {
         Schema originalSchema = originalRoot.getSchema();
         List<Field> originalFields = originalSchema.getFields();
         int currentFieldCount = originalFields.size();
 
-        // initialize system column vectors on first call
+        // initialize system column vectors on first call, using a child allocator that
+        // shares the same root as the batch allocator so all vectors are compatible
         if (bucketVector == null) {
             Field bucketField =
                     new Field(
@@ -170,7 +171,10 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
             enrichedSchema = new Schema(enrichedFields);
 
             if (systemColumnAllocator == null) {
-                systemColumnAllocator = new RootAllocator(Long.MAX_VALUE);
+                systemColumnAllocator =
+                        batchAllocator
+                                .getRoot()
+                                .newChildAllocator("system-column-allocator", 0, Long.MAX_VALUE);
             }
             bucketVector = new IntVector(bucketField, systemColumnAllocator);
             offsetVector = new BigIntVector(offsetField, systemColumnAllocator);

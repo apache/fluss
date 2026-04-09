@@ -254,6 +254,21 @@ public abstract class CompletedFetch {
                     continue;
                 }
 
+                // Skip records that are before nextFetchOffset, analogous to the
+                // record-level filtering in nextFetchedRecord() for the row-based path.
+                long batchBaseOffset = arrowBatchData.getBaseLogOffset();
+                if (batchBaseOffset < nextFetchOffset) {
+                    int skipRows = (int) (nextFetchOffset - batchBaseOffset);
+                    if (skipRows >= arrowBatchData.getRecordCount()) {
+                        arrowBatchData.close();
+                        nextFetchOffset = batch.nextLogOffset();
+                        continue;
+                    }
+                    int remainingRows = arrowBatchData.getRecordCount() - skipRows;
+                    arrowBatchData =
+                            arrowBatchData.sliceAndTransferOwnership(skipRows, remainingRows);
+                }
+
                 arrowBatches.add(arrowBatchData);
                 recordsRead += arrowBatchData.getRecordCount();
                 recordsFetched += arrowBatchData.getRecordCount();
