@@ -18,121 +18,18 @@
 package org.apache.fluss.spark.lake
 
 import org.apache.fluss.config.{ConfigOptions, Configuration}
-import org.apache.fluss.flink.tiering.LakeTieringJobBuilder
-import org.apache.fluss.flink.tiering.source.TieringSourceOptions
-import org.apache.fluss.metadata.{DataLakeFormat, TableBucket, TablePath}
-import org.apache.fluss.spark.FlussSparkTestBase
+import org.apache.fluss.metadata.DataLakeFormat
 import org.apache.fluss.spark.SparkConnectorOptions.{BUCKET_NUMBER, PRIMARY_KEY}
 
-import org.apache.flink.api.common.RuntimeExecutionMode
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment
 import org.apache.spark.sql.Row
 
-import java.time.Duration
-
-import scala.jdk.CollectionConverters._
+import java.nio.file.Files
 
 /**
  * Base class for lake-enabled primary key table read tests. Subclasses provide the lake format
  * config and lake catalog configuration.
  */
-abstract class SparkLakePkTableReadTestBase extends FlussSparkTestBase {
-
-  protected var warehousePath: String = _
-
-  /** The lake format used by this test. */
-  protected def dataLakeFormat: DataLakeFormat
-
-  /** Lake catalog configuration specific to the format. */
-  protected def lakeCatalogConf: Configuration
-
-  private val TIERING_PARALLELISM = 2
-  private val CHECKPOINT_INTERVAL_MS = 1000L
-  private val POLL_INTERVAL: Duration = Duration.ofMillis(500L)
-  private val SYNC_TIMEOUT: Duration = Duration.ofMinutes(2)
-  private val SYNC_POLL_INTERVAL_MS = 500L
-
-  /** Tier all pending data for the given table to the lake. */
-  protected def tierToLake(tableName: String): Unit = {
-    val tablePath = createTablePath(tableName)
-    val tableInfo = loadFlussTable(tablePath).getTableInfo
-    val tableId = tableInfo.getTableId
-    val numBuckets = tableInfo.getNumBuckets
-
-    val execEnv = StreamExecutionEnvironment.getExecutionEnvironment
-    execEnv.setRuntimeMode(RuntimeExecutionMode.STREAMING)
-    execEnv.setParallelism(TIERING_PARALLELISM)
-    execEnv.enableCheckpointing(CHECKPOINT_INTERVAL_MS)
-
-    val flussConfig = new Configuration(flussServer.getClientConfig)
-    flussConfig.set(TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL, POLL_INTERVAL)
-
-    val jobClient = LakeTieringJobBuilder
-      .newBuilder(
-        execEnv,
-        flussConfig,
-        lakeCatalogConf,
-        new Configuration(),
-        dataLakeFormat.toString)
-      .build()
-
-    try {
-      // Collect all buckets to wait for sync
-      val tableBuckets = if (tableInfo.isPartitioned) {
-        // For partitioned table, get all partitions and their buckets
-        val partitionInfos = admin.listPartitionInfos(tablePath).get()
-        partitionInfos.asScala.flatMap {
-          partitionInfo =>
-            (0 until numBuckets).map {
-              bucket => new TableBucket(tableId, partitionInfo.getPartitionId, bucket)
-            }
-        }.toSet
-      } else {
-        // For non-partitioned table, just use bucket 0
-        Set(new TableBucket(tableId, 0))
-      }
-
-      val deadline = System.currentTimeMillis() + SYNC_TIMEOUT.toMillis
-      val syncedBuckets = scala.collection.mutable.Set[TableBucket]()
-
-      while (syncedBuckets.size < tableBuckets.size && System.currentTimeMillis() < deadline) {
-        tableBuckets.foreach {
-          tableBucket =>
-            if (!syncedBuckets.contains(tableBucket)) {
-              try {
-                val replica = flussServer.waitAndGetLeaderReplica(tableBucket)
-                // For pk table, we also check the LogTablet's lake snapshot id
-                // which is updated when data is tiered to lake
-                if (replica.getLogTablet.getLakeTableSnapshotId >= 0) {
-                  syncedBuckets.add(tableBucket)
-                }
-              } catch {
-                case _: Exception =>
-              }
-            }
-        }
-        if (syncedBuckets.size < tableBuckets.size) {
-          Thread.sleep(SYNC_POLL_INTERVAL_MS)
-        }
-      }
-
-      assert(
-        syncedBuckets.size == tableBuckets.size,
-        s"Not all buckets synced to lake within $SYNC_TIMEOUT. " +
-          s"Synced: ${syncedBuckets.size}, Total: ${tableBuckets.size}"
-      )
-    } finally {
-      jobClient.cancel().get()
-    }
-  }
-
-  override protected def withTable(tableNames: String*)(f: => Unit): Unit = {
-    try {
-      f
-    } finally {
-      tableNames.foreach(t => sql(s"DROP TABLE IF EXISTS $DEFAULT_DATABASE.$t"))
-    }
-  }
+abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTestBase {
 
   test("Spark Lake Read: pk table falls back when no lake snapshot") {
     // Test non-partitioned table
@@ -429,5 +326,50 @@ abstract class SparkLakePkTableReadTestBase extends FlussSparkTestBase {
           Row("2026-01-02", "david", 4) :: Nil
       )
     }
+  }
+}
+
+class SparkLakePaimonPrimaryKeyTableReadTestBase extends SparkLakePrimaryKeyTableReadTestBase {
+
+  override protected def dataLakeFormat: DataLakeFormat = DataLakeFormat.PAIMON
+
+  override protected def flussConf: Configuration = {
+    val conf = super.flussConf
+    conf.setString("datalake.format", DataLakeFormat.PAIMON.toString)
+    conf.setString("datalake.paimon.metastore", "filesystem")
+    conf.setString("datalake.paimon.cache-enabled", "false")
+    warehousePath =
+      Files.createTempDirectory("fluss-testing-paimon-pk-lake-read").resolve("warehouse").toString
+    conf.setString("datalake.paimon.warehouse", warehousePath)
+    conf
+  }
+
+  override protected def lakeCatalogConf: Configuration = {
+    val conf = new Configuration()
+    conf.setString("metastore", "filesystem")
+    conf.setString("warehouse", warehousePath)
+    conf
+  }
+}
+
+class SparkLakeIcebergPrimaryKeyTableReadTestBase extends SparkLakePrimaryKeyTableReadTestBase {
+
+  override protected def dataLakeFormat: DataLakeFormat = DataLakeFormat.ICEBERG
+
+  override protected def flussConf: Configuration = {
+    val conf = super.flussConf
+    conf.setString("datalake.format", DataLakeFormat.ICEBERG.toString)
+    conf.setString("datalake.iceberg.type", "hadoop")
+    warehousePath =
+      Files.createTempDirectory("fluss-testing-iceberg-pk-lake-read").resolve("warehouse").toString
+    conf.setString("datalake.iceberg.warehouse", warehousePath)
+    conf
+  }
+
+  override protected def lakeCatalogConf: Configuration = {
+    val conf = new Configuration()
+    conf.setString("type", "hadoop")
+    conf.setString("warehouse", warehousePath)
+    conf
   }
 }
