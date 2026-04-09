@@ -45,7 +45,6 @@ case class FlussAppendInputPartition(tableBucket: TableBucket, startOffset: Long
   }
 }
 
-
 /**
  * Represents an input partition for reading data from a primary key table bucket. This partition
  * includes snapshot information for hybrid snapshot-log reading.
