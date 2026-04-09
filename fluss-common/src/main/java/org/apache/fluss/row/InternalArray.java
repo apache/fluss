@@ -175,6 +175,9 @@ public interface InternalArray extends DataGetters {
     static ElementGetter createDeepElementGetter(DataType fieldType) {
         final ElementGetter elementGetter;
         switch (fieldType.getTypeRoot()) {
+            case STRING:
+                elementGetter = (array, pos) -> array.getString(pos).copy();
+                break;
             case ARRAY:
                 DataType nestedType = ((ArrayType) fieldType).getElementType();
                 ElementGetter nestedGetter = createDeepElementGetter(nestedType);

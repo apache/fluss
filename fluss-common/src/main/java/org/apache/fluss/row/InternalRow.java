@@ -252,6 +252,9 @@ public interface InternalRow extends DataGetters {
     static FieldGetter createDeepFieldGetter(DataType fieldType, int fieldPos) {
         final FieldGetter fieldGetter;
         switch (fieldType.getTypeRoot()) {
+            case STRING:
+                fieldGetter = row -> row.getString(fieldPos).copy();
+                break;
             case ARRAY:
                 DataType elementType = ((ArrayType) fieldType).getElementType();
                 InternalArray.ElementGetter nestedGetter = createDeepElementGetter(elementType);
