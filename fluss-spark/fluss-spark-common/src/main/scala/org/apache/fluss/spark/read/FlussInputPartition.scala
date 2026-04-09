@@ -45,23 +45,6 @@ case class FlussAppendInputPartition(tableBucket: TableBucket, startOffset: Long
   }
 }
 
-/**
- * Represents an input partition for reading data from a single lake split. Each lake split maps to
- * one Spark task, enabling parallel lake reads across splits.
- *
- * @param tableBucket
- *   the table bucket this split belongs to
- * @param lakeSplitBytes
- *   serialized lake split data
- */
-case class FlussLakeInputPartition(tableBucket: TableBucket, lakeSplitBytes: Array[Byte])
-  extends FlussInputPartition {
-  override def toString: String = {
-    s"FlussLakeInputPartition{tableId=${tableBucket.getTableId}, bucketId=${tableBucket.getBucket}," +
-      s" partitionId=${tableBucket.getPartitionId}," +
-      s" splitSize=${lakeSplitBytes.length}}"
-  }
-}
 
 /**
  * Represents an input partition for reading data from a primary key table bucket. This partition
@@ -85,33 +68,6 @@ case class FlussUpsertInputPartition(
   override def toString: String = {
     s"FlussUpsertInputPartition{tableId=${tableBucket.getTableId}, bucketId=${tableBucket.getBucket}," +
       s" partitionId=${tableBucket.getPartitionId}, snapshotId=$snapshotId," +
-      s" logStartOffset=$logStartingOffset, logStopOffset=$logStoppingOffset}"
-  }
-}
-
-/**
- * Represents an input partition for reading data from a lake-enabled primary key table bucket. This
- * partition combines lake snapshot splits with Fluss log tail for hybrid lake-kv reading.
- *
- * @param tableBucket
- *   the table bucket to read from
- * @param lakeSplitBytes
- *   serialized lake splits data (may be null if no lake snapshot)
- * @param logStartingOffset
- *   the log offset where incremental reading should start
- * @param logStoppingOffset
- *   the log offset where incremental reading should end
- */
-case class FlussLakeUpsertInputPartition(
-    tableBucket: TableBucket,
-    lakeSplitBytes: Array[Byte],
-    logStartingOffset: Long,
-    logStoppingOffset: Long)
-  extends FlussInputPartition {
-  override def toString: String = {
-    s"FlussLakeUpsertInputPartition{tableId=${tableBucket.getTableId}, bucketId=${tableBucket.getBucket}," +
-      s" partitionId=${tableBucket.getPartitionId}," +
-      s" lakeSplitSize=${if (lakeSplitBytes != null) lakeSplitBytes.length else 0}," +
       s" logStartOffset=$logStartingOffset, logStopOffset=$logStoppingOffset}"
   }
 }

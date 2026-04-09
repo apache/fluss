@@ -329,7 +329,7 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
   }
 }
 
-class SparkLakePaimonPrimaryKeyTableReadTestBase extends SparkLakePrimaryKeyTableReadTestBase {
+class SparkLakePaimonPrimaryKeyTableReadTest extends SparkLakePrimaryKeyTableReadTestBase {
 
   override protected def dataLakeFormat: DataLakeFormat = DataLakeFormat.PAIMON
 
@@ -352,7 +352,7 @@ class SparkLakePaimonPrimaryKeyTableReadTestBase extends SparkLakePrimaryKeyTabl
   }
 }
 
-class SparkLakeIcebergPrimaryKeyTableReadTestBase extends SparkLakePrimaryKeyTableReadTestBase {
+class SparkLakeIcebergPrimaryKeyTableReadTest extends SparkLakePrimaryKeyTableReadTestBase {
 
   override protected def dataLakeFormat: DataLakeFormat = DataLakeFormat.ICEBERG
 
