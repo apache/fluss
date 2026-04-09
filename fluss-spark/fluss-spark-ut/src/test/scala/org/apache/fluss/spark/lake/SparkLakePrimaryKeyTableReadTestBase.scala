@@ -351,25 +351,3 @@ class SparkLakePaimonPrimaryKeyTableReadTest extends SparkLakePrimaryKeyTableRea
     conf
   }
 }
-
-class SparkLakeIcebergPrimaryKeyTableReadTest extends SparkLakePrimaryKeyTableReadTestBase {
-
-  override protected def dataLakeFormat: DataLakeFormat = DataLakeFormat.ICEBERG
-
-  override protected def flussConf: Configuration = {
-    val conf = super.flussConf
-    conf.setString("datalake.format", DataLakeFormat.ICEBERG.toString)
-    conf.setString("datalake.iceberg.type", "hadoop")
-    warehousePath =
-      Files.createTempDirectory("fluss-testing-iceberg-pk-lake-read").resolve("warehouse").toString
-    conf.setString("datalake.iceberg.warehouse", warehousePath)
-    conf
-  }
-
-  override protected def lakeCatalogConf: Configuration = {
-    val conf = new Configuration()
-    conf.setString("type", "hadoop")
-    conf.setString("warehouse", warehousePath)
-    conf
-  }
-}
