@@ -38,7 +38,6 @@ import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
 import org.apache.fluss.server.coordinator.event.TableRegistrationChangeEvent;
 import org.apache.fluss.server.coordinator.event.TestingEventManager;
 import org.apache.fluss.server.entity.TablePropertyChanges;
-import org.apache.fluss.server.zk.CuratorCacheRaceConditionTest;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
@@ -407,8 +406,6 @@ class TableChangeWatcherTest {
      * already contain full data. Without the fix, only NODE_CHANGED triggers {@code
      * processCreateTable}, so these events would be missed. The fix adds table path handling in the
      * NODE_CREATED branch to cover this case.
-     *
-     * @see CuratorCacheRaceConditionTest
      */
     @Test
     void testTableCreationDetectedViaNodeCreatedEvent() {
@@ -443,6 +440,7 @@ class TableChangeWatcherTest {
                                     tableId,
                                     schemaInfo.getSchemaId(),
                                     TEST_TABLE,
+                                    remoteDataDir,
                                     currentMillis,
                                     currentMillis),
                             tableAssignment));
