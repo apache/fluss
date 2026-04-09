@@ -42,6 +42,7 @@ final class ServerChannelInitializer extends NettyChannelInitializer {
     private final String endpointListenerName;
     private final boolean isInternal;
     private final RequestsMetrics requestsMetrics;
+    private final int maxRequestSize;
     private final Supplier<ServerAuthenticator> authenticatorSupplier;
 
     public ServerChannelInitializer(
@@ -51,6 +52,7 @@ final class ServerChannelInitializer extends NettyChannelInitializer {
             boolean isInternal,
             RequestsMetrics requestsMetrics,
             long maxIdleTimeSeconds,
+            int maxRequestSize,
             Supplier<ServerAuthenticator> authenticatorSupplier) {
         super(maxIdleTimeSeconds);
         this.requestChannels = requestChannels;
@@ -58,6 +60,7 @@ final class ServerChannelInitializer extends NettyChannelInitializer {
         this.endpointListenerName = endpointListenerName;
         this.isInternal = isInternal;
         this.requestsMetrics = requestsMetrics;
+        this.maxRequestSize = maxRequestSize;
         this.authenticatorSupplier = authenticatorSupplier;
     }
 
@@ -65,7 +68,7 @@ final class ServerChannelInitializer extends NettyChannelInitializer {
     protected void initChannel(SocketChannel ch) throws Exception {
         super.initChannel(ch);
         // initialBytesToStrip=0 to include the frame size field after decoding
-        addFrameDecoder(ch, Integer.MAX_VALUE, 0);
+        addFrameDecoder(ch, maxRequestSize, 0);
         addIdleStateHandler(ch);
         ServerAuthenticator serverAuthenticator = authenticatorSupplier.get();
         LOG.debug(

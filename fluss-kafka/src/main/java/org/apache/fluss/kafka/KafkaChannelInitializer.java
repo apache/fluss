@@ -29,14 +29,16 @@ import org.apache.fluss.shaded.netty4.io.netty.handler.flow.FlowControlHandler;
  * by the server to handle the Kafka requests for the client.
  */
 public class KafkaChannelInitializer extends NettyChannelInitializer {
-    public static final int MAX_FRAME_LENGTH = 100 * 1024 * 1024; // 100MB
 
     private final RequestChannel[] requestChannels;
+    private final int maxRequestSize;
     private final LengthFieldPrepender prepender = new LengthFieldPrepender(4);
 
-    public KafkaChannelInitializer(RequestChannel[] requestChannels, long maxIdleTimeSeconds) {
+    public KafkaChannelInitializer(
+            RequestChannel[] requestChannels, long maxIdleTimeSeconds, int maxRequestSize) {
         super(maxIdleTimeSeconds);
         this.requestChannels = requestChannels;
+        this.maxRequestSize = maxRequestSize;
     }
 
     @Override
@@ -44,7 +46,7 @@ public class KafkaChannelInitializer extends NettyChannelInitializer {
         super.initChannel(ch);
         addIdleStateHandler(ch);
         ch.pipeline().addLast(prepender);
-        addFrameDecoder(ch, MAX_FRAME_LENGTH, 4);
+        addFrameDecoder(ch, maxRequestSize, 4);
         ch.pipeline().addLast("flowController", new FlowControlHandler());
         ch.pipeline().addLast(new KafkaCommandDecoder(requestChannels));
     }

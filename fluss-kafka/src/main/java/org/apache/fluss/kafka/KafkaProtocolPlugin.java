@@ -53,7 +53,8 @@ public class KafkaProtocolPlugin implements NetworkProtocolPlugin {
             RequestChannel[] requestChannels, String listenerName) {
         return new KafkaChannelInitializer(
                 requestChannels,
-                conf.get(ConfigOptions.KAFKA_CONNECTION_MAX_IDLE_TIME).getSeconds());
+                conf.get(ConfigOptions.KAFKA_CONNECTION_MAX_IDLE_TIME).getSeconds(),
+                (int) conf.get(ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE).getBytes());
     }
 
     @Override
