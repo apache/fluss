@@ -35,7 +35,7 @@ For Flink's Table API, Fluss supports the following features:
 | [SQL Show Partitions](ddl.md#show-partitions)                   | ✔️    |                                          |
 | [SQL Add Partition](ddl.md#add-partition)                       | ✔️    |                                          |
 | [SQL Drop Partition](ddl.md#drop-partition)                     | ✔️    |                                          |
-| [Procedures](ddl.md#procedures)                                 | ✔️    | ACL management and cluster configuration |
+| [Procedures](procedures.md)                                     | ✔️    | ACL management and cluster configuration |
 | [SQL Select](reads.md)                                          | ✔️    | Support both streaming and batch mode.   |
 | [SQL Limit](reads.md#limit-read)                                | ✔️    | Only for Log Table                       |
 | [SQL Insert Into](writes.md)                                    | ✔️    | Support both streaming and batch mode.   |

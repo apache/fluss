@@ -69,7 +69,7 @@ Read the [release blog](/blog/releases/0.8/) about the new features and signific
 - [Fluss 0.7.0 Binary Release](https://github.com/apache/fluss/releases/download/v0.7.0/fluss-0.7.0-bin.tgz) ([asc](https://github.com/apache/fluss/releases/download/v0.7.0/fluss-0.7.0-bin.tgz.asc), [sha512](https://github.com/apache/fluss/releases/download/v0.7.0/fluss-0.7.0-bin.tgz.sha512))
 - [Fluss 0.7.0 Source Release](https://github.com/apache/fluss/releases/download/v0.7.0/fluss-0.7.0-src.tgz) ([asc](https://github.com/apache/fluss/releases/download/v0.7.0/fluss-0.7.0-src.tgz.asc), [sha512](https://github.com/apache/fluss/releases/download/v0.7.0/fluss-0.7.0-src.tgz.sha512))
 
-#### Flink Connector
+#### Flink Connector {#fluss-connector}
 | Flink Version | Download Link                                                                                                                    | Signature & Checksum |
 |---------------|----------------------------------------------------------------------------------------------------------------------------------|----------------------|
 | Flink 1.20 | [fluss-flink-1.20-0.7.0.jar](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-flink-1.20/0.7.0/fluss-flink-1.20-0.7.0.jar) | [asc](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/0.7.0/fluss-flink-1.20-0.7.0.jar.asc), [sha](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/0.7.0/fluss-flink-1.20-0.7.0.jar.sha1) |
