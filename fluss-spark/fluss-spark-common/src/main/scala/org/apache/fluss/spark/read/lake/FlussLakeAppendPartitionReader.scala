@@ -20,7 +20,6 @@ package org.apache.fluss.spark.read.lake
 import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
 import org.apache.fluss.metadata.TablePath
 import org.apache.fluss.record.LogRecord
-import org.apache.fluss.spark.read.FlussLakeInputPartition
 import org.apache.fluss.spark.row.DataConverter
 import org.apache.fluss.types.RowType
 import org.apache.fluss.utils.CloseableIterator
@@ -30,7 +29,7 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.read.PartitionReader
 
 /** Partition reader that reads data from a single lake split via lake storage (no Fluss connection). */
-class FlussLakePartitionReader(
+class FlussLakeAppendPartitionReader(
     tablePath: TablePath,
     rowType: RowType,
     partition: FlussLakeInputPartition,
@@ -51,9 +50,7 @@ class FlussLakePartitionReader(
     val split = splitSerializer.deserialize(splitSerializer.getVersion, partition.lakeSplitBytes)
 
     recordIterator = lakeSource
-      .createRecordReader(new LakeSource.ReaderContext[LakeSplit] {
-        override def lakeSplit(): LakeSplit = split
-      })
+      .createRecordReader(() => split)
       .read()
   }
 

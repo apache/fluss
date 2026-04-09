@@ -20,7 +20,6 @@ package org.apache.fluss.spark.read.lake
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
 import org.apache.fluss.metadata.TablePath
-import org.apache.fluss.spark.read.FlussLakeUpsertInputPartition
 
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReader, PartitionReaderFactory}
@@ -39,7 +38,7 @@ class FlussLakeUpsertPartitionReaderFactory(
   extends PartitionReaderFactory {
 
   @transient private lazy val lakeSource: LakeSource[LakeSplit] = {
-    FlussLakeSourceUtils.createLakeSource(tableProperties, tablePath)
+    FlussLakeUtils.createLakeSource(tableProperties, tablePath)
   }
 
   override def createReader(partition: InputPartition): PartitionReader[InternalRow] = {

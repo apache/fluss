@@ -20,7 +20,7 @@ package org.apache.fluss.spark.read.lake
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
 import org.apache.fluss.metadata.TablePath
-import org.apache.fluss.spark.read.{FlussAppendInputPartition, FlussAppendPartitionReader, FlussLakeInputPartition}
+import org.apache.fluss.spark.read.{FlussAppendInputPartition, FlussAppendPartitionReader}
 import org.apache.fluss.types.RowType
 
 import org.apache.spark.sql.catalyst.InternalRow
@@ -38,8 +38,8 @@ class FlussLakeAppendPartitionReaderFactory(
   extends PartitionReaderFactory {
 
   @transient private lazy val lakeSource: LakeSource[LakeSplit] = {
-    val source = FlussLakeSourceUtils.createLakeSource(tableProperties, tablePath)
-    source.withProject(FlussLakeSourceUtils.lakeProjection(projection))
+    val source = FlussLakeUtils.createLakeSource(tableProperties, tablePath)
+    source.withProject(FlussLakeUtils.lakeProjection(projection))
     source
   }
 
@@ -48,7 +48,7 @@ class FlussLakeAppendPartitionReaderFactory(
   override def createReader(partition: InputPartition): PartitionReader[InternalRow] = {
     partition match {
       case lake: FlussLakeInputPartition =>
-        new FlussLakePartitionReader(tablePath, projectedRowType, lake, lakeSource)
+        new FlussLakeAppendPartitionReader(tablePath, projectedRowType, lake, lakeSource)
       case log: FlussAppendInputPartition =>
         new FlussAppendPartitionReader(tablePath, projection, log, flussConfig)
       case _ =>

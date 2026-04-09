@@ -22,12 +22,9 @@ import org.apache.fluss.config.Configuration
 import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
 import org.apache.fluss.metadata.TablePath
 import org.apache.fluss.row.InternalRow
-import org.apache.fluss.spark.read.{FlussLakeUpsertInputPartition, FlussPartitionReader}
+import org.apache.fluss.spark.read.FlussPartitionReader
 
 import org.apache.spark.internal.Logging
-
-import java.io.{ByteArrayInputStream, DataInputStream}
-import java.util.ArrayList
 
 import scala.collection.JavaConverters._
 
@@ -47,7 +44,9 @@ class FlussLakeUpsertPartitionReader(
   with Logging {
 
   private val lakeSplits = if (flussPartition.lakeSplitBytes != null) {
-    deserializeLakeSplits(flussPartition.lakeSplitBytes, lakeSource.getSplitSerializer)
+    FlussLakeUtils.deserializeLakeSplits(
+      flussPartition.lakeSplitBytes,
+      lakeSource.getSplitSerializer)
   } else {
     null
   }
@@ -84,30 +83,6 @@ class FlussLakeUpsertPartitionReader(
       mergedIterator = flussRecords.asScala
     }
     false
-  }
-
-  private def deserializeLakeSplits(
-      bytes: Array[Byte],
-      splitSerializer: org.apache.fluss.lake.serializer.SimpleVersionedSerializer[LakeSplit])
-      : java.util.List[LakeSplit] = {
-    val bais = new ByteArrayInputStream(bytes)
-    val dis = new DataInputStream(bais)
-
-    // Read serializer version
-    val version = dis.readInt()
-    // Read number of splits
-    val numSplits = dis.readInt()
-    val splits = new ArrayList[LakeSplit](numSplits)
-
-    // Read each split
-    for (_ <- 0 until numSplits) {
-      val length = dis.readInt()
-      val serialized = new Array[Byte](length)
-      dis.readFully(serialized)
-      splits.add(splitSerializer.deserialize(version, serialized))
-    }
-
-    splits
   }
 
   private def initialize(): Unit = {

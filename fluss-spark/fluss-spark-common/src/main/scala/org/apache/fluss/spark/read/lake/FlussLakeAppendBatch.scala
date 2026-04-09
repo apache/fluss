@@ -17,12 +17,12 @@
 
 package org.apache.fluss.spark.read.lake
 
-import org.apache.fluss.client.initializer.{BucketOffsetsRetrieverImpl, OffsetsInitializer, SnapshotOffsetsInitializer}
+import org.apache.fluss.client.initializer.{BucketOffsetsRetrieverImpl, OffsetsInitializer}
 import org.apache.fluss.client.table.scanner.log.LogScanner
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer
-import org.apache.fluss.lake.source.LakeSplit
+import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
 import org.apache.fluss.metadata.{ResolvedPartitionSpec, TableBucket, TableInfo, TablePath}
 import org.apache.fluss.spark.read._
 import org.apache.fluss.utils.ExceptionUtils
@@ -34,11 +34,8 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 
-/**
- * Batch for reading lake-enabled primary key tables. Combines lake snapshot data with Fluss kv
- * tail, merging them using sort-merge algorithm.
- */
-class FlussLakeUpsertBatch(
+/** Batch for reading lake-enabled log table (append-only table with datalake). */
+class FlussLakeAppendBatch(
     tablePath: TablePath,
     tableInfo: TableInfo,
     readSchema: StructType,
@@ -46,21 +43,17 @@ class FlussLakeUpsertBatch(
     flussConfig: Configuration)
   extends FlussLakeBatch(tablePath, tableInfo, readSchema, options, flussConfig) {
 
-  override val startOffsetsInitializer: OffsetsInitializer = {
-    val offsetsInitializer = FlussOffsetInitializers.startOffsetsInitializer(options, flussConfig)
-    if (!offsetsInitializer.isInstanceOf[SnapshotOffsetsInitializer]) {
-      throw new UnsupportedOperationException("Upsert scan only support FULL startup mode.")
-    }
-    offsetsInitializer
-  }
+  // Required by FlussLakeBatch but unused — lake snapshot determines start offsets.
+  override val startOffsetsInitializer: OffsetsInitializer = OffsetsInitializer.earliest()
 
   override def createReaderFactory(): PartitionReaderFactory = {
     if (isFallback) {
-      new FlussUpsertPartitionReaderFactory(tablePath, projection, options, flussConfig)
+      new FlussAppendPartitionReaderFactory(tablePath, projection, options, flussConfig)
     } else {
-      new FlussLakeUpsertPartitionReaderFactory(
+      new FlussLakeAppendPartitionReaderFactory(
         tableInfo.getProperties.toMap,
         tablePath,
+        tableInfo.getRowType,
         projection,
         flussConfig)
     }
@@ -86,11 +79,14 @@ class FlussLakeUpsertBatch(
     lakeSource.withProject(FlussLakeUtils.lakeProjection(projection))
 
     val lakeSplits = lakeSource
-      .createPlanner(() => lakeSnapshot.getSnapshotId)
+      .createPlanner(new LakeSource.PlannerContext {
+        override def snapshotId(): Long = lakeSnapshot.getSnapshotId
+      })
       .plan()
 
     val splitSerializer = lakeSource.getSplitSerializer
     val tableBucketsOffset = lakeSnapshot.getTableBucketsOffset
+    val buckets = (0 until tableInfo.getNumBuckets).toSeq
     val bucketOffsetsRetriever = new BucketOffsetsRetrieverImpl(admin, tablePath)
 
     val partitions = if (tableInfo.isPartitioned) {
@@ -98,12 +94,14 @@ class FlussLakeUpsertBatch(
         lakeSplits.asScala,
         splitSerializer,
         tableBucketsOffset,
+        buckets,
         bucketOffsetsRetriever)
     } else {
       planNonPartitionedTable(
         lakeSplits.asScala,
         splitSerializer,
         tableBucketsOffset,
+        buckets,
         bucketOffsetsRetriever)
     }
 
@@ -114,38 +112,31 @@ class FlussLakeUpsertBatch(
       lakeSplits: Seq[LakeSplit],
       splitSerializer: SimpleVersionedSerializer[LakeSplit],
       tableBucketsOffset: java.util.Map[TableBucket, java.lang.Long],
+      buckets: Seq[Int],
       bucketOffsetsRetriever: BucketOffsetsRetrieverImpl): Array[InputPartition] = {
     val tableId = tableInfo.getTableId
-    val buckets = (0 until tableInfo.getNumBuckets).toSeq
+
+    val lakePartitions =
+      createLakePartitions(lakeSplits, splitSerializer, tableId, partitionId = None)
 
     val stoppingOffsets =
       getBucketOffsets(stoppingOffsetsInitializer, null, buckets, bucketOffsetsRetriever)
-
-    // Group lake splits by bucket
-    val lakeSplitsByBucket = lakeSplits.groupBy(_.bucket()).mapValues(_.toSeq).toMap
-
-    buckets.map {
+    val logPartitions = buckets.flatMap {
       bucketId =>
         val tableBucket = new TableBucket(tableId, bucketId)
-        val snapshotLogOffset = tableBucketsOffset.get(tableBucket)
-        val stoppingOffset = stoppingOffsets(bucketId)
+        createLogTailPartition(tableBucket, tableBucketsOffset, stoppingOffsets(bucketId))
+    }
 
-        createLakeUpsertPartition(
-          tableBucket,
-          lakeSplitsByBucket.get(bucketId),
-          splitSerializer,
-          snapshotLogOffset,
-          stoppingOffset)
-    }.toArray
+    (lakePartitions ++ logPartitions).toArray
   }
 
   private def planPartitionedTable(
       lakeSplits: Seq[LakeSplit],
       splitSerializer: SimpleVersionedSerializer[LakeSplit],
       tableBucketsOffset: java.util.Map[TableBucket, java.lang.Long],
+      buckets: Seq[Int],
       bucketOffsetsRetriever: BucketOffsetsRetrieverImpl): Array[InputPartition] = {
     val tableId = tableInfo.getTableId
-    val buckets = (0 until tableInfo.getNumBuckets).toSeq
 
     val flussPartitionIdByName = mutable.LinkedHashMap.empty[String, Long]
     partitionInfos.asScala.foreach {
@@ -155,52 +146,36 @@ class FlussLakeUpsertBatch(
     val lakeSplitsByPartition = groupLakeSplitsByPartition(lakeSplits)
     var lakeSplitPartitionId = -1L
 
-    val lakePartitions = lakeSplitsByPartition.flatMap {
-      case (partitionName, splitsByBucket) =>
+    val lakeAndLogPartitions = lakeSplitsByPartition.flatMap {
+      case (partitionName, splits) =>
         flussPartitionIdByName.remove(partitionName) match {
           case Some(partitionId) =>
-            // Partition in both lake and Fluss
+            // Partition in both lake and Fluss — lake splits + log tail
+            val lakePartitions =
+              createLakePartitions(splits, splitSerializer, tableId, Some(partitionId))
+
             val stoppingOffsets = getBucketOffsets(
               stoppingOffsetsInitializer,
               partitionName,
               buckets,
               bucketOffsetsRetriever)
-
-            buckets.map {
+            val logPartitions = buckets.flatMap {
               bucketId =>
                 val tableBucket = new TableBucket(tableId, partitionId, bucketId)
-                val snapshotLogOffset = tableBucketsOffset.get(tableBucket)
-                val stoppingOffset = stoppingOffsets(bucketId)
-
-                createLakeUpsertPartition(
-                  tableBucket,
-                  splitsByBucket.get(bucketId),
-                  splitSerializer,
-                  snapshotLogOffset,
-                  stoppingOffset)
+                createLogTailPartition(tableBucket, tableBucketsOffset, stoppingOffsets(bucketId))
             }
+
+            lakePartitions ++ logPartitions
 
           case None =>
-            // Partition only in lake (expired in Fluss) - create partitions with dummy partition id
+            // Partition only in lake (expired in Fluss) — lake splits only
             val pid = lakeSplitPartitionId
             lakeSplitPartitionId -= 1
-
-            buckets.map {
-              bucketId =>
-                val tableBucket = new TableBucket(tableId, pid, bucketId)
-                // For expired partitions, there's no log tail to read
-                createLakeUpsertPartition(
-                  tableBucket,
-                  splitsByBucket.get(bucketId),
-                  splitSerializer,
-                  null, // no log offset
-                  -1L // no stopping offset
-                )
-            }
+            createLakePartitions(splits, splitSerializer, tableId, Some(pid))
         }
-    }
+    }.toSeq
 
-    // Partitions only in Fluss (not yet tiered) - read from earliest
+    // Partitions only in Fluss (not yet tiered) — log from earliest
     val flussOnlyPartitions = flussPartitionIdByName.flatMap {
       case (partitionName, partitionId) =>
         val stoppingOffsets = getBucketOffsets(
@@ -208,28 +183,28 @@ class FlussLakeUpsertBatch(
           partitionName,
           buckets,
           bucketOffsetsRetriever)
-
-        buckets.map {
+        buckets.flatMap {
           bucketId =>
-            val tableBucket = new TableBucket(tableId, partitionId, bucketId)
             val stoppingOffset = stoppingOffsets(bucketId)
-
-            // No lake snapshot for this bucket, read log from earliest
-            FlussLakeUpsertInputPartition(
-              tableBucket,
-              null, // no lake splits
-              LogScanner.EARLIEST_OFFSET,
-              stoppingOffset
-            ): InputPartition
+            if (stoppingOffset > 0) {
+              val tableBucket = new TableBucket(tableId, partitionId, bucketId)
+              Some(
+                FlussAppendInputPartition(
+                  tableBucket,
+                  LogScanner.EARLIEST_OFFSET,
+                  stoppingOffset): InputPartition)
+            } else {
+              None
+            }
         }
-    }
+    }.toSeq
 
-    (lakePartitions ++ flussOnlyPartitions).toArray
+    (lakeAndLogPartitions ++ flussOnlyPartitions).toArray
   }
 
   private def groupLakeSplitsByPartition(
-      lakeSplits: Seq[LakeSplit]): Map[String, mutable.Map[Int, Seq[LakeSplit]]] = {
-    val grouped = mutable.LinkedHashMap.empty[String, mutable.Map[Int, Seq[LakeSplit]]]
+      lakeSplits: Seq[LakeSplit]): mutable.LinkedHashMap[String, mutable.ArrayBuffer[LakeSplit]] = {
+    val grouped = mutable.LinkedHashMap.empty[String, mutable.ArrayBuffer[LakeSplit]]
     lakeSplits.foreach {
       split =>
         val partitionName = if (split.partition() == null || split.partition().isEmpty) {
@@ -237,63 +212,67 @@ class FlussLakeUpsertBatch(
         } else {
           split.partition().asScala.mkString(ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR)
         }
-        val bucketId = split.bucket()
-        val bucketMap = grouped.getOrElseUpdate(partitionName, mutable.Map.empty)
-        val splits = bucketMap.getOrElse(bucketId, Seq.empty)
-        bucketMap(bucketId) = splits :+ split
+        grouped.getOrElseUpdate(partitionName, mutable.ArrayBuffer.empty) += split
     }
-    grouped.toMap
+    grouped
   }
 
-  private def createLakeUpsertPartition(
-      tableBucket: TableBucket,
-      lakeSplits: Option[Seq[LakeSplit]],
+  private def createLakePartitions(
+      splits: Seq[LakeSplit],
       splitSerializer: SimpleVersionedSerializer[LakeSplit],
-      snapshotLogOffset: java.lang.Long,
-      stoppingOffset: Long): InputPartition = {
-    val (lakeSplitBytes, logStartingOffset) =
-      if (lakeSplits.isDefined && lakeSplits.get.nonEmpty) {
-        // Serialize all lake splits for this bucket into a single byte array
-        val serialized = FlussLakeUtils.serializeLakeSplits(lakeSplits.get, splitSerializer)
-        val startOffset =
-          if (snapshotLogOffset != null) snapshotLogOffset.longValue()
-          else LogScanner.EARLIEST_OFFSET
-        (serialized, startOffset)
-      } else {
-        // No lake splits for this bucket
-        (null, LogScanner.EARLIEST_OFFSET)
-      }
+      tableId: Long,
+      partitionId: Option[Long]): Seq[InputPartition] = {
+    splits.map {
+      split =>
+        val tableBucket = partitionId match {
+          case Some(pid) => new TableBucket(tableId, pid, split.bucket())
+          case None => new TableBucket(tableId, split.bucket())
+        }
+        FlussLakeInputPartition(tableBucket, splitSerializer.serialize(split))
+    }
+  }
 
-    FlussLakeUpsertInputPartition(
-      tableBucket,
-      lakeSplitBytes,
-      logStartingOffset,
-      stoppingOffset
-    )
+  private def createLogTailPartition(
+      tableBucket: TableBucket,
+      tableBucketsOffset: java.util.Map[TableBucket, java.lang.Long],
+      stoppingOffset: Long): Option[InputPartition] = {
+    val snapshotLogOffset = tableBucketsOffset.get(tableBucket)
+    if (snapshotLogOffset != null) {
+      if (snapshotLogOffset.longValue() < stoppingOffset) {
+        Some(FlussAppendInputPartition(tableBucket, snapshotLogOffset.longValue(), stoppingOffset))
+      } else {
+        None
+      }
+    } else if (stoppingOffset > 0) {
+      Some(FlussAppendInputPartition(tableBucket, LogScanner.EARLIEST_OFFSET, stoppingOffset))
+    } else {
+      None
+    }
   }
 
   private def planFallbackPartitions(): Array[InputPartition] = {
-    // Fallback to pure Fluss kv reading when no lake snapshot exists
+    val fallbackStartInit = FlussOffsetInitializers.startOffsetsInitializer(options, flussConfig)
     val bucketOffsetsRetriever = new BucketOffsetsRetrieverImpl(admin, tablePath)
     val buckets = (0 until tableInfo.getNumBuckets).toSeq
+    val tableId = tableInfo.getTableId
 
     def createPartitions(
         partitionId: Option[Long],
         partitionName: String): Array[InputPartition] = {
+      val startOffsets =
+        getBucketOffsets(fallbackStartInit, partitionName, buckets, bucketOffsetsRetriever)
       val stoppingOffsets =
         getBucketOffsets(stoppingOffsetsInitializer, partitionName, buckets, bucketOffsetsRetriever)
 
       buckets.map {
         bucketId =>
           val tableBucket = partitionId match {
-            case Some(pid) => new TableBucket(tableInfo.getTableId, pid, bucketId)
-            case None => new TableBucket(tableInfo.getTableId, bucketId)
+            case Some(pid) => new TableBucket(tableId, pid, bucketId)
+            case None => new TableBucket(tableId, bucketId)
           }
-          // Use FlussUpsertInputPartition for fallback (reads from Fluss kv snapshot)
-          FlussUpsertInputPartition(
+          FlussAppendInputPartition(
             tableBucket,
-            -1L, // no snapshot
-            LogScanner.EARLIEST_OFFSET,
+            startOffsets(bucketId),
             stoppingOffsets(bucketId)
           ): InputPartition
       }.toArray
