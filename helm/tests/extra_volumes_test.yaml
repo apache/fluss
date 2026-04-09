@@ -1,0 +1,333 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+suite: defaults
+templates:
+  - templates/sts-coordinator.yaml
+  - templates/sts-tablet.yaml
+
+tests:
+  - it: should not render initContainers by default on coordinator
+    asserts:
+      - isNull:
+          path: spec.template.spec.initContainers
+        template: templates/sts-coordinator.yaml
+
+  - it: should not render initContainers by default on tablet
+    asserts:
+      - isNull:
+          path: spec.template.spec.initContainers
+        template: templates/sts-tablet.yaml
+
+  - it: should not render extra volumeMounts beyond built-ins by default on coordinator
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts
+          value:
+            - name: fluss-conf
+              mountPath: /opt/conf
+            - name: data
+              mountPath: /tmp/fluss/data
+        template: templates/sts-coordinator.yaml
+
+  - it: should not render extra volumeMounts beyond built-ins by default on tablet
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts
+          value:
+            - name: fluss-conf
+              mountPath: /opt/conf
+            - name: data
+              mountPath: /tmp/fluss/data
+        template: templates/sts-tablet.yaml
+
+---
+
+suite: coordinator extra resources
+templates:
+  - templates/sts-coordinator.yaml
+
+tests:
+  - it: should render initContainers on coordinator
+    set:
+      coordinator.initContainers:
+        - name: init-wait
+          image: busybox:latest
+          command: ["sh", "-c", "echo ready"]
+    asserts:
+      - contains:
+          path: spec.template.spec.initContainers
+          content:
+            name: init-wait
+            image: busybox:latest
+            command: ["sh", "-c", "echo ready"]
+
+  - it: should render multiple initContainers on coordinator
+    set:
+      coordinator.initContainers:
+        - name: init-one
+          image: busybox:latest
+          command: ["sh", "-c", "echo one"]
+        - name: init-two
+          image: busybox:latest
+          command: ["sh", "-c", "echo two"]
+    asserts:
+      - contains:
+          path: spec.template.spec.initContainers
+          content:
+            name: init-one
+            image: busybox:latest
+            command: ["sh", "-c", "echo one"]
+      - contains:
+          path: spec.template.spec.initContainers
+          content:
+            name: init-two
+            image: busybox:latest
+            command: ["sh", "-c", "echo two"]
+
+  - it: should render extraVolumes on coordinator
+    set:
+      coordinator.extraVolumes:
+        - name: custom-config
+          configMap:
+            name: my-config
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: custom-config
+            configMap:
+              name: my-config
+
+  - it: should render extraVolumeMounts on coordinator
+    set:
+      coordinator.extraVolumeMounts:
+        - name: custom-config
+          mountPath: /custom
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: custom-config
+            mountPath: /custom
+
+  - it: should not apply tablet extra resources to coordinator
+    set:
+      tablet.extraVolumes:
+        - name: tablet-only
+          emptyDir: {}
+      tablet.extraVolumeMounts:
+        - name: tablet-only
+          mountPath: /tablet
+      tablet.initContainers:
+        - name: tablet-init
+          image: busybox:latest
+    asserts:
+      - isNull:
+          path: spec.template.spec.initContainers
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: tablet-only
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: tablet-only
+          any: true
+
+---
+
+suite: tablet extra resources
+templates:
+  - templates/sts-tablet.yaml
+
+tests:
+  - it: should render initContainers on tablet
+    set:
+      tablet.initContainers:
+        - name: init-wait
+          image: busybox:latest
+          command: ["sh", "-c", "echo ready"]
+    asserts:
+      - contains:
+          path: spec.template.spec.initContainers
+          content:
+            name: init-wait
+            image: busybox:latest
+            command: ["sh", "-c", "echo ready"]
+
+  - it: should render multiple initContainers on tablet
+    set:
+      tablet.initContainers:
+        - name: init-one
+          image: busybox:latest
+          command: ["sh", "-c", "echo one"]
+        - name: init-two
+          image: busybox:latest
+          command: ["sh", "-c", "echo two"]
+    asserts:
+      - contains:
+          path: spec.template.spec.initContainers
+          content:
+            name: init-one
+            image: busybox:latest
+            command: ["sh", "-c", "echo one"]
+      - contains:
+          path: spec.template.spec.initContainers
+          content:
+            name: init-two
+            image: busybox:latest
+            command: ["sh", "-c", "echo two"]
+
+  - it: should render extraVolumes on tablet
+    set:
+      tablet.extraVolumes:
+        - name: custom-config
+          configMap:
+            name: my-config
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: custom-config
+            configMap:
+              name: my-config
+
+  - it: should render extraVolumeMounts on tablet
+    set:
+      tablet.extraVolumeMounts:
+        - name: custom-config
+          mountPath: /custom
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: custom-config
+            mountPath: /custom
+
+  - it: should not apply coordinator extra resources to tablet
+    set:
+      coordinator.extraVolumes:
+        - name: coordinator-only
+          emptyDir: {}
+      coordinator.extraVolumeMounts:
+        - name: coordinator-only
+          mountPath: /coordinator
+      coordinator.initContainers:
+        - name: coordinator-init
+          image: busybox:latest
+    asserts:
+      - isNull:
+          path: spec.template.spec.initContainers
+      - notContains:
+          path: spec.template.spec.volumes
+          content:
+            name: coordinator-only
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: coordinator-only
+          any: true
+
+---
+
+suite: coexistence with existing resources
+templates:
+  - templates/sts-coordinator.yaml
+  - templates/sts-tablet.yaml
+
+tests:
+  - it: should preserve built-in volumes when extraVolumes are added on coordinator
+    set:
+      coordinator.extraVolumes:
+        - name: extra-vol
+          emptyDir: {}
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: fluss-conf
+            configMap:
+              name: fluss-conf-file
+        template: templates/sts-coordinator.yaml
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: extra-vol
+            emptyDir: {}
+        template: templates/sts-coordinator.yaml
+
+  - it: should preserve built-in volumes when extraVolumes are added on tablet
+    set:
+      tablet.extraVolumes:
+        - name: extra-vol
+          emptyDir: {}
+    asserts:
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: fluss-conf
+            configMap:
+              name: fluss-conf-file
+        template: templates/sts-tablet.yaml
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: extra-vol
+            emptyDir: {}
+        template: templates/sts-tablet.yaml
+
+  - it: should preserve built-in volumeMounts when extraVolumeMounts are added on coordinator
+    set:
+      coordinator.extraVolumeMounts:
+        - name: extra-vol
+          mountPath: /extra
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: fluss-conf
+            mountPath: /opt/conf
+        template: templates/sts-coordinator.yaml
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: extra-vol
+            mountPath: /extra
+        template: templates/sts-coordinator.yaml
+
+  - it: should preserve built-in volumeMounts when extraVolumeMounts are added on tablet
+    set:
+      tablet.extraVolumeMounts:
+        - name: extra-vol
+          mountPath: /extra
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: fluss-conf
+            mountPath: /opt/conf
+        template: templates/sts-tablet.yaml
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: extra-vol
+            mountPath: /extra
+        template: templates/sts-tablet.yaml

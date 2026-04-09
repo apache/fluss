@@ -43,6 +43,9 @@ tablet:
     enabled: false
     size: 1Gi
     storageClass:
+  extraVolumes: []
+  extraVolumeMounts: []
+  initContainers: []
   # Pod scheduling configuration
   affinity: {}
   # Example: spread tablet server pods across availability zones and nodes.
@@ -75,6 +78,9 @@ coordinator:
     enabled: false
     size: 1Gi
     storageClass:
+  extraVolumes: []
+  extraVolumeMounts: []
+  initContainers: []
   affinity: {}
   nodeSelector: {}
   tolerations: []

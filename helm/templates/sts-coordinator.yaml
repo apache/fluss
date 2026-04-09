@@ -55,6 +55,10 @@ spec:
       topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.coordinator.initContainers }}
+      initContainers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: {{ .Chart.Name }}-coordinator
           image: {{ include "fluss.image" . }}
@@ -126,6 +130,9 @@ spec:
               mountPath: /etc/fluss/conf
               readOnly: true
             {{- end }}
+            {{- with .Values.coordinator.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: fluss-conf
           configMap:
@@ -138,6 +145,9 @@ spec:
         - name: sasl-config
           secret:
             secretName: {{ include "fluss.security.jaas.configName" . }}
+        {{- end }}
+        {{- with .Values.coordinator.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
         {{- end }}
   {{- if .Values.coordinator.storage.enabled }}
   volumeClaimTemplates:
