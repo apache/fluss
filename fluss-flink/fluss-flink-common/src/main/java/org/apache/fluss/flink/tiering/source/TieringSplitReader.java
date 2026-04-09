@@ -455,15 +455,12 @@ public class TieringSplitReader<WriteResult>
                 }
                 TieringSplit currentTieringSplit = currentTableSplitsByBucket.remove(bucket);
                 String currentSplitId = currentTieringSplit.splitId();
-                // use actual written offset + 1 as logEndOffset rather than
-                // stoppingOffset, because Arrow batches may cross the stopping
-                // offset boundary and write beyond it
                 writeResults.put(
                         bucket,
                         completeLakeWriter(
                                 bucket,
                                 currentTieringSplit.getPartitionName(),
-                                lastOffsetAndTimestamp.logOffset + 1,
+                                stoppingOffset,
                                 lastOffsetAndTimestamp.timestamp));
                 finishedSplitIds.put(bucket, currentSplitId);
                 LOG.info(
@@ -508,16 +505,30 @@ public class TieringSplitReader<WriteResult>
         long lastWrittenBatchEndOffset = -1;
         long lastWrittenTimestamp = -1;
         for (ArrowBatchData batch : batches) {
-            if (batch.getBaseLogOffset() < stoppingOffset) {
-                long batchEndOffset = batch.getBaseLogOffset() + batch.getRecordCount() - 1;
-                try (ArrowRecordBatch arrowRecordBatch = new ArrowRecordBatch(batch)) {
-                    batchWriter.write(arrowRecordBatch);
-                }
-                lastWrittenBatchEndOffset = batchEndOffset;
-                lastWrittenTimestamp = batch.getTimestamp();
-            } else {
+            long batchBaseOffset = batch.getBaseLogOffset();
+            if (batchBaseOffset >= stoppingOffset) {
                 batch.close();
+                continue;
             }
+
+            long writableRowCount = stoppingOffset - batchBaseOffset;
+            int writableRows = (int) Math.min(batch.getRecordCount(), writableRowCount);
+            if (writableRows <= 0) {
+                batch.close();
+                continue;
+            }
+
+            ArrowBatchData batchToWrite = batch;
+            if (writableRows < batch.getRecordCount()) {
+                batchToWrite = batch.sliceAndTransferOwnership(0, writableRows);
+            }
+
+            long batchEndOffset = batchBaseOffset + writableRows - 1L;
+            try (ArrowRecordBatch arrowRecordBatch = new ArrowRecordBatch(batchToWrite)) {
+                batchWriter.write(arrowRecordBatch);
+            }
+            lastWrittenBatchEndOffset = batchEndOffset;
+            lastWrittenTimestamp = batchToWrite.getTimestamp();
         }
         return new LogOffsetAndTimestamp(lastWrittenBatchEndOffset, lastWrittenTimestamp);
     }

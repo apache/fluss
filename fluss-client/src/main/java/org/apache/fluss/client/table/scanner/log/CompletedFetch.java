@@ -250,7 +250,7 @@ public abstract class CompletedFetch {
                 ArrowBatchData arrowBatchData = batch.loadArrowBatch(readContext);
                 if (arrowBatchData.getRecordCount() == 0) {
                     arrowBatchData.close();
-                    nextFetchOffset = batch.nextLogOffset();
+                    advanceNextFetchOffset(batch.nextLogOffset());
                     continue;
                 }
 
@@ -261,7 +261,7 @@ public abstract class CompletedFetch {
                     int skipRows = (int) (nextFetchOffset - batchBaseOffset);
                     if (skipRows >= arrowBatchData.getRecordCount()) {
                         arrowBatchData.close();
-                        nextFetchOffset = batch.nextLogOffset();
+                        advanceNextFetchOffset(batch.nextLogOffset());
                         continue;
                     }
                     int remainingRows = arrowBatchData.getRecordCount() - skipRows;
@@ -272,7 +272,7 @@ public abstract class CompletedFetch {
                 arrowBatches.add(arrowBatchData);
                 recordsRead += arrowBatchData.getRecordCount();
                 recordsFetched += arrowBatchData.getRecordCount();
-                nextFetchOffset = batch.nextLogOffset();
+                advanceNextFetchOffset(batch.nextLogOffset());
             }
         } catch (Exception e) {
             closeArrowBatches(arrowBatches);
@@ -335,9 +335,21 @@ public abstract class CompletedFetch {
         // of the same batch (in the worst case, the scanner could get stuck fetching
         // the same batch repeatedly).
         if (currentBatch != null) {
-            nextFetchOffset = currentBatch.nextLogOffset();
+            advanceNextFetchOffset(currentBatch.nextLogOffset());
         }
         drain();
+    }
+
+    /**
+     * Advances {@code nextFetchOffset} to the given offset, ensuring it never decreases. A
+     * decreasing offset can happen when an earlier batch in the response is fully skipped (its
+     * entire range is before {@code nextFetchOffset}), and its {@code nextLogOffset()} is less than
+     * the current {@code nextFetchOffset}. Without this guard, subsequent batches whose base offset
+     * falls between the regressed value and the original {@code nextFetchOffset} would bypass the
+     * slice logic and be returned un-trimmed.
+     */
+    private void advanceNextFetchOffset(long offset) {
+        nextFetchOffset = Math.max(nextFetchOffset, offset);
     }
 
     private void maybeEnsureValid(LogRecordBatch batch) {
