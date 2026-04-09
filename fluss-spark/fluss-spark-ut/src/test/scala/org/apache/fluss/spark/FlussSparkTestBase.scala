@@ -63,6 +63,7 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
 
     super.beforeAll()
     sql(s"USE $DEFAULT_DATABASE")
+    spark.sparkContext.setLogLevel("INFO")
   }
 
   override protected def afterAll(): Unit = {

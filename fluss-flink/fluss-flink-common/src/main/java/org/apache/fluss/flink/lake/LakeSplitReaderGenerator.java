@@ -19,7 +19,7 @@ package org.apache.fluss.flink.lake;
 
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
-import org.apache.fluss.flink.lake.reader.LakeSnapshotAndLogSplitScanner;
+import org.apache.fluss.client.table.scanner.batch.LakeSnapshotAndLogSplitScanner;
 import org.apache.fluss.flink.lake.reader.LakeSnapshotScanner;
 import org.apache.fluss.flink.lake.reader.SeekableLakeSnapshotSplitScanner;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
@@ -101,9 +101,23 @@ public class LakeSplitReaderGenerator {
                             lakeSplit.getCurrentLakeSplitIndex());
 
         } else {
+            long stoppingOffset =
+                    lakeSplit
+                            .getStoppingOffset()
+                            .orElseThrow(
+                                    () ->
+                                            new RuntimeException(
+                                                    "StoppingOffset is null for split: "
+                                                            + lakeSplit));
             lakeBatchScanner =
                     new LakeSnapshotAndLogSplitScanner(
-                            table, lakeSource, lakeSplit, projectedFields);
+                            table,
+                            lakeSource,
+                            lakeSplit.getLakeSplits(),
+                            lakeSplit.getTableBucket(),
+                            lakeSplit.getStartingOffset(),
+                            stoppingOffset,
+                            projectedFields);
         }
         return lakeBatchScanner;
     }

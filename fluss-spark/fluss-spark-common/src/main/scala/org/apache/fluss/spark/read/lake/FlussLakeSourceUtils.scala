@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.spark.read
+package org.apache.fluss.spark.read.lake
 
 import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.lake.lakestorage.LakeStoragePluginSetUp

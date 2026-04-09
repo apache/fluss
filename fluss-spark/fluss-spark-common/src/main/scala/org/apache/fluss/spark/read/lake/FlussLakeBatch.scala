@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.spark.read
+package org.apache.fluss.spark.read.lake
 
 import org.apache.fluss.client.initializer.{BucketOffsetsRetrieverImpl, OffsetsInitializer}
 import org.apache.fluss.client.table.scanner.log.LogScanner
@@ -24,6 +24,7 @@ import org.apache.fluss.exception.LakeTableSnapshotNotExistException
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer
 import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
 import org.apache.fluss.metadata.{ResolvedPartitionSpec, TableBucket, TableInfo, TablePath}
+import org.apache.fluss.spark.read._
 import org.apache.fluss.utils.ExceptionUtils
 
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReaderFactory}

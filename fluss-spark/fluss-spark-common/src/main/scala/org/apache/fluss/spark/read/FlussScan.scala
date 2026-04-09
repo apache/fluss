@@ -20,6 +20,7 @@ package org.apache.fluss.spark.read
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.metadata.{TableInfo, TablePath}
 import org.apache.fluss.spark.SparkConversions
+import org.apache.fluss.spark.read.lake.{FlussLakeAppendBatch, FlussLakeUpsertBatch}
 
 import org.apache.spark.sql.connector.read.{Batch, Scan}
 import org.apache.spark.sql.connector.read.streaming.MicroBatchStream
@@ -96,6 +97,30 @@ case class FlussUpsertScan(
 
   override def toBatch: Batch = {
     new FlussUpsertBatch(tablePath, tableInfo, readSchema, options, flussConfig)
+  }
+
+  override def toMicroBatchStream(checkpointLocation: String): MicroBatchStream = {
+    new FlussUpsertMicroBatchStream(
+      tablePath,
+      tableInfo,
+      readSchema,
+      options,
+      flussConfig,
+      checkpointLocation)
+  }
+}
+
+/** Fluss Lake Upsert Scan for lake-enabled primary key tables. */
+case class FlussLakeUpsertScan(
+    tablePath: TablePath,
+    tableInfo: TableInfo,
+    requiredSchema: Option[StructType],
+    options: CaseInsensitiveStringMap,
+    flussConfig: Configuration)
+  extends FlussScan {
+
+  override def toBatch: Batch = {
+    new FlussLakeUpsertBatch(tablePath, tableInfo, readSchema, options, flussConfig)
   }
 
   override def toMicroBatchStream(checkpointLocation: String): MicroBatchStream = {

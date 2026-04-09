@@ -15,11 +15,12 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.spark.read
+package org.apache.fluss.spark.read.lake
 
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
 import org.apache.fluss.metadata.TablePath
+import org.apache.fluss.spark.read.{FlussAppendInputPartition, FlussAppendPartitionReader, FlussLakeInputPartition}
 import org.apache.fluss.types.RowType
 
 import org.apache.spark.sql.catalyst.InternalRow

@@ -16,15 +16,13 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.lake.reader;
+package org.apache.fluss.client.table.scanner.batch;
 
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.SortMergeReader;
-import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
-import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.lake.source.RecordReader;
@@ -53,14 +51,14 @@ import java.util.stream.IntStream;
 /** A scanner to merge the lakehouse's snapshot and change log. */
 public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
 
-    private final LakeSnapshotAndFlussLogSplit lakeSnapshotSplitAndFlussLogSplit;
+    private final @Nullable List<LakeSplit> lakeSplits;
     private Comparator<InternalRow> rowComparator;
     private List<CloseableIterator<LogRecord>> lakeRecordIterators = new ArrayList<>();
     private final LakeSource<LakeSplit> lakeSource;
 
     private final int[] pkIndexes;
 
-    // the indexes of primary key in emitted row by paimon and fluss
+    // the indexes of primary key in emitted row by lake and fluss
     private int[] keyIndexesInRow;
     @Nullable private int[] adjustProjectedFields;
 
@@ -76,11 +74,15 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
     public LakeSnapshotAndLogSplitScanner(
             Table table,
             LakeSource<LakeSplit> lakeSource,
-            LakeSnapshotAndFlussLogSplit lakeSnapshotAndFlussLogSplit,
+            @Nullable List<LakeSplit> lakeSplits,
+            TableBucket tableBucket,
+            long startingOffset,
+            long stoppingOffset,
             @Nullable int[] projectedFields) {
         this.pkIndexes = table.getTableInfo().getSchema().getPrimaryKeyIndexes();
-        this.lakeSnapshotSplitAndFlussLogSplit = lakeSnapshotAndFlussLogSplit;
+        this.lakeSplits = lakeSplits;
         this.lakeSource = lakeSource;
+        this.stoppingOffset = stoppingOffset;
         int[] newProjectedFields = getNeedProjectFields(table, projectedFields);
 
         this.logScanner = table.newScan().project(newProjectedFields).createLogScanner();
@@ -89,29 +91,14 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
                         .mapToObj(field -> new int[] {field})
                         .toArray(int[][]::new));
 
-        TableBucket tableBucket = lakeSnapshotAndFlussLogSplit.getTableBucket();
         if (tableBucket.getPartitionId() != null) {
             this.logScanner.subscribe(
-                    tableBucket.getPartitionId(),
-                    tableBucket.getBucket(),
-                    lakeSnapshotAndFlussLogSplit.getStartingOffset());
+                    tableBucket.getPartitionId(), tableBucket.getBucket(), startingOffset);
         } else {
-            this.logScanner.subscribe(
-                    tableBucket.getBucket(), lakeSnapshotAndFlussLogSplit.getStartingOffset());
+            this.logScanner.subscribe(tableBucket.getBucket(), startingOffset);
         }
 
-        this.stoppingOffset =
-                lakeSnapshotAndFlussLogSplit
-                        .getStoppingOffset()
-                        .orElseThrow(
-                                () ->
-                                        new RuntimeException(
-                                                "StoppingOffset is null for split: "
-                                                        + lakeSnapshotAndFlussLogSplit));
-
-        this.logScanFinished =
-                lakeSnapshotAndFlussLogSplit.getStartingOffset() >= stoppingOffset
-                        || stoppingOffset <= 0;
+        this.logScanFinished = startingOffset >= stoppingOffset || stoppingOffset <= 0;
     }
 
     private int[] getNeedProjectFields(Table flussTable, @Nullable int[] projectedFields) {
@@ -169,11 +156,10 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
     public CloseableIterator<InternalRow> pollBatch(Duration timeout) throws IOException {
         if (logScanFinished) {
             if (lakeRecordIterators.isEmpty()) {
-                if (lakeSnapshotSplitAndFlussLogSplit.getLakeSplits() == null
-                        || lakeSnapshotSplitAndFlussLogSplit.getLakeSplits().isEmpty()) {
+                if (lakeSplits == null || lakeSplits.isEmpty()) {
                     lakeRecordIterators = Collections.emptyList();
                 } else {
-                    for (LakeSplit lakeSplit : lakeSnapshotSplitAndFlussLogSplit.getLakeSplits()) {
+                    for (LakeSplit lakeSplit : lakeSplits) {
                         lakeRecordIterators.add(
                                 lakeSource.createRecordReader(() -> lakeSplit).read());
                     }
@@ -195,12 +181,11 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
         } else {
             if (lakeRecordIterators.isEmpty()) {
                 List<RecordReader> recordReaders = new ArrayList<>();
-                if (lakeSnapshotSplitAndFlussLogSplit.getLakeSplits() == null
-                        || lakeSnapshotSplitAndFlussLogSplit.getLakeSplits().isEmpty()) {
+                if (lakeSplits == null || lakeSplits.isEmpty()) {
                     // pass null split to get rowComparator
                     recordReaders.add(lakeSource.createRecordReader(() -> null));
                 } else {
-                    for (LakeSplit lakeSplit : lakeSnapshotSplitAndFlussLogSplit.getLakeSplits()) {
+                    for (LakeSplit lakeSplit : lakeSplits) {
                         recordReaders.add(lakeSource.createRecordReader(() -> lakeSplit));
                     }
                 }

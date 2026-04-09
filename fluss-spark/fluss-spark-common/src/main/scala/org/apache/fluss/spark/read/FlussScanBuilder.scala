@@ -72,3 +72,16 @@ class FlussUpsertScanBuilder(
     FlussUpsertScan(tablePath, tableInfo, requiredSchema, options, flussConfig)
   }
 }
+
+/** Fluss Lake Upsert Scan Builder for lake-enabled primary key tables. */
+class FlussLakeUpsertScanBuilder(
+    tablePath: TablePath,
+    tableInfo: TableInfo,
+    options: CaseInsensitiveStringMap,
+    flussConfig: FlussConfiguration)
+  extends FlussScanBuilder {
+
+  override def build(): Scan = {
+    FlussLakeUpsertScan(tablePath, tableInfo, requiredSchema, options, flussConfig)
+  }
+}
