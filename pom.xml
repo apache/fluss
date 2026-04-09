@@ -476,6 +476,14 @@
         </profile>
 
         <profile>
+            <id>scala-2.13</id>
+            <properties>
+                <scala.binary.version>2.13</scala.binary.version>
+                <scala.version>${scala213.version}</scala.version>
+            </properties>
+        </profile>
+
+        <profile>
             <!-- used for SNAPSHOT and regular releases -->
             <id>release</id>
             <activation>

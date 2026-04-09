@@ -77,21 +77,21 @@ class DataConverterTest extends AnyFunSuite {
     val sparkDecimal = DataConverter.toSparkDecimal(flussDecimal)
 
     assertThat(sparkDecimal).isInstanceOf(classOf[SparkDecimal])
-    assertThat(sparkDecimal.toBigDecimal.doubleValue()).isEqualTo(123.45)
+    assertThat(sparkDecimal.toBigDecimal.doubleValue).isEqualTo(123.45)
   }
 
   test("toSparkDecimal: negative decimal") {
     val flussDecimal = FlussDecimal.fromBigDecimal(new java.math.BigDecimal("-999.99"), 5, 2)
     val sparkDecimal = DataConverter.toSparkDecimal(flussDecimal)
 
-    assertThat(sparkDecimal.toBigDecimal.doubleValue()).isEqualTo(-999.99)
+    assertThat(sparkDecimal.toBigDecimal.doubleValue).isEqualTo(-999.99)
   }
 
   test("toSparkDecimal: zero") {
     val flussDecimal = FlussDecimal.fromBigDecimal(java.math.BigDecimal.ZERO, 5, 2)
     val sparkDecimal = DataConverter.toSparkDecimal(flussDecimal)
 
-    assertThat(sparkDecimal.toBigDecimal.doubleValue()).isEqualTo(0.0)
+    assertThat(sparkDecimal.toBigDecimal.doubleValue).isEqualTo(0.0)
   }
 
   test("toSparkUTF8String: ASCII string") {

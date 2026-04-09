@@ -90,14 +90,14 @@ class FlussLakeAppendBatch(
 
     val partitions = if (tableInfo.isPartitioned) {
       planPartitionedTable(
-        lakeSplits.asScala,
+        lakeSplits.asScala.toSeq,
         splitSerializer,
         tableBucketsOffset,
         buckets,
         bucketOffsetsRetriever)
     } else {
       planNonPartitionedTable(
-        lakeSplits.asScala,
+        lakeSplits.asScala.toSeq,
         splitSerializer,
         tableBucketsOffset,
         buckets,
@@ -151,7 +151,7 @@ class FlussLakeAppendBatch(
           case Some(partitionId) =>
             // Partition in both lake and Fluss — lake splits + log tail
             val lakePartitions =
-              createLakePartitions(splits, splitSerializer, tableId, Some(partitionId))
+              createLakePartitions(splits.toSeq, splitSerializer, tableId, Some(partitionId))
 
             val stoppingOffsets = getBucketOffsets(
               stoppingOffsetsInitializer,
@@ -170,7 +170,7 @@ class FlussLakeAppendBatch(
             // Partition only in lake (expired in Fluss) — lake splits only
             val pid = lakeSplitPartitionId
             lakeSplitPartitionId -= 1
-            createLakePartitions(splits, splitSerializer, tableId, Some(pid))
+            createLakePartitions(splits.toSeq, splitSerializer, tableId, Some(pid))
         }
     }.toSeq
 
