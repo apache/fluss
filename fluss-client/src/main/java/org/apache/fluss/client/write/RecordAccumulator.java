@@ -37,6 +37,7 @@ import org.apache.fluss.row.arrow.ArrowWriter;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
+import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CopyOnWriteMap;
 import org.apache.fluss.utils.MathUtils;
 import org.apache.fluss.utils.clock.Clock;
@@ -49,6 +50,7 @@ import javax.annotation.Nullable;
 import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
@@ -622,18 +624,30 @@ public final class RecordAccumulator {
                         clock.milliseconds());
 
             case ARROW_LOG:
+                int[] targetColumns = writeRecord.getTargetColumns();
+                RowType writerRowType =
+                        targetColumns != null
+                                ? tableInfo.getRowType().project(targetColumns)
+                                : tableInfo.getRowType();
+                String keySuffix =
+                        targetColumns != null ? "-pruned-" + Arrays.toString(targetColumns) : "";
                 ArrowWriter arrowWriter =
                         arrowWriterPool.getOrCreateWriter(
                                 tableInfo.getTableId(),
                                 schemaId,
                                 outputView.getPreAllocatedSize(),
-                                tableInfo.getRowType(),
-                                tableInfo.getTableConfig().getArrowCompressionInfo());
+                                writerRowType,
+                                tableInfo.getTableConfig().getArrowCompressionInfo(),
+                                keySuffix);
                 LogRecordBatchStatisticsCollector statisticsCollector = null;
-                if (tableInfo.isStatisticsEnabled()) {
+                if (tableInfo.isStatisticsEnabled() && targetColumns == null) {
+                    // Statistics collection is only supported for full-schema batches.
+                    // For pruned batches, the statsIndexMapping refers to full-schema
+                    // column indices which would cause IndexOutOfBoundsException on
+                    // the pruned row type.
                     statisticsCollector =
                             new LogRecordBatchStatisticsCollector(
-                                    tableInfo.getRowType(), tableInfo.getStatsIndexMapping());
+                                    writerRowType, tableInfo.getStatsIndexMapping());
                 }
                 return new ArrowLogWriteBatch(
                         bucketId,
@@ -642,7 +656,8 @@ public final class RecordAccumulator {
                         arrowWriter,
                         outputView,
                         clock.milliseconds(),
-                        statisticsCollector);
+                        statisticsCollector,
+                        targetColumns);
 
             case COMPACTED_LOG:
                 return new CompactedLogWriteBatch(

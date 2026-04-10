@@ -89,7 +89,19 @@ public class ArrowWriterPool implements ArrowWriterProvider {
             int bufferSizeInBytes,
             RowType schema,
             ArrowCompressionInfo compressionInfo) {
-        final String writerKey = tableId + "-" + schemaId + "-" + compressionInfo.toString();
+        return getOrCreateWriter(tableId, schemaId, bufferSizeInBytes, schema, compressionInfo, "");
+    }
+
+    @Override
+    public ArrowWriter getOrCreateWriter(
+            long tableId,
+            int schemaId,
+            int bufferSizeInBytes,
+            RowType schema,
+            ArrowCompressionInfo compressionInfo,
+            String keySuffix) {
+        final String writerKey =
+                tableId + "-" + schemaId + "-" + compressionInfo.toString() + keySuffix;
         return inLock(
                 lock,
                 () -> {

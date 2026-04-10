@@ -37,4 +37,19 @@ public interface AppendWriter extends TableWriter {
      * @return A {@link CompletableFuture} that always returns append result when complete normally.
      */
     CompletableFuture<AppendResult> append(InternalRow record);
+
+    /**
+     * Append a record into a Log Table with column pruning support.
+     *
+     * <p>When {@code pruning} is false, the entire row is sent (same as {@link
+     * #append(InternalRow)}). When {@code pruning} is true, only the columns specified by {@code
+     * targetColumnIndexes} are picked from the row and sent.
+     *
+     * @param record the record to append.
+     * @param targetColumnIndexes the indexes of columns to include when pruning.
+     * @param pruning whether to prune the row to only target columns.
+     * @return A {@link CompletableFuture} that always returns append result when complete normally.
+     */
+    CompletableFuture<AppendResult> append(
+            InternalRow record, int[] targetColumnIndexes, boolean pruning);
 }
