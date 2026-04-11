@@ -169,7 +169,12 @@ public class FlussArrayToPojoArray {
                 }
             case MAP:
                 return (arr, i) ->
-                        new FlussMapToPojoMap(arr.getMap(i), (MapType) elementType, fieldName)
+                        new FlussMapToPojoMap(
+                                        arr.getMap(i),
+                                        (MapType) elementType,
+                                        fieldName,
+                                        Object.class,
+                                        Object.class)
                                 .convertMap();
             case ROW:
                 {

@@ -21,8 +21,10 @@ package org.apache.fluss.client.converter;
 import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.RowType;
 
 import java.util.Collection;
+import java.util.function.Function;
 
 import static org.apache.fluss.client.converter.PojoTypeToFlussTypeConverter.convertElementValue;
 
@@ -32,10 +34,17 @@ public class PojoArrayToFlussArray {
     private final DataType fieldType;
     private final String fieldName;
 
+    /**
+     * Pre-compiled element converter for ROW elements. Null when the element type is not ROW (the
+     * generic {@link PojoTypeToFlussTypeConverter#convertElementValue} path is used instead).
+     */
+    private final Function<Object, Object> rowElementConverter;
+
     public PojoArrayToFlussArray(Object obj, DataType fieldType, String fieldName) {
         this.obj = obj;
         this.fieldType = fieldType;
         this.fieldName = fieldName;
+        this.rowElementConverter = buildRowElementConverter(fieldType);
     }
 
     public GenericArray convertArray() {
@@ -91,9 +100,48 @@ public class PojoArrayToFlussArray {
         }
 
         Object[] converted = new Object[elements.length];
-        for (int i = 0; i < elements.length; i++) {
-            converted[i] = convertElementValue(elements[i], elementType, fieldName);
+        if (rowElementConverter != null) {
+            // ROW elements: use the pre-compiled converter to avoid re-creating it per element
+            for (int i = 0; i < elements.length; i++) {
+                converted[i] = elements[i] == null ? null : rowElementConverter.apply(elements[i]);
+            }
+        } else {
+            for (int i = 0; i < elements.length; i++) {
+                converted[i] = convertElementValue(elements[i], elementType, fieldName);
+            }
         }
         return new GenericArray(converted);
+    }
+
+    /**
+     * If the array element type is ROW, pre-compile a {@link PojoToRowConverter} once and return a
+     * function that reuses it for every element. Returns {@code null} for non-ROW element types.
+     */
+    private static Function<Object, Object> buildRowElementConverter(DataType fieldType) {
+        if (!(fieldType instanceof ArrayType)) {
+            return null;
+        }
+        DataType elementType = ((ArrayType) fieldType).getElementType();
+        if (elementType.getTypeRoot() != org.apache.fluss.types.DataTypeRoot.ROW) {
+            return null;
+        }
+        // We cannot know the concrete POJO class at this point (it depends on the runtime
+        // element), so we lazily create and cache the converter on the first non-null element.
+        RowType nestedRowType = (RowType) elementType;
+        // Use a holder array to cache the converter across lambda invocations
+        @SuppressWarnings("unchecked")
+        final PojoToRowConverter<Object>[] cache = new PojoToRowConverter[1];
+        return (elem) -> {
+            PojoToRowConverter<Object> converter = cache[0];
+            if (converter == null) {
+                @SuppressWarnings("unchecked")
+                PojoToRowConverter<Object> c =
+                        PojoToRowConverter.of(
+                                (Class<Object>) elem.getClass(), nestedRowType, nestedRowType);
+                cache[0] = c;
+                converter = c;
+            }
+            return converter.toRow(elem);
+        };
     }
 }

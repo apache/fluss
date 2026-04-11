@@ -278,4 +278,125 @@ public final class ConvertersTestFixtures {
             this.charField = c;
         }
     }
+
+    // ----------------------- Nested ROW POJOs -----------------------
+
+    /** Address POJO used as nested ROW type in tests. */
+    public static class AddressPojo {
+        public String city;
+        public Integer zipCode;
+
+        public AddressPojo() {}
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            AddressPojo that = (AddressPojo) o;
+            return Objects.equals(city, that.city) && Objects.equals(zipCode, that.zipCode);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(city, zipCode);
+        }
+    }
+
+    /** Person POJO with nested Address. */
+    public static class PersonPojo {
+        public Integer id;
+        public AddressPojo address;
+
+        public PersonPojo() {}
+    }
+
+    /** Inner POJO for deeply nested row tests. */
+    public static class InnerPojo {
+        public Double val;
+        public Boolean flag;
+
+        public InnerPojo() {}
+    }
+
+    /** Middle POJO containing inner nested POJO. */
+    public static class MiddlePojo {
+        public Integer id;
+        public InnerPojo inner;
+
+        public MiddlePojo() {}
+    }
+
+    /** Outer POJO for deeply nested row tests. */
+    public static class DeepNestOuterPojo {
+        public String name;
+        public MiddlePojo nested;
+
+        public DeepNestOuterPojo() {}
+    }
+
+    /** Nested POJO with array field. */
+    public static class RowWithArrayPojo {
+        public String label;
+        public Integer[] values;
+
+        public RowWithArrayPojo() {}
+    }
+
+    /** Outer POJO with nested row containing array. */
+    public static class RowWithArrayOuterPojo {
+        public Integer id;
+        public RowWithArrayPojo data;
+
+        public RowWithArrayOuterPojo() {}
+    }
+
+    /** Nested POJO with map field. */
+    public static class RowWithMapPojo {
+        public String name;
+        public Map<String, Integer> attrs;
+
+        public RowWithMapPojo() {}
+    }
+
+    /** Outer POJO with nested row containing map. */
+    public static class RowWithMapOuterPojo {
+        public Integer id;
+        public RowWithMapPojo info;
+
+        public RowWithMapOuterPojo() {}
+    }
+
+    /** POJO with array of nested row type. */
+    public static class ArrayOfRowPojo {
+        public Integer id;
+        public AddressPojo[] addresses;
+
+        public ArrayOfRowPojo() {}
+    }
+
+    /** POJO with map having nested row values. */
+    public static class MapOfRowPojo {
+        public Integer id;
+        public Map<String, AddressPojo> addressMap;
+
+        public MapOfRowPojo() {}
+    }
+
+    /** Negative test: array cannot be used as ROW type POJO field. */
+    public static class PrimitiveArrayFieldPojo {
+        public Integer[] badField;
+
+        public PrimitiveArrayFieldPojo() {}
+    }
+
+    /** Negative test: Map cannot be used as ROW type POJO field. */
+    public static class MapFieldPojo {
+        public Map<String, Integer> badField;
+
+        public MapFieldPojo() {}
+    }
 }

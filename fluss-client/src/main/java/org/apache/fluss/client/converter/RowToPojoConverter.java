@@ -29,6 +29,8 @@ import org.apache.fluss.types.RowType;
 import javax.annotation.Nullable;
 
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
 import java.util.Collection;
 import java.util.List;
 
@@ -193,9 +195,29 @@ public final class RowToPojoConverter<T> {
                                     .convertArray();
                 };
             case MAP:
-                return (row, pos) ->
-                        new FlussMapToPojoMap(row.getMap(pos), (MapType) fieldType, prop.name)
-                                .convertMap();
+                {
+                    MapType mapType = (MapType) fieldType;
+                    Class<?> keyClass = Object.class;
+                    Class<?> valueClass = Object.class;
+                    Type gt = prop.genericType;
+                    if (gt instanceof ParameterizedType) {
+                        ParameterizedType pt = (ParameterizedType) gt;
+                        Type[] typeArgs = pt.getActualTypeArguments();
+                        if (typeArgs.length == 2) {
+                            if (typeArgs[0] instanceof Class) {
+                                keyClass = (Class<?>) typeArgs[0];
+                            }
+                            if (typeArgs[1] instanceof Class) {
+                                valueClass = (Class<?>) typeArgs[1];
+                            }
+                        }
+                    }
+                    final Class<?> kc = keyClass;
+                    final Class<?> vc = valueClass;
+                    return (row, pos) ->
+                            new FlussMapToPojoMap(row.getMap(pos), mapType, prop.name, kc, vc)
+                                    .convertMap();
+                }
             case ROW:
                 {
                     RowType nestedRowType = (RowType) fieldType;
