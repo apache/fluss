@@ -53,14 +53,16 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * <ul>
  *   <li><b>Version 0:</b> Initial version. Remaining hybrid lake splits are only (de)serialized if
  *       the {@code lakeSource} is non-null.
- *   <li><b>Version 1 (Current):</b> Decouples split serialization from the {@code lakeSource}
- *       presence. It always attempts to (de)serialize the splits, using an internal boolean flag to
- *       indicate presence. This ensures state consistency regardless of the current runtime
- *       configuration.
+ *   <li><b>Version 1:</b> Decouples split serialization from the {@code lakeSource} presence. It
+ *       always attempts to (de)serialize the splits, using an internal boolean flag to indicate
+ *       presence. This ensures state consistency regardless of the current runtime configuration.
+ *   <li><b>Version 2:</b> Adds lease context serialization.
+ *   <li><b>Version 3 (Current):</b> Adds {@code isBacklogProcessed} boolean flag. For legacy
+ *       versions (0, 1, 2), this flag is initialized to {@code true} to skip backlog processing.
  * </ul>
  *
  * <p><b>Compatibility Note:</b> This serializer is designed for backward compatibility. It can
- * deserialize states from Version 0, but always produces Version 1 during serialization.
+ * deserialize states from Version 0, but always produces Version 3 during serialization.
  */
 public class FlussSourceEnumeratorStateSerializer
         implements SimpleVersionedSerializer<SourceEnumeratorState> {
@@ -70,11 +72,12 @@ public class FlussSourceEnumeratorStateSerializer
     private static final int VERSION_0 = 0;
     private static final int VERSION_1 = 1;
     private static final int VERSION_2 = 2;
+    private static final int VERSION_3 = 3;
 
     private static final ThreadLocal<DataOutputSerializer> SERIALIZER_CACHE =
             ThreadLocal.withInitial(() -> new DataOutputSerializer(64));
 
-    private static final int CURRENT_VERSION = VERSION_2;
+    private static final int CURRENT_VERSION = VERSION_3;
 
     public FlussSourceEnumeratorStateSerializer(LakeSource<LakeSplit> lakeSource) {
         this.lakeSource = lakeSource;
@@ -98,6 +101,9 @@ public class FlussSourceEnumeratorStateSerializer
 
         // write lease context
         serializeLeaseId(out, state);
+
+        // write isBacklogProcessed flag
+        out.writeBoolean(state.isBacklogProcessed());
 
         final byte[] result = out.getCopyOfBuffer();
         out.clear();
@@ -169,6 +175,8 @@ public class FlussSourceEnumeratorStateSerializer
     @Override
     public SourceEnumeratorState deserialize(int version, byte[] serialized) throws IOException {
         switch (version) {
+            case VERSION_3:
+                return deserializeV3(serialized);
             case VERSION_2:
                 return deserializeV2(serialized);
             case VERSION_1:
@@ -195,11 +203,13 @@ public class FlussSourceEnumeratorStateSerializer
             remainingHybridLakeFlussSplits = deserializeRemainingHybridLakeFlussSplits(in);
         }
 
+        // legacy version: initialize isBacklogProcessed to true to skip backlog processing
         return new SourceEnumeratorState(
                 assignBucketAndPartitions.f0,
                 assignBucketAndPartitions.f1,
                 remainingHybridLakeFlussSplits,
-                LeaseContext.DEFAULT.getKvSnapshotLeaseId());
+                LeaseContext.DEFAULT.getKvSnapshotLeaseId(),
+                true);
     }
 
     private SourceEnumeratorState deserializeV1(byte[] serialized) throws IOException {
@@ -213,11 +223,13 @@ public class FlussSourceEnumeratorStateSerializer
         // this logic no longer depends on the lakeSource flag. This unconditional
         // deserialization is the intended behavior change compared to VERSION_0.
 
+        // legacy version: initialize isBacklogProcessed to true to skip backlog processing
         return new SourceEnumeratorState(
                 assignBucketAndPartitions.f0,
                 assignBucketAndPartitions.f1,
                 remainingHybridLakeFlussSplits,
-                LeaseContext.DEFAULT.getKvSnapshotLeaseId());
+                LeaseContext.DEFAULT.getKvSnapshotLeaseId(),
+                true);
     }
 
     private SourceEnumeratorState deserializeV2(byte[] serialized) throws IOException {
@@ -229,11 +241,33 @@ public class FlussSourceEnumeratorStateSerializer
 
         // deserialize lease context
         LeaseContext leaseContext = deserializeLeaseId(in);
+        // legacy version: initialize isBacklogProcessed to true to skip backlog processing
         return new SourceEnumeratorState(
                 assignBucketAndPartitions.f0,
                 assignBucketAndPartitions.f1,
                 remainingHybridLakeFlussSplits,
-                leaseContext.getKvSnapshotLeaseId());
+                leaseContext.getKvSnapshotLeaseId(),
+                true);
+    }
+
+    private SourceEnumeratorState deserializeV3(byte[] serialized) throws IOException {
+        DataInputDeserializer in = new DataInputDeserializer(serialized);
+        Tuple2<Set<TableBucket>, Map<Long, String>> assignBucketAndPartitions =
+                deserializeAssignBucketAndPartitions(in);
+        List<SourceSplitBase> remainingHybridLakeFlussSplits =
+                deserializeRemainingHybridLakeFlussSplits(in);
+
+        // deserialize lease context
+        LeaseContext leaseContext = deserializeLeaseId(in);
+
+        // deserialize isBacklogProcessed flag
+        boolean isBacklogProcessed = in.readBoolean();
+        return new SourceEnumeratorState(
+                assignBucketAndPartitions.f0,
+                assignBucketAndPartitions.f1,
+                remainingHybridLakeFlussSplits,
+                leaseContext.getKvSnapshotLeaseId(),
+                isBacklogProcessed);
     }
 
     private Tuple2<Set<TableBucket>, Map<Long, String>> deserializeAssignBucketAndPartitions(

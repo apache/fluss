@@ -22,6 +22,7 @@ import org.apache.fluss.flink.adapter.SingleThreadMultiplexSourceReaderBaseAdapt
 import org.apache.fluss.flink.lake.LakeSplitStateInitializer;
 import org.apache.fluss.flink.source.emitter.FlinkRecordEmitter;
 import org.apache.fluss.flink.source.event.FinishedKvSnapshotConsumeEvent;
+import org.apache.fluss.flink.source.event.MarkedBacklogOffsetEvent;
 import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
 import org.apache.fluss.flink.source.event.PartitionsRemovedEvent;
 import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
@@ -78,6 +79,7 @@ public class FlinkSourceReader<OUT>
                         elementsQueue,
                         () ->
                                 new FlinkSourceSplitReader(
+                                        context,
                                         flussConfig,
                                         tablePath,
                                         sourceOutputType,
@@ -151,6 +153,10 @@ public class FlinkSourceReader<OUT>
                     .removePartitions(
                             partitionsRemovedEvent.getRemovedPartitions(),
                             unsubscribeTableBucketsCallback);
+        } else if (sourceEvent instanceof MarkedBacklogOffsetEvent) {
+            MarkedBacklogOffsetEvent backlogEvent = (MarkedBacklogOffsetEvent) sourceEvent;
+            ((FlinkSourceFetcherManager) splitFetcherManager)
+                    .addBacklogMarkedOffsets(backlogEvent.getMarkedBacklogOffsets());
         }
     }
 

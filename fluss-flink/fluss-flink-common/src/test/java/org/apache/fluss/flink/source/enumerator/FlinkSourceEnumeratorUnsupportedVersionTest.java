@@ -119,6 +119,7 @@ class FlinkSourceEnumeratorUnsupportedVersionTest {
                             null,
                             null,
                             LeaseContext.DEFAULT,
+                            false,
                             false);
 
             // Set admin via reflection (avoid start() which needs cluster connection)
@@ -169,7 +170,8 @@ class FlinkSourceEnumeratorUnsupportedVersionTest {
                 null,
                 null,
                 LeaseContext.DEFAULT,
-                true);
+                true,
+                false);
     }
 
     private void setAdminField(FlinkSourceEnumerator enumerator, TestAdminAdapter admin)

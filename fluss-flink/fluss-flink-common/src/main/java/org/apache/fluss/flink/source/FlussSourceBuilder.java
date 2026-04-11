@@ -25,6 +25,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
+import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.RowType;
@@ -290,6 +291,11 @@ public class FlussSourceBuilder<OUT> {
 
         LOG.info("Creating Fluss Source with Configuration: {}", flussConf);
 
+        boolean backlogReportConfigEnabled =
+                FlinkConnectorOptionsUtils.getBoolean(
+                        flussConf, FlinkConnectorOptions.SCAN_BACKLOG_REPORT_ENABLE);
+        boolean enableBacklogReporting = hasPrimaryKey && backlogReportConfigEnabled;
+
         return new FlussSource<>(
                 flussConf,
                 tablePath,
@@ -300,6 +306,7 @@ public class FlussSourceBuilder<OUT> {
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 deserializationSchema,
-                true);
+                true,
+                enableBacklogReporting);
     }
 }

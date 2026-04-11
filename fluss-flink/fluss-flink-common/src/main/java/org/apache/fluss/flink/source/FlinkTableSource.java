@@ -332,6 +332,11 @@ public class FlinkTableSource
                         "Unsupported startup mode: " + startupOptions.startupMode);
         }
 
+        boolean backlogReportConfigEnabled =
+                FlinkConnectorOptionsUtils.getBoolean(
+                        flussConfig, FlinkConnectorOptions.SCAN_BACKLOG_REPORT_ENABLE);
+        boolean enableBacklogReporting = streaming && hasPrimaryKey() && backlogReportConfigEnabled;
+
         FlinkSource<RowData> source =
                 new FlinkSource<>(
                         flussConfig,
@@ -346,7 +351,8 @@ public class FlinkTableSource
                         streaming,
                         partitionFilters,
                         enableLakeSource ? lakeSource : null,
-                        leaseContext);
+                        leaseContext,
+                        enableBacklogReporting);
 
         if (!streaming) {
             // return a bounded source provide to make planner happy,

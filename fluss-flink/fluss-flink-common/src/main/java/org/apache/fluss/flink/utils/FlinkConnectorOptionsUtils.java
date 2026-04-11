@@ -187,6 +187,16 @@ public class FlinkConnectorOptionsUtils {
         }
     }
 
+    /**
+     * Reads a Flink {@link org.apache.flink.configuration.ConfigOption} of Boolean type from a
+     * Fluss {@link Configuration}.
+     */
+    public static boolean getBoolean(
+            Configuration flussConf, org.apache.flink.configuration.ConfigOption<Boolean> option) {
+        return Boolean.parseBoolean(
+                String.valueOf(flussConf.getRawValue(option.key()).orElse(option.defaultValue())));
+    }
+
     public static String getClientScannerIoTmpDir(
             Configuration flussConf, org.apache.flink.configuration.Configuration flinkConfig) {
         if (!flussConf.contains(CLIENT_SCANNER_IO_TMP_DIR)) {
