@@ -69,6 +69,28 @@ public class PojoMapToFlussMap {
                         mapType.getValueType(), valueClass != null ? valueClass : Object.class);
     }
 
+    /**
+     * Creates an adapter using pre-built row converters for ROW-typed keys and/or values, avoiding
+     * the cost of calling {@link #buildRowConverter} on every row write. Both converters must have
+     * been constructed once at field-converter setup time (e.g. in {@link PojoToRowConverter}).
+     *
+     * <p>A {@code null} converter for key or value means no ROW conversion is required for that
+     * side; the generic {@link PojoTypeToFlussTypeConverter#convertElementValue} path is used
+     * instead.
+     */
+    PojoMapToFlussMap(
+            Map<?, ?> pojoMap,
+            MapType mapType,
+            String fieldName,
+            Function<Object, Object> prebuiltKeyConverter,
+            Function<Object, Object> prebuiltValueConverter) {
+        this.pojoMap = pojoMap;
+        this.mapType = mapType;
+        this.fieldName = fieldName;
+        this.rowKeyConverter = prebuiltKeyConverter;
+        this.rowValueConverter = prebuiltValueConverter;
+    }
+
     public GenericMap convertMap() {
         if (pojoMap == null) {
             return null;
@@ -106,8 +128,7 @@ public class PojoMapToFlussMap {
      * {@code javaClass} is {@code Object.class} the converter is built lazily from the first
      * non-null entry's runtime class and stored in an {@link AtomicReference} for thread safety.
      */
-    private static Function<Object, Object> buildRowConverter(
-            DataType dataType, Class<?> javaClass) {
+    static Function<Object, Object> buildRowConverter(DataType dataType, Class<?> javaClass) {
         if (dataType.getTypeRoot() != DataTypeRoot.ROW) {
             return null;
         }
@@ -116,8 +137,7 @@ public class PojoMapToFlussMap {
         if (javaClass != Object.class) {
             @SuppressWarnings("unchecked")
             PojoToRowConverter<Object> converter =
-                    PojoToRowConverter.of(
-                            (Class<Object>) javaClass, nestedRowType, nestedRowType);
+                    PojoToRowConverter.of((Class<Object>) javaClass, nestedRowType, nestedRowType);
             return converter::toRow;
         }
 

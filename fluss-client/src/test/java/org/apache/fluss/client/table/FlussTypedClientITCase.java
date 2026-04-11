@@ -608,17 +608,7 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
     }
 
     private static Schema complexTypesPkSchema() {
-        return Schema.newBuilder()
-                .column("id", DataTypes.INT())
-                .column("intArray", DataTypes.ARRAY(DataTypes.INT()))
-                .column("strArray", DataTypes.ARRAY(DataTypes.STRING()))
-                .column("nestedArray", DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.INT())))
-                .column("simpleMap", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()))
-                .column(
-                        "mapOfArrays",
-                        DataTypes.MAP(DataTypes.STRING(), DataTypes.ARRAY(DataTypes.INT())))
-                .primaryKey("id")
-                .build();
+        return Schema.newBuilder().fromSchema(complexTypesLogSchema()).primaryKey("id").build();
     }
 
     private static ComplexTypesPojo newComplexTypesPojo(int i) {
@@ -1178,10 +1168,7 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
     void testArrayOfRowAppendAndScan() throws Exception {
         TablePath path = TablePath.of("pojo_db", "array_of_row_log");
         TableDescriptor td =
-                TableDescriptor.builder()
-                        .schema(arrayOfRowLogSchema())
-                        .distributedBy(1)
-                        .build();
+                TableDescriptor.builder().schema(arrayOfRowLogSchema()).distributedBy(1).build();
         createTable(path, td, true);
 
         try (Table table = conn.getTable(path)) {
@@ -1277,10 +1264,7 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
         // Reuses the same ARRAY<ROW> schema; only the POJO field type differs (List vs array)
         TablePath path = TablePath.of("pojo_db", "list_of_row_log");
         TableDescriptor td =
-                TableDescriptor.builder()
-                        .schema(arrayOfRowLogSchema())
-                        .distributedBy(1)
-                        .build();
+                TableDescriptor.builder().schema(arrayOfRowLogSchema()).distributedBy(1).build();
         createTable(path, td, true);
 
         try (Table table = conn.getTable(path)) {

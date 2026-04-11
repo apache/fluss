@@ -66,6 +66,25 @@ public class PojoArrayToFlussArray {
                         fieldType, componentClass != null ? componentClass : Object.class);
     }
 
+    /**
+     * Creates an adapter using a pre-built row-element converter, avoiding the cost of calling
+     * {@link #buildRowElementConverter} on every row write. The converter must have been
+     * constructed once at field-converter setup time (e.g. in {@link PojoToRowConverter}).
+     *
+     * <p>Passing {@code null} signals that no ROW-element conversion is needed; the generic {@link
+     * PojoTypeToFlussTypeConverter#convertElementValue} path is used for every element instead.
+     */
+    PojoArrayToFlussArray(
+            Object obj,
+            DataType fieldType,
+            String fieldName,
+            Function<Object, Object> prebuiltRowElementConverter) {
+        this.obj = obj;
+        this.fieldType = fieldType;
+        this.fieldName = fieldName;
+        this.rowElementConverter = prebuiltRowElementConverter;
+    }
+
     public GenericArray convertArray() {
         if (obj == null) {
             return null;
@@ -136,13 +155,13 @@ public class PojoArrayToFlussArray {
      * If the array element type is ROW, compile a {@link PojoToRowConverter} and return a function
      * that applies it to every element. Returns {@code null} for non-ROW element types.
      *
-     * <p>When {@code componentClass} is a concrete POJO class the converter is built eagerly,
-     * which also means every element in the array is converted with a consistent converter
-     * regardless of its runtime sub-type. When {@code componentClass} is {@code Object.class} (the
-     * type is not known statically) the converter is built lazily from the first non-null element's
-     * runtime class and stored in an {@link AtomicReference} so the initialisation is thread-safe.
+     * <p>When {@code componentClass} is a concrete POJO class the converter is built eagerly, which
+     * also means every element in the array is converted with a consistent converter regardless of
+     * its runtime sub-type. When {@code componentClass} is {@code Object.class} (the type is not
+     * known statically) the converter is built lazily from the first non-null element's runtime
+     * class and stored in an {@link AtomicReference} so the initialisation is thread-safe.
      */
-    private static Function<Object, Object> buildRowElementConverter(
+    static Function<Object, Object> buildRowElementConverter(
             DataType fieldType, Class<?> componentClass) {
         if (!(fieldType instanceof ArrayType)) {
             return null;
