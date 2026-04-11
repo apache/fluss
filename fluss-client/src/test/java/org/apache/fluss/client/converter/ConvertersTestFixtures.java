@@ -29,6 +29,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -312,6 +313,23 @@ public final class ConvertersTestFixtures {
         public AddressPojo address;
 
         public PersonPojo() {}
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            PersonPojo that = (PersonPojo) o;
+            return Objects.equals(id, that.id) && Objects.equals(address, that.address);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(id, address);
+        }
     }
 
     /** Inner POJO for deeply nested row tests. */
@@ -320,6 +338,23 @@ public final class ConvertersTestFixtures {
         public Boolean flag;
 
         public InnerPojo() {}
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            InnerPojo that = (InnerPojo) o;
+            return Objects.equals(val, that.val) && Objects.equals(flag, that.flag);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(val, flag);
+        }
     }
 
     /** Middle POJO containing inner nested POJO. */
@@ -328,6 +363,23 @@ public final class ConvertersTestFixtures {
         public InnerPojo inner;
 
         public MiddlePojo() {}
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            MiddlePojo that = (MiddlePojo) o;
+            return Objects.equals(id, that.id) && Objects.equals(inner, that.inner);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(id, inner);
+        }
     }
 
     /** Outer POJO for deeply nested row tests. */
@@ -336,6 +388,23 @@ public final class ConvertersTestFixtures {
         public MiddlePojo nested;
 
         public DeepNestOuterPojo() {}
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            DeepNestOuterPojo that = (DeepNestOuterPojo) o;
+            return Objects.equals(name, that.name) && Objects.equals(nested, that.nested);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(name, nested);
+        }
     }
 
     /** Nested POJO with array field. */
@@ -398,5 +467,13 @@ public final class ConvertersTestFixtures {
         public Map<String, Integer> badField;
 
         public MapFieldPojo() {}
+    }
+
+    /** POJO with a List of nested row type (tests {@code Collection<ROW>} deserialization). */
+    public static class ListOfRowPojo {
+        public Integer id;
+        public List<AddressPojo> addresses;
+
+        public ListOfRowPojo() {}
     }
 }

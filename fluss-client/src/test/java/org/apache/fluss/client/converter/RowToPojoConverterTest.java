@@ -471,12 +471,43 @@ public class RowToPojoConverterTest {
 
         assertThat(back.id).isEqualTo(1);
         assertThat(back.addressMap).containsKey("home");
-        // With generic type extraction, Map<String, AddressPojo> values should be properly
-        // deserialized as AddressPojo instead of InternalRow
-        Object rawValue = back.addressMap.get("home");
-        assertThat(rawValue).isInstanceOf(ConvertersTestFixtures.AddressPojo.class);
-        ConvertersTestFixtures.AddressPojo backAddr = (ConvertersTestFixtures.AddressPojo) rawValue;
-        assertThat(backAddr.city).isEqualTo("Beijing");
-        assertThat(backAddr.zipCode).isEqualTo(100000);
+        assertThat(back.addressMap.get("home")).isEqualTo(addr);
+    }
+
+    @Test
+    public void testListOfNestedRowRoundTrip() {
+        RowType elementRowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("city", DataTypes.STRING()),
+                        DataTypes.FIELD("zipCode", DataTypes.INT()));
+        RowType table =
+                RowType.builder()
+                        .field("id", DataTypes.INT())
+                        .field("addresses", DataTypes.ARRAY(elementRowType))
+                        .build();
+
+        PojoToRowConverter<ConvertersTestFixtures.ListOfRowPojo> writer =
+                PojoToRowConverter.of(ConvertersTestFixtures.ListOfRowPojo.class, table, table);
+        RowToPojoConverter<ConvertersTestFixtures.ListOfRowPojo> reader =
+                RowToPojoConverter.of(ConvertersTestFixtures.ListOfRowPojo.class, table, table);
+
+        ConvertersTestFixtures.AddressPojo addr1 = new ConvertersTestFixtures.AddressPojo();
+        addr1.city = "Beijing";
+        addr1.zipCode = 100000;
+        ConvertersTestFixtures.AddressPojo addr2 = new ConvertersTestFixtures.AddressPojo();
+        addr2.city = "Shanghai";
+        addr2.zipCode = 200000;
+
+        ConvertersTestFixtures.ListOfRowPojo pojo = new ConvertersTestFixtures.ListOfRowPojo();
+        pojo.id = 7;
+        pojo.addresses = java.util.Arrays.asList(addr1, addr2);
+
+        GenericRow row = writer.toRow(pojo);
+        ConvertersTestFixtures.ListOfRowPojo back = reader.fromRow(row);
+
+        assertThat(back.id).isEqualTo(7);
+        assertThat(back.addresses).hasSize(2);
+        assertThat(back.addresses.get(0)).isEqualTo(addr1);
+        assertThat(back.addresses.get(1)).isEqualTo(addr2);
     }
 }

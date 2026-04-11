@@ -342,10 +342,6 @@ public class Order {
 }
 ```
 
-:::note
-Due to Java type erasure, when a `ROW` type is used as a `MAP` value, the deserialized value will be an `InternalRow` instead of the POJO class. For `ARRAY<ROW>` and direct `ROW` fields, the POJO class is correctly used.
-:::
-
 ### Writing Data
 
 #### Append Writer

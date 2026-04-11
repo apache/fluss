@@ -169,16 +169,24 @@ public final class RowToPojoConverter<T> {
             case ARRAY:
                 ArrayType arrayType = (ArrayType) fieldType;
                 if (Collection.class.isAssignableFrom(prop.type)) {
-                    // POJO field is a List / Collection — deserialize as ArrayList<Object>
+                    // POJO field is a List / Collection — extract the element class from the
+                    // generic type declaration so that ROW elements are deserialized to the
+                    // declared POJO type (e.g. List<AddressPojo>) rather than InternalRow.
+                    Class<?> elemClass = Object.class;
+                    if (prop.genericType instanceof ParameterizedType) {
+                        ParameterizedType pt = (ParameterizedType) prop.genericType;
+                        Type[] args = pt.getActualTypeArguments();
+                        if (args.length == 1 && args[0] instanceof Class) {
+                            elemClass = (Class<?>) args[0];
+                        }
+                    }
+                    final Class<?> ec = elemClass;
                     return (row, pos) -> {
                         InternalArray array = row.getArray(pos);
                         return array == null
                                 ? null
                                 : new FlussArrayToPojoArray(
-                                                array,
-                                                arrayType.getElementType(),
-                                                prop.name,
-                                                Object.class)
+                                                array, arrayType.getElementType(), prop.name, ec)
                                         .convertList();
                     };
                 }

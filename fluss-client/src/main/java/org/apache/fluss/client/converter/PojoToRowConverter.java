@@ -26,6 +26,9 @@ import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
@@ -149,14 +152,54 @@ public final class PojoToRowConverter<T> {
                                     precision, prop.name, prop.read(obj));
                 }
             case ARRAY:
-                return (obj) ->
-                        new PojoArrayToFlussArray(prop.read(obj), fieldType, prop.name)
-                                .convertArray();
+                {
+                    // Determine the element class so the nested ROW converter (if any) can be
+                    // built eagerly instead of lazily from the first element's runtime class.
+                    Class<?> componentClass = Object.class;
+                    if (prop.type.isArray()) {
+                        componentClass = prop.type.getComponentType();
+                    } else if (Collection.class.isAssignableFrom(prop.type)
+                            && prop.genericType instanceof ParameterizedType) {
+                        ParameterizedType pt = (ParameterizedType) prop.genericType;
+                        Type[] args = pt.getActualTypeArguments();
+                        if (args.length == 1 && args[0] instanceof Class) {
+                            componentClass = (Class<?>) args[0];
+                        }
+                    }
+                    final Class<?> elemClass = componentClass;
+                    return (obj) ->
+                            new PojoArrayToFlussArray(prop.read(obj), fieldType, prop.name, elemClass)
+                                    .convertArray();
+                }
             case MAP:
-                return (obj) ->
-                        new PojoMapToFlussMap(
-                                        (Map<?, ?>) prop.read(obj), (MapType) fieldType, prop.name)
-                                .convertMap();
+                {
+                    // Extract key/value classes from the generic field type so ROW-typed values
+                    // can be converted with a pre-built PojoToRowConverter.
+                    Class<?> keyClass = Object.class;
+                    Class<?> valueClass = Object.class;
+                    if (prop.genericType instanceof ParameterizedType) {
+                        ParameterizedType pt = (ParameterizedType) prop.genericType;
+                        Type[] args = pt.getActualTypeArguments();
+                        if (args.length == 2) {
+                            if (args[0] instanceof Class) {
+                                keyClass = (Class<?>) args[0];
+                            }
+                            if (args[1] instanceof Class) {
+                                valueClass = (Class<?>) args[1];
+                            }
+                        }
+                    }
+                    final Class<?> kc = keyClass;
+                    final Class<?> vc = valueClass;
+                    return (obj) ->
+                            new PojoMapToFlussMap(
+                                            (Map<?, ?>) prop.read(obj),
+                                            (MapType) fieldType,
+                                            prop.name,
+                                            kc,
+                                            vc)
+                                    .convertMap();
+                }
             case ROW:
                 {
                     RowType nestedRowType = (RowType) fieldType;
