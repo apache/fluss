@@ -5,20 +5,20 @@ sidebar_position: 4
 
 # Real-Time User Profile
 
-This tutorial demonstrates a real-time user profiling workflow using two core Apache Fluss features: the **Auto-Increment Column** and the **Aggregation Merge Engine**.
+This tutorial demonstrates how to build a real-time user profiling system using two core Apache Fluss features: the **Auto-Increment Column** and the **Aggregation Merge Engine**. You will learn how to automatically map high-cardinality string identifiers (like emails) to compact integer UIDs, and accumulate user click metrics directly in the storage layer keeping the Flink job entirely stateless.
 
 ## How the System Works
 
 ### Core Concepts
 
 - **Identity Mapping**: Incoming email strings are automatically mapped to compact `INT` UIDs using Fluss's auto-increment column, no manual ID management required.
-- **Storage-Level Aggregation**: Click counts are accumulated directly in the Fluss TabletServers via The Aggregation Merge Engine sums the clicks at the storage layer, with no windowing or state in Flink required.
+- **Storage-Level Aggregation**: Click counts are accumulated directly in the Fluss TabletServers via the Aggregation Merge Engine. The Flink job remains stateless and lightweight.
 
 ### Data Flow
 
-1. **Ingestion**: Raw click events arrive with an email address, a click count, and a profile group.
+1. **Ingestion**: Raw click events arrive with an email address and a click count.
 2. **Mapping**: A Flink lookup join against `user_dict` resolves the email to a UID. If the email is new, the `insert-if-not-exists` hint instructs Fluss to generate a new UID automatically.
-3. **Aggregation**: Each event's click count is written to `user_profiles`. The Aggregation Merge Engine sums the clicks at the storage layer, with no windowing or state in Flink required.
+3. **Aggregation**: The resolved UID becomes the primary key in `user_profiles`. Each event's click count is summed at the storage layer via the Aggregation Merge Engine, no windowing or state in Flink required.
 
 ## Environment Setup
 
@@ -177,7 +177,7 @@ USE CATALOG fluss_catalog;
 
 ## Step 2: Create the User Dictionary Table
 
-Create the `user_dict` table to map emails to UIDs. The `auto-increment.fields` property instructs Fluss to automatically generate a unique `INT` UID for every new email it receives.
+Create the `user_dict` table to map email addresses to integer UIDs. The `auto-increment.fields` property instructs Fluss to automatically assign a unique `INT` UID for every new email it receives.
 
 ```sql
 CREATE TABLE user_dict (
@@ -191,13 +191,13 @@ CREATE TABLE user_dict (
 
 ## Step 3: Create the Aggregated Profile Table
 
-Create the `user_profiles` table using the **Aggregation Merge Engine**. The `sum` aggregator on `total_clicks` means every incoming click count is accumulated directly at the storage layer, so the Flink job does not need to maintain any state.
+Create the `user_profiles` table using the **Aggregation Merge Engine**. Each user's UID is the primary key, and `total_clicks` accumulates their click activity directly at the storage layer via the `sum` aggregator.
 
 ```sql
 CREATE TABLE user_profiles (
-    profile_id   INT,
+    uid          INT,
     total_clicks BIGINT,
-    PRIMARY KEY (profile_id) NOT ENFORCED
+    PRIMARY KEY (uid) NOT ENFORCED
 ) WITH (
     'table.merge-engine'      = 'aggregation',
     'fields.total_clicks.agg' = 'sum'
@@ -208,29 +208,29 @@ CREATE TABLE user_profiles (
 
 Create a temporary source table to simulate raw click events using the Faker connector.
 
+:::note
+Java Faker's `numberBetween(min, max)` treats `max` as exclusive. The expressions below are set to produce click counts of 1–10 and a pool of 100 distinct simulated email users.
+:::
+
 ```sql
 CREATE TEMPORARY TABLE raw_events (
-    email            STRING,
-    click_count      INT,
-    profile_group_id INT,
-    proctime         AS PROCTIME()
+    email       STRING,
+    click_count INT,
+    proctime    AS PROCTIME()
 ) WITH (
-    'connector'                          = 'faker',
-    'rows-per-second'                    = '1',
-    'fields.email.expression'            = '#{internet.emailAddress}',
-    'fields.click_count.expression'      = '#{number.numberBetween ''1'',''10''}',
-    'fields.profile_group_id.expression' = '#{number.numberBetween ''1'',''5''}'
+    'connector'                     = 'faker',
+    'rows-per-second'               = '1',
+    'fields.email.expression'       = '#{internet.emailAddress}',
+    'fields.click_count.expression' = '#{number.numberBetween ''1'',''11''}'
 );
 ```
 
-Now run the pipeline. The `lookup.insert-if-not-exists` hint ensures that if an email is not found in `user_dict`, Fluss automatically generates a new UID for it on the fly.
-
-Although this minimal quickstart does not use the generated `uid` in the final aggregation, the lookup join is still important because it demonstrates how Fluss automatically assigns and persists stable integer IDs for new email identifiers on first encounter.
+Now run the pipeline. The `lookup.insert-if-not-exists` hint ensures that if an email is not found in `user_dict`, Fluss generates a new `uid` for it automatically. The resolved `uid` becomes the primary key of `user_profiles`, making the dictionary mapping the central link between the two tables.
 
 ```sql
 INSERT INTO user_profiles
 SELECT
-    e.profile_group_id,
+    d.uid,
     CAST(e.click_count AS BIGINT)
 FROM raw_events AS e
 JOIN user_dict /*+ OPTIONS('lookup.insert-if-not-exists' = 'true') */
@@ -240,7 +240,7 @@ ON e.email = d.email;
 
 ## Step 5: Verify Results
 
-Open a **second terminal**, change into the same working directory, re-run the export commands, and launch another SQL Client session to query the results while the pipeline runs.
+Open a **second terminal**, re-run the export commands, and launch another SQL Client session to query results while the pipeline runs.
 
 ```shell
 cd fluss-user-profile
@@ -257,6 +257,7 @@ CREATE CATALOG fluss_catalog WITH (
     'bootstrap.servers' = 'coordinator-server:9123'
 );
 ```
+
 ```sql
 USE CATALOG fluss_catalog;
 ```
@@ -268,18 +269,18 @@ SET 'sql-client.execution.result-mode' = 'tableau';
 ```
 
 ```sql
-SELECT profile_id, total_clicks FROM user_profiles;
+SELECT uid, total_clicks FROM user_profiles;
 ```
 
-You should see 5 rows (one per profile group) with `total_clicks` increasing in real time as new events arrive.
+You should see rows appearing for each new user, with `total_clicks` accumulating in real time as more events arrive for the same email.
 
-To verify the dictionary mapping is working:
+To verify that email-to-UID mapping is working correctly:
 
 ```sql
 SELECT * FROM user_dict LIMIT 10;
 ```
 
-Each email should have a compact `INT` uid automatically assigned by Fluss.
+Each email should have a unique compact `INT` uid automatically assigned by Fluss.
 
 ## Clean Up
 
@@ -288,6 +289,12 @@ Exit the SQL Client by typing `exit;`, then stop the Docker containers.
 ```shell
 docker compose down -v
 ```
+
+## Architectural Benefits
+
+- **Stateless Flink Jobs:** Offloading both the identity dictionary and the click aggregation to Fluss makes the Flink job lightweight, with fast checkpoints and minimal recovery time.
+- **Compact Storage:** Using auto-incremented `INT` UIDs instead of raw email strings reduces memory and storage footprint significantly.
+- **Exactly-Once Accuracy:** The **Undo Recovery** mechanism in the Fluss Flink connector ensures that replayed data during failovers does not result in double-counting.
 
 ## What's Next?
 
