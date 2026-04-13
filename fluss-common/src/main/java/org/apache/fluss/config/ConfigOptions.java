@@ -855,6 +855,16 @@ public class ConfigOptions {
                     .withDescription(
                             "The number of queued requests allowed for worker threads, before blocking the I/O threads.");
 
+    public static final ConfigOption<MemorySize> NETTY_SERVER_MAX_REQUEST_SIZE =
+            key("netty.server.max-request-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("100mb"))
+                    .withDescription(
+                            "The maximum size of a single request that the server can receive. "
+                                    + "This limits the maximum frame length at the Netty pipeline level "
+                                    + "to protect the server from malicious clients sending oversized requests "
+                                    + "that could exhaust server memory.");
+
     public static final ConfigOption<Duration> NETTY_CONNECTION_MAX_IDLE_TIME =
             key("netty.connection.max-idle-time")
                     .durationType()
