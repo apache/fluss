@@ -186,6 +186,7 @@ public class TabletServer extends ServerBase {
 
     public static void main(String[] args) {
         Configuration configuration = loadConfiguration(args, TabletServer.class.getSimpleName());
+        applyServerDefaultConfigurations(configuration);
         TabletServer tabletServer = new TabletServer(configuration);
         startServer(tabletServer);
     }
@@ -240,7 +241,7 @@ public class TabletServer extends ServerBase {
             // to fetch log.
             this.clientMetricGroup =
                     new ClientMetricGroup(metricRegistry, SERVER_NAME + "-" + serverId);
-            this.rpcClient = RpcClient.create(conf, clientMetricGroup, true);
+            this.rpcClient = RpcClient.create(conf, clientMetricGroup);
 
             this.coordinatorGateway =
                     GatewayClientProxy.createGatewayProxy(

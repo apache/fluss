@@ -948,7 +948,9 @@ public class ConfigOptions {
                     .withDescription(
                             "Whether to allocate heap buffer first for the netty client. "
                                     + "If set to false, direct buffer will be used first, "
-                                    + "which requires sufficient off-heap memory to be available.");
+                                    + "which requires sufficient off-heap memory to be available. "
+                                    + "By default, inner clients (server-to-server) use false "
+                                    + "and non-inner clients (external) use true.");
 
     // ------------------------------------------------------------------------
     //  Client Settings

@@ -168,6 +168,7 @@ public class CoordinatorServer extends ServerBase {
     public static void main(String[] args) {
         Configuration configuration =
                 loadConfiguration(args, CoordinatorServer.class.getSimpleName());
+        applyServerDefaultConfigurations(configuration);
         CoordinatorServer coordinatorServer = new CoordinatorServer(configuration);
         startServer(coordinatorServer);
     }
@@ -297,7 +298,7 @@ public class CoordinatorServer extends ServerBase {
 
         synchronized (lock) {
             this.clientMetricGroup = new ClientMetricGroup(metricRegistry, SERVER_NAME);
-            this.rpcClient = RpcClient.create(conf, clientMetricGroup, true);
+            this.rpcClient = RpcClient.create(conf, clientMetricGroup);
 
             this.coordinatorChannelManager = new CoordinatorChannelManager(rpcClient);
 

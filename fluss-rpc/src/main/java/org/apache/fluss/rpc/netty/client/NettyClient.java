@@ -78,8 +78,7 @@ public final class NettyClient implements RpcClient {
 
     private volatile boolean isClosed = false;
 
-    public NettyClient(
-            Configuration conf, ClientMetricGroup clientMetricGroup, boolean isInnerClient) {
+    public NettyClient(Configuration conf, ClientMetricGroup clientMetricGroup) {
         this.connections = MapUtils.newConcurrentHashMap();
 
         // build bootstrap
@@ -90,6 +89,8 @@ public final class NettyClient implements RpcClient {
         int connectTimeoutMs = (int) conf.get(ConfigOptions.CLIENT_CONNECT_TIMEOUT).toMillis();
         int connectionMaxIdle =
                 (int) conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds();
+        boolean preferHeap =
+                conf.getBoolean(ConfigOptions.NETTY_CLIENT_ALLOCATOR_HEAP_BUFFER_FIRST);
         PooledByteBufAllocator allocator = PooledByteBufAllocator.DEFAULT;
         this.bootstrap =
                 new Bootstrap()
@@ -99,7 +100,7 @@ public final class NettyClient implements RpcClient {
                         .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectTimeoutMs)
                         .option(ChannelOption.TCP_NODELAY, true)
                         .option(ChannelOption.SO_KEEPALIVE, true)
-                        .handler(new ClientChannelInitializer(connectionMaxIdle, isInnerClient));
+                        .handler(new ClientChannelInitializer(connectionMaxIdle, preferHeap));
         this.clientMetricGroup = clientMetricGroup;
         this.authenticatorSupplier = AuthenticationFactory.loadClientAuthenticatorSupplier(conf);
         NettyMetrics.registerNettyMetrics(clientMetricGroup, allocator);

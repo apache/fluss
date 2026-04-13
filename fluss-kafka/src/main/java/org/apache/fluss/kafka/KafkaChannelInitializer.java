@@ -33,12 +33,17 @@ public class KafkaChannelInitializer extends NettyChannelInitializer {
     private final RequestChannel[] requestChannels;
     private final int maxRequestSize;
     private final LengthFieldPrepender prepender = new LengthFieldPrepender(4);
+    private final boolean preferHeap;
 
     public KafkaChannelInitializer(
-            RequestChannel[] requestChannels, long maxIdleTimeSeconds, int maxRequestSize) {
+            RequestChannel[] requestChannels,
+            long maxIdleTimeSeconds,
+            int maxRequestSize,
+            boolean preferHeap) {
         super(maxIdleTimeSeconds);
         this.requestChannels = requestChannels;
         this.maxRequestSize = maxRequestSize;
+        this.preferHeap = preferHeap;
     }
 
     @Override
@@ -46,7 +51,7 @@ public class KafkaChannelInitializer extends NettyChannelInitializer {
         super.initChannel(ch);
         addIdleStateHandler(ch);
         ch.pipeline().addLast(prepender);
-        addFrameDecoder(ch, maxRequestSize, 4, false);
+        addFrameDecoder(ch, maxRequestSize, 4, preferHeap);
         ch.pipeline().addLast("flowController", new FlowControlHandler());
         ch.pipeline().addLast(new KafkaCommandDecoder(requestChannels));
     }

@@ -69,9 +69,28 @@ public class NettyChannelInitializer extends ChannelInitializer<SocketChannel> {
      *
      * <p>On native transports (epoll / kqueue), {@code EpollRecvByteAllocatorHandle.allocate()}
      * always forces the read buffer to be direct regardless of the channel allocator. The default
-     * {@code MERGE_CUMULATOR}'s fast-path would adopt this direct buffer as the cumulation. For
-     * large partial messages, the cumulation can grow up to the maximum frame size (e.g. 32 MB), so
-     * multiple connections could consume significant off-heap memory.
+     * {@code ByteToMessageDecoder#MERGE_CUMULATOR}'s fast-path would adopt this direct buffer as
+     * the cumulation. For large partial messages, the cumulation can grow up to the maximum frame
+     * size (e.g. 32 MB), so multiple connections could consume significant off-heap memory.
+     *
+     * <p><b>Origin:</b> Derived from Netty 4.1's {@code ByteToMessageDecoder.MERGE_CUMULATOR} with
+     * the following modifications to enforce heap-backed cumulation:
+     *
+     * <ol>
+     *   <li><b>Heap-only adoption on empty cumulation:</b> When the cumulation is empty and the
+     *       incoming buffer is contiguous, Netty's MERGE_CUMULATOR adopts any incoming buffer
+     *       directly. This class only adopts heap buffers; for direct buffers, it allocates a new
+     *       heap cumulation pre-sized to the expected frame length (via {@link #allocateForFrame}).
+     *   <li><b>Direct cumulation triggers expansion:</b> Added {@code cumulation.isDirect()} as an
+     *       additional condition to trigger {@link #expandCumulation}, ensuring direct cumulations
+     *       are always replaced with heap ones during appends.
+     *   <li><b>Frame-length-aware pre-allocation:</b> New {@link #allocateForFrame} method reads
+     *       the 4-byte length field from the incoming buffer to pre-size the heap buffer to the
+     *       exact frame size, avoiding repeated re-allocations.
+     *   <li><b>Forced heap in expandCumulation:</b> The companion {@link
+     *       NettyChannelInitializer#expandCumulation} uses {@code alloc.heapBuffer()} instead of
+     *       Netty's {@code alloc.buffer()} so the replacement cumulation is always on the JVM heap.
+     * </ol>
      */
     static final class HeapPreferringCumulator implements ByteToMessageDecoder.Cumulator {
 
@@ -89,16 +108,15 @@ public class NettyChannelInitializer extends ChannelInitializer<SocketChannel> {
                 return cumulation;
             }
             if (!cumulation.isReadable() && in.isContiguous()) {
-                // Fast-path: cumulation is empty and the incoming buffer is contiguous.
-                // Allow adoption if the buffer is already heap, or if it is direct but
-                // contains at least one complete frame (the direct memory is short-lived
-                // because the frame decoder will extract and release it immediately).
+                // Adopt the incoming buffer only when it is already heap-backed. Direct buffers are
+                // always copied into a heap cumulation so downstream decoding continues to operate
+                // on heap memory.
                 if (!in.isDirect()) {
                     cumulation.release();
                     return in;
                 }
-                // Direct buffer with incomplete frame — allocate a heap cumulation
-                // pre-sized to the expected frame length to avoid repeated expansion.
+                // Direct buffer — allocate a heap cumulation pre-sized to the expected frame length
+                // to avoid repeated expansion.
                 cumulation.release();
                 ByteBuf heapCumulation = allocateForFrame(alloc, in);
                 try {
@@ -146,7 +164,8 @@ public class NettyChannelInitializer extends ChannelInitializer<SocketChannel> {
      * new incoming data. Used when the existing cumulation cannot accommodate the new data (e.g.
      * capacity exceeded, shared buffer, or direct buffer that needs to be converted to heap).
      */
-    static ByteBuf expandCumulation(ByteBufAllocator alloc, ByteBuf oldCumulation, ByteBuf in) {
+    private static ByteBuf expandCumulation(
+            ByteBufAllocator alloc, ByteBuf oldCumulation, ByteBuf in) {
         int oldBytes = oldCumulation.readableBytes();
         int newBytes = in.readableBytes();
         int totalBytes = oldBytes + newBytes;
