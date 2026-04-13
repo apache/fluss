@@ -17,6 +17,9 @@
 
 package org.apache.fluss.record;
 
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.AllocationListener;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.rounding.RoundingPolicy;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.util.CommonUtil;
 
@@ -107,6 +110,11 @@ public class FlussRoundingPolicy implements RoundingPolicy {
 
     private FlussRoundingPolicy(long chunkSize) {
         this.chunkSize = chunkSize;
+    }
+
+    /** Creates a {@link BufferAllocator} configured with the {@link FlussRoundingPolicy}. */
+    public static BufferAllocator createBufferAllocator() {
+        return new RootAllocator(AllocationListener.NOOP, Long.MAX_VALUE, DEFAULT_ROUNDING_POLICY);
     }
 
     /** Rounds request size to next power of 2 if less than chunk size, otherwise returns as-is. */

@@ -35,6 +35,7 @@ import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.FlussRoundingPolicy;
 import org.apache.fluss.server.TabletManagerBase;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.ZkSequenceGeneratorFactory;
@@ -44,7 +45,6 @@ import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.MapUtils;
@@ -150,7 +150,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             throws IOException {
         super(TabletType.KV, dataDir, conf, recoveryThreadsPerDataDir);
         this.logManager = logManager;
-        this.arrowBufferAllocator = new RootAllocator(Long.MAX_VALUE);
+        this.arrowBufferAllocator = FlussRoundingPolicy.createBufferAllocator();
         this.memorySegmentPool = LazyMemorySegmentPool.createServerBufferPool(conf);
         this.zkClient = zkClient;
         this.remoteKvDir = FlussPaths.remoteKvDir(conf);
