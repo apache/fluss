@@ -18,7 +18,6 @@
 package org.apache.fluss.record;
 
 import org.apache.fluss.annotation.VisibleForTesting;
-import org.apache.fluss.compression.ChunkedAllocationManager;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -27,9 +26,9 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.InternalRow.FieldGetter;
 import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.AllocationManager;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.AllocatorUtil;
-import org.apache.fluss.row.arrow.memory.BufferAllocatorUtil;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocatorUtil;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ChunkedAllocationManager;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
@@ -148,7 +147,8 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
             SchemaGetter schemaGetter,
             AllocationManager.Factory allocationManagerFactory) {
         // TODO: use a more reasonable memory limit
-        BufferAllocator allocator = BufferAllocatorUtil.createBufferAllocator(allocationManagerFactory);
+        BufferAllocator allocator =
+                BufferAllocatorUtil.createBufferAllocator(allocationManagerFactory);
         FieldGetter[] fieldGetters = buildProjectedFieldGetters(dataRowType, selectedFields);
         return new LogRecordReadContext(
                 LogFormat.ARROW,

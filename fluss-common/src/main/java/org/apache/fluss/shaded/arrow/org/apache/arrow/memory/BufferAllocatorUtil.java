@@ -17,19 +17,26 @@
  * under the License.
  */
 
-package org.apache.fluss.row.arrow.memory;
+package org.apache.fluss.shaded.arrow.org.apache.arrow.memory;
 
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.AllocationListener;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
+import javax.annotation.Nullable;
 
-import static org.apache.fluss.row.arrow.memory.ArrowRoundingPolicy.ARROW_ROUNDING_POLICY;
+import static org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowRoundingPolicy.ARROW_ROUNDING_POLICY;
 
 /** Utility class for creating Arrow BufferAllocators with the custom ArrowRoundingPolicy. */
 public class BufferAllocatorUtil {
 
     /** Creates a {@link BufferAllocator} configured with the {@link ArrowRoundingPolicy}. */
-    public static BufferAllocator createBufferAllocator() {
-        return new RootAllocator(AllocationListener.NOOP, Long.MAX_VALUE, ARROW_ROUNDING_POLICY);
+    public static BufferAllocator createBufferAllocator(
+            @Nullable AllocationManager.Factory allocationManagerFactory) {
+        ImmutableConfig.Builder builder =
+                ImmutableConfig.builder()
+                        .listener(AllocationListener.NOOP)
+                        .maxAllocation(Long.MAX_VALUE)
+                        .roundingPolicy(ARROW_ROUNDING_POLICY);
+        if (allocationManagerFactory != null) {
+            builder.allocationManagerFactory(allocationManagerFactory);
+        }
+        return new RootAllocator(builder.build());
     }
 }

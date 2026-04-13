@@ -23,7 +23,6 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.ScannerMetricGroup;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.cluster.BucketLocation;
-import org.apache.fluss.compression.ChunkedAllocationManager;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ApiException;
@@ -54,6 +53,7 @@ import org.apache.fluss.rpc.messages.PbFetchLogRespForTable;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.util.PredicateMessageUtils;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ChunkedAllocationManager;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.Projection;
@@ -95,6 +95,7 @@ public class LogFetcher implements Closeable {
     //  currently can only do project when generate scanRecord instead of doing project while read
     //  bytes from remote file.
     private final LogRecordReadContext remoteReadContext;
+    private final ChunkedAllocationManager.ChunkedFactory chunkedFactory;
     @Nullable private final Projection projection;
     @Nullable private final org.apache.fluss.rpc.messages.PbPredicate cachedPbPredicate;
     private final int filterSchemaId;
@@ -129,8 +130,7 @@ public class LogFetcher implements Closeable {
             SchemaGetter schemaGetter) {
         this.tablePath = tableInfo.getTablePath();
         this.isPartitioned = tableInfo.isPartitioned();
-        ChunkedAllocationManager.ChunkedFactory chunkedFactory =
-                new ChunkedAllocationManager.ChunkedFactory();
+        this.chunkedFactory = new ChunkedAllocationManager.ChunkedFactory();
         this.readContext =
                 LogRecordReadContext.createReadContext(
                         tableInfo, false, projection, schemaGetter, chunkedFactory);
@@ -608,6 +608,7 @@ public class LogFetcher implements Closeable {
             IOUtils.closeQuietly(remoteLogDownloader, "remoteLogDownloader");
             readContext.close();
             remoteReadContext.close();
+            chunkedFactory.close();
             isClosed = true;
             LOG.info("Fetcher for {} is closed.", tablePath);
         }

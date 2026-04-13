@@ -18,7 +18,6 @@
 package org.apache.fluss.client.table.scanner.batch;
 
 import org.apache.fluss.client.metadata.MetadataUpdater;
-import org.apache.fluss.compression.ChunkedAllocationManager;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -38,6 +37,7 @@ import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.LimitScanRequest;
 import org.apache.fluss.rpc.messages.LimitScanResponse;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ChunkedAllocationManager;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.SchemaUtil;
@@ -67,6 +67,8 @@ public class LimitBatchScanner implements BatchScanner {
     private final SchemaGetter schemaGetter;
     private final KvFormat kvFormat;
     private final int targetSchemaId;
+    /** The chunked allocation manager factory to reuse memory for arrow log write batch. */
+    private final ChunkedAllocationManager.ChunkedFactory chunkedFactory;
 
     /**
      * A cache for schema projection mapping from source schema to target. Use HashMap here, because
@@ -117,6 +119,7 @@ public class LimitBatchScanner implements BatchScanner {
 
         this.kvFormat = tableInfo.getTableConfig().getKvFormat();
         this.endOfInput = false;
+        this.chunkedFactory = new ChunkedAllocationManager.ChunkedFactory();
     }
 
     @Nullable
@@ -166,11 +169,7 @@ public class LimitBatchScanner implements BatchScanner {
         } else {
             LogRecordReadContext readContext =
                     LogRecordReadContext.createReadContext(
-                            tableInfo,
-                            false,
-                            null,
-                            schemaGetter,
-                            new ChunkedAllocationManager.ChunkedFactory());
+                            tableInfo, false, null, schemaGetter, chunkedFactory);
             LogRecords records = MemoryLogRecords.pointToByteBuffer(recordsBuffer);
             for (LogRecordBatch logRecordBatch : records.batches()) {
                 // A batch of log record maybe little more than limit, thus we need slice the
@@ -209,5 +208,7 @@ public class LimitBatchScanner implements BatchScanner {
     @Override
     public void close() throws IOException {
         scanFuture.cancel(true);
+        // Release off-heap memory held by the chunked allocation manager factory.
+        chunkedFactory.close();
     }
 }

@@ -17,7 +17,7 @@
  * under the License.
  */
 
-package org.apache.fluss.row.arrow.memory;
+package org.apache.fluss.shaded.arrow.org.apache.arrow.memory;
 
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.rounding.RoundingPolicy;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.util.CommonUtil;

@@ -22,7 +22,6 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metrics.WriterMetricGroup;
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.cluster.Cluster;
-import org.apache.fluss.compression.ChunkedAllocationManager;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
@@ -36,8 +35,8 @@ import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.record.LogRecordBatchStatisticsCollector;
 import org.apache.fluss.row.arrow.ArrowWriter;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
-import org.apache.fluss.row.arrow.memory.BufferAllocatorUtil;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ChunkedAllocationManager;
 import org.apache.fluss.utils.CopyOnWriteMap;
 import org.apache.fluss.utils.MathUtils;
 import org.apache.fluss.utils.clock.Clock;
@@ -64,7 +63,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
-import static org.apache.fluss.shaded.arrow.org.apache.arrow.memory.AllocatorUtil.createBufferAllocator;
+import static org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocatorUtil.createBufferAllocator;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
@@ -101,6 +100,9 @@ public final class RecordAccumulator {
     /** The arrow buffer allocator to allocate memory for arrow log write batch. */
     private final BufferAllocator bufferAllocator;
 
+    /** The chunked allocation manager factory, stored for explicit native memory release. */
+    private final ChunkedAllocationManager.ChunkedFactory chunkedFactory;
+
     /** The pool of lazily created arrow {@link ArrowWriter}s for arrow log write batch. */
     private final ArrowWriterPool arrowWriterPool;
 
@@ -136,7 +138,8 @@ public final class RecordAccumulator {
                 Math.max(1, (int) conf.get(ConfigOptions.CLIENT_WRITER_BATCH_SIZE).getBytes());
 
         this.writerBufferPool = LazyMemorySegmentPool.createWriterBufferPool(conf);
-        this.bufferAllocator = createBufferAllocator(new ChunkedAllocationManager.ChunkedFactory());
+        this.chunkedFactory = new ChunkedAllocationManager.ChunkedFactory();
+        this.bufferAllocator = createBufferAllocator(chunkedFactory);
         this.arrowWriterPool = new ArrowWriterPool(bufferAllocator);
         this.incomplete = new IncompleteBatches();
         this.nodesDrainIndex = new HashMap<>();
@@ -966,6 +969,8 @@ public final class RecordAccumulator {
         // Release all the memory segments.
         bufferAllocator.releaseBytes(bufferAllocator.getAllocatedMemory());
         bufferAllocator.close();
+        // Release native memory held by the chunked allocation manager factory.
+        chunkedFactory.close();
     }
 
     /** Per table bucket and write batches. */

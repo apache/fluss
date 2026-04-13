@@ -15,12 +15,9 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.compression;
+package org.apache.fluss.shaded.arrow.org.apache.arrow.memory;
 
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.AllocationManager;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ReferenceManager;
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.util.MemoryUtil;
 
 import java.util.ArrayDeque;
@@ -109,7 +106,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * }</pre>
  *
  * <p>For allocations >= chunkSize, a dedicated memory region is allocated directly (no bump
- * pointer), behaving identically to {@link UnsafeAllocationManager}.
+ * pointer), behaving identically to {@code UnsafeAllocationManager}.
  */
 public class ChunkedAllocationManager extends AllocationManager {
 
@@ -257,9 +254,6 @@ public class ChunkedAllocationManager extends AllocationManager {
      */
     public static class ChunkedFactory implements AllocationManager.Factory {
 
-        private static final ArrowBuf EMPTY =
-                new ArrowBuf(ReferenceManager.NO_OP, null, 0, MemoryUtil.UNSAFE.allocateMemory(0));
-
         private final long chunkSize;
         private final int maxFreeChunks;
 
@@ -288,7 +282,7 @@ public class ChunkedAllocationManager extends AllocationManager {
         @Override
         public synchronized AllocationManager create(
                 BufferAllocator accountingAllocator, long size) {
-            if (size >= chunkSize) {
+            if (size > chunkSize) {
                 // Large allocation: give it its own memory region.
                 long address = MemoryUtil.UNSAFE.allocateMemory(size);
                 return new ChunkedAllocationManager(accountingAllocator, address, size);
@@ -308,7 +302,7 @@ public class ChunkedAllocationManager extends AllocationManager {
 
         @Override
         public ArrowBuf empty() {
-            return EMPTY;
+            return NettyAllocationManager.EMPTY_BUFFER;
         }
 
         /**
@@ -363,6 +357,16 @@ public class ChunkedAllocationManager extends AllocationManager {
                 activeChunk.destroy();
             }
             activeChunk = null;
+        }
+
+        @VisibleForTesting
+        Deque<Chunk> getFreeChunks() {
+            return freeChunks;
+        }
+
+        @VisibleForTesting
+        Chunk getActiveChunk() {
+            return activeChunk;
         }
     }
 }
