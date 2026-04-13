@@ -1,25 +1,24 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ *   http://www.apache.org/licenses/LICENSE-2.0
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
  */
 
-package org.apache.fluss.record;
+package org.apache.fluss.row.arrow.memory;
 
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.AllocationListener;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.rounding.RoundingPolicy;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.util.CommonUtil;
 
@@ -36,8 +35,8 @@ import org.slf4j.LoggerFactory;
  * <p>TODO: Remove this once fixed upstream in <a
  * href="https://github.com/apache/arrow-java/issues/1040">apache/arrow-java#1040</a>.
  */
-public class FlussRoundingPolicy implements RoundingPolicy {
-    private static final Logger LOG = LoggerFactory.getLogger(FlussRoundingPolicy.class);
+public class ArrowRoundingPolicy implements RoundingPolicy {
+    private static final Logger LOG = LoggerFactory.getLogger(ArrowRoundingPolicy.class);
     public final long chunkSize;
     private static final long MIN_PAGE_SIZE = 4096;
     private static final long MAX_CHUNK_SIZE = ((long) Integer.MAX_VALUE + 1) / 2;
@@ -105,16 +104,11 @@ public class FlussRoundingPolicy implements RoundingPolicy {
     }
 
     /** The singleton instance with default chunk size. */
-    public static final FlussRoundingPolicy DEFAULT_ROUNDING_POLICY =
-            new FlussRoundingPolicy(DEFAULT_CHUNK_SIZE);
+    public static final ArrowRoundingPolicy ARROW_ROUNDING_POLICY =
+            new ArrowRoundingPolicy(DEFAULT_CHUNK_SIZE);
 
-    private FlussRoundingPolicy(long chunkSize) {
+    private ArrowRoundingPolicy(long chunkSize) {
         this.chunkSize = chunkSize;
-    }
-
-    /** Creates a {@link BufferAllocator} configured with the {@link FlussRoundingPolicy}. */
-    public static BufferAllocator createBufferAllocator() {
-        return new RootAllocator(AllocationListener.NOOP, Long.MAX_VALUE, DEFAULT_ROUNDING_POLICY);
     }
 
     /** Rounds request size to next power of 2 if less than chunk size, otherwise returns as-is. */
