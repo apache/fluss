@@ -184,4 +184,49 @@ public class TableConfig {
                         .collect(Collectors.toList());
         return StatisticsColumnsConfig.of(columns);
     }
+
+    /**
+     * Returns whether automatic Variant shredding is enabled for this table.
+     *
+     * <p>When enabled, the write path will collect field statistics for Variant columns and
+     * automatically trigger schema evolution to extract frequently-occurring, type-consistent
+     * fields into independent typed columns.
+     */
+    public boolean isVariantShreddingEnabled() {
+        return config.get(ConfigOptions.TABLE_VARIANT_SHREDDING_ENABLED);
+    }
+
+    /**
+     * Returns the minimum presence ratio threshold for Variant field shredding.
+     *
+     * <p>A Variant field must appear in at least this fraction of total records to be eligible for
+     * shredding. Range: 0.0 to 1.0.
+     */
+    public float getVariantShreddingPresenceThreshold() {
+        return config.get(ConfigOptions.TABLE_VARIANT_SHREDDING_PRESENCE_THRESHOLD).floatValue();
+    }
+
+    /**
+     * Returns the minimum type-consistency ratio threshold for Variant field shredding.
+     *
+     * <p>At least this fraction of a field's occurrences must share the same type. Range: 0.0 to
+     * 1.0.
+     */
+    public float getVariantShreddingTypeConsistencyThreshold() {
+        return config.get(ConfigOptions.TABLE_VARIANT_SHREDDING_TYPE_CONSISTENCY_THRESHOLD)
+                .floatValue();
+    }
+
+    /** Returns the maximum number of fields that can be shredded from a single Variant column. */
+    public int getVariantShreddingMaxFields() {
+        return config.get(ConfigOptions.TABLE_VARIANT_SHREDDING_MAX_FIELDS);
+    }
+
+    /**
+     * Returns the minimum number of records that must be observed before the shredding inferrer
+     * produces a schema.
+     */
+    public int getVariantShreddingMinSampleSize() {
+        return config.get(ConfigOptions.TABLE_VARIANT_SHREDDING_MIN_SAMPLE_SIZE);
+    }
 }

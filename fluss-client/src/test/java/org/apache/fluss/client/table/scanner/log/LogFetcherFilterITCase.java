@@ -112,6 +112,7 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
                         DATA1_TABLE_INFO,
                         null, // projection
                         recordBatchFilter, // recordBatchFilter
+                        null, // variantFieldProjection
                         logScannerStatus,
                         clientConf,
                         metadataUpdater,
@@ -434,6 +435,7 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
                 DATA1_TABLE_INFO,
                 null,
                 recordBatchFilter,
+                null,
                 scannerStatus,
                 clientConf,
                 metadataUpdater,

@@ -155,6 +155,7 @@ import org.apache.fluss.rpc.messages.PbTableStatsReqForBucket;
 import org.apache.fluss.rpc.messages.PbTableStatsRespForBucket;
 import org.apache.fluss.rpc.messages.PbValue;
 import org.apache.fluss.rpc.messages.PbValueList;
+import org.apache.fluss.rpc.messages.PbVariantFieldProjection;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
@@ -936,6 +937,19 @@ public class ServerRpcMessageUtils {
                 projectionFields = null;
             }
 
+            // Extract variant sub-field projection hints
+            final Map<Integer, List<String>> variantFieldProjection;
+            if (fetchLogReqForTable.getVariantFieldProjectionsCount() > 0) {
+                variantFieldProjection = new HashMap<>();
+                for (int vi = 0; vi < fetchLogReqForTable.getVariantFieldProjectionsCount(); vi++) {
+                    PbVariantFieldProjection vfp =
+                            fetchLogReqForTable.getVariantFieldProjectionAt(vi);
+                    variantFieldProjection.put(vfp.getColumnIndex(), vfp.getFieldNamesList());
+                }
+            } else {
+                variantFieldProjection = null;
+            }
+
             List<PbFetchLogReqForBucket> bucketsReqsList = fetchLogReqForTable.getBucketsReqsList();
             for (PbFetchLogReqForBucket fetchLogReqForBucket : bucketsReqsList) {
                 int bucketId = fetchLogReqForBucket.getBucketId();
@@ -950,7 +964,8 @@ public class ServerRpcMessageUtils {
                                 tableId,
                                 fetchLogReqForBucket.getFetchOffset(),
                                 fetchLogReqForBucket.getMaxFetchBytes(),
-                                projectionFields));
+                                projectionFields,
+                                variantFieldProjection));
             }
         }
 

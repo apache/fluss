@@ -21,6 +21,7 @@ import org.apache.fluss.types.BytesType;
 import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.StringType;
+import org.apache.fluss.types.VariantType;
 
 import org.apache.flink.table.types.logical.ArrayType;
 import org.apache.flink.table.types.logical.BigIntType;
@@ -170,6 +171,11 @@ class FlinkTypeToFlussType extends LogicalTypeDefaultVisitor<DataType> {
 
     @Override
     protected DataType defaultMethod(LogicalType logicalType) {
+        // Check for Variant type by name since it's only available in Flink 2.1+
+        // and not present in the LogicalTypeRoot enum of older Flink versions
+        if ("VARIANT".equals(logicalType.getTypeRoot().name())) {
+            return new VariantType(logicalType.isNullable());
+        }
         throw new UnsupportedOperationException("Unsupported data type: " + logicalType);
     }
 }

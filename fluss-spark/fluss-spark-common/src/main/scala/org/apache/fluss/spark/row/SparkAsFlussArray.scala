@@ -18,6 +18,7 @@
 package org.apache.fluss.spark.row
 
 import org.apache.fluss.row.{BinaryString, Decimal, InternalArray => FlussInternalArray, InternalMap, InternalRow => FlussInternalRow, TimestampLtz, TimestampNtz}
+import org.apache.fluss.types.variant.Variant
 
 import org.apache.spark.sql.catalyst.util.{ArrayData => SparkArrayData}
 import org.apache.spark.sql.types.{ArrayType => SparkArrayType, DataType => SparkDataType, StructType}
@@ -133,5 +134,10 @@ class SparkAsFlussArray(arrayData: SparkArrayData, elementType: SparkDataType)
   /** Returns the map value at the given position. */
   override def getMap(pos: Int): InternalMap = {
     throw new UnsupportedOperationException()
+  }
+
+  /** Returns the variant value at the given position. */
+  override def getVariant(pos: Int): Variant = {
+    throw new UnsupportedOperationException("Variant type is not supported in Spark 3.x.")
   }
 }

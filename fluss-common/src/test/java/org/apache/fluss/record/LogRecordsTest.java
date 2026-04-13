@@ -37,6 +37,12 @@ import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 
+import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
+import static org.apache.fluss.record.TestData.VARIANT_DATA;
+import static org.apache.fluss.record.TestData.VARIANT_ROW_TYPE;
+import static org.apache.fluss.record.TestData.VARIANT_SCHEMA;
+import static org.apache.fluss.testutils.DataTestUtils.assertLogRecordsEquals;
+import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.DataTestUtils.indexedRow;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -109,6 +115,22 @@ final class LogRecordsTest extends LogTestBase {
 
         assertThat(iterator.hasNext()).isFalse();
         assertThat(memoryIterator.hasNext()).isFalse();
+    }
+
+    @Test
+    void testVariantData() throws Exception {
+        MemoryLogRecords memoryLogRecords =
+                genMemoryLogRecordsByObject(
+                        VARIANT_ROW_TYPE, DEFAULT_SCHEMA_ID, magic, VARIANT_DATA);
+
+        // Create FileLogRecords.
+        fileLogRecords = new FileLogRecords(file, fileChannel, 0, Integer.MAX_VALUE, false);
+        fileLogRecords.append(memoryLogRecords);
+
+        // Verify data by reading back from FileLogRecords.
+        SchemaGetter variantSchemaGetter =
+                new TestingSchemaGetter(DEFAULT_SCHEMA_ID, VARIANT_SCHEMA);
+        assertLogRecordsEquals(VARIANT_ROW_TYPE, fileLogRecords, VARIANT_DATA, variantSchemaGetter);
     }
 
     @AfterEach
