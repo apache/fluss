@@ -512,7 +512,7 @@ public class FlussAuthorizationITCase {
                         Collections.singleton(DATA1_TABLE_PATH_PK), null, null);
 
         try (RpcClient rpcClient =
-                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance())) {
+                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance(), false)) {
             AdminGateway guestGateway =
                     GatewayClientProxy.createGatewayProxy(
                             () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("CLIENT"),
@@ -836,7 +836,7 @@ public class FlussAuthorizationITCase {
                 new ControlledShutdownRequest().setTabletServerId(-1).setTabletServerEpoch(-1);
 
         try (RpcClient rpcClient =
-                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance())) {
+                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance(), false)) {
             CoordinatorGateway guestGateway =
                     GatewayClientProxy.createGatewayProxy(
                             () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("CLIENT"),

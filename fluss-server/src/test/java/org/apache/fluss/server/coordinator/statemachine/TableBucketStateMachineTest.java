@@ -280,7 +280,8 @@ class TableBucketStateMachineTest {
                         new CoordinatorChannelManager(
                                 RpcClient.create(
                                         new Configuration(),
-                                        TestingClientMetricGroup.newInstance())),
+                                        TestingClientMetricGroup.newInstance(),
+                                        false)),
                         coordinatorContext,
                         autoPartitionManager,
                         lakeTableTieringManager,

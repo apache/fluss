@@ -46,7 +46,7 @@ public class KafkaChannelInitializer extends NettyChannelInitializer {
         super.initChannel(ch);
         addIdleStateHandler(ch);
         ch.pipeline().addLast(prepender);
-        addFrameDecoder(ch, maxRequestSize, 4);
+        addFrameDecoder(ch, maxRequestSize, 4, false);
         ch.pipeline().addLast("flowController", new FlowControlHandler());
         ch.pipeline().addLast(new KafkaCommandDecoder(requestChannels));
     }

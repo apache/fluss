@@ -70,7 +70,7 @@ public class TestingMetadataUpdater extends MetadataUpdater {
             Map<Integer, TestTabletServerGateway> customGateways,
             Configuration conf) {
         super(
-                RpcClient.create(conf, TestingClientMetricGroup.newInstance()),
+                RpcClient.create(conf, TestingClientMetricGroup.newInstance(), false),
                 conf,
                 Cluster.empty());
         initializeCluster(coordinatorServer, tabletServers, tableInfos);

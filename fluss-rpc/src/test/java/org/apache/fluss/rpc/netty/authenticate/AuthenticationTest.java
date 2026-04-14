@@ -73,7 +73,7 @@ public class AuthenticationTest {
         clientConfig.setString("client.security.sasl.username", "root");
         clientConfig.setString("client.security.sasl.password", "password");
         try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
             verifyGetTableNamesList(nettyClient, usernamePasswordServerNode);
         }
     }
@@ -85,14 +85,14 @@ public class AuthenticationTest {
 
         // test normal mutual auth
         try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
             verifyGetTableNamesList(nettyClient, mutualAuthServerNode);
         }
 
         // test invalid challenge from server
         clientConfig.setString("client.security.mutual.error-type", "SERVER_ERROR_CHALLENGE");
         try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
             assertThatThrownBy(() -> verifyGetTableNamesList(nettyClient, mutualAuthServerNode))
                     .hasRootCauseExactlyInstanceOf(AuthenticationException.class)
                     .rootCause()
@@ -102,7 +102,7 @@ public class AuthenticationTest {
         // test invalid token from client
         clientConfig.setString("client.security.mutual.error-type", "CLIENT_ERROR_SECOND_TOKEN");
         try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
             assertThatThrownBy(() -> verifyGetTableNamesList(nettyClient, mutualAuthServerNode))
                     .rootCause()
                     .hasMessageContaining("Invalid token value");
@@ -115,7 +115,7 @@ public class AuthenticationTest {
         clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "mutual");
         clientConfig.setString("client.security.mutual.error-type", "SERVER_NO_CHALLENGE");
         try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
 
             assertThatThrownBy(() -> verifyGetTableNamesList(nettyClient, mutualAuthServerNode))
                     .hasRootCauseExactlyInstanceOf(IllegalStateException.class)
@@ -130,7 +130,7 @@ public class AuthenticationTest {
         clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "mutual");
         clientConfig.setString("client.security.mutual.error-type", "RETRIABLE_EXCEPTION");
         try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
             verifyGetTableNamesList(nettyClient, mutualAuthServerNode);
         }
     }
@@ -139,7 +139,7 @@ public class AuthenticationTest {
     void testClientLackAuthenticateProtocol() throws Exception {
         Configuration clientConfig = new Configuration();
         try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
             assertThatThrownBy(
                             () -> verifyGetTableNamesList(nettyClient, usernamePasswordServerNode))
                     .cause()
@@ -154,7 +154,7 @@ public class AuthenticationTest {
         Configuration clientConfig = new Configuration();
         clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "mutual");
         try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
             assertThatThrownBy(
                             () -> verifyGetTableNamesList(nettyClient, usernamePasswordServerNode))
                     .cause()
@@ -172,7 +172,7 @@ public class AuthenticationTest {
         clientConfig.setString("client.security.sasl.username", "root");
         clientConfig.setString("client.security.sasl.password", "password2");
         try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
             assertThatThrownBy(
                             () -> verifyGetTableNamesList(nettyClient, usernamePasswordServerNode))
                     .cause()
@@ -190,12 +190,12 @@ public class AuthenticationTest {
         clientConfig.setString("client.security.sasl.password", "password");
 
         try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
             verifyGetTableNamesList(nettyClient, usernamePasswordServerNode);
             // client2 with wrong password after client1 successes to authenticate.
             clientConfig.setString("client.security.sasl.password", "password2");
             try (NettyClient nettyClient2 =
-                    new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+                    new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
                 assertThatThrownBy(
                                 () ->
                                         verifyGetTableNamesList(

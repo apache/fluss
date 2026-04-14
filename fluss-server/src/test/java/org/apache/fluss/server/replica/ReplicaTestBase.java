@@ -210,7 +210,7 @@ public class ReplicaTestBase {
                                 new LakeCatalogDynamicLoader(new Configuration(), null, true)));
         initMetadataCache(serverMetadataCache);
 
-        rpcClient = RpcClient.create(conf, TestingClientMetricGroup.newInstance());
+        rpcClient = RpcClient.create(conf, TestingClientMetricGroup.newInstance(), false);
 
         snapshotReporter = new TestingCompletedKvSnapshotCommitter();
 

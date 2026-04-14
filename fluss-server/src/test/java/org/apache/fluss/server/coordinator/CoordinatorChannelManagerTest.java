@@ -54,7 +54,8 @@ class CoordinatorChannelManagerTest {
         Configuration configuration = new Configuration();
         CoordinatorChannelManager coordinatorChannelManager =
                 new CoordinatorChannelManager(
-                        RpcClient.create(configuration, TestingClientMetricGroup.newInstance()));
+                        RpcClient.create(
+                                configuration, TestingClientMetricGroup.newInstance(), false));
         List<ServerNode> tabletServersNode = FLUSS_CLUSTER_EXTENSION.getTabletServerNodes();
 
         // test start up using server 0
