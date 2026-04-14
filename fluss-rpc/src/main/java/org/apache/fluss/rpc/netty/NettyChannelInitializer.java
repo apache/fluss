@@ -118,13 +118,19 @@ public class NettyChannelInitializer extends ChannelInitializer<SocketChannel> {
                 // Direct buffer — allocate a heap cumulation pre-sized to the expected frame length
                 // to avoid repeated expansion.
                 cumulation.release();
-                ByteBuf heapCumulation = allocateForFrame(alloc, in);
+                ByteBuf heapCumulation = null;
                 try {
+                    heapCumulation = allocateForFrame(alloc, in);
                     heapCumulation.writeBytes(in);
+                    return heapCumulation;
+                } catch (Exception e) {
+                    if (heapCumulation != null) {
+                        heapCumulation.release();
+                    }
+                    throw e;
                 } finally {
                     in.release();
                 }
-                return heapCumulation;
             }
             try {
                 final int required = in.readableBytes();
