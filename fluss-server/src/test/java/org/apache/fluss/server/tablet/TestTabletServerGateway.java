@@ -285,7 +285,29 @@ public class TestTabletServerGateway implements TabletServerGateway {
             notifyLeaderAndIsrResponse.addAllNotifyBucketsLeaderResps(bucketsResps);
             return CompletableFuture.completedFuture(notifyLeaderAndIsrResponse);
         } else {
-            return CompletableFuture.completedFuture(new NotifyLeaderAndIsrResponse());
+            // Build success responses for all buckets in the request so that
+            // the coordinator can identify which buckets have been acknowledged.
+            List<PbNotifyLeaderAndIsrRespForBucket> bucketsResps = new ArrayList<>();
+            for (PbNotifyLeaderAndIsrReqForBucket pbNotifyLeaderForBucket :
+                    notifyLeaderAndIsrRequest.getNotifyBucketsLeaderReqsList()) {
+                PbNotifyLeaderAndIsrRespForBucket pbNotifyLeaderRespForBucket =
+                        new PbNotifyLeaderAndIsrRespForBucket();
+                pbNotifyLeaderRespForBucket
+                        .setTableBucket()
+                        .setTableId(pbNotifyLeaderForBucket.getTableBucket().getTableId())
+                        .setBucketId(pbNotifyLeaderForBucket.getTableBucket().getBucketId());
+                if (pbNotifyLeaderForBucket.getTableBucket().hasPartitionId()) {
+                    pbNotifyLeaderRespForBucket
+                            .getTableBucket()
+                            .setPartitionId(
+                                    pbNotifyLeaderForBucket.getTableBucket().getPartitionId());
+                }
+                bucketsResps.add(pbNotifyLeaderRespForBucket);
+            }
+            NotifyLeaderAndIsrResponse notifyLeaderAndIsrResponse =
+                    new NotifyLeaderAndIsrResponse();
+            notifyLeaderAndIsrResponse.addAllNotifyBucketsLeaderResps(bucketsResps);
+            return CompletableFuture.completedFuture(notifyLeaderAndIsrResponse);
         }
     }
 

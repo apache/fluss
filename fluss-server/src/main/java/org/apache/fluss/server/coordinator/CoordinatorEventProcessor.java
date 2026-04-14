@@ -980,6 +980,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
             // trigger replicas to offline
             onReplicaBecomeOffline(offlineReplicas);
         }
+
+        // Try to complete rebalance tasks for the buckets in the response.
+        // This is essential for leader-only migrations to ensure they wait for the tablet
+        // server to acknowledge the leader change before proceeding to the next migration.
+        for (NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket :
+                notifyLeaderAndIsrResultForBuckets) {
+            tryToCompleteRebalanceTask(notifyLeaderAndIsrResultForBucket.getTableBucket());
+        }
     }
 
     private void onReplicaBecomeOffline(Set<TableBucketReplica> offlineReplicas) {
@@ -1365,12 +1373,15 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         if (planForBucket.isLeaderChanged() && !reassignment.isBeingReassigned()) {
             // buckets only need to change leader like leader replica rebalance.
+            // Don't finish the task immediately; wait for the NotifyLeaderAndIsr response
+            // from the tablet server to confirm the leader change has been applied.
+            // This ensures leader migrations are executed sequentially, avoiding excessive
+            // pressure on tablet servers (especially for KV tables).
             LOG.info("trigger leader election for tableBucket {}.", tableBucket);
             tableBucketStateMachine.handleStateChange(
                     Collections.singleton(tableBucket),
                     OnlineBucket,
                     new ReassignmentLeaderElection(newReplicas));
-            rebalanceManager.finishRebalanceTask(tableBucket, RebalanceStatus.COMPLETED);
         } else {
             try {
                 LOG.info(
