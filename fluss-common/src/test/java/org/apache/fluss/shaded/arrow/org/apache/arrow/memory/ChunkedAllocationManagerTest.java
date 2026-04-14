@@ -25,6 +25,8 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -216,5 +218,81 @@ class ChunkedAllocationManagerTest {
         localFactory.close();
         assertThat(localFactory.getFreeChunks()).isEmpty();
         assertThat(localFactory.getActiveChunk()).isNull();
+    }
+
+    @Test
+    void testConcurrentAllocateAndRelease() throws Exception {
+        // Stress test for the double-recycle race: multiple threads sharing one factory,
+        // each doing allocate -> close in a tight loop. Before the drainGeneration fix,
+        // onChunkDrained could be called twice for the same drain event, causing double-recycle
+        // (duplicate entries in freeChunks) or use-after-free (native memory corruption).
+        int threadCount = 8;
+        int iterationsPerThread = 500;
+        ChunkedFactory concurrentFactory =
+                new ChunkedFactory(TEST_CHUNK_SIZE, TEST_MAX_FREE_CHUNKS);
+        BufferAllocator concurrentAllocator =
+                BufferAllocatorUtil.createBufferAllocator(concurrentFactory);
+
+        CyclicBarrier barrier = new CyclicBarrier(threadCount);
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+
+        Thread[] threads = new Thread[threadCount];
+        for (int t = 0; t < threadCount; t++) {
+            threads[t] =
+                    new Thread(
+                            () -> {
+                                try {
+                                    barrier.await();
+                                    for (int i = 0; i < iterationsPerThread; i++) {
+                                        ArrowBuf buf = concurrentAllocator.buffer(64);
+                                        buf.close();
+                                    }
+                                } catch (Throwable ex) {
+                                    failure.compareAndSet(null, ex);
+                                }
+                            });
+            threads[t].start();
+        }
+
+        for (Thread thread : threads) {
+            thread.join();
+        }
+
+        assertThat(failure.get()).isNull();
+
+        // After all threads finish, the free-list must not exceed maxFreeChunks
+        // (would indicate double-recycle).
+        assertThat(concurrentFactory.getFreeChunks().size())
+                .isLessThanOrEqualTo(TEST_MAX_FREE_CHUNKS);
+
+        concurrentAllocator.close();
+        concurrentFactory.close();
+    }
+
+    @Test
+    void testCloseWhileArrowBufsAliveDoesNotLeakMemory() {
+        // Verify that closing the factory while ArrowBufs are still alive does not leak memory.
+        ChunkedFactory localFactory = new ChunkedFactory(TEST_CHUNK_SIZE, TEST_MAX_FREE_CHUNKS);
+        BufferAllocator localAllocator = BufferAllocatorUtil.createBufferAllocator(localFactory);
+
+        // Allocate some buffers so the active chunk has outstanding sub-allocations.
+        List<ArrowBuf> bufs = new ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            bufs.add(localAllocator.buffer(64));
+        }
+
+        // Close factory while ArrowBufs are still alive.
+
+        localFactory.close();
+
+        // Active chunk was not destroyed (subAllocCount > 0), just nulled.
+        assertThat(localFactory.getActiveChunk()).isNull();
+
+        // Release all ArrowBufs — onChunkDrained should destroy the chunk, not recycle it.
+        bufs.forEach(ArrowBuf::close);
+
+        // The chunk must NOT have been added to freeChunks (would be a leak).
+        assertThat(localFactory.getFreeChunks()).isEmpty();
+        localAllocator.close();
     }
 }

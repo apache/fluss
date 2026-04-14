@@ -188,6 +188,13 @@ public class ChunkedAllocationManager extends AllocationManager {
          * instances are released.
          */
         final AtomicInteger subAllocCount = new AtomicInteger(0);
+        /**
+         * Generation counter incremented each time this chunk is successfully drained. Used to
+         * prevent ABA double-recycle: a caller snapshots the generation before the atomic
+         * decrement; if the generation has changed by the time {@link
+         * ChunkedFactory#onChunkDrained} runs, the drain is stale and must be skipped.
+         */
+        volatile int drainGeneration;
         /** Back-reference to the owning factory for recycling on drain. */
         final ChunkedFactory factory;
 
@@ -219,10 +226,37 @@ public class ChunkedAllocationManager extends AllocationManager {
         /**
          * Called when a sub-allocation's ArrowBuf is released. If the chunk is now empty (all
          * sub-allocations freed), notifies the factory for recycling.
+         *
+         * <h4>Why not always call {@code onChunkDrained}?</h4>
+         *
+         * <p>Unconditionally calling {@link ChunkedFactory#onChunkDrained} on every release would
+         * be thread-safe (the method is {@code synchronized}), but prohibitively expensive: in a
+         * high-column scenario (e.g., 1000 columns x 3 buffers = 3000 releases per batch), every
+         * release would contend for the factory lock even though only the very last one actually
+         * needs to recycle the chunk.
+         *
+         * <p>To avoid this, we first perform a lock-free check: {@code
+         * subAllocCount.decrementAndGet() == 0}, and only enter the synchronized {@code
+         * onChunkDrained} when the chunk is truly empty. This reduces lock contention from O(N) to
+         * O(1) per drain cycle.
+         *
+         * <h4>ABA double-recycle problem</h4>
+         *
+         * <p>However, the gap between {@code subAllocCount.decrementAndGet() == 0} and the
+         * subsequent {@code onChunkDrained} call is <b>not atomic</b>. During this window another
+         * thread can complete a full allocate-release cycle on the same chunk, triggering a second
+         * legitimate drain. Without protection, both callers would enter {@code onChunkDrained} and
+         * recycle the same chunk twice (duplicate free-list entry or use-after-free).
+         *
+         * <p>The {@link Chunk#drainGeneration} snapshot solves this: we capture the generation
+         * <i>before</i> the atomic decrement. Inside {@code onChunkDrained}, the generation is
+         * compared and incremented atomically under the lock, so only the first caller succeeds;
+         * the stale caller sees a mismatch and is skipped.
          */
         void releaseSubAllocation() {
+            int gen = drainGeneration;
             if (subAllocCount.decrementAndGet() == 0) {
-                factory.onChunkDrained(this);
+                factory.onChunkDrained(this, gen);
             }
         }
 
@@ -262,6 +296,9 @@ public class ChunkedAllocationManager extends AllocationManager {
 
         /** Pool of empty chunks available for reuse. */
         private final Deque<Chunk> freeChunks = new ArrayDeque<>();
+
+        /** Set to true when {@link #close()} is called. */
+        private boolean closed;
 
         /** Creates a factory with default chunk size (4MB) and max 3 free chunks. */
         public ChunkedFactory() {
@@ -309,7 +346,7 @@ public class ChunkedAllocationManager extends AllocationManager {
          * Obtains a chunk for use as the new active chunk. Prefers recycled chunks from the
          * free-list; falls back to allocating a fresh one.
          */
-        private Chunk obtainChunk() {
+        private synchronized Chunk obtainChunk() {
             Chunk recycled = freeChunks.pollFirst();
             if (recycled != null) {
                 recycled.resetBump();
@@ -322,18 +359,30 @@ public class ChunkedAllocationManager extends AllocationManager {
          * Called when a chunk's sub-allocation count reaches zero (all ArrowBufs released).
          * Recycles the chunk if possible, or frees its memory if the free-list is full.
          *
-         * <p>Thread-safety note: between {@code subAllocCount} reaching 0 and this method acquiring
-         * the lock, another thread may call {@link #create} and bump-allocate from this chunk (if
-         * it is still the active chunk). The guard {@code chunk.subAllocCount.get() > 0} handles
-         * this race.
+         * <p>Thread-safety: between {@code subAllocCount} reaching 0 and this method acquiring the
+         * lock, another thread may complete a full allocate-release cycle on the same chunk (ABA
+         * problem). The {@code expectedGeneration} parameter detects this: each successful drain
+         * increments the generation, so a stale caller's snapshot will mismatch.
+         *
+         * @param chunk the chunk whose sub-allocation count just reached zero.
+         * @param expectedGeneration the drain generation snapshot taken before the atomic
+         *     decrement. If it no longer matches, another drain already processed this event.
          */
-        synchronized void onChunkDrained(Chunk chunk) {
-            // Guard: if new sub-allocations were added between refCount=0 and now, skip.
+        synchronized void onChunkDrained(Chunk chunk, int expectedGeneration) {
+            // ABA guard: if another thread already drained and recycled this chunk, skip.
+            if (chunk.drainGeneration != expectedGeneration) {
+                return;
+            }
+            // Simple re-allocation guard: new sub-allocations arrived after our decrement.
             if (chunk.subAllocCount.get() > 0) {
                 return;
             }
+            chunk.drainGeneration++;
 
-            if (chunk == activeChunk) {
+            if (closed) {
+                // Factory is closed — no one will ever reuse this chunk. Free it.
+                chunk.destroy();
+            } else if (chunk == activeChunk) {
                 // Still the active chunk — just reset bump pointer for continued use.
                 chunk.resetBump();
             } else if (freeChunks.size() < maxFreeChunks) {
@@ -346,12 +395,15 @@ public class ChunkedAllocationManager extends AllocationManager {
         }
 
         /**
-         * Closes this factory, freeing all cached chunks. Active chunks with outstanding
-         * sub-allocations will be freed when their last ArrowBuf is released.
+         * Closes this factory, freeing all cached and idle chunks. Active chunks with outstanding
+         * sub-allocations will be freed when their last ArrowBuf is released (see {@link
+         * #onChunkDrained}).
          */
         public synchronized void close() {
+            closed = true;
             while (!freeChunks.isEmpty()) {
-                freeChunks.poll().destroy();
+                Chunk poll = freeChunks.poll();
+                poll.destroy();
             }
             if (activeChunk != null && activeChunk.subAllocCount.get() == 0) {
                 activeChunk.destroy();
