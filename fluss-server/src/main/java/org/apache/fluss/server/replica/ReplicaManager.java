@@ -27,6 +27,7 @@ import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
+import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
@@ -1193,17 +1194,16 @@ public class ReplicaManager implements ServerReconfigurable {
             Integer leaderId = replica.getLeaderId();
             TableBucket tb = replica.getTableBucket();
             LogTablet logTablet = replica.getLogTablet();
-            if (leaderId == null) {
+            if (leaderId == null || leaderId < 0) {
                 result.put(
                         tb,
                         new NotifyLeaderAndIsrResultForBucket(
                                 tb,
                                 ApiError.fromThrowable(
-                                        new StorageException(
+                                        new LeaderNotAvailableException(
                                                 String.format(
-                                                        "Could not find leader for follower replica %s while make "
-                                                                + "follower for %s.",
-                                                        serverId, tb)))));
+                                                        "No leader available for follower replica %s on server %s.",
+                                                        tb, serverId)))));
             } else {
                 bucketAndStatus.put(
                         tb,

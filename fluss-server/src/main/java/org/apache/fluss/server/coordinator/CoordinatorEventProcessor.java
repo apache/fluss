@@ -59,6 +59,7 @@ import org.apache.fluss.rpc.messages.PbCommitLakeTableSnapshotRespForTable;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
@@ -353,8 +354,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
         long start4loadTabletServer = System.currentTimeMillis();
         Map<Integer, TabletServerRegistration> tabletServerRegistrations =
                 zooKeeperClient.getTabletServers(currentServers);
+        List<Integer> skippedNullRegistration = new ArrayList<>();
+        List<Integer> skippedNoEndpoint = new ArrayList<>();
         for (int server : currentServers) {
             TabletServerRegistration registration = tabletServerRegistrations.get(server);
+            if (registration == null) {
+                skippedNullRegistration.add(server);
+                continue;
+            }
             ServerInfo serverInfo =
                     new ServerInfo(
                             server,
@@ -368,6 +375,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         "Can not find endpoint for listener name {} for tablet server {}",
                         internalListenerName,
                         serverInfo);
+                skippedNoEndpoint.add(server);
                 continue;
             }
             tabletServerInfos.add(serverInfo);
@@ -381,8 +389,30 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         coordinatorContext.setLiveTabletServers(tabletServerInfos);
         LOG.info(
-                "Load tablet servers success in {}ms when initializing coordinator context.",
-                System.currentTimeMillis() - start4loadTabletServer);
+                "Load tablet servers success in {}ms when initializing coordinator context. "
+                        + "ZK returned {} servers, loaded {} into liveSet, "
+                        + "skipped {} (null registration), skipped {} (no endpoint). "
+                        + "Live server IDs: {}",
+                System.currentTimeMillis() - start4loadTabletServer,
+                currentServers.length,
+                tabletServerInfos.size(),
+                skippedNullRegistration.size(),
+                skippedNoEndpoint.size(),
+                tabletServerInfos.stream()
+                        .map(s -> String.valueOf(s.id()))
+                        .collect(Collectors.joining(",")));
+        if (!skippedNullRegistration.isEmpty()) {
+            LOG.warn(
+                    "Skipped {} servers with null ZK registration: {}",
+                    skippedNullRegistration.size(),
+                    skippedNullRegistration);
+        }
+        if (!skippedNoEndpoint.isEmpty()) {
+            LOG.warn(
+                    "Skipped {} servers with no internal endpoint: {}",
+                    skippedNoEndpoint.size(),
+                    skippedNoEndpoint);
+        }
 
         // init tablet server channels
         coordinatorChannelManager.startup(internalServerNodes);
@@ -969,17 +999,43 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 notifyLeaderAndIsrResponseReceivedEvent.getNotifyLeaderAndIsrResultForBuckets();
         for (NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket :
                 notifyLeaderAndIsrResultForBuckets) {
-            // if the error code is not none, we will consider it as offline
             if (notifyLeaderAndIsrResultForBucket.failed()) {
-                offlineReplicas.add(
-                        new TableBucketReplica(
-                                notifyLeaderAndIsrResultForBucket.getTableBucket(), serverId));
+                Errors error = notifyLeaderAndIsrResultForBucket.getError().error();
+                TableBucket tableBucket = notifyLeaderAndIsrResultForBucket.getTableBucket();
+                if (isFatalReplicaError(error)) {
+                    LOG.warn(
+                            "Fatal NotifyLeaderAndIsr error for bucket {} on server {}: {}. "
+                                    + "Marking replica offline.",
+                            tableBucket,
+                            serverId,
+                            notifyLeaderAndIsrResultForBucket.getError());
+                    offlineReplicas.add(new TableBucketReplica(tableBucket, serverId));
+                } else {
+                    LOG.warn(
+                            "Transient NotifyLeaderAndIsr error for bucket {} on server {}: {}. "
+                                    + "Replica remains online.",
+                            tableBucket,
+                            serverId,
+                            notifyLeaderAndIsrResultForBucket.getError());
+                }
             }
         }
         if (!offlineReplicas.isEmpty()) {
             // trigger replicas to offline
             onReplicaBecomeOffline(offlineReplicas);
         }
+    }
+
+    /**
+     * Returns true if the error indicates a fatal replica failure (storage corruption, unknown
+     * internal error) that warrants excluding this replica from future leader elections. All other
+     * errors are considered transient and should NOT mark the replica offline.
+     */
+    private static boolean isFatalReplicaError(Errors error) {
+        return error == Errors.STORAGE_EXCEPTION
+                || error == Errors.LOG_STORAGE_EXCEPTION
+                || error == Errors.KV_STORAGE_EXCEPTION
+                || error == Errors.UNKNOWN_SERVER_ERROR;
     }
 
     private void onReplicaBecomeOffline(Set<TableBucketReplica> offlineReplicas) {

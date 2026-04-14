@@ -90,6 +90,7 @@ import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
 import org.apache.fluss.rpc.protocol.ApiKeys;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -275,7 +276,7 @@ public class TestTabletServerGateway implements TabletServerGateway {
                         .setTableBucket()
                         .setTableId(pbNotifyLeaderForBucket.getTableBucket().getTableId())
                         .setBucketId(pbNotifyLeaderForBucket.getTableBucket().getBucketId());
-                pbNotifyLeaderRespForBucket.setErrorCode(1);
+                pbNotifyLeaderRespForBucket.setErrorCode(Errors.STORAGE_EXCEPTION.code());
                 pbNotifyLeaderRespForBucket.setErrorMessage(
                         "mock notifyLeaderAndIsr fail for test purpose.");
                 bucketsResps.add(pbNotifyLeaderRespForBucket);
