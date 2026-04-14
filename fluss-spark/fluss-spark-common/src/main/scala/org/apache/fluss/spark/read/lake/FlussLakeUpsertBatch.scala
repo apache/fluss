@@ -61,6 +61,7 @@ class FlussLakeUpsertBatch(
       new FlussLakeUpsertPartitionReaderFactory(
         tableInfo.getProperties.toMap,
         tablePath,
+        tableInfo.getRowType,
         projection,
         flussConfig)
     }
@@ -153,7 +154,6 @@ class FlussLakeUpsertBatch(
     }
 
     val lakeSplitsByPartition = groupLakeSplitsByPartition(lakeSplits)
-    var lakeSplitPartitionId = -1L
 
     val lakePartitions = lakeSplitsByPartition.flatMap {
       case (partitionName, splitsByBucket) =>
@@ -181,21 +181,14 @@ class FlussLakeUpsertBatch(
             }
 
           case None =>
-            // Partition only in lake (expired in Fluss) - create partitions with dummy partition id
-            val pid = lakeSplitPartitionId
-            lakeSplitPartitionId -= 1
-
-            buckets.map {
+            // Partition only in lake (expired in Fluss)
+            buckets.flatMap {
               bucketId =>
-                val tableBucket = new TableBucket(tableId, pid, bucketId)
-                // For expired partitions, there's no log tail to read
-                createLakeUpsertPartition(
-                  tableBucket,
-                  splitsByBucket.get(bucketId),
-                  splitSerializer,
-                  null, // no log offset
-                  -1L // no stopping offset
-                )
+                val tableBucket = new TableBucket(tableId, -1, bucketId)
+                splitsByBucket.getOrElse(bucketId, Seq.empty).map {
+                  lakeSplit =>
+                    FlussLakeInputPartition(tableBucket, splitSerializer.serialize(lakeSplit))
+                }
             }
         }
     }

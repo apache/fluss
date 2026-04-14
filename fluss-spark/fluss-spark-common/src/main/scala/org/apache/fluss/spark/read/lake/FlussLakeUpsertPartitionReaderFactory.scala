@@ -20,6 +20,7 @@ package org.apache.fluss.spark.read.lake
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
 import org.apache.fluss.metadata.TablePath
+import org.apache.fluss.types.RowType
 
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReader, PartitionReaderFactory}
@@ -33,6 +34,7 @@ import java.util
 class FlussLakeUpsertPartitionReaderFactory(
     tableProperties: util.Map[String, String],
     tablePath: TablePath,
+    rowType: RowType,
     projection: Array[Int],
     flussConfig: Configuration)
   extends PartitionReaderFactory {
@@ -43,13 +45,19 @@ class FlussLakeUpsertPartitionReaderFactory(
 
   override def createReader(partition: InputPartition): PartitionReader[InternalRow] = {
     partition match {
-      case lakeUpsert: FlussLakeUpsertInputPartition =>
+      case mixedSplit: FlussLakeUpsertInputPartition =>
         new FlussLakeUpsertPartitionReader(
           tablePath,
           lakeSource,
           projection,
-          lakeUpsert,
+          mixedSplit,
           flussConfig)
+      case lakeOnlySplit: FlussLakeInputPartition =>
+        new FlussLakeAppendPartitionReader(
+          tablePath,
+          rowType.project(projection),
+          lakeOnlySplit,
+          lakeSource)
       case _ =>
         throw new IllegalArgumentException(s"Unexpected partition type: ${partition.getClass}")
     }
