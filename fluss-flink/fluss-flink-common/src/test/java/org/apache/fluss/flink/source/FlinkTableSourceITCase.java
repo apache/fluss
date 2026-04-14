@@ -1151,6 +1151,52 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     }
 
     @Test
+    void testStreamingReadPartitionPushDownWithWatermark() throws Exception {
+        tEnv.executeSql(
+                "create table watermark_partitioned_table"
+                        + " (a int not null, b varchar, ts timestamp(3),"
+                        + " c string,"
+                        + " primary key (a, c) NOT ENFORCED,"
+                        + " WATERMARK FOR ts AS ts - INTERVAL '5' SECOND)"
+                        + " partitioned by (c) ");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "watermark_partitioned_table");
+        tEnv.executeSql("alter table watermark_partitioned_table add partition (c=2025)");
+        tEnv.executeSql("alter table watermark_partitioned_table add partition (c=2026)");
+
+        // write data with 4 columns (a, b, ts, c), ts is nullable
+        List<InternalRow> rows = new ArrayList<>();
+        List<String> expectedRowValues = new ArrayList<>();
+        for (String partition : Arrays.asList("2025", "2026")) {
+            for (int i = 0; i < 10; i++) {
+                rows.add(row(i, "v1", null, partition));
+                if (partition.equals("2025")) {
+                    expectedRowValues.add(String.format("+I[%d, v1, %s]", i, partition));
+                }
+            }
+        }
+        writeRows(conn, tablePath, rows, false);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
+
+        // verify partition filter is pushed down in the execution plan
+        String plan =
+                tEnv.explainSql("select a, b, c from watermark_partitioned_table where c ='2025'");
+        assertThat(plan)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, watermark_partitioned_table, "
+                                + "watermark=[-(ts, 5000:INTERVAL SECOND)], "
+                                + "watermarkEmitStrategy=[on-periodic], "
+                                + "filter=[=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")]]], "
+                                + "fields=[a, b, ts, c])");
+
+        // verify query results only contain data from the matching partition
+        org.apache.flink.util.CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select a, b, c from watermark_partitioned_table where c ='2025'")
+                        .collect();
+
+        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+    }
+
+    @Test
     void testStreamingReadAllPartitionTypePushDown() throws Exception {
         tEnv.executeSql(
                 "CREATE TABLE all_type_partitioned_table"
@@ -2018,6 +2064,51 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         tEnv.createTemporaryView("src", tEnv.fromDataStream(srcDs, srcSchema));
 
         return tableName;
+    }
+
+    /** Verifies that idle source splits do not block watermark progression. */
+    @Test
+    void testPerBucketWatermarkWithIdleSource() throws Exception {
+        // 1. Set idle source timeout
+        tEnv.getConfig()
+                .set(ExecutionConfigOptions.TABLE_EXEC_SOURCE_IDLE_TIMEOUT, Duration.ofMillis(100));
+
+        // 2. Create Fluss source table with 4 buckets and WATERMARK.
+        tEnv.executeSql(
+                "CREATE TABLE wm_idle_test ("
+                        + "  `bucket_id` INT,"
+                        + "  `value` INT,"
+                        + "  `ts` TIMESTAMP(3),"
+                        + "  WATERMARK FOR `ts` AS `ts`"
+                        + ") WITH ("
+                        + "  'bucket.num' = '4',"
+                        + "  'bucket.key' = 'bucket_id'"
+                        + ")");
+
+        // 3. Only 2 bucket keys, so at most two buckets have data, and the others are empty.
+        tEnv.executeSql(
+                        "INSERT INTO wm_idle_test VALUES "
+                                + "(0, 0, TIMESTAMP '2020-03-08 13:12:11.123'),"
+                                + "(0, 1, TIMESTAMP '2020-03-08 13:15:12.223'),"
+                                + "(0, 2, TIMESTAMP '2020-03-08 16:12:13.323'),"
+                                + "(1, 3, TIMESTAMP '2020-03-08 13:13:11.123'),"
+                                + "(1, 4, TIMESTAMP '2020-03-08 13:19:11.133'),"
+                                + "(1, 5, TIMESTAMP '2020-03-08 16:13:11.143')")
+                .await();
+
+        // 4. Execute TUMBLE window aggregation and verify results.
+        //    Each bucket_id has 2 records in the first hour window (13:xx): [0, 2] and [1, 2].
+        //    The second window (16:xx) never fires since no data advances the watermark past 17:00.
+        //    If idle buckets blocked the watermark, the TUMBLE windows would never fire.
+        execEnv.setParallelism(1);
+        final List<String> expected = Arrays.asList("+I[0, 2]", "+I[1, 2]");
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql(
+                                "SELECT `bucket_id`, COUNT(`value`) FROM wm_idle_test"
+                                        + " GROUP BY `bucket_id`,"
+                                        + " TUMBLE(`ts`, INTERVAL '1' HOUR)")
+                        .collect();
+        assertResultsIgnoreOrder(rowIter, expected, true);
     }
 
     private GenericRow rowWithPartition(Object[] values, @Nullable String partition) {
