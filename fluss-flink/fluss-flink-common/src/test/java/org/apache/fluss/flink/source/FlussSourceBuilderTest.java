@@ -266,6 +266,59 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
         assertThat(source).isNotNull();
     }
 
+    @Test
+    public void testSetLakeEnabled() {
+        // Given - using full() which is the default, lakeEnabled = true
+        // Note: Without actual data lake configuration, lake source won't be created
+        // This test verifies the builder accepts the method call
+        FlussSource<TestRecord> source =
+                FlussSource.<TestRecord>builder()
+                        .setBootstrapServers(bootstrapServers)
+                        .setDatabase(DEFAULT_DB)
+                        .setTable(DEFAULT_TABLE_PATH.getTableName())
+                        .setStartingOffsets(OffsetsInitializer.full())
+                        .setLakeEnabled(true)
+                        .setDeserializationSchema(new TestDeserializationSchema())
+                        .build();
+
+        // Then - source should be created (lake source may be null if table doesn't have datalake)
+        assertThat(source).isNotNull();
+    }
+
+    @Test
+    public void testSetLakeEnabledWithEarliestOffset() {
+        // Given - using earliest() offset, lakeEnabled = true
+        // Lake source won't be enabled since startup mode is not FULL
+        FlussSource<TestRecord> source =
+                FlussSource.<TestRecord>builder()
+                        .setBootstrapServers(bootstrapServers)
+                        .setDatabase(DEFAULT_DB)
+                        .setTable(DEFAULT_TABLE_PATH.getTableName())
+                        .setStartingOffsets(OffsetsInitializer.earliest())
+                        .setLakeEnabled(true)
+                        .setDeserializationSchema(new TestDeserializationSchema())
+                        .build();
+
+        // Then
+        assertThat(source).isNotNull();
+    }
+
+    @Test
+    public void testLakeEnabledDefaultValue() {
+        // Given - not setting lakeEnabled, should default to false
+        FlussSource<TestRecord> source =
+                FlussSource.<TestRecord>builder()
+                        .setBootstrapServers(bootstrapServers)
+                        .setDatabase(DEFAULT_DB)
+                        .setTable(DEFAULT_TABLE_PATH.getTableName())
+                        .setStartingOffsets(OffsetsInitializer.full())
+                        .setDeserializationSchema(new TestDeserializationSchema())
+                        .build();
+
+        // Then
+        assertThat(source).isNotNull();
+    }
+
     // Test record class for tests
     private static class TestRecord {
         private int id;

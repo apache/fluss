@@ -22,6 +22,8 @@ import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
 import org.apache.fluss.flink.source.reader.LeaseContext;
+import org.apache.fluss.lake.source.LakeSource;
+import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.types.RowType;
@@ -55,10 +57,16 @@ import javax.annotation.Nullable;
  * }</pre>
  *
  * @param <OUT> The type of records produced by this source
+ * @see FlussSourceBuilder
  */
 public class FlussSource<OUT> extends FlinkSource<OUT> {
     private static final long serialVersionUID = 1L;
 
+    /**
+     * Creates a FlussSource without lake source (backward compatible constructor).
+     *
+     * <p>Use {@link #builder()} to create a FlussSource with more configuration options.
+     */
     FlussSource(
             Configuration flussConf,
             TablePath tablePath,
@@ -85,7 +93,39 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
                 deserializationSchema,
                 streaming,
                 null,
+                null,
                 LeaseContext.DEFAULT);
+    }
+
+    /** Creates a FlussSource with optional lake source for union read. */
+    FlussSource(
+            Configuration flussConf,
+            TablePath tablePath,
+            boolean hasPrimaryKey,
+            boolean isPartitioned,
+            RowType sourceOutputType,
+            @Nullable int[] projectedFields,
+            OffsetsInitializer offsetsInitializer,
+            long scanPartitionDiscoveryIntervalMs,
+            FlussDeserializationSchema<OUT> deserializationSchema,
+            boolean streaming,
+            @Nullable LakeSource<LakeSplit> lakeSource,
+            LeaseContext leaseContext) {
+        // TODO: Support partition pushDown in datastream
+        super(
+                flussConf,
+                tablePath,
+                hasPrimaryKey,
+                isPartitioned,
+                sourceOutputType,
+                projectedFields,
+                offsetsInitializer,
+                scanPartitionDiscoveryIntervalMs,
+                deserializationSchema,
+                streaming,
+                null,
+                lakeSource,
+                leaseContext);
     }
 
     /**

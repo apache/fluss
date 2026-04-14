@@ -82,6 +82,90 @@ DataStreamSource<Order> stream =
 stream.print();
 ```
 
+### Union Read (Lake + Fluss)
+
+Union Read combines historical data from a data lake snapshot (e.g., Paimon) with real-time data from Fluss logs, giving you a complete and up-to-date view of your data.
+
+#### Prerequisites
+
+- The table must be created with `'table.datalake.enabled' = 'true'`
+- The corresponding lake connector JAR must be available, depending on your data lake type:
+  - Paimon: `fluss-lake-paimon-$FLUSS_VERSION$.jar`
+  - Iceberg: `fluss-lake-iceberg-$FLUSS_VERSION$.jar`
+- At least one lake snapshot must exist (the tiering job must have run at least once)
+
+#### Configuration
+
+To enable union read in DataStream API, use the following key methods:
+
+- **setLakeEnabled(true):** Enables union read mode
+- **setStartingOffsets(OffsetsInitializer.full()):** Required for union read (this is also the default)
+- **setStreaming(false):** Required when running in BATCH mode
+
+:::note
+When running in Flink BATCH mode, you must explicitly call `setStreaming(false)` on the source builder. Otherwise, the source will be treated as an unbounded source, which is incompatible with batch execution.
+:::
+
+#### BATCH Mode Example
+
+In batch mode, the source reads the lake snapshot merged with the latest Fluss data and then terminates.
+
+```java
+StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+env.setRuntimeMode(RuntimeExecutionMode.BATCH);
+
+FlussSource<RowData> flussSource = FlussSource.<RowData>builder()
+    .setBootstrapServers("localhost:9123")
+    .setDatabase("mydb")
+    .setTable("orders")
+    .setLakeEnabled(true)                           // Enable union read
+    .setStartingOffsets(OffsetsInitializer.full())  // Required (default)
+    .setStreaming(false)                            // Required for BATCH mode
+    .setDeserializationSchema(new RowDataDeserializationSchema())
+    .build();
+
+DataStreamSource<RowData> stream = env.fromSource(
+    flussSource,
+    WatermarkStrategy.noWatermarks(),
+    "Fluss Union Read Source"
+);
+
+stream.print();
+env.execute("Union Read Batch Job");
+```
+
+#### STREAMING Mode Example
+
+In streaming mode, the source first reads the lake snapshot, then continues to consume real-time changes from Fluss logs indefinitely.
+
+```java
+StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+env.setRuntimeMode(RuntimeExecutionMode.STREAMING);
+
+FlussSource<RowData> flussSource = FlussSource.<RowData>builder()
+    .setBootstrapServers("localhost:9123")
+    .setDatabase("mydb")
+    .setTable("orders")
+    .setLakeEnabled(true)                           // Enable union read
+    .setStartingOffsets(OffsetsInitializer.full())  // Required (default)
+    // setStreaming(false) is NOT needed for streaming mode
+    .setDeserializationSchema(new RowDataDeserializationSchema())
+    .build();
+
+DataStreamSource<RowData> stream = env.fromSource(
+    flussSource,
+    WatermarkStrategy.noWatermarks(),
+    "Fluss Union Read Source"
+);
+
+stream.print();
+env.execute("Union Read Streaming Job");
+```
+
+#### Primary Key Table Deduplication
+
+When performing union read on a **Primary Key Table**, records with the same key that exist in both the lake snapshot and Fluss logs are automatically deduplicated. The most recent value (from Fluss) takes precedence, ensuring data consistency without manual intervention.
+
 ### Configuration Options
 The `FlussSourceBuilder` provides several methods for configuring the source connector:
 
