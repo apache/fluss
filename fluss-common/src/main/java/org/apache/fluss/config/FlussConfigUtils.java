@@ -225,4 +225,22 @@ public class FlussConfigUtils {
                             option.key(), minValue));
         }
     }
+
+    public static void validateClientConfigs(Configuration conf) {
+        int maxPollRecords = conf.getInt(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS);
+        if (maxPollRecords <= 0) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than 0.",
+                            ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS.key()));
+        }
+
+        long connectTimeoutMs = conf.get(ConfigOptions.CLIENT_CONNECT_TIMEOUT).toMillis();
+        if (connectTimeoutMs <= 0) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than 0.",
+                            ConfigOptions.CLIENT_CONNECT_TIMEOUT.key()));
+        }
+    }
 }

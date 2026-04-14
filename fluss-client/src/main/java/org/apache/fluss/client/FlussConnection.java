@@ -32,6 +32,7 @@ import org.apache.fluss.client.write.WriterClient;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.metadata.TablePath;
@@ -76,6 +77,7 @@ public final class FlussConnection implements Connection {
                 Configuration.fromMap(
                         extractPrefix(new HashMap<>(conf.toMap()), CLIENT_PREFIX + "fs.")),
                 null);
+        FlussConfigUtils.validateClientConfigs(conf);
         // for client metrics.
         setupClientMetricsConfiguration();
         String clientId = conf.getString(ConfigOptions.CLIENT_ID);

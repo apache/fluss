@@ -175,4 +175,27 @@ class FlussConfigUtilsTest {
                 .hasMessageContaining(ConfigOptions.TABLET_SERVER_ID.key())
                 .hasMessageContaining("it must be greater than or equal 0");
     }
+
+    @Test
+    void testValidateClientConfigs() {
+        // valid defaults should pass
+        Configuration validConf = new Configuration();
+        FlussConfigUtils.validateClientConfigs(validConf);
+
+        // max-poll-records = 0 should fail
+        Configuration zeroPollConf = new Configuration();
+        zeroPollConf.set(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 0);
+        assertThatThrownBy(() -> FlussConfigUtils.validateClientConfigs(zeroPollConf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS.key())
+                .hasMessageContaining("must be greater than 0");
+
+        // connect-timeout = 0 should fail
+        Configuration zeroTimeoutConf = new Configuration();
+        zeroTimeoutConf.set(ConfigOptions.CLIENT_CONNECT_TIMEOUT, java.time.Duration.ZERO);
+        assertThatThrownBy(() -> FlussConfigUtils.validateClientConfigs(zeroTimeoutConf))
+                .isInstanceOf(IllegalConfigurationException.class)
+                .hasMessageContaining(ConfigOptions.CLIENT_CONNECT_TIMEOUT.key())
+                .hasMessageContaining("must be greater than 0");
+    }
 }
