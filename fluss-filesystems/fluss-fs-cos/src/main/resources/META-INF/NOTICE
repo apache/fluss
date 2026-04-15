@@ -21,8 +21,9 @@ This project bundles the following dependencies under the Apache Software Licens
 - com.squareup.okhttp:logging-interceptor:2.7.5
 - com.squareup.okhttp:okhttp:2.7.5
 - com.squareup.okio:okio:1.12.0
-- com.tencentcloudapi:tencentcloud-sdk-java-common:3.1.213
+- com.tencentcloudapi:tencentcloud-sdk-java-common:3.1.678
 - com.tencentcloudapi:tencentcloud-sdk-java-kms:3.1.213
+- com.tencentcloudapi:tencentcloud-sdk-java-sts:3.1.678
 - commons-beanutils:commons-beanutils:1.9.4
 - commons-codec:commons-codec:1.13
 - commons-collections:commons-collections:3.2.2

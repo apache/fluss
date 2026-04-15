@@ -31,13 +31,16 @@ public class COSTestCredentials {
 
     @Nullable private static final String SECRET_KEY = System.getenv("COSN_SECRET_KEY");
 
+    @Nullable private static final String REGION = System.getenv("COSN_REGION");
+
     // ------------------------------------------------------------------------
 
     public static boolean credentialsAvailable() {
         return isNotEmpty(ENDPOINT)
                 && isNotEmpty(BUCKET)
                 && isNotEmpty(SECRET_ID)
-                && isNotEmpty(SECRET_KEY);
+                && isNotEmpty(SECRET_KEY)
+                && isNotEmpty(REGION);
     }
 
     /** Checks if a String is not null and not empty. */
@@ -86,6 +89,19 @@ public class COSTestCredentials {
             return SECRET_KEY;
         } else {
             throw new IllegalStateException("COS secret key is not available");
+        }
+    }
+
+    /**
+     * Get COS region.
+     *
+     * @return COS region
+     */
+    public static String getCOSRegion() {
+        if (REGION != null) {
+            return REGION;
+        } else {
+            throw new IllegalStateException("COS region is not available");
         }
     }
 

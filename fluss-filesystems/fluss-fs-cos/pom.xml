@@ -33,6 +33,7 @@
     <properties>
         <fs.cosn.sdk.version>3.3.5</fs.cosn.sdk.version>
         <fs.cos.api.version>5.6.139</fs.cos.api.version>
+        <fs.cos.sts.sdk.version>3.1.678</fs.cos.sts.sdk.version>
     </properties>
 
     <dependencies>
@@ -83,6 +84,18 @@
             <groupId>com.qcloud</groupId>
             <artifactId>cos_api</artifactId>
             <version>${fs.cos.api.version}</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>javax.xml.bind</groupId>
+                    <artifactId>jaxb-api</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
+        <dependency>
+            <groupId>com.tencentcloudapi</groupId>
+            <artifactId>tencentcloud-sdk-java-sts</artifactId>
+            <version>${fs.cos.sts.sdk.version}</version>
             <exclusions>
                 <exclusion>
                     <groupId>javax.xml.bind</groupId>

@@ -22,7 +22,6 @@ import org.apache.fluss.fs.token.CredentialsJsonSerde;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.fs.token.SecurityTokenReceiver;
 
-import com.qcloud.cos.auth.BasicCOSCredentials;
 import com.qcloud.cos.auth.BasicSessionCredentials;
 import com.qcloud.cos.auth.COSCredentials;
 import org.slf4j.Logger;
@@ -93,20 +92,12 @@ public class COSSecurityTokenReceiver implements SecurityTokenReceiver {
         org.apache.fluss.fs.token.Credentials flussCredentials =
                 CredentialsJsonSerde.fromJson(tokenBytes);
 
-        // Create COSCredentials from fluss credentials, distinguishing between
-        // static credentials (no session token) and temporary session credentials
-        if (flussCredentials.getSecurityToken() != null) {
-            credentials =
-                    new BasicSessionCredentials(
-                            flussCredentials.getAccessKeyId(),
-                            flussCredentials.getSecretAccessKey(),
-                            flussCredentials.getSecurityToken());
-        } else {
-            credentials =
-                    new BasicCOSCredentials(
-                            flussCredentials.getAccessKeyId(),
-                            flussCredentials.getSecretAccessKey());
-        }
+        // STS always returns temporary credentials with a session token
+        credentials =
+                new BasicSessionCredentials(
+                        flussCredentials.getAccessKeyId(),
+                        flussCredentials.getSecretAccessKey(),
+                        flussCredentials.getSecurityToken());
         additionInfos = token.getAdditionInfos();
 
         // Consistent with S3DelegationTokenReceiver, logging access key at INFO level

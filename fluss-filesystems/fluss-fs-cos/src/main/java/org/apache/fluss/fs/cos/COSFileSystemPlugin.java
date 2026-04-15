@@ -48,6 +48,8 @@ public class COSFileSystemPlugin implements FileSystemPlugin {
     public static final String SECRET_KEY = "fs.cosn.userinfo.secretKey";
     public static final String CREDENTIALS_PROVIDER = "fs.cosn.credentials.provider";
 
+    public static final String REGION = "fs.cosn.userinfo.region";
+
     public static final String ENDPOINT_KEY = "fs.cosn.bucket.endpoint_suffix";
 
     @Override

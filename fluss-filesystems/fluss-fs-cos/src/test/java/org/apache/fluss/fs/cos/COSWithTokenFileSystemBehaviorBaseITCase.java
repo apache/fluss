@@ -22,6 +22,7 @@ import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FileSystemBehaviorTestSuite;
 
 import static org.apache.fluss.fs.cos.COSFileSystemPlugin.ENDPOINT_KEY;
+import static org.apache.fluss.fs.cos.COSFileSystemPlugin.REGION;
 import static org.apache.fluss.fs.cos.COSFileSystemPlugin.SECRET_ID;
 import static org.apache.fluss.fs.cos.COSFileSystemPlugin.SECRET_KEY;
 
@@ -34,6 +35,7 @@ abstract class COSWithTokenFileSystemBehaviorBaseITCase extends FileSystemBehavi
         // first init filesystem with secretId/secretKey
         final Configuration conf = new Configuration();
         conf.setString(ENDPOINT_KEY, COSTestCredentials.getCOSEndpoint());
+        conf.setString(REGION, COSTestCredentials.getCOSRegion());
         conf.setString(SECRET_ID, COSTestCredentials.getCOSSecretId());
         conf.setString(SECRET_KEY, COSTestCredentials.getCOSSecretKey());
         FileSystem.initialize(conf, null);
