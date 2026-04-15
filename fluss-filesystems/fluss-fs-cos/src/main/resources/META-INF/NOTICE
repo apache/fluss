@@ -10,7 +10,7 @@ This project bundles the following dependencies under the Apache Software Licens
 - com.fasterxml.jackson.core:jackson-core:2.15.3
 - com.fasterxml.jackson.core:jackson-databind:2.15.3
 - com.fasterxml.woodstox:woodstox-core:5.4.0
-- com.google.code.gson:gson:2.2.4
+- com.google.code.gson:gson:2.8.9
 - com.google.guava:failureaccess:1.0
 - com.google.guava:guava:27.0-jre
 - com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava
@@ -18,9 +18,10 @@ This project bundles the following dependencies under the Apache Software Licens
 - com.google.re2j:re2j:1.1
 - com.qcloud:cos_api:5.6.139
 - com.qcloud:cos_api-bundle:5.6.69
-- com.squareup.okhttp:logging-interceptor:2.7.5
-- com.squareup.okhttp:okhttp:2.7.5
-- com.squareup.okio:okio:1.12.0
+- com.squareup.okhttp3:logging-interceptor:4.10.0
+- com.squareup.okhttp3:okhttp:4.10.0
+- com.squareup.okio:okio-jvm:3.2.0
+- com.squareup.okio:okio:3.2.0
 - com.tencentcloudapi:tencentcloud-sdk-java-common:3.1.678
 - com.tencentcloudapi:tencentcloud-sdk-java-kms:3.1.213
 - com.tencentcloudapi:tencentcloud-sdk-java-sts:3.1.678
@@ -42,6 +43,7 @@ This project bundles the following dependencies under the Apache Software Licens
 - io.netty:netty-transport:4.1.100.Final
 - jakarta.activation:jakarta.activation-api:1.2.1
 - joda-time:joda-time:2.9.9
+- org.ini4j:ini4j:0.5.4
 - org.apache.commons:commons-compress:1.24.0
 - org.apache.commons:commons-configuration2:2.8.0
 - org.apache.commons:commons-lang3:3.18.0
@@ -60,6 +62,11 @@ This project bundles the following dependencies under the Apache Software Licens
 - org.apache.kerby:kerby-util:2.0.3
 - org.bouncycastle:bcprov-jdk15on:1.67
 - org.checkerframework:checker-qual:2.5.2
+- org.jetbrains.kotlin:kotlin-stdlib-common:1.6.20
+- org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.6.10
+- org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.6.10
+- org.jetbrains.kotlin:kotlin-stdlib:1.6.20
+- org.jetbrains:annotations:13.0
 - org.codehaus.jettison:jettison:1.5.4
 - org.codehaus.mojo:animal-sniffer-annotations:1.17
 - org.codehaus.woodstox:stax2-api:4.2.1
