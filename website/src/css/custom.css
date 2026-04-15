@@ -21,17 +21,37 @@
  * work well for content-centric websites.
  */
 
+/* Self-hosted fonts via @fontsource (no external requests) */
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/700.css';
+@import '@fontsource/inter/800.css';
+@import '@fontsource/roboto/400.css';
+@import '@fontsource/roboto/500.css';
+@import '@fontsource/roboto/700.css';
+
 /* You can override the default Infima variables here. */
 :root {
-  --ifm-color-primary: #0071e3;
-  --ifm-color-primary-dark: #0066cc;
-  --ifm-color-primary-darker: #0060c1;
-  --ifm-color-primary-darkest: #004f9f;
-  --ifm-color-primary-light: #007cfa;
-  --ifm-color-primary-lighter: #0682ff;
-  --ifm-color-primary-lightest: #2893ff;
+  /* Use Roboto consistently across the platform */
+  --ifm-font-family-base: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+
+  /* Increase line height for a more "airy" and professional feel */
+  --ifm-line-height-base: 1.65;
+
+  /* Refine primary colors to a slightly more professional "Brand Blue" */
+  --ifm-color-primary: #0062cc;
+  --ifm-color-primary-dark: #0056b3;
+  --ifm-color-primary-darker: #004d99;
+  --ifm-color-primary-darkest: #003d7a;
+  --ifm-color-primary-light: #1a7ae0;
+  --ifm-color-primary-lighter: #338df2;
+  --ifm-color-primary-lightest: #66abf7;
+
+  /* Adjust heading weights */
+  --ifm-heading-font-weight: 700;
+
   --ifm-code-font-size: 90%;
-  --ifm-font-family-base: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
   --docusaurus-highlighted-code-line-bg: #E2E9F3;
 
   --ifm-menu-color-background-active: #edeefa99;
@@ -45,17 +65,27 @@
 
 
 .navbar__brand {
-  font-family: monaco;
+  font-family: 'Roboto', sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   color: inherit;
 }
 
 .hero__title {
-  font-family: var(--ifm-font-family-base);
+  font-family: 'Roboto', sans-serif;
   font-weight: 700;
-  letter-spacing: -0.03em;
+  font-size: 3.5rem;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
 }
 
 .hero__subtitle {
+  font-family: 'Roboto', sans-serif;
+  font-weight: 400;
+  font-size: 1.5rem;
+  opacity: 0.9;
+  max-width: 800px;
+  margin: 0 auto;
   padding-bottom: 2rem;
 }
 
@@ -76,6 +106,16 @@
 .menu__list-item {
   font-size: 0.95rem;
   font-weight: 500;
+}
+
+.menu__link {
+  font-weight: 500;
+  color: #57606a;
+}
+
+.menu__link--active {
+  color: var(--ifm-color-primary);
+  font-weight: 600;
 }
 
 .menu__link--sublist-caret:after {
@@ -126,38 +166,43 @@
         line-height: 1.875;
 
         code {
-          border-radius: 4px;
-          background-color: #edf2fa;
-          border: none;
-          padding: 3px 4px;
-          font-size: 14px;
-          color: #4c576c;
-      }
-    }
-
-    li > code {
-        border-radius: 4px;
-        background-color: #edf2fa;
-        border: none;
-        padding: 3px 4px;
-        font-size: 14px;
-        color: #4c576c;
-    }
-
-    pre {
-        code {
-            padding: 0.725rem 1.25rem;
-            background-color: #f5f5f5;
+            font-family: 'SFMono-Regular', Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            border-radius: 6px;
+            background-color: rgba(175, 184, 193, 0.2);
+            border: none;
+            padding: 0.2em 0.4em;
+            font-size: 0.9em;
+            color: #4c576c;
         }
     }
 
+    li > code {
+        font-family: 'SFMono-Regular', Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        border-radius: 6px;
+        background-color: rgba(175, 184, 193, 0.2);
+        border: none;
+        padding: 0.2em 0.4em;
+        font-size: 0.9em;
+        color: #4c576c;
+    }
+
+    table {
+        display: table;
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        border: 1px solid #e1e4e8;
+        border-radius: 8px;
+        overflow: hidden;
+    }
+
     table thead tr {
-        background-color: #f7f9fe;
+        background-color: #f6f8fa;
     }
 
     table thead th {
-        background-color: #f7f9fe;
-        color: #1d1d1d;
+        background-color: #f6f8fa;
+        color: #1a1a1a;
         font-size: 1rem;
         font-weight: 500;
     }
@@ -168,11 +213,12 @@
         font-size: var(--global-font-size-small);
 
         code {
-            border-radius: 4px;
-            background-color: #edf2fa;
+            font-family: 'SFMono-Regular', Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            border-radius: 6px;
+            background-color: rgba(175, 184, 193, 0.2);
             border: none;
-            padding: 3px 4px;
-            font-size: 14px;
+            padding: 0.2em 0.4em;
+            font-size: 0.9em;
             color: #4c576c;
         }
     }
@@ -196,7 +242,6 @@
             position: relative;
             list-style: initial;
         }
-
         code {
             border-radius: 4px;
             background-color: #edf2fa;
@@ -243,6 +288,21 @@
     opacity: .6;
     text-align: center;
     width: 98%;
+}
+
+/* Hide blog sidebar on individual blog post pages to increase content width */
+.blog-post-page-no-sidebar aside.col.col--3 {
+    display: none;
+}
+
+.blog-post-page-no-sidebar main.col.col--7 {
+    flex-basis: calc(9 / 12 * 100%);
+    max-width: calc(9 / 12 * 100%);
+}
+
+.blog-post-page-no-sidebar .col.col--2 {
+    flex-basis: calc(3 / 12 * 100%);
+    max-width: calc(3 / 12 * 100%);
 }
 
 .hidden {
