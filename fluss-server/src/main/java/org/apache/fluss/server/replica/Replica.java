@@ -844,7 +844,7 @@ public final class Replica {
             // Always create RemoteLogFetcher; the temp directory is lazily created only
             // when fetch() is actually called, so this is lightweight.
             RemoteLogFetcher remoteLogFetcher =
-                    new RemoteLogFetcher(remoteLogManager, tableBucket, logManager.getDataDir());
+                    new RemoteLogFetcher(remoteLogManager, tableBucket, logTablet.getLogDir());
 
             try {
                 KvRecoverHelper kvRecoverHelper =

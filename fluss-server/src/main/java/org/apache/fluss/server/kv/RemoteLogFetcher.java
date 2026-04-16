@@ -81,11 +81,12 @@ public class RemoteLogFetcher implements Closeable {
     private volatile RemoteLogBatchIterator activeIterator;
 
     public RemoteLogFetcher(
-            RemoteLogManager remoteLogManager, TableBucket tableBucket, File dataDir) {
+            RemoteLogManager remoteLogManager, TableBucket tableBucket, File logTabletDir) {
         this(
                 remoteLogManager,
                 tableBucket,
-                dataDir.toPath()
+                logTabletDir
+                        .toPath()
                         .resolve("tmp")
                         .resolve(REMOTE_LOG_RECOVERY_DIR_PREFIX + UUID.randomUUID()));
     }

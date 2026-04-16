@@ -58,8 +58,8 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         // Get the end offset of all remote segments to use as localLogStartOffset.
         long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
 
-        File dataDir = logManager.getDataDir();
-        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, dataDir)) {
+        File logTabletDir = logTablet.getLogDir();
+        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir)) {
             // Fetch all remote log batches from offset 0 to remoteEndOffset.
             Iterable<LogRecordBatch> batches = fetcher.fetch(0, remoteEndOffset);
             List<LogRecordBatch> batchList = new ArrayList<>();
@@ -96,8 +96,8 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         long startOffset = 5;
         long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
 
-        File dataDir = logManager.getDataDir();
-        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, dataDir)) {
+        File logTabletDir = logTablet.getLogDir();
+        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir)) {
             Iterable<LogRecordBatch> batches = fetcher.fetch(startOffset, remoteEndOffset);
             List<LogRecordBatch> batchList = new ArrayList<>();
             for (LogRecordBatch batch : batches) {
@@ -128,8 +128,8 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         // Use the start offset of the second segment as localLogStartOffset.
         long localLogStartOffset = segments.get(1).remoteLogStartOffset();
 
-        File dataDir = logManager.getDataDir();
-        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, dataDir)) {
+        File logTabletDir = logTablet.getLogDir();
+        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir)) {
             Iterable<LogRecordBatch> batches = fetcher.fetch(0, localLogStartOffset);
             List<LogRecordBatch> batchList = new ArrayList<>();
             for (LogRecordBatch batch : batches) {
@@ -151,8 +151,9 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         makeLogTableAsLeader(tb, false);
         // Don't upload any segments to remote.
 
-        File dataDir = logManager.getDataDir();
-        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, dataDir)) {
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        File logTabletDir = replica.getLogTablet().getLogDir();
+        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir)) {
             assertThatThrownBy(() -> fetcher.fetch(0, 100))
                     .isInstanceOf(RemoteStorageException.class)
                     .hasMessageContaining("No remote log segments found");
@@ -161,8 +162,12 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
 
     @Test
     void testStaleDirectoriesFromUncleanShutdownAreCleanedUp() throws Exception {
-        File dataDir = logManager.getDataDir();
-        Path tmpDir = dataDir.toPath().resolve("tmp");
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        makeLogTableAsLeader(tb, false);
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        File logTabletDir = replica.getLogTablet().getLogDir();
+
+        Path tmpDir = logTabletDir.toPath().resolve("tmp");
         Files.createDirectories(tmpDir);
 
         // Simulate stale directories left behind by a previous unclean shutdown.
@@ -176,8 +181,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
 
         // Simulate next startup: creating and closing a new RemoteLogFetcher should
         // clean up the entire tmp directory including all stale recovery directories.
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
-        RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, dataDir);
+        RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir);
         fetcher.close();
 
         assertThat(Files.exists(staleDir1)).isFalse();
@@ -199,8 +203,8 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         assertThat(segments).isNotEmpty();
         long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
 
-        File dataDir = logManager.getDataDir();
-        RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, dataDir);
+        File logTabletDir = logTablet.getLogDir();
+        RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir);
         Path tempDir = fetcher.getTempDir();
 
         // Not yet created before fetch.
@@ -236,8 +240,8 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
 
         long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
 
-        File dataDir = logManager.getDataDir();
-        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, dataDir)) {
+        File logTabletDir = logTablet.getLogDir();
+        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir)) {
             Iterable<LogRecordBatch> batches = fetcher.fetch(0, remoteEndOffset);
 
             long prevNextOffset = 0;
@@ -273,8 +277,8 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         // during KV recovery.
         long sameOffset = segments.get(0).remoteLogStartOffset();
 
-        File dataDir = logManager.getDataDir();
-        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, dataDir)) {
+        File logTabletDir = logTablet.getLogDir();
+        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir)) {
             Iterable<LogRecordBatch> batches = fetcher.fetch(sameOffset, sameOffset);
             List<LogRecordBatch> batchList = new ArrayList<>();
             for (LogRecordBatch batch : batches) {
@@ -298,8 +302,8 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         assertThat(segments).isNotEmpty();
         long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
 
-        File dataDir = logManager.getDataDir();
-        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, dataDir)) {
+        File logTabletDir = logTablet.getLogDir();
+        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir)) {
             Path tempDir = fetcher.getTempDir();
 
             // Consume all batches to trigger downloading.
