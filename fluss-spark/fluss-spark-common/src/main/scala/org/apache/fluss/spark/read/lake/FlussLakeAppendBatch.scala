@@ -50,7 +50,7 @@ class FlussLakeAppendBatch(
     if (isFallback) {
       new FlussAppendPartitionReaderFactory(tablePath, projection, options, flussConfig)
     } else {
-      new FlussLakeAppendPartitionReaderFactory(
+      new FlussLakePartitionReaderFactory(
         tableInfo.getProperties.toMap,
         tablePath,
         tableInfo.getRowType,
