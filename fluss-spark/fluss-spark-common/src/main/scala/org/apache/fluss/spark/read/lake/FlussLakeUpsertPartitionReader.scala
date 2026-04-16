@@ -23,6 +23,7 @@ import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
 import org.apache.fluss.metadata.TablePath
 import org.apache.fluss.row.InternalRow
 import org.apache.fluss.spark.read.FlussPartitionReader
+import org.apache.fluss.types.RowType
 
 import org.apache.spark.internal.Logging
 
@@ -62,6 +63,8 @@ class FlussLakeUpsertPartitionReader(
   private var scanFinished = false
 
   initialize()
+
+  override lazy val projectedRowType: RowType = rowType.project(projection)
 
   override def next(): Boolean = {
     if (closed || scanFinished) {

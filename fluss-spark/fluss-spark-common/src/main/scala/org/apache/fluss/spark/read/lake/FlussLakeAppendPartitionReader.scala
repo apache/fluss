@@ -17,34 +17,32 @@
 
 package org.apache.fluss.spark.read.lake
 
+import org.apache.fluss.config.Configuration
 import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
 import org.apache.fluss.metadata.TablePath
 import org.apache.fluss.record.LogRecord
-import org.apache.fluss.spark.row.DataConverter
+import org.apache.fluss.spark.read.FlussPartitionReader
 import org.apache.fluss.types.RowType
 import org.apache.fluss.utils.CloseableIterator
 
 import org.apache.spark.internal.Logging
-import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.connector.read.PartitionReader
 
 /** Partition reader that reads data from a single lake split via lake storage (no Fluss connection). */
 class FlussLakeAppendPartitionReader(
     tablePath: TablePath,
-    rowType: RowType,
     partition: FlussLakeInputPartition,
-    lakeSource: LakeSource[LakeSplit])
-  extends PartitionReader[InternalRow]
+    lakeSource: LakeSource[LakeSplit],
+    projection: Array[Int],
+    flussConfig: Configuration)
+  extends FlussPartitionReader(tablePath, flussConfig)
   with Logging {
 
-  private var currentRow: InternalRow = _
-  private var closed = false
   private var recordIterator: CloseableIterator[LogRecord] = _
 
   initialize()
 
   private def initialize(): Unit = {
-    logInfo(s"Reading lake split for table $tablePath bucket=${partition.tableBucket.getBucket}")
+    logInfo(s"Reading lake split for table $tablePath $partition")
 
     val splitSerializer = lakeSource.getSplitSerializer
     val split = splitSerializer.deserialize(splitSerializer.getVersion, partition.lakeSplitBytes)
@@ -54,28 +52,24 @@ class FlussLakeAppendPartitionReader(
       .read()
   }
 
+  override lazy val projectedRowType: RowType = rowType.project(projection)
+
   override def next(): Boolean = {
     if (closed || recordIterator == null) {
       return false
     }
 
     if (recordIterator.hasNext) {
-      val logRecord = recordIterator.next()
-      currentRow = DataConverter.toSparkInternalRow(logRecord.getRow, rowType)
+      currentRow = convertToSparkRow(recordIterator.next().getRow)
       true
     } else {
       false
     }
   }
 
-  override def get(): InternalRow = currentRow
-
-  override def close(): Unit = {
-    if (!closed) {
-      closed = true
-      if (recordIterator != null) {
-        recordIterator.close()
-      }
+  override def close0(): Unit = {
+    if (recordIterator != null) {
+      recordIterator.close()
     }
   }
 }
