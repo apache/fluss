@@ -46,7 +46,7 @@ abstract class FlussLakeBatch(
 
   /**
    * Plans input partitions for reading. The returned isFallback flag is true when no lake snapshot
-   * exists and the plan falls back to pure log reading.
+   * exists and the plan falls back to reading directly from Fluss.
    */
   def doPlan(): (Array[InputPartition], Boolean)
 

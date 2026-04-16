@@ -77,7 +77,6 @@ abstract class SparkLakeTableReadTestBase extends FlussSparkTestBase {
     try {
       // Collect all buckets to wait for sync
       val tableBuckets = if (tableInfo.isPartitioned) {
-        // For partitioned table, get all partitions and their buckets
         val partitionInfos = admin.listPartitionInfos(tablePath).get()
         partitionInfos.asScala.flatMap {
           partitionInfo =>
@@ -86,8 +85,7 @@ abstract class SparkLakeTableReadTestBase extends FlussSparkTestBase {
             }
         }.toSet
       } else {
-        // For non-partitioned table, just use bucket 0
-        Set(new TableBucket(tableId, 0))
+        (0 until numBuckets).map(bucket => new TableBucket(tableId, bucket)).toSet
       }
 
       val deadline = System.currentTimeMillis() + SYNC_TIMEOUT.toMillis

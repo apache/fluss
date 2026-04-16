@@ -28,8 +28,8 @@ import org.apache.spark.sql.connector.read.{InputPartition, PartitionReader, Par
 
 import java.util
 
-/** Factory for lake-enabled log table reads. Dispatches to lake or log reader per partition type. */
-class FlussLakeAppendPartitionReaderFactory(
+/** Factory for lake-enabled table reads. Dispatches to lake or log reader per partition type. */
+class FlussLakePartitionReaderFactory(
     tableProperties: util.Map[String, String],
     tablePath: TablePath,
     rowType: RowType,
@@ -47,10 +47,17 @@ class FlussLakeAppendPartitionReaderFactory(
 
   override def createReader(partition: InputPartition): PartitionReader[InternalRow] = {
     partition match {
-      case lake: FlussLakeInputPartition =>
-        new FlussLakeAppendPartitionReader(tablePath, projectedRowType, lake, lakeSource)
-      case log: FlussAppendInputPartition =>
-        new FlussAppendPartitionReader(tablePath, projection, log, flussConfig)
+      case lakeOnlySplit: FlussLakeInputPartition =>
+        new FlussLakeAppendPartitionReader(tablePath, projectedRowType, lakeOnlySplit, lakeSource)
+      case logSplit: FlussAppendInputPartition =>
+        new FlussAppendPartitionReader(tablePath, projection, logSplit, flussConfig)
+      case mixedSplit: FlussLakeUpsertInputPartition =>
+        new FlussLakeUpsertPartitionReader(
+          tablePath,
+          lakeSource,
+          projection,
+          mixedSplit,
+          flussConfig)
       case _ =>
         throw new IllegalArgumentException(s"Unexpected partition type: ${partition.getClass}")
     }

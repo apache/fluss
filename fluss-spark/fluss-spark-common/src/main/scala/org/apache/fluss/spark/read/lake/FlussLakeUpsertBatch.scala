@@ -49,7 +49,7 @@ class FlussLakeUpsertBatch(
   override val startOffsetsInitializer: OffsetsInitializer = {
     val offsetsInitializer = FlussOffsetInitializers.startOffsetsInitializer(options, flussConfig)
     if (!offsetsInitializer.isInstanceOf[SnapshotOffsetsInitializer]) {
-      throw new UnsupportedOperationException("Upsert scan only support FULL startup mode.")
+      throw new UnsupportedOperationException("Upsert scan only supports FULL startup mode.")
     }
     offsetsInitializer
   }
@@ -58,7 +58,7 @@ class FlussLakeUpsertBatch(
     if (isFallback) {
       new FlussUpsertPartitionReaderFactory(tablePath, projection, options, flussConfig)
     } else {
-      new FlussLakeUpsertPartitionReaderFactory(
+      new FlussLakePartitionReaderFactory(
         tableInfo.getProperties.toMap,
         tablePath,
         tableInfo.getRowType,
@@ -244,18 +244,15 @@ class FlussLakeUpsertBatch(
       splitSerializer: SimpleVersionedSerializer[LakeSplit],
       snapshotLogOffset: java.lang.Long,
       stoppingOffset: Long): InputPartition = {
-    val (lakeSplitBytes, logStartingOffset) =
+    val logStartingOffset =
+      if (snapshotLogOffset != null) snapshotLogOffset.longValue()
+      else LogScanner.EARLIEST_OFFSET
+
+    val lakeSplitBytes =
       if (lakeSplits.isDefined && lakeSplits.get.nonEmpty) {
         // Serialize all lake splits for this bucket into a single byte array
-        val serialized = FlussLakeUtils.serializeLakeSplits(lakeSplits.get, splitSerializer)
-        val startOffset =
-          if (snapshotLogOffset != null) snapshotLogOffset.longValue()
-          else LogScanner.EARLIEST_OFFSET
-        (serialized, startOffset)
-      } else {
-        // No lake splits for this bucket
-        (null, LogScanner.EARLIEST_OFFSET)
-      }
+        FlussLakeUtils.serializeLakeSplits(lakeSplits.get, splitSerializer)
+      } else null
 
     FlussLakeUpsertInputPartition(
       tableBucket,
