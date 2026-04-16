@@ -61,7 +61,6 @@ class FlussLakeUpsertBatch(
       new FlussLakePartitionReaderFactory(
         tableInfo.getProperties.toMap,
         tablePath,
-        tableInfo.getRowType,
         projection,
         flussConfig)
     }

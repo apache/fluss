@@ -21,7 +21,6 @@ import org.apache.fluss.config.Configuration
 import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
 import org.apache.fluss.metadata.TablePath
 import org.apache.fluss.spark.read.{FlussAppendInputPartition, FlussAppendPartitionReader}
-import org.apache.fluss.types.RowType
 
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReader, PartitionReaderFactory}
@@ -32,7 +31,6 @@ import java.util
 class FlussLakePartitionReaderFactory(
     tableProperties: util.Map[String, String],
     tablePath: TablePath,
-    rowType: RowType,
     projection: Array[Int],
     flussConfig: Configuration)
   extends PartitionReaderFactory {
