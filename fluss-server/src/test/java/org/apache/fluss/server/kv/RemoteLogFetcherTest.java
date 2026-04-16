@@ -160,20 +160,63 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
     }
 
     @Test
-    void testTempDirectoryCreatedAndCleanedUp() throws Exception {
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+    void testStaleDirectoriesFromUncleanShutdownAreCleanedUp() throws Exception {
         File dataDir = logManager.getDataDir();
+        Path tmpDir = dataDir.toPath().resolve("tmp");
+        Files.createDirectories(tmpDir);
 
+        // Simulate stale directories left behind by a previous unclean shutdown.
+        Path staleDir1 = Files.createDirectories(tmpDir.resolve("remote-log-recovery-stale-1"));
+        Path staleDir2 = Files.createDirectories(tmpDir.resolve("remote-log-recovery-stale-2"));
+        // Create a file inside one stale dir to simulate a partially downloaded segment.
+        Files.createFile(staleDir1.resolve("00000000000000000000.log"));
+
+        assertThat(Files.exists(staleDir1)).isTrue();
+        assertThat(Files.exists(staleDir2)).isTrue();
+
+        // Simulate next startup: creating and closing a new RemoteLogFetcher should
+        // clean up the entire tmp directory including all stale recovery directories.
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, dataDir);
+        fetcher.close();
+
+        assertThat(Files.exists(staleDir1)).isFalse();
+        assertThat(Files.exists(staleDir2)).isFalse();
+        assertThat(Files.exists(tmpDir)).isFalse();
+    }
+
+    @Test
+    void testTempDirectoryCreatedLazilyOnFetchAndCleanedUp() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        makeLogTableAsLeader(tb, false);
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        List<RemoteLogSegment> segments = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(segments).isNotEmpty();
+        long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
+
+        File dataDir = logManager.getDataDir();
         RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, dataDir);
         Path tempDir = fetcher.getTempDir();
 
-        // Verify temp directory was created.
+        // Not yet created before fetch.
+        assertThat(Files.exists(tempDir)).isFalse();
+
+        // Fetch triggers lazy directory creation.
+        for (LogRecordBatch batch : fetcher.fetch(0, remoteEndOffset)) {
+            assertThat(Files.exists(tempDir)).isTrue();
+        }
         assertThat(Files.exists(tempDir)).isTrue();
-        assertThat(tempDir.getFileName().toString()).startsWith("remote-log-recovery-");
 
         // Close and verify cleanup.
         fetcher.close();
         assertThat(Files.exists(tempDir)).isFalse();
+        // The parent "tmp" directory should also be removed when empty.
+        assertThat(Files.exists(tempDir.getParent())).isFalse();
     }
 
     @Test

@@ -841,21 +841,10 @@ public final class Replica {
                             snapshotContext.getZooKeeperClient(),
                             snapshotContext.maxFetchLogSizeInRecoverKv());
 
-            // Create RemoteLogFetcher if the recover point offset is before the localLogStartOffset
-            // meaning we need to fetch logs from remote storage to fill the gap.
-            RemoteLogFetcher remoteLogFetcher = null;
-            if (startRecoverLogOffset < logTablet.localLogStartOffset()) {
-                LOG.info(
-                        "Creating RemoteLogFetcher for {} of table {} because recover offset {} "
-                                + "is before localLogStartOffset {}",
-                        tableBucket,
-                        physicalPath,
-                        startRecoverLogOffset,
-                        logTablet.localLogStartOffset());
-                remoteLogFetcher =
-                        new RemoteLogFetcher(
-                                remoteLogManager, tableBucket, logManager.getDataDir());
-            }
+            // Always create RemoteLogFetcher; the temp directory is lazily created only
+            // when fetch() is actually called, so this is lightweight.
+            RemoteLogFetcher remoteLogFetcher =
+                    new RemoteLogFetcher(remoteLogManager, tableBucket, logManager.getDataDir());
 
             try {
                 KvRecoverHelper kvRecoverHelper =
@@ -872,10 +861,7 @@ public final class Replica {
                                 remoteLogFetcher);
                 kvRecoverHelper.recover();
             } finally {
-                // Always clean up the temp directory used for remote log recovery
-                if (remoteLogFetcher != null) {
-                    remoteLogFetcher.close();
-                }
+                remoteLogFetcher.close();
             }
         } catch (Exception e) {
             throw new KvStorageException(

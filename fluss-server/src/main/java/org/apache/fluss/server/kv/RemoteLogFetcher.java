@@ -81,24 +81,20 @@ public class RemoteLogFetcher implements Closeable {
     private volatile RemoteLogBatchIterator activeIterator;
 
     public RemoteLogFetcher(
-            RemoteLogManager remoteLogManager, TableBucket tableBucket, File dataDir)
-            throws IOException {
+            RemoteLogManager remoteLogManager, TableBucket tableBucket, File dataDir) {
         this(
                 remoteLogManager,
                 tableBucket,
-                Files.createDirectories(
-                        dataDir.toPath()
-                                .resolve("tmp")
-                                .resolve(REMOTE_LOG_RECOVERY_DIR_PREFIX + UUID.randomUUID())));
+                dataDir.toPath()
+                        .resolve("tmp")
+                        .resolve(REMOTE_LOG_RECOVERY_DIR_PREFIX + UUID.randomUUID()));
     }
 
     @VisibleForTesting
-    RemoteLogFetcher(RemoteLogManager remoteLogManager, TableBucket tableBucket, Path tempDir)
-            throws IOException {
+    RemoteLogFetcher(RemoteLogManager remoteLogManager, TableBucket tableBucket, Path tempDir) {
         this.remoteLogManager = remoteLogManager;
         this.tableBucket = tableBucket;
         this.tempDir = tempDir;
-        Files.createDirectories(tempDir);
     }
 
     /**
@@ -117,6 +113,11 @@ public class RemoteLogFetcher implements Closeable {
      */
     public Iterable<LogRecordBatch> fetch(long startOffset, long localLogStartOffset)
             throws Exception {
+        // Lazily create the temp directory on first fetch.
+        if (!Files.exists(tempDir)) {
+            Files.createDirectories(tempDir);
+        }
+
         // Close any previously active iterator before creating a new one to avoid leaking file
         // descriptors.
         RemoteLogBatchIterator prev = this.activeIterator;
@@ -153,8 +154,13 @@ public class RemoteLogFetcher implements Closeable {
             activeIterator.close();
             activeIterator = null;
         }
-        LOG.info("Cleaning up remote log recovery temp dir: {}", tempDir);
-        deleteDirectoryQuietly(tempDir.toFile());
+        // Remove the entire "tmp" parent directory to clean up our subdirectory as well
+        // as any stale recovery directories left by a previous failed recovery.
+        Path tmpDir = tempDir.getParent();
+        if (tmpDir != null && Files.exists(tmpDir)) {
+            LOG.info("Cleaning up remote log recovery tmp dir: {}", tmpDir);
+            deleteDirectoryQuietly(tmpDir.toFile());
+        }
     }
 
     @VisibleForTesting
@@ -290,6 +296,10 @@ public class RemoteLogFetcher implements Closeable {
                 }
 
                 try {
+                    // TODO optimize to async downloading the next segment while processing the
+                    // current one. Otherwise, the recovery process may be significantly slowed down
+                    // by the download time of remote segments, especially when there are many
+                    // segments to fetch. trace by: https://github.com/apache/fluss/issues/3091
                     File localFile = downloadSegment(segment);
                     currentFileLogRecords = FileLogRecords.open(localFile, false);
                     int startPosition = 0;

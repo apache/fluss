@@ -66,7 +66,7 @@ public class KvRecoverHelper {
     private final KvRecoverContext recoverContext;
     private final KvFormat kvFormat;
     private final LogFormat logFormat;
-    @Nullable private final RemoteLogFetcher remoteLogFetcher;
+    private final RemoteLogFetcher remoteLogFetcher;
 
     // will be initialized when first encounter a log record during recovering from log
     private Integer currentSchemaId;
@@ -87,31 +87,8 @@ public class KvRecoverHelper {
             KvRecoverContext recoverContext,
             KvFormat kvFormat,
             LogFormat logFormat,
-            SchemaGetter schemaGetter) {
-        this(
-                kvTablet,
-                logTablet,
-                recoverPointOffset,
-                recoverPointRowCount,
-                autoIncRange,
-                recoverContext,
-                kvFormat,
-                logFormat,
-                schemaGetter,
-                null);
-    }
-
-    public KvRecoverHelper(
-            KvTablet kvTablet,
-            LogTablet logTablet,
-            long recoverPointOffset,
-            @Nullable Long recoverPointRowCount,
-            @Nullable AutoIncIDRange autoIncRange,
-            KvRecoverContext recoverContext,
-            KvFormat kvFormat,
-            LogFormat logFormat,
             SchemaGetter schemaGetter,
-            @Nullable RemoteLogFetcher remoteLogFetcher) {
+            RemoteLogFetcher remoteLogFetcher) {
         this.kvTablet = kvTablet;
         this.logTablet = logTablet;
         this.recoverPointOffset = recoverPointOffset;
@@ -148,38 +125,11 @@ public class KvRecoverHelper {
                                 schema, autoIncRange, kvTablet.getAutoIncrementCacheSize())
                         : new NoOpAutoIncIDRangeUpdater();
 
-        // Phase 0: If remoteLogFetcher is provided, it means the recover point offset
-        // is before localLogStartOffset, we need to recover from remote log first.
         long localLogStartOffset = logTablet.localLogStartOffset();
-        if (remoteLogFetcher != null && nextLogOffset < localLogStartOffset) {
-            LOG.info(
-                    "Recover point offset {} is before localLogStartOffset {}, "
-                            + "recovering from remote log for tablet '{}'",
-                    nextLogOffset,
-                    localLogStartOffset,
-                    kvTablet.getTableBucket());
-            nextLogOffset =
-                    readRemoteLogRecordsAndApply(
-                            nextLogOffset,
-                            localLogStartOffset,
-                            rowCountUpdater,
-                            autoIncIdRangeUpdater);
-            if (nextLogOffset < localLogStartOffset) {
-                throw new IllegalStateException(
-                        String.format(
-                                "After remote log recovery, next log offset (%d) is still before "
-                                        + "local log start offset (%d) for tablet '%s'. "
-                                        + "Remote log segments may be incomplete.",
-                                nextLogOffset, localLogStartOffset, kvTablet.getTableBucket()));
-            }
-            LOG.info(
-                    "Finished recovering from remote log for tablet '{}', "
-                            + "next log offset is {}",
-                    kvTablet.getTableBucket(),
-                    nextLogOffset);
-        }
 
-        // read to high watermark
+        // Read to high watermark. If the recover point offset is before localLogStartOffset,
+        // remote log records are fetched first, then local log records are read — both share
+        // the same KvBatchWriter and LogRecordReadContext.
         try (KvBatchWriter kvBatchWriter = kvTablet.createKvBatchWriter()) {
             ThrowingConsumer<KeyValueAndLogOffset, Exception> resumeRecordApplier =
                     (resumeRecord) -> {
@@ -193,6 +143,7 @@ public class KvRecoverHelper {
             nextLogOffset =
                     readLogRecordsAndApply(
                             nextLogOffset,
+                            localLogStartOffset,
                             rowCountUpdater,
                             autoIncIdRangeUpdater,
                             FetchIsolation.HIGH_WATERMARK,
@@ -225,6 +176,7 @@ public class KvRecoverHelper {
                                 resumeRecord.logOffset);
         readLogRecordsAndApply(
                 nextLogOffset,
+                localLogStartOffset,
                 // records in pre-write-buffer shouldn't affect the row count, the high-watermark
                 // of pre-write-buffer records will update the row-count async
                 new NoOpRowCountUpdater(),
@@ -244,43 +196,9 @@ public class KvRecoverHelper {
         }
     }
 
-    /**
-     * Read log records from remote storage and apply them to the kv tablet directly. This is used
-     * when the recover point offset is before the local log start offset.
-     *
-     * @return the next fetch offset after processing remote log records
-     */
-    private long readRemoteLogRecordsAndApply(
-            long startOffset,
-            long localLogStartOffset,
-            RowCountUpdater rowCountUpdater,
-            AutoIncIDRangeUpdater autoIncIdRangeUpdater)
-            throws Exception {
-        try (LogRecordReadContext readContext = createLogRecordReadContext();
-                KvBatchWriter kvBatchWriter = kvTablet.createKvBatchWriter()) {
-            long nextFetchOffset = startOffset;
-            for (LogRecordBatch logRecordBatch :
-                    remoteLogFetcher.fetch(startOffset, localLogStartOffset)) {
-                nextFetchOffset =
-                        applyLogRecordBatch(
-                                logRecordBatch,
-                                readContext,
-                                rowCountUpdater,
-                                autoIncIdRangeUpdater,
-                                (resumeRecord) -> {
-                                    if (resumeRecord.value == null) {
-                                        kvBatchWriter.delete(resumeRecord.key);
-                                    } else {
-                                        kvBatchWriter.put(resumeRecord.key, resumeRecord.value);
-                                    }
-                                });
-            }
-            return nextFetchOffset;
-        }
-    }
-
     private long readLogRecordsAndApply(
             long startFetchOffset,
+            long localLogStartOffset,
             RowCountUpdater rowCountUpdater,
             AutoIncIDRangeUpdater autoIncIdRangeUpdater,
             FetchIsolation fetchIsolation,
@@ -289,21 +207,27 @@ public class KvRecoverHelper {
         try (LogRecordReadContext readContext = createLogRecordReadContext()) {
             long nextFetchOffset = startFetchOffset;
             while (true) {
-                LogRecords logRecords =
-                        logTablet
-                                .read(
-                                        nextFetchOffset,
-                                        recoverContext.maxFetchLogSizeInRecoverKv,
-                                        fetchIsolation,
-                                        true,
-                                        null,
-                                        null)
-                                .getRecords();
-                if (logRecords == MemoryLogRecords.EMPTY) {
-                    break;
+                final Iterable<LogRecordBatch> batches;
+                if (nextFetchOffset < localLogStartOffset) {
+                    batches = remoteLogFetcher.fetch(nextFetchOffset, localLogStartOffset);
+                } else {
+                    LogRecords logRecords =
+                            logTablet
+                                    .read(
+                                            nextFetchOffset,
+                                            recoverContext.maxFetchLogSizeInRecoverKv,
+                                            fetchIsolation,
+                                            true,
+                                            null,
+                                            null)
+                                    .getRecords();
+                    if (logRecords == MemoryLogRecords.EMPTY) {
+                        break;
+                    }
+                    batches = logRecords.batches();
                 }
 
-                for (LogRecordBatch logRecordBatch : logRecords.batches()) {
+                for (LogRecordBatch logRecordBatch : batches) {
                     nextFetchOffset =
                             applyLogRecordBatch(
                                     logRecordBatch,
