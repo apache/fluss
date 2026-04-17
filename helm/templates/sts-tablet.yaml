@@ -32,8 +32,15 @@ spec:
   template:
     metadata:
       labels:
+        {{- with .Values.tablet.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         {{- include "fluss.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: tablet
+      {{- with .Values.tablet.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
     spec:
       {{- if .Values.serviceAccount.create }}
       serviceAccountName: {{ .Values.serviceAccount.name | default (include "fluss.fullname" .) }}

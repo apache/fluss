@@ -16,10 +16,22 @@
 # limitations under the License.
 #
 
-CHART NAME: {{ .Chart.Name }}
-CHART VERSION: {{ .Chart.Version }}
-APP VERSION: {{ .Chart.AppVersion }}
-
-{{ include "fluss.security.validateValues" . }}
-{{ include "fluss.metrics.validateValues" . }}
-{{ include "fluss.pdb.validateValues" . }}
+{{- if .Values.coordinator.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: coordinator-server
+  labels:
+  {{- include "fluss.labels" . | nindent 4 }}
+spec:
+  {{- if hasKey .Values.coordinator.podDisruptionBudget "minAvailable" }}
+  minAvailable: {{ .Values.coordinator.podDisruptionBudget.minAvailable }}
+  {{- end }}
+  {{- if hasKey .Values.coordinator.podDisruptionBudget "maxUnavailable" }}
+  maxUnavailable: {{ .Values.coordinator.podDisruptionBudget.maxUnavailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "fluss.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: coordinator
+{{- end }}

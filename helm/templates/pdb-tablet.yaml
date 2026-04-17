@@ -16,10 +16,22 @@
 # limitations under the License.
 #
 
-CHART NAME: {{ .Chart.Name }}
-CHART VERSION: {{ .Chart.Version }}
-APP VERSION: {{ .Chart.AppVersion }}
-
-{{ include "fluss.security.validateValues" . }}
-{{ include "fluss.metrics.validateValues" . }}
-{{ include "fluss.pdb.validateValues" . }}
+{{- if .Values.tablet.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: tablet-server
+  labels:
+  {{- include "fluss.labels" . | nindent 4 }}
+spec:
+  {{- if hasKey .Values.tablet.podDisruptionBudget "minAvailable" }}
+  minAvailable: {{ .Values.tablet.podDisruptionBudget.minAvailable }}
+  {{- end }}
+  {{- if hasKey .Values.tablet.podDisruptionBudget "maxUnavailable" }}
+  maxUnavailable: {{ .Values.tablet.podDisruptionBudget.maxUnavailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "fluss.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: tablet
+{{- end }}

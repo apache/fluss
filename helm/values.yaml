@@ -46,6 +46,12 @@ tablet:
   extraVolumes: []
   extraVolumeMounts: []
   initContainers: []
+  podAnnotations: {}
+  podLabels: {}
+  podDisruptionBudget:
+    enabled: false
+    # minAvailable: 1
+    # maxUnavailable: 1
   # Pod scheduling configuration
   affinity: {}
   # Example: spread tablet server pods across availability zones and nodes.
@@ -81,6 +87,12 @@ coordinator:
   extraVolumes: []
   extraVolumeMounts: []
   initContainers: []
+  podAnnotations: {}
+  podLabels: {}
+  podDisruptionBudget:
+    enabled: false
+    # minAvailable: 1
+    # maxUnavailable: 1
   affinity: {}
   nodeSelector: {}
   tolerations: []

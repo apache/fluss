@@ -284,9 +284,19 @@ It is recommended to set these explicitly in production.
 | `coordinator.extraVolumes` | Extra volumes to add to the CoordinatorServer pod spec | `[]` |
 | `coordinator.extraVolumeMounts` | Extra volume mounts to add to the coordinator container | `[]` |
 | `coordinator.initContainers` | Init containers to run before the coordinator container starts | `[]` |
+| `coordinator.podAnnotations` | Annotations to add to CoordinatorServer pods | `{}` |
+| `coordinator.podLabels` | Additional labels to add to CoordinatorServer pods | `{}` |
+| `coordinator.podDisruptionBudget.enabled` | Enable PodDisruptionBudget for CoordinatorServer | `false` |
+| `coordinator.podDisruptionBudget.minAvailable` | Minimum available coordinator pods during disruption | Not set |
+| `coordinator.podDisruptionBudget.maxUnavailable` | Maximum unavailable coordinator pods during disruption | Not set |
 | `tablet.extraVolumes` | Extra volumes to add to TabletServer pod specs | `[]` |
 | `tablet.extraVolumeMounts` | Extra volume mounts to add to the tablet container | `[]` |
 | `tablet.initContainers` | Init containers to run before the tablet container starts | `[]` |
+| `tablet.podAnnotations` | Annotations to add to TabletServer pods | `{}` |
+| `tablet.podLabels` | Additional labels to add to TabletServer pods | `{}` |
+| `tablet.podDisruptionBudget.enabled` | Enable PodDisruptionBudget for TabletServer | `false` |
+| `tablet.podDisruptionBudget.minAvailable` | Minimum available tablet server pods during disruption | Not set |
+| `tablet.podDisruptionBudget.maxUnavailable` | Maximum unavailable tablet server pods during disruption | Not set |
 
 ## Advanced Configuration
 
