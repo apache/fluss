@@ -124,7 +124,7 @@ class FlussLakeUpsertBatch(
     // Group lake splits by bucket
     val lakeSplitsByBucket = lakeSplits.groupBy(_.bucket()).mapValues(_.toSeq).toMap
 
-    buckets.map {
+    buckets.flatMap {
       bucketId =>
         val tableBucket = new TableBucket(tableId, bucketId)
         val snapshotLogOffset = tableBucketsOffset.get(tableBucket)
@@ -165,7 +165,7 @@ class FlussLakeUpsertBatch(
               buckets,
               bucketOffsetsRetriever)
 
-            buckets.map {
+            buckets.flatMap {
               bucketId =>
                 val tableBucket = new TableBucket(tableId, partitionId, bucketId)
                 val snapshotLogOffset = tableBucketsOffset.get(tableBucket)
@@ -201,18 +201,23 @@ class FlussLakeUpsertBatch(
           buckets,
           bucketOffsetsRetriever)
 
-        buckets.map {
+        buckets.flatMap {
           bucketId =>
             val tableBucket = new TableBucket(tableId, partitionId, bucketId)
             val stoppingOffset = stoppingOffsets(bucketId)
 
-            // No lake snapshot for this bucket, read log from earliest
-            FlussLakeUpsertInputPartition(
-              tableBucket,
-              null, // no lake splits
-              LogScanner.EARLIEST_OFFSET,
-              stoppingOffset
-            ): InputPartition
+            // No lake snapshot for this bucket, skip if there's no data to read
+            if (stoppingOffset > 0) {
+              Some(
+                FlussLakeUpsertInputPartition(
+                  tableBucket,
+                  null, // no lake splits
+                  LogScanner.EARLIEST_OFFSET,
+                  stoppingOffset
+                ))
+            } else {
+              None
+            }
         }
     }
 
@@ -242,10 +247,16 @@ class FlussLakeUpsertBatch(
       lakeSplits: Option[Seq[LakeSplit]],
       splitSerializer: SimpleVersionedSerializer[LakeSplit],
       snapshotLogOffset: java.lang.Long,
-      stoppingOffset: Long): InputPartition = {
-    val logStartingOffset =
-      if (snapshotLogOffset != null) snapshotLogOffset.longValue()
-      else LogScanner.EARLIEST_OFFSET
+      stoppingOffset: Long): Option[InputPartition] = {
+    val needLogSplit = if (snapshotLogOffset == null) {
+      stoppingOffset > 0
+    } else {
+      snapshotLogOffset < stoppingOffset.longValue()
+    }
+    val needLakeSplit = lakeSplits.isDefined && lakeSplits.get.nonEmpty
+    if (!needLogSplit && !needLakeSplit) {
+      return None
+    }
 
     val lakeSplitBytes =
       if (lakeSplits.isDefined && lakeSplits.get.nonEmpty) {
@@ -253,12 +264,17 @@ class FlussLakeUpsertBatch(
         FlussLakeUtils.serializeLakeSplits(lakeSplits.get, splitSerializer)
       } else null
 
-    FlussLakeUpsertInputPartition(
-      tableBucket,
-      lakeSplitBytes,
-      logStartingOffset,
-      stoppingOffset
-    )
+    val logStartingOffset =
+      if (snapshotLogOffset != null) snapshotLogOffset.longValue()
+      else LogScanner.EARLIEST_OFFSET
+
+    Some(
+      FlussLakeUpsertInputPartition(
+        tableBucket,
+        lakeSplitBytes,
+        logStartingOffset,
+        stoppingOffset
+      ))
   }
 
   private def planFallbackPartitions(): Array[InputPartition] = {
