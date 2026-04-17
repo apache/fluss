@@ -59,6 +59,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
@@ -104,7 +105,7 @@ public final class RecordAccumulator {
     private final ChunkedAllocationManager.ChunkedFactory chunkedFactory;
 
     /** Guard to make {@link #destroyResources()} idempotent. */
-    private volatile boolean resourcesDestroyed = false;
+    private final AtomicBoolean resourcesDestroyed = new AtomicBoolean(false);
 
     /** The pool of lazily created arrow {@link ArrowWriter}s for arrow log write batch. */
     private final ArrowWriterPool arrowWriterPool;
@@ -978,15 +979,14 @@ public final class RecordAccumulator {
      *
      * <p>This method is idempotent: subsequent calls after the first are no-ops.
      */
+    @VisibleForTesting
     public void destroyResources() {
-        if (resourcesDestroyed) {
+        if (!resourcesDestroyed.compareAndSet(false, true)) {
             return;
         }
-        resourcesDestroyed = true;
         writerBufferPool.close();
         arrowWriterPool.close();
         bufferAllocator.close();
-        // Release native memory held by the chunked allocation manager factory.
         chunkedFactory.close();
     }
 
