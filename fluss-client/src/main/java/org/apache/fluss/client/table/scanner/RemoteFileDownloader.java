@@ -76,8 +76,8 @@ public class RemoteFileDownloader implements Closeable {
                         FsPath remoteFilePath = fsPathAndFileName.getPath();
                         long downloadBytes = downloadFile(targetFilePath, remoteFilePath);
                         future.complete(downloadBytes);
-                    } catch (Exception e) {
-                        future.completeExceptionally(e);
+                    } catch (Throwable t) {
+                        future.completeExceptionally(t);
                     }
                 });
         return future;
