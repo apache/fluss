@@ -46,6 +46,8 @@ tablet:
   extraVolumes: []
   extraVolumeMounts: []
   initContainers: []
+  extraEnv: []
+  envFrom: []
   podAnnotations: {}
   podLabels: {}
   podDisruptionBudget:
@@ -87,6 +89,8 @@ coordinator:
   extraVolumes: []
   extraVolumeMounts: []
   initContainers: []
+  extraEnv: []
+  envFrom: []
   podAnnotations: {}
   podLabels: {}
   podDisruptionBudget:

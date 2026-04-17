@@ -48,7 +48,6 @@ jobs:
         run: helm lint ./helm
 
       - name: "Run helm-unittest"
-        uses: d3adb5/helm-unittest-action@v2
-        with:
-          helm-version: latest
-          charts: helm
+        run: |
+          helm plugin install https://github.com/helm-unittest/helm-unittest
+          helm unittest ./helm

@@ -284,6 +284,8 @@ It is recommended to set these explicitly in production.
 | `coordinator.extraVolumes` | Extra volumes to add to the CoordinatorServer pod spec | `[]` |
 | `coordinator.extraVolumeMounts` | Extra volume mounts to add to the coordinator container | `[]` |
 | `coordinator.initContainers` | Init containers to run before the coordinator container starts | `[]` |
+| `coordinator.extraEnv` | Additional environment variables for the coordinator container | `[]` |
+| `coordinator.envFrom` | Additional envFrom sources (e.g., Secrets, ConfigMaps) for the coordinator container | `[]` |
 | `coordinator.podAnnotations` | Annotations to add to CoordinatorServer pods | `{}` |
 | `coordinator.podLabels` | Additional labels to add to CoordinatorServer pods | `{}` |
 | `coordinator.podDisruptionBudget.enabled` | Enable PodDisruptionBudget for CoordinatorServer | `false` |
@@ -292,6 +294,8 @@ It is recommended to set these explicitly in production.
 | `tablet.extraVolumes` | Extra volumes to add to TabletServer pod specs | `[]` |
 | `tablet.extraVolumeMounts` | Extra volume mounts to add to the tablet container | `[]` |
 | `tablet.initContainers` | Init containers to run before the tablet container starts | `[]` |
+| `tablet.extraEnv` | Additional environment variables for the tablet container | `[]` |
+| `tablet.envFrom` | Additional envFrom sources (e.g., Secrets, ConfigMaps) for the tablet container | `[]` |
 | `tablet.podAnnotations` | Annotations to add to TabletServer pods | `{}` |
 | `tablet.podLabels` | Additional labels to add to TabletServer pods | `{}` |
 | `tablet.podDisruptionBudget.enabled` | Enable PodDisruptionBudget for TabletServer | `false` |
@@ -299,6 +303,35 @@ It is recommended to set these explicitly in production.
 | `tablet.podDisruptionBudget.maxUnavailable` | Maximum unavailable tablet server pods during disruption | Not set |
 
 ## Advanced Configuration
+
+### Injecting Environment Variables from External Secrets
+
+You can inject environment variables from Kubernetes Secrets or ConfigMaps using `envFrom`. This is useful when combined with the [External Secrets Operator](https://external-secrets.io/) or similar tools that provision Secrets from external stores (AWS Secrets Manager, HashiCorp Vault, etc.).
+
+```yaml
+tablet:
+  envFrom:
+    - secretRef:
+        name: aws-credentials
+coordinator:
+  envFrom:
+    - secretRef:
+        name: aws-credentials
+```
+
+You can also set individual environment variables using `extraEnv`:
+
+```yaml
+tablet:
+  extraEnv:
+    - name: AWS_REGION
+      value: us-east-1
+    - name: MY_SECRET
+      valueFrom:
+        secretKeyRef:
+          name: my-secret
+          key: password
+```
 
 ### Custom ZooKeeper Configuration
 

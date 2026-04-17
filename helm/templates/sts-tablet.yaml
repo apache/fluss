@@ -87,6 +87,13 @@ spec:
             - name: FLUSS_ENV_JAVA_OPTS
               value: "-Djava.security.auth.login.config=/etc/fluss/conf/jaas.conf"
             {{- end }}
+            {{- with .Values.tablet.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.tablet.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           ports:
             - name: internal
               containerPort: {{ .Values.listeners.internal.port }}
