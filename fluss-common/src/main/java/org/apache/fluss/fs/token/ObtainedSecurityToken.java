@@ -19,6 +19,7 @@ package org.apache.fluss.fs.token;
 
 import javax.annotation.Nullable;
 
+import java.util.Collections;
 import java.util.Map;
 import java.util.Optional;
 
@@ -62,5 +63,14 @@ public final class ObtainedSecurityToken {
 
     public Map<String, String> getAdditionInfos() {
         return additionInfos;
+    }
+
+    public boolean isEmpty() {
+        return token.length == 0;
+    }
+
+    /** Creates an empty token for the given scheme, signaling that delegation is disabled. */
+    public static ObtainedSecurityToken empty(String scheme) {
+        return new ObtainedSecurityToken(scheme, new byte[0], null, Collections.emptyMap());
     }
 }

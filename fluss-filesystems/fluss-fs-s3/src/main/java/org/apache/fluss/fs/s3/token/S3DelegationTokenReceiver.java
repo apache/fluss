@@ -80,6 +80,11 @@ public class S3DelegationTokenReceiver implements SecurityTokenReceiver {
 
     @Override
     public void onNewTokensObtained(ObtainedSecurityToken token) {
+        if (token.isEmpty()) {
+            LOG.info("Received empty token, delegation is disabled. Skipping credential update.");
+            return;
+        }
+
         LOG.info("Updating session credentials");
 
         byte[] tokenBytes = token.getToken();
