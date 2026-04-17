@@ -238,6 +238,20 @@ The following table lists the configurable parameters of the Fluss chart and the
 | `resources.tabletServer.limits.cpu` | CPU limits for tablet servers | Not set |
 | `resources.tabletServer.limits.memory` | Memory limits for tablet servers | Not set |
 
+### Pod Metadata and Disruption Budget Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `coordinator.podAnnotations` | Annotations to add to CoordinatorServer pods | `{}` |
+| `coordinator.podLabels` | Additional labels to add to CoordinatorServer pods | `{}` |
+| `coordinator.podDisruptionBudget.enabled` | Enable PodDisruptionBudget for CoordinatorServer | `false` |
+| `coordinator.podDisruptionBudget.minAvailable` | Minimum available coordinator pods during disruption | Not set |
+| `coordinator.podDisruptionBudget.maxUnavailable` | Maximum unavailable coordinator pods during disruption | Not set |
+| `tablet.podAnnotations` | Annotations to add to TabletServer pods | `{}` |
+| `tablet.podLabels` | Additional labels to add to TabletServer pods | `{}` |
+| `tablet.podDisruptionBudget.enabled` | Enable PodDisruptionBudget for TabletServer | `false` |
+| `tablet.podDisruptionBudget.minAvailable` | Minimum available tablet server pods during disruption | Not set |
+| `tablet.podDisruptionBudget.maxUnavailable` | Maximum unavailable tablet server pods during disruption | Not set |
 
 ## Advanced Configuration
 

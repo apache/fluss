@@ -1,0 +1,285 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+
+suite: pod-metadata-defaults
+templates:
+  - templates/sts-tablet.yaml
+  - templates/sts-coordinator.yaml
+
+tests:
+  - it: should not render pod annotations by default on tablet
+    asserts:
+      - isNull:
+          path: spec.template.metadata.annotations
+        template: templates/sts-tablet.yaml
+
+  - it: should not render pod annotations by default on coordinator
+    asserts:
+      - isNull:
+          path: spec.template.metadata.annotations
+        template: templates/sts-coordinator.yaml
+
+---
+
+suite: tablet-pod-annotations
+templates:
+  - templates/sts-tablet.yaml
+
+tests:
+  - it: should render pod annotations on tablet
+    set:
+      tablet.podAnnotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9249"
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations
+          value:
+            prometheus.io/scrape: "true"
+            prometheus.io/port: "9249"
+
+  - it: should not apply coordinator annotations to tablet
+    set:
+      coordinator.podAnnotations:
+        prometheus.io/scrape: "true"
+    asserts:
+      - isNull:
+          path: spec.template.metadata.annotations
+
+---
+
+suite: coordinator-pod-annotations
+templates:
+  - templates/sts-coordinator.yaml
+
+tests:
+  - it: should render pod annotations on coordinator
+    set:
+      coordinator.podAnnotations:
+        prometheus.io/scrape: "true"
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations
+          value:
+            prometheus.io/scrape: "true"
+
+---
+
+suite: tablet-pod-labels
+templates:
+  - templates/sts-tablet.yaml
+
+tests:
+  - it: should render custom pod labels on tablet
+    set:
+      tablet.podLabels:
+        team: data-platform
+        env: production
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels.team
+          value: data-platform
+      - equal:
+          path: spec.template.metadata.labels.env
+          value: production
+
+  - it: should preserve built-in labels when custom labels are added
+    set:
+      tablet.podLabels:
+        custom: label
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: tablet
+      - equal:
+          path: spec.template.metadata.labels.custom
+          value: label
+
+---
+
+suite: coordinator-pod-labels
+templates:
+  - templates/sts-coordinator.yaml
+
+tests:
+  - it: should render custom pod labels on coordinator
+    set:
+      coordinator.podLabels:
+        team: data-platform
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels.team
+          value: data-platform
+
+---
+
+suite: pdb-defaults
+templates:
+  - templates/pdb-tablet.yaml
+  - templates/pdb-coordinator.yaml
+
+tests:
+  - it: should not render tablet PDB by default
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/pdb-tablet.yaml
+
+  - it: should not render coordinator PDB by default
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/pdb-coordinator.yaml
+
+---
+
+suite: tablet-pdb
+templates:
+  - templates/pdb-tablet.yaml
+
+tests:
+  - it: should render tablet PDB with minAvailable
+    set:
+      tablet.podDisruptionBudget:
+        enabled: true
+        minAvailable: 2
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: PodDisruptionBudget
+      - equal:
+          path: metadata.name
+          value: tablet-server
+      - equal:
+          path: spec.minAvailable
+          value: 2
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: tablet
+
+  - it: should render tablet PDB with maxUnavailable
+    set:
+      tablet.podDisruptionBudget:
+        enabled: true
+        maxUnavailable: 1
+    asserts:
+      - equal:
+          path: spec.maxUnavailable
+          value: 1
+      - isNull:
+          path: spec.minAvailable
+
+---
+
+suite: coordinator-pdb
+templates:
+  - templates/pdb-coordinator.yaml
+
+tests:
+  - it: should render coordinator PDB with minAvailable
+    set:
+      coordinator.podDisruptionBudget:
+        enabled: true
+        minAvailable: 1
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: PodDisruptionBudget
+      - equal:
+          path: metadata.name
+          value: coordinator-server
+      - equal:
+          path: spec.minAvailable
+          value: 1
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: coordinator
+
+---
+
+suite: pdb-validation
+templates:
+  - templates/NOTES.txt
+
+tests:
+  - it: should fail when both minAvailable and maxUnavailable are set on tablet
+    set:
+      tablet.podDisruptionBudget:
+        enabled: true
+        minAvailable: 2
+        maxUnavailable: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: "cannot set both minAvailable and maxUnavailable"
+
+  - it: should fail when neither minAvailable nor maxUnavailable is set on tablet
+    set:
+      tablet.podDisruptionBudget:
+        enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "must set either minAvailable or maxUnavailable when enabled"
+
+  - it: should fail when both minAvailable and maxUnavailable are set on coordinator
+    set:
+      coordinator.podDisruptionBudget:
+        enabled: true
+        minAvailable: 1
+        maxUnavailable: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: "cannot set both minAvailable and maxUnavailable"
+
+  - it: should fail when neither minAvailable nor maxUnavailable is set on coordinator
+    set:
+      coordinator.podDisruptionBudget:
+        enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "must set either minAvailable or maxUnavailable when enabled"
+
+---
+
+suite: pdb-zero-values
+templates:
+  - templates/pdb-tablet.yaml
+
+tests:
+  - it: should render tablet PDB with minAvailable set to zero
+    set:
+      tablet.podDisruptionBudget:
+        enabled: true
+        minAvailable: 0
+    asserts:
+      - equal:
+          path: spec.minAvailable
+          value: 0
+
+  - it: should render tablet PDB with maxUnavailable set to zero
+    set:
+      tablet.podDisruptionBudget:
+        enabled: true
+        maxUnavailable: 0
+    asserts:
+      - equal:
+          path: spec.maxUnavailable
+          value: 0

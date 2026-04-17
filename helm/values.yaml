@@ -68,6 +68,12 @@ tablet:
   nodeSelector: {}
   tolerations: []
   topologySpreadConstraints: []
+  podAnnotations: {}
+  podLabels: {}
+  podDisruptionBudget:
+    enabled: false
+    # minAvailable: 1
+    # maxUnavailable: 1
 
 coordinator:
   numberOfReplicas: 1
@@ -79,6 +85,12 @@ coordinator:
   nodeSelector: {}
   tolerations: []
   topologySpreadConstraints: []
+  podAnnotations: {}
+  podLabels: {}
+  podDisruptionBudget:
+    enabled: false
+    # minAvailable: 1
+    # maxUnavailable: 1
 
 # Fluss listener configurations
 listeners:
