@@ -19,6 +19,7 @@ package org.apache.fluss.flink.tiering.source.enumerator;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
@@ -37,6 +38,7 @@ import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
 import org.apache.flink.api.connector.source.SourceEvent;
 import org.apache.flink.api.connector.source.SplitsAssignment;
 import org.apache.flink.api.connector.source.mocks.MockSplitEnumeratorContext;
+import org.apache.flink.util.FlinkRuntimeException;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -55,6 +57,7 @@ import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFS
 import static org.apache.fluss.config.ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Unit tests for {@link TieringSourceEnumerator} and {@link TieringSplitGenerator}. */
 class TieringSourceEnumeratorTest extends TieringTestBase {
@@ -728,6 +731,21 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
     private TieringSourceEnumerator createTieringSourceEnumerator(
             Configuration flussConf, MockSplitEnumeratorContext<TieringSplit> context) {
         return new TieringSourceEnumerator(flussConf, context, 500);
+    }
+
+    @Test
+    void testNetworkErrorInHeartbeatTriggersFailover() throws Exception {
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                new FlussMockSplitEnumeratorContext<>(1)) {
+            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
+            FlinkRuntimeException networkError =
+                    new FlinkRuntimeException(
+                            "Failed to wait heartbeat response due to ",
+                            new NetworkException("coordinator disconnected"));
+            assertThatThrownBy(() -> enumerator.generateAndAssignSplits(null, networkError))
+                    .isInstanceOf(FlinkRuntimeException.class)
+                    .hasMessageContaining("failover");
+        }
     }
 
     @Test
