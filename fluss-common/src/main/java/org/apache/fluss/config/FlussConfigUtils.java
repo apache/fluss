@@ -23,6 +23,7 @@ import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.fs.FsPath;
 
 import java.lang.reflect.Field;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -227,20 +228,18 @@ public class FlussConfigUtils {
     }
 
     public static void validateClientConfigs(Configuration conf) {
-        int maxPollRecords = conf.getInt(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS);
-        if (maxPollRecords <= 0) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be greater than 0.",
-                            ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS.key()));
-        }
+        validMinValue(conf, ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 1);
+        validMinDuration(conf, ConfigOptions.CLIENT_CONNECT_TIMEOUT, 1);
+    }
 
-        long connectTimeoutMs = conf.get(ConfigOptions.CLIENT_CONNECT_TIMEOUT).toMillis();
-        if (connectTimeoutMs <= 0) {
+    private static void validMinDuration(
+            Configuration conf, ConfigOption<Duration> option, long minMillis) {
+        long millis = conf.get(option).toMillis();
+        if (millis < minMillis) {
             throw new IllegalConfigurationException(
                     String.format(
-                            "Invalid configuration for %s, it must be greater than 0.",
-                            ConfigOptions.CLIENT_CONNECT_TIMEOUT.key()));
+                            "Invalid configuration for %s, it must be greater than or equal %d ms.",
+                            option.key(), minMillis));
         }
     }
 }

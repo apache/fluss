@@ -71,13 +71,13 @@ public final class FlussConnection implements Connection {
 
     FlussConnection(Configuration conf, MetricRegistry metricRegistry) {
         this.conf = conf;
+        FlussConfigUtils.validateClientConfigs(conf);
         // init Filesystem with configuration from FlussConnection,
         // only pass options with 'client.fs.' prefix
         FileSystem.initialize(
                 Configuration.fromMap(
                         extractPrefix(new HashMap<>(conf.toMap()), CLIENT_PREFIX + "fs.")),
                 null);
-        FlussConfigUtils.validateClientConfigs(conf);
         // for client metrics.
         setupClientMetricsConfiguration();
         String clientId = conf.getString(ConfigOptions.CLIENT_ID);

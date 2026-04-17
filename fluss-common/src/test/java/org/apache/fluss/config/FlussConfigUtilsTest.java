@@ -21,6 +21,7 @@ import org.apache.fluss.exception.IllegalConfigurationException;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Map;
@@ -188,14 +189,14 @@ class FlussConfigUtilsTest {
         assertThatThrownBy(() -> FlussConfigUtils.validateClientConfigs(zeroPollConf))
                 .isInstanceOf(IllegalConfigurationException.class)
                 .hasMessageContaining(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS.key())
-                .hasMessageContaining("must be greater than 0");
+                .hasMessageContaining("must be greater than or equal 1");
 
         // connect-timeout = 0 should fail
         Configuration zeroTimeoutConf = new Configuration();
-        zeroTimeoutConf.set(ConfigOptions.CLIENT_CONNECT_TIMEOUT, java.time.Duration.ZERO);
+        zeroTimeoutConf.set(ConfigOptions.CLIENT_CONNECT_TIMEOUT, Duration.ZERO);
         assertThatThrownBy(() -> FlussConfigUtils.validateClientConfigs(zeroTimeoutConf))
                 .isInstanceOf(IllegalConfigurationException.class)
                 .hasMessageContaining(ConfigOptions.CLIENT_CONNECT_TIMEOUT.key())
-                .hasMessageContaining("must be greater than 0");
+                .hasMessageContaining("must be greater than or equal 1 ms");
     }
 }
