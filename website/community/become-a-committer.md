@@ -3,11 +3,7 @@ title: How to become a Committer
 sidebar_position: 5
 ---
 
-# Committer
-
-## Become a Committer
-
-#### How to become a committer
+# How to become a committer
 
 There is no strict protocol for becoming a committer. Candidates for new committers are typically people that are active contributors and community members. Candidates are suggested by current committers or PPMC members, and voted upon by the PPMC.
 
@@ -17,17 +13,17 @@ If you would like to become a committer, you should engage with the community an
 
 - **Code/technology contributions** include contributed pull requests (see [Contribute Code](how-to-contribute/contribute-code.md) for the process), design discussions, reviews, testing, and other help in identifying and fixing bugs. Especially constructive and high quality design discussions, as well as helping other contributors, are strong indicators.
 
-#### Identify promising candidates
+## Identify promising candidates
 
 While the prior points give ways to identify promising candidates, the following are "must haves" for any committer candidate:
 
-- **Being community minded**: The candidate understands the meritocratic principles of community management. They do not always optimize for as much as possible personal contribution, but will help and empower others where it makes sense.
+- **Being community minded**: The candidate understands the meritocratic principles of community management. They do not always optimize for as much personal contribution as possible, but will help and empower others where it makes sense.
 
 - **Responsibility with write access**: We trust that a committer candidate will use their write access to the repositories responsibly, and if in doubt, conservatively. It is important that committers are aware of what they know and what they don't know. In doubt, committers should ask for a second pair of eyes rather than commit to parts that they are not well familiar with.
 
-- **Respectful and constructive**: They have shown to be respectful towards other community members and constructive in discussions.
+- **Respectful and constructive**: They have shown themselves to be respectful towards other community members and constructive in discussions.
 
-#### Path to PPMC Membership
+## Path to PPMC Membership
 
 Outstanding committers may be invited to join the Project Management Committee (PPMC). As described in [Fluss Team](fluss-team.md), the PPMC is the vehicle through which decision-making power and responsibility for oversight devolves to developers. While committers have the ability to update the code, only the PPMC as a body has the authority to:
 
