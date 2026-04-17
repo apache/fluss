@@ -95,13 +95,13 @@ class FlussLakeUpsertBatch(
 
     val partitions = if (tableInfo.isPartitioned) {
       planPartitionedTable(
-        lakeSplits.asScala,
+        lakeSplits.asScala.toSeq,
         splitSerializer,
         tableBucketsOffset,
         bucketOffsetsRetriever)
     } else {
       planNonPartitionedTable(
-        lakeSplits.asScala,
+        lakeSplits.asScala.toSeq,
         splitSerializer,
         tableBucketsOffset,
         bucketOffsetsRetriever)
