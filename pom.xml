@@ -104,7 +104,7 @@
         <fluss.hadoop.version>3.4.0</fluss.hadoop.version>
         <frocksdb.version>6.20.3-ververica-2.0</frocksdb.version>
         <slf4j.version>1.7.36</slf4j.version>
-        <log4j.version>2.17.1</log4j.version>
+        <log4j.version>2.25.3</log4j.version>
         <jaxb.api.version>2.3.1</jaxb.api.version>
         <junit5.version>5.9.1</junit5.version>
         <mockito.version>3.4.6</mockito.version>
