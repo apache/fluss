@@ -458,6 +458,10 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         // apply system defaults if the config is not set
         tableDescriptor = applySystemDefaults(tableDescriptor, lakeCatalogContainer);
 
+        // validate table descriptor before creating table in lake or fluss metadata,
+        // to avoid orphaned lake tables when validation fails
+        metadataManager.validateTableDescriptor(tableDescriptor);
+
         // the distribution and bucket count must be set now
         //noinspection OptionalGetWithoutIsPresent
         int bucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();

@@ -866,8 +866,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                 admin.createTable(tablePath, nonPositiveReplicaFactorTable, false)
                                         .get())
                 .cause()
-                .isInstanceOf(InvalidReplicationFactorException.class)
-                .hasMessageContaining("Replication factor must be larger than 0.");
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("'table.replication.factor' must be greater than 0.");
 
         // let's kill one tablet server
         FLUSS_CLUSTER_EXTENSION.stopTabletServer(0);

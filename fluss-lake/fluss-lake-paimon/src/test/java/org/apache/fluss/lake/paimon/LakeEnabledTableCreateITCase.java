@@ -697,10 +697,9 @@ class LakeEnabledTableCreateITCase {
             assertThatThrownBy(() -> admin.createTable(logTablePath, logTable, false).get())
                     .cause()
                     .isInstanceOf(InvalidTableException.class)
-                    .hasMessage(
-                            "Column "
-                                    + systemColumn
-                                    + " conflicts with a system column name of paimon table, please rename the column.");
+                    .hasMessageContaining(
+                            systemColumn
+                                    + " cannot be used as column names, because they are reserved system columns in Fluss.");
         }
     }
 
@@ -1047,7 +1046,7 @@ class LakeEnabledTableCreateITCase {
                                         .primaryKey("c1", "c3")
                                         .build())
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                        .property("paimon.deletion-vectors.enabled", "true")
+                        .customProperty("paimon.deletion-vectors.enabled", "true")
                         .partitionedBy("c3")
                         .build();
 

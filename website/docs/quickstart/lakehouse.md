@@ -143,7 +143,6 @@ services:
         s3.path-style-access: true
         s3.assumed.role.arn: arn:aws:iam::000000000000:role/rustfsadmin
         s3.assumed.role.sts.endpoint: http://rustfs:9000
-        kv.snapshot.interval: 0s
         datalake.enabled: true
         datalake.format: paimon
         datalake.paimon.metastore: filesystem
