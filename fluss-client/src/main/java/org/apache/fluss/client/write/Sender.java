@@ -167,6 +167,8 @@ public class Sender implements Runnable {
             }
         }
 
+        destroyResources();
+
         // TODO if force close failed, add logic to abort incomplete batches.
         LOG.debug("Shutdown of Fluss write sender I/O thread has completed.");
     }
@@ -642,5 +644,19 @@ public class Sender implements Runnable {
         // breaking from the sender loop. Otherwise, we may miss some callbacks when shutting down.
         accumulator.close();
         running = false;
+    }
+
+    /**
+     * Releases all resources held by the accumulator (Arrow writer pool, buffer allocator, etc.).
+     *
+     * <p>In production, this is called at the end of {@link #run()} after both the main loop and
+     * the shutdown drain loop have completed, so no further drain operations will touch the Arrow
+     * allocator.
+     *
+     * <p>This method is idempotent: repeated calls are harmless because the underlying {@link
+     * RecordAccumulator#destroyResources()} tolerates multiple invocations.
+     */
+    void destroyResources() {
+        accumulator.destroyResources();
     }
 }
