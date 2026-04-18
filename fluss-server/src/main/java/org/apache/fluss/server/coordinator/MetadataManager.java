@@ -540,10 +540,7 @@ public class MetadataManager {
                 }
 
                 // reuse the same validate logic with the createTable() method
-                TableDescriptorValidation.validateTableDescriptor(
-                        newDescriptor,
-                        maxBucketNum,
-                        lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat());
+                validateTableDescriptor(newDescriptor);
                 // pre alter table properties, e.g. create lake table in lake storage if it's to
                 // enable datalake for the table
                 preAlterTableProperties(
