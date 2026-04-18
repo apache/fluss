@@ -44,11 +44,8 @@ class FlussLakeAppendPartitionReader(
   private def initialize(): Unit = {
     logInfo(s"Reading lake split for table $tablePath $partition")
 
-    val splitSerializer = lakeSource.getSplitSerializer
-    val split = splitSerializer.deserialize(splitSerializer.getVersion, partition.lakeSplitBytes)
-
     recordIterator = lakeSource
-      .createRecordReader(() => split)
+      .createRecordReader(() => partition.lakeSplit)
       .read()
   }
 

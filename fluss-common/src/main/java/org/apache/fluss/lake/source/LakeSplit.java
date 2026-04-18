@@ -27,7 +27,7 @@ import java.util.List;
  * @since 0.8
  */
 @PublicEvolving
-public interface LakeSplit {
+public interface LakeSplit extends java.io.Serializable {
 
     /**
      * Returns the bucket id for this data split. Any data split in lake must belong to a Fluss

@@ -21,7 +21,6 @@ import org.apache.fluss.client.initializer.{BucketOffsetsRetrieverImpl, OffsetsI
 import org.apache.fluss.client.table.scanner.log.LogScanner
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException
-import org.apache.fluss.lake.serializer.SimpleVersionedSerializer
 import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
 import org.apache.fluss.metadata.{ResolvedPartitionSpec, TableBucket, TableInfo, TablePath}
 import org.apache.fluss.spark.read._
@@ -83,7 +82,6 @@ class FlussLakeAppendBatch(
       })
       .plan()
 
-    val splitSerializer = lakeSource.getSplitSerializer
     val tableBucketsOffset = lakeSnapshot.getTableBucketsOffset
     val buckets = (0 until tableInfo.getNumBuckets).toSeq
     val bucketOffsetsRetriever = new BucketOffsetsRetrieverImpl(admin, tablePath)
@@ -91,14 +89,12 @@ class FlussLakeAppendBatch(
     val partitions = if (tableInfo.isPartitioned) {
       planPartitionedTable(
         lakeSplits.asScala.toSeq,
-        splitSerializer,
         tableBucketsOffset,
         buckets,
         bucketOffsetsRetriever)
     } else {
       planNonPartitionedTable(
         lakeSplits.asScala.toSeq,
-        splitSerializer,
         tableBucketsOffset,
         buckets,
         bucketOffsetsRetriever)
@@ -109,14 +105,13 @@ class FlussLakeAppendBatch(
 
   private def planNonPartitionedTable(
       lakeSplits: Seq[LakeSplit],
-      splitSerializer: SimpleVersionedSerializer[LakeSplit],
       tableBucketsOffset: java.util.Map[TableBucket, java.lang.Long],
       buckets: Seq[Int],
       bucketOffsetsRetriever: BucketOffsetsRetrieverImpl): Array[InputPartition] = {
     val tableId = tableInfo.getTableId
 
     val lakePartitions =
-      createLakePartitions(lakeSplits, splitSerializer, tableId, partitionId = None)
+      createLakePartitions(lakeSplits, tableId, partitionId = None)
 
     val stoppingOffsets =
       getBucketOffsets(stoppingOffsetsInitializer, null, buckets, bucketOffsetsRetriever)
@@ -131,7 +126,6 @@ class FlussLakeAppendBatch(
 
   private def planPartitionedTable(
       lakeSplits: Seq[LakeSplit],
-      splitSerializer: SimpleVersionedSerializer[LakeSplit],
       tableBucketsOffset: java.util.Map[TableBucket, java.lang.Long],
       buckets: Seq[Int],
       bucketOffsetsRetriever: BucketOffsetsRetrieverImpl): Array[InputPartition] = {
@@ -151,7 +145,7 @@ class FlussLakeAppendBatch(
           case Some(partitionId) =>
             // Partition in both lake and Fluss — lake splits + log tail
             val lakePartitions =
-              createLakePartitions(splits.toSeq, splitSerializer, tableId, Some(partitionId))
+              createLakePartitions(splits.toSeq, tableId, Some(partitionId))
 
             val stoppingOffsets = getBucketOffsets(
               stoppingOffsetsInitializer,
@@ -170,7 +164,7 @@ class FlussLakeAppendBatch(
             // Partition only in lake (expired in Fluss) — lake splits only
             val pid = lakeSplitPartitionId
             lakeSplitPartitionId -= 1
-            createLakePartitions(splits.toSeq, splitSerializer, tableId, Some(pid))
+            createLakePartitions(splits.toSeq, tableId, Some(pid))
         }
     }.toSeq
 
@@ -218,7 +212,6 @@ class FlussLakeAppendBatch(
 
   private def createLakePartitions(
       splits: Seq[LakeSplit],
-      splitSerializer: SimpleVersionedSerializer[LakeSplit],
       tableId: Long,
       partitionId: Option[Long]): Seq[InputPartition] = {
     splits.map {
@@ -227,7 +220,7 @@ class FlussLakeAppendBatch(
           case Some(pid) => new TableBucket(tableId, pid, split.bucket())
           case None => new TableBucket(tableId, split.bucket())
         }
-        FlussLakeInputPartition(tableBucket, splitSerializer.serialize(split))
+        FlussLakeInputPartition(tableBucket, split)
     }
   }
 

@@ -19,14 +19,11 @@ package org.apache.fluss.spark.read.lake
 
 import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.lake.lakestorage.LakeStoragePluginSetUp
-import org.apache.fluss.lake.serializer.SimpleVersionedSerializer
 import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
 import org.apache.fluss.metadata.TablePath
 import org.apache.fluss.utils.PropertiesUtils
 
-import java.io.{ByteArrayInputStream, ByteArrayOutputStream, DataInputStream, DataOutputStream}
 import java.util
-import java.util.ArrayList
 
 object FlussLakeUtils {
 
@@ -47,50 +44,5 @@ object FlussLakeUtils {
 
   def lakeProjection(projection: Array[Int]): Array[Array[Int]] = {
     projection.map(i => Array(i))
-  }
-
-  def serializeLakeSplits(
-      lakeSplits: Seq[LakeSplit],
-      splitSerializer: SimpleVersionedSerializer[LakeSplit]): Array[Byte] = {
-    val baos = new ByteArrayOutputStream()
-    val dos = new DataOutputStream(baos)
-
-    // Write serializer version
-    dos.writeInt(splitSerializer.getVersion)
-    // Write number of splits
-    dos.writeInt(lakeSplits.size)
-    // Write each split
-    for (split <- lakeSplits) {
-      val serialized = splitSerializer.serialize(split)
-      dos.writeInt(serialized.length)
-      dos.write(serialized)
-    }
-
-    dos.flush()
-    baos.toByteArray
-  }
-
-  def deserializeLakeSplits(
-      bytes: Array[Byte],
-      splitSerializer: org.apache.fluss.lake.serializer.SimpleVersionedSerializer[LakeSplit])
-      : java.util.List[LakeSplit] = {
-    val bais = new ByteArrayInputStream(bytes)
-    val dis = new DataInputStream(bais)
-
-    // Read serializer version
-    val version = dis.readInt()
-    // Read number of splits
-    val numSplits = dis.readInt()
-    val splits = new ArrayList[LakeSplit](numSplits)
-
-    // Read each split
-    for (_ <- 0 until numSplits) {
-      val length = dis.readInt()
-      val serialized = new Array[Byte](length)
-      dis.readFully(serialized)
-      splits.add(splitSerializer.deserialize(version, serialized))
-    }
-
-    splits
   }
 }

@@ -17,6 +17,7 @@
 
 package org.apache.fluss.spark.read.lake
 
+import org.apache.fluss.lake.source.LakeSplit
 import org.apache.fluss.metadata.TableBucket
 import org.apache.fluss.spark.read.FlussInputPartition
 
@@ -26,15 +27,15 @@ import org.apache.fluss.spark.read.FlussInputPartition
  *
  * @param tableBucket
  *   the table bucket this split belongs to
- * @param lakeSplitBytes
- *   serialized lake split data
+ * @param lakeSplit
+ *   the lake split to read
  */
-case class FlussLakeInputPartition(tableBucket: TableBucket, lakeSplitBytes: Array[Byte])
+case class FlussLakeInputPartition(tableBucket: TableBucket, lakeSplit: LakeSplit)
   extends FlussInputPartition {
   override def toString: String = {
     s"FlussLakeInputPartition{tableId=${tableBucket.getTableId}, bucketId=${tableBucket.getBucket}," +
       s" partitionId=${tableBucket.getPartitionId}," +
-      s" splitSize=${lakeSplitBytes.length}}"
+      s" lakeSplit=$lakeSplit}"
   }
 }
 
@@ -44,8 +45,8 @@ case class FlussLakeInputPartition(tableBucket: TableBucket, lakeSplitBytes: Arr
  *
  * @param tableBucket
  *   the table bucket to read from
- * @param lakeSplitBytes
- *   serialized lake splits data (may be null if no lake snapshot)
+ * @param lakeSplits
+ *   the lake splits to read (may be null if no lake snapshot)
  * @param logStartingOffset
  *   the log offset where incremental reading should start
  * @param logStoppingOffset
@@ -53,14 +54,14 @@ case class FlussLakeInputPartition(tableBucket: TableBucket, lakeSplitBytes: Arr
  */
 case class FlussLakeUpsertInputPartition(
     tableBucket: TableBucket,
-    lakeSplitBytes: Array[Byte],
+    lakeSplits: java.util.List[LakeSplit],
     logStartingOffset: Long,
     logStoppingOffset: Long)
   extends FlussInputPartition {
   override def toString: String = {
     s"FlussLakeUpsertInputPartition{tableId=${tableBucket.getTableId}, bucketId=${tableBucket.getBucket}," +
       s" partitionId=${tableBucket.getPartitionId}," +
-      s" lakeSplitSize=${if (lakeSplitBytes != null) lakeSplitBytes.length else 0}," +
+      s" lakeSplits=${if (lakeSplits != null) lakeSplits.size() else 0}," +
       s" logStartOffset=$logStartingOffset, logStopOffset=$logStoppingOffset}"
   }
 }

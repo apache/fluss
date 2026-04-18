@@ -17,10 +17,13 @@
 
 package org.apache.fluss.lake.source;
 
+import java.io.Serializable;
 import java.util.List;
 
 /** A testing implementation of {@link LakeSplit}. */
-public class TestingLakeSplit implements LakeSplit {
+public class TestingLakeSplit implements LakeSplit, Serializable {
+
+    private static final long serialVersionUID = 1L;
 
     private final int bucket;
     private final List<String> partition;

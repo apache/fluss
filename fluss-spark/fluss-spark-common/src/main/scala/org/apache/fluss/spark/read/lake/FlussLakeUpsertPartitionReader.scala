@@ -44,13 +44,7 @@ class FlussLakeUpsertPartitionReader(
   extends FlussPartitionReader(tablePath, flussConfig)
   with Logging {
 
-  private val lakeSplits = if (flussPartition.lakeSplitBytes != null) {
-    FlussLakeUtils.deserializeLakeSplits(
-      flussPartition.lakeSplitBytes,
-      lakeSource.getSplitSerializer)
-  } else {
-    null
-  }
+  private val lakeSplits = flussPartition.lakeSplits
   private val flussLakeSnapshotAndLogSplitScanner = new LakeSnapshotAndLogSplitScanner(
     table,
     lakeSource,

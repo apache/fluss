@@ -21,7 +21,6 @@ import org.apache.fluss.client.initializer.{BucketOffsetsRetrieverImpl, OffsetsI
 import org.apache.fluss.client.table.scanner.log.LogScanner
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException
-import org.apache.fluss.lake.serializer.SimpleVersionedSerializer
 import org.apache.fluss.lake.source.LakeSplit
 import org.apache.fluss.metadata.{ResolvedPartitionSpec, TableBucket, TableInfo, TablePath}
 import org.apache.fluss.spark.read._
@@ -89,20 +88,17 @@ class FlussLakeUpsertBatch(
       .createPlanner(() => lakeSnapshot.getSnapshotId)
       .plan()
 
-    val splitSerializer = lakeSource.getSplitSerializer
     val tableBucketsOffset = lakeSnapshot.getTableBucketsOffset
     val bucketOffsetsRetriever = new BucketOffsetsRetrieverImpl(admin, tablePath)
 
     val partitions = if (tableInfo.isPartitioned) {
       planPartitionedTable(
         lakeSplits.asScala.toSeq,
-        splitSerializer,
         tableBucketsOffset,
         bucketOffsetsRetriever)
     } else {
       planNonPartitionedTable(
         lakeSplits.asScala.toSeq,
-        splitSerializer,
         tableBucketsOffset,
         bucketOffsetsRetriever)
     }
@@ -112,7 +108,6 @@ class FlussLakeUpsertBatch(
 
   private def planNonPartitionedTable(
       lakeSplits: Seq[LakeSplit],
-      splitSerializer: SimpleVersionedSerializer[LakeSplit],
       tableBucketsOffset: java.util.Map[TableBucket, java.lang.Long],
       bucketOffsetsRetriever: BucketOffsetsRetrieverImpl): Array[InputPartition] = {
     val tableId = tableInfo.getTableId
@@ -133,7 +128,6 @@ class FlussLakeUpsertBatch(
         createLakeUpsertPartition(
           tableBucket,
           lakeSplitsByBucket.get(bucketId),
-          splitSerializer,
           snapshotLogOffset,
           stoppingOffset)
     }.toArray
@@ -141,7 +135,6 @@ class FlussLakeUpsertBatch(
 
   private def planPartitionedTable(
       lakeSplits: Seq[LakeSplit],
-      splitSerializer: SimpleVersionedSerializer[LakeSplit],
       tableBucketsOffset: java.util.Map[TableBucket, java.lang.Long],
       bucketOffsetsRetriever: BucketOffsetsRetrieverImpl): Array[InputPartition] = {
     val tableId = tableInfo.getTableId
@@ -174,7 +167,6 @@ class FlussLakeUpsertBatch(
                 createLakeUpsertPartition(
                   tableBucket,
                   splitsByBucket.get(bucketId),
-                  splitSerializer,
                   snapshotLogOffset,
                   stoppingOffset)
             }
@@ -186,7 +178,7 @@ class FlussLakeUpsertBatch(
                 val tableBucket = new TableBucket(tableId, -1, bucketId)
                 splitsByBucket.getOrElse(bucketId, Seq.empty).map {
                   lakeSplit =>
-                    FlussLakeInputPartition(tableBucket, splitSerializer.serialize(lakeSplit))
+                    FlussLakeInputPartition(tableBucket, lakeSplit)
                 }
             }
         }
@@ -245,7 +237,6 @@ class FlussLakeUpsertBatch(
   private def createLakeUpsertPartition(
       tableBucket: TableBucket,
       lakeSplits: Option[Seq[LakeSplit]],
-      splitSerializer: SimpleVersionedSerializer[LakeSplit],
       snapshotLogOffset: java.lang.Long,
       stoppingOffset: Long): Option[InputPartition] = {
     val needLogSplit = if (snapshotLogOffset == null) {
@@ -258,10 +249,9 @@ class FlussLakeUpsertBatch(
       return None
     }
 
-    val lakeSplitBytes =
+    val lakeSplitList =
       if (lakeSplits.isDefined && lakeSplits.get.nonEmpty) {
-        // Serialize all lake splits for this bucket into a single byte array
-        FlussLakeUtils.serializeLakeSplits(lakeSplits.get, splitSerializer)
+        new java.util.ArrayList[LakeSplit](lakeSplits.get.asJava)
       } else null
 
     val logStartingOffset =
@@ -271,7 +261,7 @@ class FlussLakeUpsertBatch(
     Some(
       FlussLakeUpsertInputPartition(
         tableBucket,
-        lakeSplitBytes,
+        lakeSplitList,
         logStartingOffset,
         stoppingOffset
       ))
