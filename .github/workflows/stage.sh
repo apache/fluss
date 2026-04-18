@@ -20,6 +20,7 @@
 STAGE_CORE="core"
 STAGE_FLINK="flink"
 STAGE_SPARK="spark3"
+STAGE_SPARK4="spark4"
 STAGE_LAKE="lake"
 
 MODULES_FLINK="\
@@ -43,6 +44,13 @@ fluss-spark/fluss-spark-3.5,\
 fluss-spark/fluss-spark-3.4,\
 "
 
+MODULES_SPARK4="\
+fluss-spark,\
+fluss-spark/fluss-spark-common,\
+fluss-spark/fluss-spark-ut,\
+fluss-spark/fluss-spark-4.1,\
+"
+
 # we move Flink legacy version tests to "lake" module for balancing testing time
 MODULES_LAKE="\
 fluss-flink/fluss-flink-1.19,\
@@ -64,6 +72,8 @@ function get_test_modules_for_stage() {
     local negated_lake=\!${MODULES_LAKE//,/,\!}
     local modules_core="$negated_flink,$negated_spark,$negated_lake"
 
+    local modules_spark4=$MODULES_SPARK4
+
     case ${stage} in
         (${STAGE_CORE})
             echo "-pl $modules_core"
@@ -73,6 +83,9 @@ function get_test_modules_for_stage() {
         ;;
         (${STAGE_SPARK})
             echo "-Pspark3 -pl fluss-test-coverage,$modules_spark3"
+        ;;
+        (${STAGE_SPARK4})
+            echo "-Pspark4 -pl fluss-test-coverage,$modules_spark4"
         ;;
         (${STAGE_LAKE})
             echo "-pl fluss-test-coverage,$modules_lake"
