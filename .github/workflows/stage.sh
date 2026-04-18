@@ -73,10 +73,10 @@ function get_test_modules_for_stage() {
             echo "-pl fluss-test-coverage,$modules_flink"
         ;;
         (${STAGE_SPARK})
-            echo "-Pspark3 -pl fluss-test-coverage,$modules_spark3"
+            echo "-pl fluss-test-coverage,$modules_spark3"
         ;;
         (${STAGE_SPARK_SCALA213})
-            echo "-Pspark3,scala-2.13 -pl fluss-test-coverage,$modules_spark3"
+            echo "-Pscala-2.13 -pl fluss-test-coverage,$modules_spark3"
         ;;
         (${STAGE_LAKE})
             echo "-pl fluss-test-coverage,$modules_lake"
