@@ -90,7 +90,9 @@ public class NettyServerTest {
                                             metricGroup));
                     NettyClient nettyClient =
                             new NettyClient(
-                                    new Configuration(), TestingClientMetricGroup.newInstance(), false)) {
+                                    new Configuration(),
+                                    TestingClientMetricGroup.newInstance(),
+                                    false)) {
                 nettyServer.start();
 
                 // The NettyClient will try to send an API_VERSIONS handshake request.
