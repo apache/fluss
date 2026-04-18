@@ -30,6 +30,7 @@ dependency-reduced-pom.xml
 .DS_Store
 
 # website & docs
+website/blog
 website/node_modules
 website/build
 website/.docusaurus

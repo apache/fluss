@@ -43,6 +43,10 @@ const config: Config = {
 
   onBrokenLinks: 'throw',
 
+  // Serve blog-dependent static resources (avatars) from blog/static/
+  // Blog content is cloned from a separate repo via setup_blog.sh
+  staticDirectories: ['static', 'blog/static'],
+
   // Even if you don't use internationalization, you can use this field to set
   // useful metadata like html lang. For example, if your site is Chinese, you
   // may want to replace "en" with "zh-Hans".
