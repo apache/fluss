@@ -86,6 +86,7 @@ import org.apache.fluss.server.coordinator.event.NotifyLakeTableOffsetEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
+import org.apache.fluss.server.coordinator.event.ResumeDeletionEvent;
 import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
 import org.apache.fluss.server.coordinator.event.TableRegistrationChangeEvent;
 import org.apache.fluss.server.coordinator.event.watcher.CoordinatorChangeWatcher;
@@ -122,6 +123,8 @@ import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.AutoPartitionStrategy;
+import org.apache.fluss.utils.ExecutorUtils;
+import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -142,6 +145,9 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
@@ -185,6 +191,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final RebalanceManager rebalanceManager;
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private final LakeTableHelper lakeTableHelper;
+    private final ScheduledExecutorService resumeDeletionScheduledExecutor;
+    private final long resumeDeletionIntervalMs;
 
     public CoordinatorEventProcessor(
             ZooKeeperClient zooKeeperClient,
@@ -253,6 +261,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.ioExecutor = ioExecutor;
         this.lakeTableHelper =
                 new LakeTableHelper(zooKeeperClient, conf.getString(ConfigOptions.REMOTE_DATA_DIR));
+        this.resumeDeletionScheduledExecutor =
+                Executors.newScheduledThreadPool(
+                        1, new ExecutorThreadFactory("resume-deletion-scheduler"));
+        this.resumeDeletionIntervalMs =
+                conf.get(ConfigOptions.COORDINATOR_RESUME_DELETION_INTERVAL).toMillis();
     }
 
     public CoordinatorEventManager getCoordinatorEventManager() {
@@ -302,9 +315,16 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // start rebalance manager.
         rebalanceManager.startup();
+
+        resumeDeletionScheduledExecutor.scheduleWithFixedDelay(
+                () -> coordinatorEventManager.put(new ResumeDeletionEvent()),
+                resumeDeletionIntervalMs,
+                resumeDeletionIntervalMs,
+                TimeUnit.MILLISECONDS);
     }
 
     public void shutdown() {
+        ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, resumeDeletionScheduledExecutor);
         // close the event manager
         coordinatorEventManager.close();
         rebalanceManager.close();
@@ -574,6 +594,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
             processDropTable((DropTableEvent) event);
         } else if (event instanceof DropPartitionEvent) {
             processDropPartition((DropPartitionEvent) event);
+        } else if (event instanceof ResumeDeletionEvent) {
+            tableManager.resumeDeletions();
         } else if (event instanceof SchemaChangeEvent) {
             SchemaChangeEvent schemaChangeEvent = (SchemaChangeEvent) event;
             processSchemaChange(schemaChangeEvent);
