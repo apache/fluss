@@ -59,6 +59,7 @@ import java.nio.channels.ClosedChannelException;
 import java.util.ArrayDeque;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
@@ -99,6 +100,9 @@ final class ServerConnection {
 
     @GuardedBy("lock")
     private int retryAuthCount = 0;
+
+    @GuardedBy("lock")
+    private ScheduledFuture<?> authRetryTask = null;
 
     ServerConnection(
             Bootstrap bootstrap,
@@ -180,6 +184,12 @@ final class ServerConnection {
             if (channel != null) {
                 // Close the channel directly, without waiting for the channel to close properly.
                 channel.close();
+            }
+
+            // Cancel any pending authentication retry task
+            if (authRetryTask != null) {
+                authRetryTask.cancel(false);
+                authRetryTask = null;
             }
 
             // TODO all return completeExceptionally will let some test cases blocked, so we
@@ -448,11 +458,16 @@ final class ServerConnection {
             if (cause != null) {
                 if (cause instanceof RetriableAuthenticationException) {
                     LOG.warn("Authentication failed, retrying {} times", retryAuthCount, cause);
-                    channel.eventLoop()
-                            .schedule(
-                                    this::sendInitialToken,
-                                    backoff.backoff(retryAuthCount++),
-                                    TimeUnit.MILLISECONDS);
+                    // Cancel any existing auth retry task before scheduling a new one
+                    if (authRetryTask != null) {
+                        authRetryTask.cancel(false);
+                    }
+                    authRetryTask =
+                            channel.eventLoop()
+                                    .schedule(
+                                            this::sendInitialToken,
+                                            backoff.backoff(retryAuthCount++),
+                                            TimeUnit.MILLISECONDS);
                 } else {
                     close(cause);
                 }
