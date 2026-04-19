@@ -321,4 +321,33 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
             }
         }
     }
+
+    @Test
+    void testFetchTwiceCancelsPreviousIteratorAndStillWorks() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        makeLogTableAsLeader(tb, false);
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        List<RemoteLogSegment> segments = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(segments).isNotEmpty();
+        long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
+
+        File logTabletDir = logTablet.getLogDir();
+        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir)) {
+            java.util.Iterator<LogRecordBatch> firstIterator =
+                    fetcher.fetch(0, remoteEndOffset).iterator();
+            assertThat(firstIterator.hasNext()).isTrue();
+            firstIterator.next();
+
+            int secondFetchBatchCount = 0;
+            for (LogRecordBatch ignored : fetcher.fetch(0, remoteEndOffset)) {
+                secondFetchBatchCount++;
+            }
+            assertThat(secondFetchBatchCount).isGreaterThan(0);
+        }
+    }
 }

@@ -44,6 +44,10 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import static org.apache.fluss.utils.FileUtils.deleteDirectoryQuietly;
 
@@ -76,6 +80,7 @@ public class RemoteLogFetcher implements Closeable {
     private final RemoteLogManager remoteLogManager;
     private final TableBucket tableBucket;
     private final Path tempDir;
+    private final ExecutorService downloadExecutor;
 
     /** Tracks the currently active iterator to ensure proper cleanup on close. */
     private volatile RemoteLogBatchIterator activeIterator;
@@ -96,6 +101,19 @@ public class RemoteLogFetcher implements Closeable {
         this.remoteLogManager = remoteLogManager;
         this.tableBucket = tableBucket;
         this.tempDir = tempDir;
+        this.downloadExecutor =
+                Executors.newSingleThreadExecutor(
+                        runnable -> {
+                            Thread thread =
+                                    new Thread(
+                                            runnable,
+                                            "remote-log-fetcher-download-"
+                                                    + tableBucket.getTableId()
+                                                    + "-"
+                                                    + tableBucket.getBucket());
+                            thread.setDaemon(true);
+                            return thread;
+                        });
     }
 
     /**
@@ -150,17 +168,21 @@ public class RemoteLogFetcher implements Closeable {
 
     @Override
     public void close() {
-        // Close any active iterator to release file handles
-        if (activeIterator != null) {
-            activeIterator.close();
-            activeIterator = null;
-        }
-        // Remove the entire "tmp" parent directory to clean up our subdirectory as well
-        // as any stale recovery directories left by a previous failed recovery.
-        Path tmpDir = tempDir.getParent();
-        if (tmpDir != null && Files.exists(tmpDir)) {
-            LOG.info("Cleaning up remote log recovery tmp dir: {}", tmpDir);
-            deleteDirectoryQuietly(tmpDir.toFile());
+        try {
+            // Close any active iterator to release file handles
+            if (activeIterator != null) {
+                activeIterator.close();
+                activeIterator = null;
+            }
+        } finally {
+            downloadExecutor.shutdownNow();
+            // Remove the entire "tmp" parent directory to clean up our subdirectory as well
+            // as any stale recovery directories left by a previous failed recovery.
+            Path tmpDir = tempDir.getParent();
+            if (tmpDir != null && Files.exists(tmpDir)) {
+                LOG.info("Cleaning up remote log recovery tmp dir: {}", tmpDir);
+                deleteDirectoryQuietly(tmpDir.toFile());
+            }
         }
     }
 
@@ -214,6 +236,8 @@ public class RemoteLogFetcher implements Closeable {
         private int currentSegmentIndex = 0;
         private FileLogRecords currentFileLogRecords;
         private Iterator<LogRecordBatch> currentBatchIterator;
+        private CompletableFuture<File> nextDownloadedSegmentFuture;
+        private RemoteLogSegment prefetchedSegment;
         private LogRecordBatch nextBatch;
         private boolean finished = false;
         private volatile boolean closed = false;
@@ -229,6 +253,7 @@ public class RemoteLogFetcher implements Closeable {
         public void close() {
             if (!closed) {
                 closed = true;
+                cancelPrefetch();
                 closeCurrentFileLogRecords();
             }
         }
@@ -297,12 +322,9 @@ public class RemoteLogFetcher implements Closeable {
                 }
 
                 try {
-                    // TODO optimize to async downloading the next segment while processing the
-                    // current one. Otherwise, the recovery process may be significantly slowed down
-                    // by the download time of remote segments, especially when there are many
-                    // segments to fetch. trace by: https://github.com/apache/fluss/issues/3091
-                    File localFile = downloadSegment(segment);
+                    File localFile = fetchSegmentFile(segment);
                     currentFileLogRecords = FileLogRecords.open(localFile, false);
+                    prefetchNextSegment();
                     int startPosition = 0;
                     // if this segment contains data before currentOffset, find the right position
                     if (segment.remoteLogStartOffset() < currentOffset) {
@@ -325,12 +347,81 @@ public class RemoteLogFetcher implements Closeable {
                     }
                 } catch (Exception e) {
                     // Ensure resources are cleaned up if an exception occurs during segment loading
+                    cancelPrefetch();
                     closeCurrentFileLogRecords();
                     throw new RuntimeException(
                             "Failed to fetch remote log segment: " + segment.remoteLogSegmentId(),
                             e);
                 }
             }
+        }
+
+        private File fetchSegmentFile(RemoteLogSegment segment) throws IOException {
+            if (segment.equals(prefetchedSegment) && nextDownloadedSegmentFuture != null) {
+                try {
+                    return nextDownloadedSegmentFuture.get();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException(
+                            "Interrupted while waiting for remote log segment download: "
+                                    + segment.remoteLogSegmentId(),
+                            e);
+                } catch (ExecutionException e) {
+                    LOG.warn(
+                            "Prefetched segment {} failed, fallback to sync download.",
+                            segment.remoteLogSegmentId(),
+                            e.getCause());
+                    return downloadSegment(segment);
+                } finally {
+                    nextDownloadedSegmentFuture = null;
+                    prefetchedSegment = null;
+                }
+            }
+            return downloadSegment(segment);
+        }
+
+        private void prefetchNextSegment() {
+            cancelPrefetch();
+            RemoteLogSegment nextSegment = findNextFetchableSegment(currentSegmentIndex);
+            if (nextSegment == null) {
+                return;
+            }
+            prefetchedSegment = nextSegment;
+            nextDownloadedSegmentFuture =
+                    CompletableFuture.supplyAsync(
+                            () -> {
+                                try {
+                                    return downloadSegment(nextSegment);
+                                } catch (IOException e) {
+                                    throw new RuntimeException(
+                                            "Failed to prefetch remote log segment: "
+                                                    + nextSegment.remoteLogSegmentId(),
+                                            e);
+                                }
+                            },
+                            downloadExecutor);
+        }
+
+        private RemoteLogSegment findNextFetchableSegment(int startIndex) {
+            for (int i = startIndex; i < segments.size(); i++) {
+                RemoteLogSegment segment = segments.get(i);
+                if (segment.remoteLogEndOffset() < currentOffset) {
+                    continue;
+                }
+                if (segment.remoteLogStartOffset() >= localLogStartOffset) {
+                    return null;
+                }
+                return segment;
+            }
+            return null;
+        }
+
+        private void cancelPrefetch() {
+            if (nextDownloadedSegmentFuture != null) {
+                nextDownloadedSegmentFuture.cancel(true);
+                nextDownloadedSegmentFuture = null;
+            }
+            prefetchedSegment = null;
         }
 
         private void closeCurrentFileLogRecords() {
