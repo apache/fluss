@@ -47,7 +47,6 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocatorUtil;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
-import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.rocksdb.RateLimiter;
@@ -64,6 +63,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
@@ -115,7 +115,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
 
     private final ZooKeeperClient zkClient;
 
-    private final Map<TableBucket, KvTablet> currentKvs = MapUtils.newConcurrentHashMap();
+    private final Map<TableBucket, KvTablet> currentKvs = new ConcurrentHashMap<>();
 
     /**
      * For arrow log format. The buffer allocator to allocate memory for arrow write batch of

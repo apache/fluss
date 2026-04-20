@@ -26,7 +26,6 @@ import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
-import org.apache.fluss.utils.MapUtils;
 
 import javax.annotation.Nullable;
 
@@ -36,6 +35,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.apache.fluss.metrics.utils.MetricGroupUtils.makeScope;
 
@@ -45,14 +45,14 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
     private static final String NAME = "coordinator";
 
     private final Map<TablePath, SimpleTableMetricGroup> metricGroupByTable =
-            MapUtils.newConcurrentHashMap();
+            new ConcurrentHashMap<>();
 
     protected final String clusterId;
     protected final String hostname;
     protected final String serverId;
 
     private final Map<Class<? extends CoordinatorEvent>, CoordinatorEventMetricGroup>
-            eventMetricGroups = MapUtils.newConcurrentHashMap();
+            eventMetricGroups = new ConcurrentHashMap<>();
 
     public CoordinatorMetricGroup(
             MetricRegistry registry, String clusterId, String hostname, String serverId) {

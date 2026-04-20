@@ -31,7 +31,6 @@ import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.utils.IOUtils;
-import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
@@ -48,6 +47,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -78,8 +78,8 @@ public class RemoteLogManager implements Closeable {
     private final Clock clock;
     private final ZooKeeperClient zkClient;
 
-    private final Map<TableBucket, TaskWithFuture> rlmTasks = MapUtils.newConcurrentHashMap();
-    private final Map<TableBucket, RemoteLogTablet> remoteLogs = MapUtils.newConcurrentHashMap();
+    private final Map<TableBucket, TaskWithFuture> rlmTasks = new ConcurrentHashMap<>();
+    private final Map<TableBucket, RemoteLogTablet> remoteLogs = new ConcurrentHashMap<>();
 
     public RemoteLogManager(
             Configuration conf,

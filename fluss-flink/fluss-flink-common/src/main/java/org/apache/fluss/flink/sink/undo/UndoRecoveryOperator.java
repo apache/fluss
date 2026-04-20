@@ -29,7 +29,6 @@ import org.apache.fluss.flink.sink.undo.UndoRecoveryManager.UndoOffsets;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.RowType;
-import org.apache.fluss.utils.MapUtils;
 
 import org.apache.flink.api.common.state.ListState;
 import org.apache.flink.api.common.state.ListStateDescriptor;
@@ -689,7 +688,7 @@ public class UndoRecoveryOperator<IN> extends AbstractStreamOperator<IN>
      * @param initialOffsets the initial bucket offsets
      */
     protected void initializeBucketOffsets(Map<TableBucket, Long> initialOffsets) {
-        this.bucketOffsets = MapUtils.newConcurrentHashMap();
+        this.bucketOffsets = new ConcurrentHashMap<>();
         this.bucketOffsets.putAll(initialOffsets);
     }
 }

@@ -87,7 +87,6 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DataTypes;
-import org.apache.fluss.utils.MapUtils;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -107,6 +106,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -2261,7 +2261,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         Map<Integer, ListOffsetsRequest> leaderToRequestMap = new HashMap<>();
         leaderToRequestMap.put(1, request);
 
-        Map<Integer, CompletableFuture<Long>> bucketToOffsetMap = MapUtils.newConcurrentHashMap();
+        Map<Integer, CompletableFuture<Long>> bucketToOffsetMap = new ConcurrentHashMap<>();
         bucketToOffsetMap.put(0, new CompletableFuture<>());
         bucketToOffsetMap.put(1, new CompletableFuture<>());
         bucketToOffsetMap.put(2, new CompletableFuture<>());

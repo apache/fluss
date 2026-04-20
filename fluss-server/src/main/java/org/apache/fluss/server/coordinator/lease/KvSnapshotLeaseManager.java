@@ -26,7 +26,6 @@ import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotTableLease;
-import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
@@ -68,15 +67,14 @@ public class KvSnapshotLeaseManager {
     /** lease id to kv snapshot lease. */
     @GuardedBy("managerLock")
     private final ConcurrentHashMap<String, KvSnapshotLeaseHandler> kvSnapshotLeaseMap =
-            MapUtils.newConcurrentHashMap();
+            new ConcurrentHashMap<>();
 
     /**
      * KvSnapshotLeaseForBucket to the ref count, which means this table bucket + snapshotId has
      * been leased by how many lease id.
      */
     @GuardedBy("managerLock")
-    private final Map<TableBucketSnapshot, AtomicInteger> refCount =
-            MapUtils.newConcurrentHashMap();
+    private final Map<TableBucketSnapshot, AtomicInteger> refCount = new ConcurrentHashMap<>();
 
     /** For metrics. */
     private final AtomicInteger leasedBucketCount = new AtomicInteger(0);

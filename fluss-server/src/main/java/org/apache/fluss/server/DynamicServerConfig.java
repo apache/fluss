@@ -24,7 +24,6 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.ConfigValidator;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
-import org.apache.fluss.utils.MapUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,6 +36,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -69,11 +69,11 @@ class DynamicServerConfig {
 
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
     private final Map<Class<? extends ServerReconfigurable>, ServerReconfigurable>
-            serverReconfigures = MapUtils.newConcurrentHashMap();
+            serverReconfigures = new ConcurrentHashMap<>();
 
     /** Registered stateless config validators, organized by config key for efficient lookup. */
     private final Map<String, List<ConfigValidator<?>>> configValidatorsByKey =
-            MapUtils.newConcurrentHashMap();
+            new ConcurrentHashMap<>();
 
     /** The initial configuration items when the server starts from server.yaml. */
     private final Map<String, String> initialConfigMap;

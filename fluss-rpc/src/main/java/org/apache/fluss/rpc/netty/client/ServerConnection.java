@@ -44,7 +44,6 @@ import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
 import org.apache.fluss.utils.ExponentialBackoff;
-import org.apache.fluss.utils.MapUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,6 +58,7 @@ import java.nio.channels.ClosedChannelException;
 import java.util.ArrayDeque;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
@@ -72,7 +72,7 @@ final class ServerConnection {
     private final ServerNode node;
 
     // TODO: add max inflight requests limit like Kafka's "max.in.flight.requests.per.connection"
-    private final Map<Integer, InflightRequest> inflightRequests = MapUtils.newConcurrentHashMap();
+    private final Map<Integer, InflightRequest> inflightRequests = new ConcurrentHashMap<>();
     private final CompletableFuture<Void> closeFuture = new CompletableFuture<>();
     private final ConnectionMetrics connectionMetrics;
     private final ClientAuthenticator authenticator;

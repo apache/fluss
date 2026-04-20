@@ -110,7 +110,6 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
-import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.Scheduler;
 
@@ -132,6 +131,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
@@ -163,7 +163,7 @@ public class ReplicaManager implements ServerReconfigurable {
     private final OffsetCheckpointFile highWatermarkCheckpoint;
 
     @GuardedBy("replicaStateChangeLock")
-    private final Map<TableBucket, HostedReplica> allReplicas = MapUtils.newConcurrentHashMap();
+    private final Map<TableBucket, HostedReplica> allReplicas = new ConcurrentHashMap<>();
 
     private final TabletServerMetadataCache metadataCache;
     private final ExecutorService ioExecutor;

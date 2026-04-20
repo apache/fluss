@@ -34,7 +34,6 @@ import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
-import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.Scheduler;
 import org.apache.fluss.utils.types.Tuple2;
@@ -53,6 +52,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
@@ -92,7 +92,7 @@ public final class LogManager extends TabletManagerBase {
     private final TabletServerMetricGroup serverMetricGroup;
     private final ReentrantLock logCreationOrDeletionLock = new ReentrantLock();
 
-    private final Map<TableBucket, LogTablet> currentLogs = MapUtils.newConcurrentHashMap();
+    private final Map<TableBucket, LogTablet> currentLogs = new ConcurrentHashMap<>();
 
     private volatile OffsetCheckpointFile recoveryPointCheckpoint;
     private boolean loadLogsCompletedFlag = false;

@@ -33,7 +33,6 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.ArrowUtils;
-import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.Projection;
 
 import javax.annotation.Nullable;
@@ -63,7 +62,7 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
     private final boolean projectionPushDowned;
     private final SchemaGetter schemaGetter;
     private final ConcurrentHashMap<Integer, VectorSchemaRoot> vectorSchemaRootMap =
-            MapUtils.newConcurrentHashMap();
+            new ConcurrentHashMap<>();
 
     public static LogRecordReadContext createReadContext(
             TableInfo tableInfo,
