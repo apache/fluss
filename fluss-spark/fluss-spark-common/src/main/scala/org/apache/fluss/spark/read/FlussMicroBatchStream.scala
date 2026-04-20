@@ -52,6 +52,8 @@ abstract class FlussMicroBatchStream(
   with Logging
   with AutoCloseable {
 
+  @volatile private var stopped = false
+
   lazy val conn: Connection = ConnectionFactory.createConnection(flussConfig)
 
   lazy val admin: Admin = conn.getAdmin
@@ -107,6 +109,10 @@ abstract class FlussMicroBatchStream(
       throw new UnsupportedOperationException(s"Only ReadAllAvailable is supported, but $readLimit")
     }
 
+    if (stopped) {
+      return start
+    }
+
     val latestTableBucketOffsets = if (allDataForTriggerAvailableNow.isDefined) {
       allDataForTriggerAvailableNow.get
     } else {
@@ -116,6 +122,9 @@ abstract class FlussMicroBatchStream(
   }
 
   override def prepareForTriggerAvailableNow(): Unit = {
+    if (stopped) {
+      return
+    }
     allDataForTriggerAvailableNow = fetchLatestOffsets()
   }
 
@@ -145,7 +154,10 @@ abstract class FlussMicroBatchStream(
   // No need to notify fluss server
   override def commit(end: Offset): Unit = {}
 
-  override def stop(): Unit = close()
+  override def stop(): Unit = {
+    stopped = true
+    close()
+  }
 
   override def deserializeOffset(json: String): Offset = {
     FlussSourceOffset(TableBucketOffsets.fromJsonBytes(json.getBytes("utf-8")))
