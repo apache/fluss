@@ -21,6 +21,7 @@ import org.apache.fluss.client.{Connection, ConnectionFactory}
 import org.apache.fluss.client.admin.Admin
 import org.apache.fluss.client.initializer.{BucketOffsetsRetrieverImpl, OffsetsInitializer}
 import org.apache.fluss.config.Configuration
+import org.apache.fluss.exception.FlussRuntimeException
 import org.apache.fluss.metadata.{PartitionInfo, TableBucket, TableInfo, TablePath}
 import org.apache.fluss.utils.json.TableBucketOffsets
 
@@ -51,8 +52,6 @@ abstract class FlussMicroBatchStream(
   with MicroBatchStream
   with Logging
   with AutoCloseable {
-
-  @volatile private var stopped = false
 
   lazy val conn: Connection = ConnectionFactory.createConnection(flussConfig)
 
@@ -109,10 +108,6 @@ abstract class FlussMicroBatchStream(
       throw new UnsupportedOperationException(s"Only ReadAllAvailable is supported, but $readLimit")
     }
 
-    if (stopped) {
-      return start
-    }
-
     val latestTableBucketOffsets = if (allDataForTriggerAvailableNow.isDefined) {
       allDataForTriggerAvailableNow.get
     } else {
@@ -122,40 +117,47 @@ abstract class FlussMicroBatchStream(
   }
 
   override def prepareForTriggerAvailableNow(): Unit = {
-    if (stopped) {
-      return
-    }
     allDataForTriggerAvailableNow = fetchLatestOffsets()
   }
 
   private def fetchLatestOffsets(): Option[TableBucketOffsets] = {
-    val buckets = (0 until tableInfo.getNumBuckets).toSeq
-    val offsetsInitializer = OffsetsInitializer.latest()
-    if (tableInfo.isPartitioned) {
-      val partitionOffsets = partitionInfos.asScala.map(
-        partitionInfo =>
-          FlussMicroBatchStream.getLatestOffsets(
-            tableInfo,
-            offsetsInitializer,
-            bucketOffsetsRetriever,
-            buckets,
-            Some(partitionInfo)))
-      val mergedOffsets = partitionOffsets
-        .map(_.getOffsets)
-        .reduce((l, r) => (l.asScala ++ r.asScala).asJava)
-      Some(new TableBucketOffsets(tableInfo.getTableId, mergedOffsets))
-    } else {
-      Some(
-        FlussMicroBatchStream
-          .getLatestOffsets(tableInfo, offsetsInitializer, bucketOffsetsRetriever, buckets, None))
+    try {
+      val buckets = (0 until tableInfo.getNumBuckets).toSeq
+      val offsetsInitializer = OffsetsInitializer.latest()
+      if (tableInfo.isPartitioned) {
+        val partitionOffsets = partitionInfos.asScala.map(
+          partitionInfo =>
+            FlussMicroBatchStream.getLatestOffsets(
+              tableInfo,
+              offsetsInitializer,
+              bucketOffsetsRetriever,
+              buckets,
+              Some(partitionInfo)))
+        val mergedOffsets = partitionOffsets
+          .map(_.getOffsets)
+          .reduce((l, r) => (l.asScala ++ r.asScala).asJava)
+        Some(new TableBucketOffsets(tableInfo.getTableId, mergedOffsets))
+      } else {
+        Some(
+          FlussMicroBatchStream
+            .getLatestOffsets(tableInfo, offsetsInitializer, bucketOffsetsRetriever, buckets, None))
+      }
+    } catch {
+      case e: FlussRuntimeException =>
+        if (e.getCause != null && e.getCause.isInstanceOf[InterruptedException]) {
+          logWarning(s"Streaming execution thread be interrupted.")
+          None
+        } else {
+          throw e
+        }
     }
+
   }
 
   // No need to notify fluss server
   override def commit(end: Offset): Unit = {}
 
   override def stop(): Unit = {
-    stopped = true
     close()
   }
 
@@ -354,5 +356,23 @@ class FlussUpsertMicroBatchStream(
 
   override def createReaderFactory(): PartitionReaderFactory = {
     new FlussUpsertPartitionReaderFactory(tablePath, projection, options, flussConfig)
+  }
+
+  /**
+   * Check if an exception is caused by thread interruption during stream shutdown. This mirrors
+   * Spark's isInterruptionException logic to distinguish between intentional interruption (stop()
+   * called) and real errors.
+   */
+  private def isInterruptionException(e: Throwable): Boolean = e match {
+    case _: InterruptedException => true
+    case _: java.io.InterruptedIOException => true
+    case _: java.nio.channels.ClosedByInterruptException => true
+    case e: java.util.concurrent.ExecutionException =>
+      isInterruptionException(e.getCause)
+    case e: Exception =>
+      // Fluss wraps InterruptedException in FlussRuntimeException
+      if (e.getCause != null) isInterruptionException(e.getCause)
+      else false
+    case _ => false
   }
 }
