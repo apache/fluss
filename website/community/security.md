@@ -7,8 +7,8 @@ sidebar_position: 8
 
 ## Reporting Security Issues
 
-If you have apprehensions regarding Fluss's security or you discover vulnerability or potential threat, don't hesitate to get in touch with the Apache Security Team by dropping a mail at **security@apache.org**. 
+If you have concerns regarding Fluss's security or discover a vulnerability or potential threat, please contact the Apache Security Team by sending an email to **security@apache.org**. 
 
-In the mail, specify the project name **Fluss** with the description of the issue or potential threat. You are also urged to recommend the way to reproduce and replicate the issue. The security team and the Fluss community will get back to you after assessing and analysing the findings.
+In the email, specify the project name **Fluss** and include a description of the issue or potential threat. You are also encouraged to include steps to reproduce the issue. The security team and the Fluss community will get back to you after assessing and analyzing the findings.
 
-**PLEASE PAY ATTENTION** to report the security issue on the security email before disclosing it on public domain.
+**PLEASE PAY ATTENTION** to report the security issue privately to **security@apache.org** before disclosing it publicly.
