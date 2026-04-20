@@ -357,22 +357,4 @@ class FlussUpsertMicroBatchStream(
   override def createReaderFactory(): PartitionReaderFactory = {
     new FlussUpsertPartitionReaderFactory(tablePath, projection, options, flussConfig)
   }
-
-  /**
-   * Check if an exception is caused by thread interruption during stream shutdown. This mirrors
-   * Spark's isInterruptionException logic to distinguish between intentional interruption (stop()
-   * called) and real errors.
-   */
-  private def isInterruptionException(e: Throwable): Boolean = e match {
-    case _: InterruptedException => true
-    case _: java.io.InterruptedIOException => true
-    case _: java.nio.channels.ClosedByInterruptException => true
-    case e: java.util.concurrent.ExecutionException =>
-      isInterruptionException(e.getCause)
-    case e: Exception =>
-      // Fluss wraps InterruptedException in FlussRuntimeException
-      if (e.getCause != null) isInterruptionException(e.getCause)
-      else false
-    case _ => false
-  }
 }
