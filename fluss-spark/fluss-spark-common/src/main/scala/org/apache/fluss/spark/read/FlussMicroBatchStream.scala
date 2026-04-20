@@ -157,9 +157,7 @@ abstract class FlussMicroBatchStream(
   // No need to notify fluss server
   override def commit(end: Offset): Unit = {}
 
-  override def stop(): Unit = {
-    close()
-  }
+  override def stop(): Unit = close()
 
   override def deserializeOffset(json: String): Offset = {
     FlussSourceOffset(TableBucketOffsets.fromJsonBytes(json.getBytes("utf-8")))
