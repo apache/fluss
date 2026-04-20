@@ -28,10 +28,13 @@ import org.apache.fluss.server.replica.Replica;
 import org.junit.jupiter.api.Test;
 
 import java.io.File;
+import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -338,8 +341,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
 
         File logTabletDir = logTablet.getLogDir();
         try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir)) {
-            java.util.Iterator<LogRecordBatch> firstIterator =
-                    fetcher.fetch(0, remoteEndOffset).iterator();
+            Iterator<LogRecordBatch> firstIterator = fetcher.fetch(0, remoteEndOffset).iterator();
             assertThat(firstIterator.hasNext()).isTrue();
             firstIterator.next();
 
@@ -349,5 +351,85 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
             }
             assertThat(secondFetchBatchCount).isGreaterThan(0);
         }
+    }
+
+    @Test
+    void testPrefetchFailureFallsBackToSyncDownload() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        makeLogTableAsLeader(tb, false);
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        List<RemoteLogSegment> segments = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(segments).hasSizeGreaterThanOrEqualTo(2);
+        long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
+
+        File logTabletDir = logTablet.getLogDir();
+        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir)) {
+            Iterator<LogRecordBatch> iterator = fetcher.fetch(0, remoteEndOffset).iterator();
+            assertThat(iterator.hasNext()).isTrue();
+            iterator.next();
+
+            Object activeIterator = getPrivateField(fetcher, "activeIterator");
+            CompletableFuture<File> failedFuture = new CompletableFuture<>();
+            failedFuture.completeExceptionally(new RuntimeException("injected prefetch failure"));
+            setPrivateField(activeIterator, "prefetchedSegment", segments.get(1));
+            setPrivateField(activeIterator, "nextDownloadedSegmentFuture", failedFuture);
+
+            int count = 1;
+            while (iterator.hasNext()) {
+                iterator.next();
+                count++;
+            }
+            assertThat(count).isGreaterThan(1);
+        }
+    }
+
+    @Test
+    void testCloseCancelsPendingPrefetchFuture() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        makeLogTableAsLeader(tb, false);
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        List<RemoteLogSegment> segments = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(segments).isNotEmpty();
+        long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
+
+        File logTabletDir = logTablet.getLogDir();
+        RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir);
+        try {
+            Iterator<LogRecordBatch> iterator = fetcher.fetch(0, remoteEndOffset).iterator();
+            assertThat(iterator.hasNext()).isTrue();
+            iterator.next();
+
+            Object activeIterator = getPrivateField(fetcher, "activeIterator");
+            CompletableFuture<File> pendingFuture = new CompletableFuture<>();
+            setPrivateField(activeIterator, "prefetchedSegment", segments.get(0));
+            setPrivateField(activeIterator, "nextDownloadedSegmentFuture", pendingFuture);
+
+            fetcher.close();
+            assertThat(pendingFuture.isCancelled()).isTrue();
+        } finally {
+            fetcher.close();
+        }
+    }
+
+    private static Object getPrivateField(Object target, String fieldName) throws Exception {
+        Field field = target.getClass().getDeclaredField(fieldName);
+        field.setAccessible(true);
+        return field.get(target);
+    }
+
+    private static void setPrivateField(Object target, String fieldName, Object value) throws Exception {
+        Field field = target.getClass().getDeclaredField(fieldName);
+        field.setAccessible(true);
+        field.set(target, value);
     }
 }
