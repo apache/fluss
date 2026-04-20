@@ -332,10 +332,11 @@ public class SortMergeReader {
                         SortMergeRows sortMergeRows = currentLakeSnapshotRecords.next();
                         if (!sortMergeRows.mergedRows.isEmpty()) {
                             currentMergedRows = sortMergeRows.mergedRows.iterator();
+                        } else {
+                            // If mergedRows is empty (e.g., record was deleted), continue
+                            // the loop to try the next snapshot record.
+                            continue;
                         }
-                        // If mergedRows is empty (e.g., record was deleted), continue
-                        // the loop to try the next snapshot record.
-                        continue;
                     }
 
                     if (currentMergedRows.hasNext()) {
