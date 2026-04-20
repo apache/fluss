@@ -38,7 +38,7 @@ The core idea of Streaming Lakehouse is shared data and shared metadata between 
 Some powerful features it provides are:
 
 - **Unified Metadata**: Fluss provides unified table metadata for both data in Stream and Lakehouse. Users only need to manage one table and can access real-time streaming data, historical data, or both combined.
-- **Union Reads**: Compute engines that perform queries on the table will read the union of the real-time streaming data and Lakehouse data. Currently, only Flink supports union reads, but more engines are on the roadmap.
+- **Union Reads**: Compute engines that perform queries on the table will read the union of the real-time streaming data and Lakehouse data. Currently, Flink and Spark support union reads, with more engines on the roadmap.
 - **Real-Time Lakehouse**: The union reads help Lakehouse evolving from near-real-time analytics to truly real-time analytics. This empowers businesses to gain more valuable insights from real-time data.
 - **Analytical Streams**: The union reads help data streams to have the powerful analytics capabilities. This reduces complexity when developing streaming applications, simplifies debugging, and allows for immediate access to live data insights.
 - **Connect to Lakehouse Ecosystem**: Fluss keeps the table metadata in sync with data lake catalogs while compacting data into Lakehouse. As a result, external engines like Spark, StarRocks, Flink, and Trino can read the data directly. They simply connect to the data lake catalog.
