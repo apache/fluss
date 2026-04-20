@@ -321,6 +321,8 @@ public class SortMergeReader {
                 return true;
             }
             try {
+                // Loop to skip empty merge results (e.g., when a snapshot record is
+                // deleted by changelog) and advance to the next non-empty result.
                 while (returnedRow == null) {
                     if (currentMergedRows == null) {
                         if (!currentLakeSnapshotRecords.hasNext()) {
@@ -331,6 +333,8 @@ public class SortMergeReader {
                         if (!sortMergeRows.mergedRows.isEmpty()) {
                             currentMergedRows = sortMergeRows.mergedRows.iterator();
                         }
+                        // If mergedRows is empty (e.g., record was deleted), continue
+                        // the loop to try the next snapshot record.
                         continue;
                     }
 
