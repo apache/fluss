@@ -92,15 +92,9 @@ class FlussLakeUpsertBatch(
     val bucketOffsetsRetriever = new BucketOffsetsRetrieverImpl(admin, tablePath)
 
     val partitions = if (tableInfo.isPartitioned) {
-      planPartitionedTable(
-        lakeSplits.asScala.toSeq,
-        tableBucketsOffset,
-        bucketOffsetsRetriever)
+      planPartitionedTable(lakeSplits.asScala.toSeq, tableBucketsOffset, bucketOffsetsRetriever)
     } else {
-      planNonPartitionedTable(
-        lakeSplits.asScala.toSeq,
-        tableBucketsOffset,
-        bucketOffsetsRetriever)
+      planNonPartitionedTable(lakeSplits.asScala.toSeq, tableBucketsOffset, bucketOffsetsRetriever)
     }
 
     (partitions, false)
@@ -177,8 +171,7 @@ class FlussLakeUpsertBatch(
               bucketId =>
                 val tableBucket = new TableBucket(tableId, -1, bucketId)
                 splitsByBucket.getOrElse(bucketId, Seq.empty).map {
-                  lakeSplit =>
-                    FlussLakeInputPartition(tableBucket, lakeSplit)
+                  lakeSplit => FlussLakeInputPartition(tableBucket, lakeSplit)
                 }
             }
         }
