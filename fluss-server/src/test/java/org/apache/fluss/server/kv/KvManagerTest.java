@@ -299,6 +299,126 @@ final class KvManagerTest {
         assertThat(kvManager.getKv(tableBucket1)).isPresent();
     }
 
+    @ParameterizedTest
+    @MethodSource("partitionProvider")
+    void testRegisterKv(String partitionName) throws Exception {
+        initTableBuckets(partitionName);
+        PhysicalTablePath physicalTablePath =
+                PhysicalTablePath.of(
+                        tablePath1.getDatabaseName(), tablePath1.getTableName(), partitionName);
+        LogTablet logTablet =
+                logManager.getOrCreateLog(
+                        physicalTablePath, tableBucket1, LogFormat.ARROW, 1, true);
+
+        // Create a lazy sentinel and register it
+        KvTablet sentinel =
+                KvTablet.createLazySentinel(physicalTablePath, tableBucket1, logTablet, null);
+        kvManager.registerKv(tableBucket1, sentinel);
+
+        // verify registered
+        assertThat(kvManager.getKv(tableBucket1)).isPresent();
+        assertThat(kvManager.getKv(tableBucket1).get()).isSameAs(sentinel);
+    }
+
+    @Test
+    void testRegisterKvDuplicate() throws Exception {
+        initTableBuckets(null);
+        PhysicalTablePath physicalTablePath =
+                PhysicalTablePath.of(tablePath1.getDatabaseName(), tablePath1.getTableName(), null);
+        LogTablet logTablet =
+                logManager.getOrCreateLog(
+                        physicalTablePath, tableBucket1, LogFormat.ARROW, 1, true);
+
+        KvTablet sentinel =
+                KvTablet.createLazySentinel(physicalTablePath, tableBucket1, logTablet, null);
+        kvManager.registerKv(tableBucket1, sentinel);
+
+        // registering again should throw
+        KvTablet sentinel2 =
+                KvTablet.createLazySentinel(physicalTablePath, tableBucket1, logTablet, null);
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> kvManager.registerKv(tableBucket1, sentinel2))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("already registered");
+    }
+
+    @ParameterizedTest
+    @MethodSource("partitionProvider")
+    void testUnregisterKv(String partitionName) throws Exception {
+        initTableBuckets(partitionName);
+        getOrCreateKv(tablePath1, partitionName, tableBucket1);
+        assertThat(kvManager.getKv(tableBucket1)).isPresent();
+
+        kvManager.unregisterKv(tableBucket1);
+        assertThat(kvManager.getKv(tableBucket1)).isNotPresent();
+    }
+
+    @ParameterizedTest
+    @MethodSource("partitionProvider")
+    void testCreateKvTabletUnregistered(String partitionName) throws Exception {
+        initTableBuckets(partitionName);
+        PhysicalTablePath physicalTablePath =
+                PhysicalTablePath.of(
+                        tablePath1.getDatabaseName(), tablePath1.getTableName(), partitionName);
+        LogTablet logTablet =
+                logManager.getOrCreateLog(
+                        physicalTablePath, tableBucket1, LogFormat.ARROW, 1, true);
+
+        KvTablet tablet =
+                kvManager.createKvTabletUnregistered(
+                        physicalTablePath,
+                        tableBucket1,
+                        logTablet,
+                        KvFormat.COMPACTED,
+                        new TestingSchemaGetter(new SchemaInfo(DATA1_SCHEMA_PK, 1)),
+                        new TableConfig(new Configuration()),
+                        DEFAULT_COMPRESSION);
+
+        // tablet should be created but NOT registered
+        assertThat(tablet.getKvTabletDir()).exists();
+        assertThat(kvManager.getKv(tableBucket1)).isNotPresent();
+    }
+
+    @ParameterizedTest
+    @MethodSource("partitionProvider")
+    void testGetTabletDirPath(String partitionName) throws Exception {
+        initTableBuckets(partitionName);
+        PhysicalTablePath physicalTablePath =
+                PhysicalTablePath.of(
+                        tablePath1.getDatabaseName(), tablePath1.getTableName(), partitionName);
+
+        File dirPath = kvManager.getTabletDirPath(physicalTablePath, tableBucket1);
+        // directory should not be created by this call
+        assertThat(dirPath).doesNotExist();
+
+        // Assert the exact expected path structure
+        File expectedDir;
+        if (partitionName == null) {
+            // Non-partitioned: {dataDir}/{db}/{table}-{tableId}/kv-{bucket}
+            expectedDir =
+                    new File(
+                            tempDir,
+                            "db1/t1-"
+                                    + tableBucket1.getTableId()
+                                    + "/kv-"
+                                    + tableBucket1.getBucket());
+        } else {
+            // Partitioned: {dataDir}/{db}/{table}-{tableId}/{partition}-p{partitionId}/kv-{bucket}
+            expectedDir =
+                    new File(
+                            tempDir,
+                            "db1/t1-"
+                                    + tableBucket1.getTableId()
+                                    + "/"
+                                    + partitionName
+                                    + "-p"
+                                    + tableBucket1.getPartitionId()
+                                    + "/kv-"
+                                    + tableBucket1.getBucket());
+        }
+        assertThat(dirPath).isEqualTo(expectedDir);
+    }
+
     @Test
     void testGetNonExistentKv() {
         initTableBuckets(null);
