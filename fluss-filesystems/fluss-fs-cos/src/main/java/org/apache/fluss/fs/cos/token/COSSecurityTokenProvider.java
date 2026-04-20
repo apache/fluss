@@ -51,8 +51,8 @@ public class COSSecurityTokenProvider {
     /** Default federation token name. */
     private static final String FEDERATION_TOKEN_NAME = "fluss-cos-federation";
 
-    /** Default duration seconds for temporary credentials, 1800s = 30min. */
-    private static final long DEFAULT_DURATION_SECONDS = 1800L;
+    /** Default duration seconds for temporary credentials, 3600s = 1h. */
+    private static final long DEFAULT_DURATION_SECONDS = 3600L;
 
     /**
      * Default COS full read-write policy that allows all COS operations. See <a

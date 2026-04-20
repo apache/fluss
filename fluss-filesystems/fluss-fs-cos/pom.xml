@@ -31,7 +31,7 @@
     <name>Fluss : FileSystems : COS FS</name>
 
     <properties>
-        <fs.cosn.sdk.version>3.3.5</fs.cosn.sdk.version>
+        <fs.hadoop.cos.version>3.3.5</fs.hadoop.cos.version>
         <fs.cos.api.version>5.6.139</fs.cos.api.version>
         <fs.cos.sts.sdk.version>3.1.678</fs.cos.sts.sdk.version>
     </properties>
@@ -59,7 +59,7 @@
         <dependency>
             <groupId>org.apache.hadoop</groupId>
             <artifactId>hadoop-cos</artifactId>
-            <version>${fs.cosn.sdk.version}</version>
+            <version>${fs.hadoop.cos.version}</version>
             <exclusions>
                 <exclusion>
                     <groupId>com.qcloud</groupId>
