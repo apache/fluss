@@ -22,6 +22,7 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.exception.CorruptRecordException;
 import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.CompactedLogRecord;
 import org.apache.fluss.record.IndexedLogRecord;
 import org.apache.fluss.record.LogRecord;
@@ -211,24 +212,20 @@ abstract class CompletedFetch {
         List<ScanRecord> scanRecords = new ArrayList<>();
         try {
             for (int i = 0; i < maxRecords; i++) {
-                // Only move to next record if there was no exception in the last fetch.
-                if (cachedRecordException == null) {
-                    corruptLastRecord = true;
-                    lastRecord = nextFetchedRecord();
-                    corruptLastRecord = false;
-                }
-
+                fetchRecord(scanRecords);
                 if (lastRecord == null) {
                     break;
                 }
+            }
 
-                ScanRecord record = toScanRecord(lastRecord);
-                scanRecords.add(record);
-                recordsRead++;
-                // Per-record offset is a best-effort value; the authoritative offset
-                // comes from the batch's nextLogOffset once the batch is fully consumed.
-                nextFetchOffset = lastRecord.logOffset() + 1;
-                cachedRecordException = null;
+            // Guarantee that UPDATE_BEFORE (-U) and UPDATE_AFTER (+U) are never split
+            // across two consecutive poll batches. If the last fetched record is an
+            // UPDATE_BEFORE, fetch one more record so the matching UPDATE_AFTER is
+            // included in the same batch. This prevents downstream converters (e.g.,
+            // BinlogRowConverter) from seeing an orphaned -U when records from multiple
+            // buckets are interleaved across polls.
+            if (lastRecord != null && lastRecord.getChangeType() == ChangeType.UPDATE_BEFORE) {
+                fetchRecord(scanRecords);
             }
         } catch (Exception e) {
             cachedRecordException = e;
@@ -242,6 +239,27 @@ abstract class CompletedFetch {
         }
 
         return scanRecords;
+    }
+
+    private void fetchRecord(List<ScanRecord> scanRecords) throws Exception {
+        // Only move to next record if there was no exception in the last fetch.
+        if (cachedRecordException == null) {
+            corruptLastRecord = true;
+            lastRecord = nextFetchedRecord();
+            corruptLastRecord = false;
+        }
+
+        if (lastRecord == null) {
+            return;
+        }
+
+        ScanRecord record = toScanRecord(lastRecord);
+        scanRecords.add(record);
+        recordsRead++;
+        // Per-record offset is a best-effort value; the authoritative offset
+        // comes from the batch's nextLogOffset once the batch is fully consumed.
+        nextFetchOffset = lastRecord.logOffset() + 1;
+        cachedRecordException = null;
     }
 
     private LogRecord nextFetchedRecord() throws Exception {
