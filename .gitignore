@@ -34,6 +34,7 @@ website/blog
 website/node_modules
 website/build
 website/.docusaurus
+website/docs/_configs/
 website/.cache-loader
 website/.env.local
 website/.env.development.local
