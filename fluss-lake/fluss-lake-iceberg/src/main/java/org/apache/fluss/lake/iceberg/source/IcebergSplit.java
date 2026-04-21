@@ -22,12 +22,10 @@ import org.apache.fluss.lake.source.LakeSplit;
 
 import org.apache.iceberg.FileScanTask;
 
-import java.io.Serializable;
 import java.util.List;
 
 /** Split for Iceberg table. */
-public class IcebergSplit implements LakeSplit, Serializable {
-    private static final long serialVersionUID = 1L;
+public class IcebergSplit implements LakeSplit {
 
     private final FileScanTask fileScanTask;
     private final int bucket;

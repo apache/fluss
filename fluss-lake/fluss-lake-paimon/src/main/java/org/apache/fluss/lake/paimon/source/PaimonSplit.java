@@ -23,15 +23,12 @@ import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.table.source.DataSplit;
 
-import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
 /** Split for paimon table. */
-public class PaimonSplit implements LakeSplit, Serializable {
-
-    private static final long serialVersionUID = 1L;
+public class PaimonSplit implements LakeSplit {
 
     private final DataSplit dataSplit;
 
