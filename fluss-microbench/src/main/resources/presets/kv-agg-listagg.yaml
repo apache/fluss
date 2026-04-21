@@ -1,0 +1,105 @@
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+meta:
+  name: kv-agg-listagg
+  description: "KV table LISTAGG – unbounded string growth memory pressure"
+  tags: [kv, aggregation, listagg, memory]
+
+cluster:
+  tablet-servers: 3
+  jvm-args:
+    - "-Xmx4g"
+    - "-Xms4g"
+    - "-XX:MaxDirectMemorySize=2g"
+    - "-XX:+UseG1GC"
+    - "-XX:MaxGCPauseMillis=50"
+  config:
+    kv.rocksdb.block-cache-size: "512mb"
+    kv.rocksdb.write-buffer-size: "128mb"
+    kv.rocksdb.max-write-buffer-number: "4"
+
+client:
+  config:
+    client.writer.buffer.memory-size: "256mb"
+    client.writer.batch-size: "2mb"
+
+table:
+  name: listagg_perf
+  columns:
+    - name: group_id
+      type: INT
+    - name: tags
+      type: STRING
+      agg:
+        function: LISTAGG
+        args:
+          delimiter: ","
+  primary-key: [group_id]
+  merge-engine: AGGREGATION
+  buckets: 12
+
+data:
+  seed: 42
+  generators:
+    group_id:
+      type: sequential
+      start: 0
+      # 1M groups — large key space ensures per-key LISTAGG value stays small
+      # With 10M records, each group gets ~10 appends → ~100 bytes per value
+      # This keeps Arrow WAL serialization fast and avoids direct memory exhaustion
+      end: 1000000
+    tags:
+      type: random-string
+      length: { min: 5, max: 15 }
+
+workload:
+  # LISTAGG with 1M groups — record-count mode for deterministic workload
+  # 10M records / 1M groups = avg 10 appends per key → ~100 bytes per value
+  - phase: write
+    records: 10000000
+    threads: 4
+  # Phase 2: concurrent lookup on populated data
+  - phase: lookup
+    warmup: 20000000
+    duration: 90s
+    threads: 4
+    key-range: [0, 1000000]
+  # Phase 3: concurrent write + lookup – mixed contention
+  - phase: mixed
+    warmup: 1000000
+    duration: 90s
+    threads: 4
+    mix:
+      write: 60
+      lookup: 40
+
+sampling:
+  interval: 1s
+  nmt: true
+  nmtInterval: 5s
+  jfr: true
+  jfrConfig: "settings=profile"
+
+report:
+  formats: [json, csv, html]
+
+thresholds:
+  rss-peak-mb:
+    max: 8000
+  heap-mb:
+    max: 4096
+  p99-ms:
+    max: 30000

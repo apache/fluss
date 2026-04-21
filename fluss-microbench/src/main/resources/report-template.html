@@ -1,0 +1,346 @@
+<!--
+  Licensed to the Apache Software Foundation (ASF) under one or more
+  contributor license agreements.  See the NOTICE file distributed with
+  this work for additional information regarding copyright ownership.
+  The ASF licenses this file to You under the Apache License, Version 2.0
+  (the "License"); you may not use this file except in compliance with
+  the License.  You may obtain a copy of the License at
+
+     http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{SCENARIO_NAME}} - Perf Report</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+:root {
+  --bg-canvas: #111217;
+  --bg-panel: #181b1f;
+  --bg-header: #1f2229;
+  --bg-hover: #22252b;
+  --border: #2c3235;
+  --border-light: #34383c;
+  --text: #d8d9da;
+  --text2: #8e8e8e;
+  --text3: #6e7681;
+  --mono: 'IBM Plex Mono', 'SF Mono', 'Consolas', monospace;
+  --sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  --green: #73BF69;
+  --blue: #8AB8FF;
+  --yellow: #F2CC0C;
+  --orange: #FF9830;
+  --red: #F2495C;
+  --purple: #B877D9;
+  --c1: #73BF69; --c2: #8AB8FF; --c3: #F2CC0C; --c4: #FF9830;
+  --c5: #F2495C; --c6: #B877D9; --c7: #56C0D8; --c8: #FF6EB4;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:var(--sans);background:var(--bg-canvas);color:var(--text);font-size:13px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1600px;margin:0 auto;padding:20px 24px}
+
+/* Top bar */
+.topbar{display:flex;align-items:baseline;gap:12px;padding:12px 0;border-bottom:2px solid var(--border-light);margin-bottom:16px}
+.topbar h1{font-family:var(--mono);font-size:18px;font-weight:700;letter-spacing:-0.3px;color:#fff}
+.tag{font-family:var(--mono);font-size:10px;font-weight:600;padding:2px 8px;border-radius:3px;text-transform:uppercase;letter-spacing:0.5px}
+.tag-complete{background:rgba(115,191,105,0.15);color:var(--green)}
+.tag-partial{background:rgba(255,152,48,0.15);color:var(--orange)}
+.tag-error{background:rgba(242,73,92,0.15);color:var(--red)}
+.topbar .ts{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--text3)}
+
+/* KPI grid */
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-bottom:16px}
+.kpi{background:var(--bg-panel);border:1px solid var(--border);border-radius:4px;padding:12px 14px}
+.kpi-val{font-family:var(--mono);font-size:20px;font-weight:700;line-height:1.2;white-space:nowrap;color:var(--text)}
+.kpi-hi .kpi-val{color:var(--blue)}
+.kpi-lbl{font-size:10px;color:var(--text3);text-transform:uppercase;letter-spacing:0.4px;margin-top:2px;white-space:nowrap}
+
+/* Grafana collapsible row */
+.grafana-row{margin-bottom:12px}
+.grafana-row-header{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg-header);border:1px solid var(--border);border-radius:4px;cursor:pointer;user-select:none;transition:background 0.15s}
+.grafana-row-header:hover{background:var(--bg-hover)}
+.grafana-row-header .chevron{display:inline-block;width:16px;height:16px;transition:transform 0.2s;flex-shrink:0}
+.grafana-row-header .chevron svg{fill:var(--text2);width:16px;height:16px}
+.grafana-row.collapsed .grafana-row-header .chevron{transform:rotate(-90deg)}
+.grafana-row-title{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--text);letter-spacing:0.3px}
+.grafana-row-count{font-family:var(--mono);font-size:10px;color:var(--text3);margin-left:auto}
+.grafana-row-body{overflow:hidden;transition:max-height 0.3s ease}
+.grafana-row.collapsed .grafana-row-body{max-height:0 !important;overflow:hidden}
+.grafana-row-body-inner{padding-top:8px}
+
+/* Panels */
+.panel{background:var(--bg-panel);border:1px solid var(--border);border-radius:4px;overflow:hidden}
+.panel-head{font-family:var(--mono);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.8px;color:var(--text3);padding:8px 12px;border-bottom:1px solid var(--border);background:var(--bg-header)}
+.panel-body{padding:10px 12px}
+
+/* Env */
+.env{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:0 20px}
+.env-3col{grid-template-columns:repeat(3,1fr)}
+.env-r{display:flex;justify-content:space-between;gap:16px;padding:4px 0;border-bottom:1px solid var(--border)}
+.env-r:last-child{border:none}
+.env-k{color:var(--text3);font-size:12px;flex-shrink:0;min-width:100px}
+.env-v{font-family:var(--mono);font-size:12px;font-weight:500;text-align:right;word-break:break-word;color:var(--text)}
+
+/* Table */
+.tbl{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px;white-space:nowrap}
+.tbl th{text-align:right;padding:6px 10px;font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;border-bottom:2px solid var(--border);background:var(--bg-header)}
+.tbl th:first-child{text-align:left}
+.tbl td{text-align:right;padding:7px 10px;border-bottom:1px solid var(--border);color:var(--text)}
+.tbl td:first-child{text-align:left;font-weight:600;color:var(--blue)}
+.tbl tr:hover td{background:var(--bg-hover)}
+
+/* Phase stat cards */
+.phase-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px;margin-top:8px}
+.phase-card{background:var(--bg-panel);border:1px solid var(--border);border-radius:4px;padding:12px 14px}
+.phase-card-name{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--blue);margin-bottom:8px;border-bottom:1px solid var(--border);padding-bottom:6px}
+.phase-card-stats{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px 12px}
+.phase-card-stat .stat-val{font-family:var(--mono);font-size:14px;font-weight:700;color:var(--text)}
+.phase-card-stat .stat-lbl{font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:0.3px}
+.phase-card-stat.accent .stat-val{color:var(--green)}
+
+/* Charts */
+.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.chart-box{background:var(--bg-panel);border:1px solid var(--border);border-radius:4px;overflow:hidden}
+.chart-head{font-family:var(--mono);font-size:10px;font-weight:600;letter-spacing:0.3px;color:var(--text3);padding:8px 12px;border-bottom:1px solid var(--border);background:var(--bg-header)}
+.chart-body{position:relative;height:220px;padding:8px}
+
+/* Error */
+.err{background:rgba(242,73,92,0.1);border:1px solid var(--red);border-radius:4px;padding:12px;margin-bottom:16px}
+.err pre{font-family:var(--mono);font-size:12px;color:var(--red);white-space:pre-wrap}
+
+/* Footer */
+.foot{text-align:center;padding:12px 0;font-family:var(--mono);font-size:10px;color:var(--text3);border-top:1px solid var(--border);margin-top:8px}
+
+@media(max-width:900px){
+  .chart-grid{grid-template-columns:1fr}
+  .kpi-grid{grid-template-columns:repeat(2,1fr)}
+  .phase-cards{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="topbar">
+  <h1>{{SCENARIO_NAME}}</h1>
+  <span class="tag tag-{{STATUS_CLASS}}">{{STATUS}}</span>
+  <span class="ts">{{META_LINE}}</span>
+</div>
+
+<div class="kpi-grid">
+  {{KPI_ITEMS}}
+</div>
+
+<div class="grafana-row collapsed" data-section="config-env">
+  <div class="grafana-row-header" onclick="toggleRow(this)">
+    <span class="chevron"><svg viewBox="0 0 16 16"><path d="M5.7 13.7L4.3 12.3 8.6 8 4.3 3.7 5.7 2.3 11.4 8z"/></svg></span>
+    <span class="grafana-row-title">Configuration & Environment</span>
+  </div>
+  <div class="grafana-row-body">
+    <div class="grafana-row-body-inner">
+      <div class="panel" style="margin-bottom:8px">
+        <div class="panel-head">Test Configuration</div>
+        <div class="panel-body"><div class="env env-3col">{{CONFIG_ITEMS}}</div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">Environment</div>
+        <div class="panel-body"><div class="env">{{ENV_ITEMS}}</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="grafana-row" data-section="workload-phases">
+  <div class="grafana-row-header" onclick="toggleRow(this)">
+    <span class="chevron"><svg viewBox="0 0 16 16"><path d="M5.7 13.7L4.3 12.3 8.6 8 4.3 3.7 5.7 2.3 11.4 8z"/></svg></span>
+    <span class="grafana-row-title">Workload Phases</span>
+  </div>
+  <div class="grafana-row-body">
+    <div class="grafana-row-body-inner">
+      <div class="panel">
+        <div class="panel-body" style="padding:0;overflow-x:auto">
+          <table class="tbl">
+            <thead><tr>
+              <th>Phase</th><th>Threads</th><th>Records</th><th>Duration</th>
+              <th>Warmup</th><th>Rate Limit</th><th>Key Range</th>
+            </tr></thead>
+            <tbody>{{WORKLOAD_ROWS}}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="grafana-row" data-section="phase-results">
+  <div class="grafana-row-header" onclick="toggleRow(this)">
+    <span class="chevron"><svg viewBox="0 0 16 16"><path d="M5.7 13.7L4.3 12.3 8.6 8 4.3 3.7 5.7 2.3 11.4 8z"/></svg></span>
+    <span class="grafana-row-title">Phase Results</span>
+  </div>
+  <div class="grafana-row-body">
+    <div class="grafana-row-body-inner">
+      <div class="panel" style="margin-bottom:8px">
+        <div class="panel-body" style="padding:0;overflow-x:auto">
+          <table class="tbl">
+            <thead><tr>
+              <th>Phase</th><th>Ops</th><th>Bytes</th><th>Ops/s</th><th>MB/s</th>
+              <th>p50</th><th>p95</th><th>p99</th><th>p99.9</th><th>p99.99</th><th>Max</th><th>Dur</th>
+            </tr></thead>
+            <tbody>{{PHASE_ROWS}}</tbody>
+          </table>
+        </div>
+      </div>
+      {{PHASE_CARDS}}
+    </div>
+  </div>
+</div>
+
+<div class="grafana-row" data-section="overview-charts">
+  <div class="grafana-row-header" onclick="toggleRow(this)">
+    <span class="chevron"><svg viewBox="0 0 16 16"><path d="M5.7 13.7L4.3 12.3 8.6 8 4.3 3.7 5.7 2.3 11.4 8z"/></svg></span>
+    <span class="grafana-row-title">Overview Charts</span>
+  </div>
+  <div class="grafana-row-body">
+    <div class="grafana-row-body-inner">
+      <div class="chart-grid">
+        {{OVERVIEW_CHARTS}}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="grafana-row" data-section="client-charts">
+  <div class="grafana-row-header" onclick="toggleRow(this)">
+    <span class="chevron"><svg viewBox="0 0 16 16"><path d="M5.7 13.7L4.3 12.3 8.6 8 4.3 3.7 5.7 2.3 11.4 8z"/></svg></span>
+    <span class="grafana-row-title">Client Charts</span>
+  </div>
+  <div class="grafana-row-body">
+    <div class="grafana-row-body-inner">
+      <div class="chart-grid">
+        {{CLIENT_CHARTS}}
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="grafana-row" data-section="server-charts">
+  <div class="grafana-row-header" onclick="toggleRow(this)">
+    <span class="chevron"><svg viewBox="0 0 16 16"><path d="M5.7 13.7L4.3 12.3 8.6 8 4.3 3.7 5.7 2.3 11.4 8z"/></svg></span>
+    <span class="grafana-row-title">Server Charts</span>
+  </div>
+  <div class="grafana-row-body">
+    <div class="grafana-row-body-inner">
+      <div class="chart-grid">
+        {{SERVER_CHARTS}}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Server Metrics Timeseries (auto-generated grafana-row sections) -->
+{{SERVER_METRIC_CHARTS}}
+
+{{ERROR_SECTION}}
+
+{{CAVEATS_SECTION}}
+
+<div class="foot">fluss-perf benchmark report</div>
+</div>
+
+<script>
+var C=['#58D9F9','#8AB8FF','#F2CC0C','#FF9830','#F2495C','#B877D9','#73BF69','#FF6EB4'];
+Chart.defaults.color='#8e8e8e';
+Chart.defaults.borderColor='#2c3235';
+Chart.defaults.font.family="'IBM Plex Mono',monospace";
+Chart.defaults.font.size=10;
+Chart.defaults.plugins.legend.labels.boxWidth=8;
+Chart.defaults.plugins.legend.labels.boxHeight=8;
+Chart.defaults.plugins.legend.labels.padding=12;
+Chart.defaults.plugins.legend.labels.usePointStyle=true;
+Chart.defaults.elements.line.borderWidth=1.5;
+Chart.defaults.elements.line.tension=0.25;
+Chart.defaults.elements.point.radius=0;
+Chart.defaults.elements.point.hoverRadius=3;
+Chart.defaults.animation.duration=0;
+
+/* Collapsible row toggle with localStorage persistence */
+function toggleRow(header) {
+  var row = header.parentElement;
+  var section = row.getAttribute('data-section');
+  row.classList.toggle('collapsed');
+  var isCollapsed = row.classList.contains('collapsed');
+  try { localStorage.setItem('perf-row-' + section, isCollapsed ? '1' : '0'); } catch(e) {}
+  if (!isCollapsed) {
+    setTimeout(function(){ window.dispatchEvent(new Event('resize')); }, 350);
+  }
+}
+
+/* Restore collapsed state from localStorage on load */
+(function() {
+  var rows = document.querySelectorAll('.grafana-row[data-section]');
+  for (var i = 0; i < rows.length; i++) {
+    var section = rows[i].getAttribute('data-section');
+    try {
+      var saved = localStorage.getItem('perf-row-' + section);
+      if (saved === '1') {
+        rows[i].classList.add('collapsed');
+      } else if (saved === '0') {
+        rows[i].classList.remove('collapsed');
+      }
+      // If no saved state, keep the default from HTML
+    } catch(e) {}
+  }
+})();
+
+function lineChart(id,labels,datasets,yLabel){
+  var el=document.getElementById(id);if(!el)return;
+  new Chart(el,{type:'line',
+    data:{labels:labels,datasets:datasets.map(function(d,i){return{
+      label:d.label,data:d.data,borderColor:C[i%C.length],
+      backgroundColor:C[i%C.length]+'15',fill:false,
+      yAxisID:d.yAxisID||'y',pointBackgroundColor:C[i%C.length]
+    }})},
+    options:{responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{tooltip:{backgroundColor:'#1f2229',titleColor:'#d8d9da',bodyColor:'#8e8e8e',
+        borderColor:'#2c3235',borderWidth:1,padding:8,cornerRadius:3,
+        titleFont:{family:"'IBM Plex Mono',monospace",size:11,weight:'600'},
+        bodyFont:{family:"'IBM Plex Mono',monospace",size:10}}},
+      scales:{
+        x:{grid:{display:false,color:'#2c3235'},ticks:{maxRotation:0,autoSkipPadding:20,color:'#6e7681'}},
+        y:{title:{display:!!yLabel,text:yLabel||'',font:{size:10},color:'#8e8e8e'},beginAtZero:true,grid:{color:'#2c3235'},ticks:{color:'#6e7681'}},
+        ...(datasets.some(function(d){return d.yAxisID==='y1';})?{
+          y1:{position:'right',title:{display:true,text:'MB/s',font:{size:10},color:'#8e8e8e'},beginAtZero:true,grid:{drawOnChartArea:false},ticks:{color:'#6e7681'}}
+        }:{})
+      }
+    }
+  });
+}
+function barChart(id,labels,values){
+  var el=document.getElementById(id);if(!el)return;
+  new Chart(el,{type:'bar',
+    data:{labels:labels,datasets:[{data:values,
+      backgroundColor:values.map(function(v){var m=Math.max.apply(null,values);var r=v/(m||1);return r>0.6?'#8AB8FF':r>0.25?'#5A8FCC':'#3A6090'}),
+      borderRadius:2,barPercentage:0.8}]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},
+        tooltip:{backgroundColor:'#1f2229',titleColor:'#d8d9da',bodyColor:'#8e8e8e',borderColor:'#2c3235',borderWidth:1,padding:8,cornerRadius:3,
+          titleFont:{family:"'IBM Plex Mono',monospace",size:11},bodyFont:{family:"'IBM Plex Mono',monospace",size:10}}},
+      scales:{x:{grid:{display:false},ticks:{maxRotation:45,font:{size:9},color:'#6e7681'}},
+        y:{title:{display:true,text:'Count',font:{size:10},color:'#8e8e8e'},beginAtZero:true,grid:{color:'#2c3235'},ticks:{color:'#6e7681'}}}
+    }
+  });
+}
+{{CHART_SCRIPTS}}
+</script>
+</body>
+</html>

@@ -1,0 +1,110 @@
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+meta:
+  name: log-filter-pushdown
+  description: "Filter pushdown trimming ratio – write mixed data, scan with selective filter"
+  tags: [log, filter, pushdown, trimming]
+
+cluster:
+  tablet-servers: 3
+  jvm-args:
+    - "-Xmx4g"
+    - "-Xms4g"
+    - "-XX:MaxDirectMemorySize=1g"
+    - "-XX:+UseG1GC"
+    - "-XX:MaxGCPauseMillis=50"
+  config:
+    log.segment.file-size: "64mb"
+
+client:
+  config:
+    client.writer.buffer.memory-size: "128mb"
+    client.writer.batch-size: "1mb"
+
+table:
+  name: filter_events
+  columns:
+    - name: event_id
+      type: BIGINT
+    - name: category
+      type: INT
+    - name: severity
+      type: INT
+    - name: payload
+      type: STRING
+  buckets: 6
+  log-format: ARROW
+  properties:
+    table.statistics.columns: "*"
+
+data:
+  seed: 42
+  generators:
+    event_id:
+      type: sequential
+      start: 0
+      end: 5000000
+    category:
+      type: random-int
+      min: 0
+      max: 100
+    severity:
+      type: random-int
+      min: 1
+      max: 10
+    payload:
+      type: random-string
+      length: 256
+
+workload:
+  # Phase 1: Write 5M records with random category (0-100) and severity (1-10)
+  - phase: write
+    warmup: 100000
+    records: 5000000
+    threads: 12
+
+  # Phase 2: Unfiltered scan baseline
+  - phase: scan-baseline
+    duration: 2m
+    threads: 6
+    from-offset: earliest
+
+  # Phase 3: Filtered scan – severity > 9 selects ~10% of data
+  # With batch-level statistics, most batches will be skipped entirely
+  - phase: scan-filtered
+    duration: 2m
+    threads: 6
+    from-offset: earliest
+    filter:
+      column: severity
+      op: gt
+      value: "9"
+
+sampling:
+  interval: 1s
+  nmt: true
+  nmtInterval: 10s
+  jfr: true
+  jfrConfig: "settings=profile"
+
+report:
+  formats: [json, csv, html]
+
+thresholds:
+  write-tps:
+    min: 100000
+  p99-ms:
+    max: 2000

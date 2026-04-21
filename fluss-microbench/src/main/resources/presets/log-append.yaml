@@ -1,0 +1,96 @@
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+meta:
+  name: log-append
+  description: "Log table append throughput – sustained write + concurrent scan stress"
+  tags: [log, throughput, sustained]
+
+cluster:
+  tablet-servers: 3
+  jvm-args:
+    - "-Xmx4g"
+    - "-Xms4g"
+    - "-XX:MaxDirectMemorySize=1g"
+    - "-XX:+UseG1GC"
+    - "-XX:MaxGCPauseMillis=50"
+  config:
+    kv.rocksdb.block-cache-size: "512mb"
+    log.segment.file-size: "256mb"
+
+client:
+  config:
+    client.writer.buffer.memory-size: "64mb"
+    client.writer.batch-size: "1mb"
+
+table:
+  name: event_log
+  columns:
+    - name: event_id
+      type: BIGINT
+    - name: event_time
+      type: BIGINT
+    - name: payload
+      type: STRING
+  buckets: 12
+  log-format: INDEXED
+
+data:
+  seed: 42
+  generators:
+    event_id:
+      type: sequential
+      start: 0
+      end: 50000000
+    event_time:
+      type: timestamp-now
+    payload:
+      type: random-string
+      length: 32
+
+workload:
+  # Phase 1: sustained write – duration-based for stable measurement window
+  # Time-based warmup absorbs JIT C2 compilation, Netty buffer pool, OS page cache ramp-up
+  # Disk budget: ~1.2M ops/s × 90s total × ~80B/row ≈ 8.6GB
+  - phase: write
+    warmup: 30s
+    duration: 60s
+    threads: 1
+  # Phase 2: concurrent scan on written data
+  - phase: scan
+    warmup: 400
+    duration: 90s
+    threads: 2
+    from-offset: earliest
+
+sampling:
+  interval: 1s
+  nmt: true
+  nmtInterval: 10s
+  jfr: true
+  jfrConfig: "settings=profile"
+
+report:
+  formats: [json, csv, html]
+
+thresholds:
+  write-tps:
+    min: 200000
+  rss-peak-mb:
+    max: 6000
+  heap-mb:
+    max: 4096
+  p99-ms:
+    max: 1000

@@ -233,7 +233,7 @@ public final class FlussClusterExtension
             rpcClient = null;
         }
         if (tempDir != null) {
-            tempDir.delete();
+            org.apache.fluss.utils.FileUtils.deleteDirectoryQuietly(tempDir);
             tempDir = null;
         }
         for (TabletServer tabletServer : tabletServers.values()) {

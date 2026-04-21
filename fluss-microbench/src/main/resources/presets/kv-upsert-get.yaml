@@ -1,0 +1,119 @@
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+meta:
+  name: kv-upsert-get
+  description: "KV table upsert + point get – pure RocksDB write/compaction stress"
+  tags: [kv, upsert, lookup, rocksdb]
+
+cluster:
+  tablet-servers: 3
+  jvm-args:
+    - "-Xmx4g"
+    - "-Xms4g"
+    - "-XX:MaxDirectMemorySize=2g"
+    - "-XX:+UseG1GC"
+    - "-XX:MaxGCPauseMillis=50"
+  config:
+    kv.rocksdb.block-cache-size: "512mb"
+    kv.rocksdb.write-buffer-size: "128mb"
+    kv.rocksdb.max-write-buffer-number: "4"
+
+client:
+  config:
+    client.writer.buffer.memory-size: "256mb"
+    client.writer.batch-size: "2mb"
+
+table:
+  name: kv_upsert
+  columns:
+    - name: user_id
+      type: BIGINT
+    - name: name
+      type: STRING
+    - name: balance
+      type: DOUBLE
+    - name: updated_at
+      type: BIGINT
+  primary-key: [user_id]
+  buckets: 12
+
+data:
+  seed: 42
+  generators:
+    user_id:
+      type: sequential
+      start: 0
+      # 5M unique keys – large enough to overflow memtable into SST files
+      # and trigger L0→L1→L2 compaction chains
+      end: 5000000
+    name:
+      type: random-string
+      length: 32
+    balance:
+      type: random-double
+      min: 0.0
+      max: 100000.0
+    updated_at:
+      type: timestamp-now
+
+workload:
+  # Phase 1: bulk upsert – fill 5M keys, then overwrite to trigger compaction
+  # 10M records / 5M keys = avg 2 overwrites per key
+  # ~88 bytes/row × 10M = ~0.9GB raw data into RocksDB
+  # Record-count phase: use count-based warmup (500K global / 8 threads = 62.5K per thread)
+  - phase: write-bulk
+    warmup: 500000
+    records: 10000000
+    threads: 8
+  # Phase 2: sustained upsert – keep writing to push compaction further
+  # Time-based warmup absorbs RocksDB compaction state carryover from write-bulk
+  - phase: write-sustained
+    warmup: 30s
+    duration: 2m
+    threads: 8
+  # Phase 3: pure point get under compaction pressure
+  - phase: lookup
+    warmup: 2000
+    duration: 2m
+    threads: 4
+    key-range: [0, 5000000]
+  # Phase 4: concurrent upsert + get – worst-case read/write contention
+  - phase: mixed
+    duration: 2m
+    threads: 8
+    mix:
+      write: 50
+      lookup: 50
+
+sampling:
+  interval: 1s
+  nmt: true
+  nmtInterval: 10s
+  jfr: true
+  jfrConfig: "settings=profile"
+
+report:
+  formats: [json, csv, html]
+
+thresholds:
+  write-tps:
+    min: 100000
+  rss-peak-mb:
+    max: 8000
+  heap-mb:
+    max: 4096
+  p99-ms:
+    max: 1000
