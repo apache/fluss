@@ -547,6 +547,9 @@ public final class Replica {
     // -------------------------------------------------------------------------------------------
 
     private void onBecomeNewLeader() {
+        // Clear standby flag — a leader is never a standby replica.
+        isStandbyReplica = false;
+
         updateLeaderEndOffsetSnapshot();
 
         if (isDataLakeEnabled()) {
@@ -1752,6 +1755,11 @@ public final class Replica {
 
         // TODO add server epoch to isr.
 
+        // TODO: For PK tables, if the current standby list is empty (e.g., the previous standby
+        //  went down), we should consider assigning a standby from the expanded ISR members.
+        //  This also requires sending a NotifyLeaderAndIsr to the newly assigned standby replica
+        //  so it can start maintaining KV snapshots. Without this, buckets that lose their standby
+        //  will not regain one until the next leader election.
         LeaderAndIsr newLeaderAndIsr =
                 new LeaderAndIsr(
                         localTabletServerId,

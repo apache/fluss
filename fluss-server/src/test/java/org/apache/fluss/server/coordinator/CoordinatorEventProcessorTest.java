@@ -1066,16 +1066,6 @@ class CoordinatorEventProcessorTest {
         }
         testCoordinatorChannelManager.setGateways(gateways);
 
-        // Use a LOG table (no primary key) so that leader election always picks the first
-        // available replica in newReplicas. PK tables have standby-promotion logic that can
-        // elect a different leader than the one specified in the rebalance plan.
-        TableDescriptor logTable =
-                TableDescriptor.builder()
-                        .schema(Schema.newBuilder().column("a", DataTypes.INT()).build())
-                        .distributedBy(3)
-                        .build()
-                        .withReplicationFactor(REPLICATION_FACTOR);
-
         // Create a table with 3 buckets, each assigned to replicas [0, 1, 2] with leader 0.
         TablePath t1 = TablePath.of(defaultDatabase, "test_leader_rebalance_sequential");
         Map<Integer, BucketAssignment> bucketAssignments = new HashMap<>();
@@ -1083,7 +1073,7 @@ class CoordinatorEventProcessorTest {
         bucketAssignments.put(1, BucketAssignment.of(0, 1, 2));
         bucketAssignments.put(2, BucketAssignment.of(0, 1, 2));
         TableAssignment tableAssignment = new TableAssignment(bucketAssignments);
-        long t1Id = metadataManager.createTable(t1, logTable, tableAssignment, false);
+        long t1Id = metadataManager.createTable(t1, TEST_TABLE, tableAssignment, false);
 
         TableBucket tb0 = new TableBucket(t1Id, 0);
         TableBucket tb1 = new TableBucket(t1Id, 1);

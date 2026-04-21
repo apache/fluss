@@ -717,8 +717,13 @@ public class TableBucketStateMachine {
 
         return Optional.of(
                 new ElectionResult(
-                        aliveReplicas,
+                        availableReplicas,
                         new LeaderAndIsr(
-                                leader, 0, aliveReplicas, standbyReplicas, coordinatorEpoch, 0)));
+                                leader,
+                                0,
+                                availableReplicas,
+                                standbyReplicas,
+                                coordinatorEpoch,
+                                0)));
     }
 }

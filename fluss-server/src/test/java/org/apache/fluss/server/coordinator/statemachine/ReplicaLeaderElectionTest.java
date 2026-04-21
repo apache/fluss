@@ -290,11 +290,11 @@ public class ReplicaLeaderElectionTest {
         Optional<ElectionResult> leaderOpt =
                 reassignmentLeaderElection.leaderElection(liveReplicas, leaderAndIsr, true);
         assertThat(leaderOpt).isPresent();
-        // Standby (3) should be promoted to leader
-        assertThat(leaderOpt.get().getLeaderAndIsr().leader()).isEqualTo(3);
-        // A new standby should be assigned from remaining replicas
+        // First available replica (1) should be leader to honor the rebalance plan
+        assertThat(leaderOpt.get().getLeaderAndIsr().leader()).isEqualTo(1);
+        // A new standby should be assigned from remaining available replicas
         assertThat(leaderOpt.get().getLeaderAndIsr().standbyReplicas())
-                .containsExactlyInAnyOrder(1);
+                .containsExactlyInAnyOrder(2);
     }
 
     @Test

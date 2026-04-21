@@ -35,7 +35,7 @@ public class LeaderAndIsrJsonSerde
 
     public static final LeaderAndIsrJsonSerde INSTANCE = new LeaderAndIsrJsonSerde();
     private static final String VERSION_KEY = "version";
-    private static final int VERSION = 2;
+    private static final int CURRENT_VERSION = 2;
 
     private static final String LEADER = "leader";
     private static final String LEADER_EPOCH = "leader_epoch";
@@ -47,7 +47,7 @@ public class LeaderAndIsrJsonSerde
     @Override
     public void serialize(LeaderAndIsr leaderAndIsr, JsonGenerator generator) throws IOException {
         generator.writeStartObject();
-        generator.writeNumberField(VERSION_KEY, VERSION);
+        generator.writeNumberField(VERSION_KEY, CURRENT_VERSION);
         generator.writeNumberField(LEADER, leaderAndIsr.leader());
         generator.writeNumberField(LEADER_EPOCH, leaderAndIsr.leaderEpoch());
         generator.writeArrayFieldStart(ISR);
@@ -82,7 +82,7 @@ public class LeaderAndIsrJsonSerde
         }
 
         List<Integer> standbyList = new ArrayList<>();
-        if (version > 1) {
+        if (version >= CURRENT_VERSION) {
             Iterator<JsonNode> hotStandbyListNodes = node.get(STANDBY_REPLICA).elements();
             while (hotStandbyListNodes.hasNext()) {
                 standbyList.add(hotStandbyListNodes.next().asInt());

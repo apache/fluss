@@ -1344,9 +1344,9 @@ public class ServerRpcMessageUtils {
                 for (int i = 0; i < reqForBucket.getNewIsrsCount(); i++) {
                     newIsr.add(reqForBucket.getNewIsrAt(i));
                 }
-                List<Integer> standbyReplica = new ArrayList<>();
+                List<Integer> standbyReplicas = new ArrayList<>();
                 for (int i = 0; i < reqForBucket.getStandbyReplicasCount(); i++) {
-                    standbyReplica.add(reqForBucket.getStandbyReplicaAt(i));
+                    standbyReplicas.add(reqForBucket.getStandbyReplicaAt(i));
                 }
 
                 leaderAndIsrMap.put(
@@ -1355,7 +1355,7 @@ public class ServerRpcMessageUtils {
                                 leaderId,
                                 reqForBucket.getLeaderEpoch(),
                                 newIsr,
-                                standbyReplica,
+                                standbyReplicas,
                                 reqForBucket.getCoordinatorEpoch(),
                                 reqForBucket.getBucketEpoch()));
             }
@@ -1432,9 +1432,9 @@ public class ServerRpcMessageUtils {
                 for (int i = 0; i < respForBucket.getIsrsCount(); i++) {
                     isr.add(respForBucket.getIsrAt(i));
                 }
-                List<Integer> standbyReplica = new ArrayList<>();
+                List<Integer> standbyReplicas = new ArrayList<>();
                 for (int i = 0; i < respForBucket.getStandbyReplicasCount(); i++) {
-                    standbyReplica.add(respForBucket.getStandbyReplicaAt(i));
+                    standbyReplicas.add(respForBucket.getStandbyReplicaAt(i));
                 }
                 adjustIsrResult.put(
                         tb,
@@ -1444,7 +1444,7 @@ public class ServerRpcMessageUtils {
                                         respForBucket.getLeaderId(),
                                         respForBucket.getLeaderEpoch(),
                                         isr,
-                                        standbyReplica,
+                                        standbyReplicas,
                                         respForBucket.getCoordinatorEpoch(),
                                         respForBucket.getBucketEpoch())));
             }

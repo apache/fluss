@@ -40,6 +40,12 @@ public interface IsrState {
      */
     List<Integer> maximalIsr();
 
+    /**
+     * Returns the list of standby replicas for this bucket. Standby replicas are follower replicas
+     * designated to maintain a recent KV snapshot so that they can be quickly promoted to leader
+     * without a full data rebuild. Currently, at most one standby replica is supported per bucket,
+     * and it is only applicable to primary-key tables.
+     */
     List<Integer> standbyReplicas();
 
     /** Indicates if we have an AdjustIsr request inflight. */
