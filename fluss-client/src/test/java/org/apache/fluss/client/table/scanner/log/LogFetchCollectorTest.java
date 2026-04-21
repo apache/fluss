@@ -210,4 +210,21 @@ public class LogFetchCollectorTest {
         return new DefaultCompletedFetch(
                 tableBucket, resultForBucket, readContext, logScannerStatus, true, offset, null);
     }
+
+    @Test
+    void testCollectDrainsDiscardedFetch() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        CompletedFetch completedFetch =
+                makeCompletedFetch(
+                        tb,
+                        new FetchLogResultForBucket(tb, genMemoryLogRecordsByObject(DATA1), 10L),
+                        0L);
+        logFetchBuffer.add(completedFetch);
+        logScannerStatus.unassignScanBuckets(Collections.singletonList(tb));
+
+        ScanRecords records = logFetchCollector.collectFetch(logFetchBuffer);
+
+        assertThat(records.buckets()).isEmpty();
+        assertThat(completedFetch.isConsumed()).isTrue();
+    }
 }
