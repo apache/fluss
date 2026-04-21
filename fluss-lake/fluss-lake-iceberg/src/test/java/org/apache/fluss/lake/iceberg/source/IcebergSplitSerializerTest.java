@@ -85,8 +85,8 @@ class IcebergSplitSerializerTest extends IcebergSourceTestBase {
 
     @Test
     void testJavaSerializationRoundTrip() throws Exception {
-        // prepare iceberg table - use a different table name to avoid conflict with other tests
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_java_serialization_table");
+        // prepare iceberg table
+        TablePath tablePath = TablePath.of(DEFAULT_DB, DEFAULT_TABLE);
         Schema schema =
                 new Schema(
                         optional(1, "c1", Types.IntegerType.get()),

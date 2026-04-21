@@ -81,9 +81,9 @@ class PaimonSplitSerializerTest extends PaimonSourceTestBase {
 
     @Test
     void testJavaSerializationRoundTrip() throws Exception {
-        // prepare paimon table - use a different table name to avoid conflict with other tests
+        // prepare paimon table
         int bucketNum = 1;
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_java_serialization_table");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, DEFAULT_TABLE);
         Schema.Builder builder =
                 Schema.newBuilder()
                         .column("c1", DataTypes.INT())
