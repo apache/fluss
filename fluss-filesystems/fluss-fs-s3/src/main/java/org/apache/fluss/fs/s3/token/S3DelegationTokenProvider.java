@@ -52,6 +52,7 @@ public class S3DelegationTokenProvider {
 
     private static final String REGION_KEY = "fs.s3a.region";
     private static final String ENDPOINT_KEY = "fs.s3a.endpoint";
+    private static final String PATH_STYLE_ACCESS_KEY = "fs.s3a.path.style.access";
 
     private static final String ROLE_ARN_KEY = "fs.s3a.assumed.role.arn";
     private static final String STS_ENDPOINT_KEY = "fs.s3a.assumed.role.sts.endpoint";
@@ -83,7 +84,7 @@ public class S3DelegationTokenProvider {
         }
 
         this.additionInfos = new HashMap<>();
-        for (String key : Arrays.asList(REGION_KEY, ENDPOINT_KEY)) {
+        for (String key : Arrays.asList(REGION_KEY, ENDPOINT_KEY, PATH_STYLE_ACCESS_KEY)) {
             if (conf.get(key) != null) {
                 additionInfos.put(key, conf.get(key));
             }
