@@ -145,13 +145,12 @@ abstract class FlussMicroBatchStream(
     } catch {
       case e: FlussRuntimeException =>
         if (e.getCause != null && e.getCause.isInstanceOf[InterruptedException]) {
-          logWarning(s"Streaming execution thread be interrupted.")
-          None
+          logWarning(s"Streaming execution thread was interrupted.")
+          throw e.getCause
         } else {
           throw e
         }
     }
-
   }
 
   // No need to notify fluss server
