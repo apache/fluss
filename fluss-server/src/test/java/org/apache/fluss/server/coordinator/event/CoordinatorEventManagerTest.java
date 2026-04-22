@@ -19,6 +19,8 @@ package org.apache.fluss.server.coordinator.event;
 
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
@@ -84,8 +86,16 @@ class CoordinatorEventManagerTest {
             retry(
                     Duration.ofMinutes(1),
                     () -> assertThat(metricsUpdateCount.get()).isGreaterThan(0));
+
+            Gauge activeTabletServerCount =
+                    (Gauge)
+                            TestingMetricGroups.COORDINATOR_METRICS
+                                    .getMetrics()
+                                    .get(MetricNames.ACTIVE_TABLET_SERVER_COUNT);
+            assertThat(activeTabletServerCount.getValue()).isEqualTo(2);
         } finally {
             manager.close();
+            TestingMetricGroups.COORDINATOR_METRICS.close();
         }
     }
 
