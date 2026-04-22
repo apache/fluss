@@ -481,8 +481,17 @@ $ cd docker/fluss
 docker/fluss $ docker buildx build --push --platform linux/arm64/v8,linux/amd64 --tag apache/fluss:${RELEASE_VERSION}-rc${RC_NUM} .
 ```
 
+Then, run the following commands to build and push the flink — a customized Apache Flink image that includes all necessary libraries and JARs for the Fluss Quickstart guide:
+
+```bash
+docker/fluss $ cd ../quickstart-flink
+docker/quickstart-flink $ ./prepare_build.sh
+docker/quickstart-flink $ docker buildx build --push --platform linux/arm64/v8,linux/amd64 --tag apache/fluss-quickstart-flink:1.20-${RELEASE_VERSION}-rc${RC_NUM} .
+```
+
 Verify the RC images are present:
 - https://hub.docker.com/r/apache/fluss/tags
+- https://hub.docker.com/r/apache/fluss-quickstart-flink/tags
 
 Then, update the `dockerVersion` field for the current release RC version in the `website/fluss-versions.json` file on the `main` branch to the value of `${RELEASE_VERSION}_RC${RC_NUM}` (which includes the RC suffix, e.g., `0.8.0-incubating-rc1`). This update should be committed and pushed to the `main` branch.
 
@@ -500,7 +509,7 @@ git push origin $TAG
 
 - Source & binary & helm-chart distribution deployed to the dev repository of [dist.apache.org](https://dist.apache.org/repos/dist/dev/incubator/fluss/)
 - Maven artifacts deployed to the staging repository of [repository.apache.org](https://repository.apache.org/content/repositories/)
-- RC Docker images pushed to [DockerHub](https://hub.docker.com/r/apache/fluss/tags)
+- RC Docker images pushed to DockerHub ([apache/fluss](https://hub.docker.com/r/apache/fluss/tags), [apache/fluss-quickstart-flink](https://hub.docker.com/r/apache/fluss-quickstart-flink/tags))
 - RC tag pushed to the [official repository](https://github.com/apache/fluss/tags)
 - Updated `dockerVersion` in `fluss-versions.json` on `main` branch
 
@@ -559,7 +568,7 @@ Upgrade note for the new release:
 
 Docker images for the release candidate:
 * fluss
-* quickstart
+* quickstart-flink
 
 Please download, verify and test. To learn more about how to verify: 
 https://fluss.apache.org/community/how-to-release/verifying-a-fluss-release/
@@ -807,7 +816,7 @@ In [GitHub Milestones](https://github.com/apache/fluss/milestones), mark the cur
 - Helm Chart package available in the release repository of https://dist.apache.org/repos/dist/release/incubator/fluss/helm-chart/
 - Dev repository https://dist.apache.org/repos/dist/dev/incubator/fluss/ is empty
 - Release tagged in the source code repository
-- Docker images for the release pushed to [DockerHub](https://hub.docker.com/r/apache/fluss/tags)
+- Docker images for the release pushed to DockerHub ([apache/fluss](https://hub.docker.com/r/apache/fluss/tags), [apache/fluss-quickstart-flink](https://hub.docker.com/r/apache/fluss-quickstart-flink/tags))
 - Milestone marked as released in GitHub
 
 ## Promote the release
