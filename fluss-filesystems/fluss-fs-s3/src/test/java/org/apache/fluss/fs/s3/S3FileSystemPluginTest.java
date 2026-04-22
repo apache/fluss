@@ -85,4 +85,58 @@ class S3FileSystemPluginTest {
         String providers = hadoopConfig.get(PROVIDER_CONFIG, "");
         assertThat(providers).contains(DynamicTemporaryAWSCredentialsProvider.NAME);
     }
+
+    @Test
+    void testExplicitProviderNotOverridden() {
+        Configuration flussConfig = new Configuration();
+        flussConfig.setString(
+                "fs.s3a.aws.credentials.provider",
+                "com.amazonaws.auth.EnvironmentVariableCredentialsProvider");
+
+        S3FileSystemPlugin plugin = new S3FileSystemPlugin();
+        org.apache.hadoop.conf.Configuration hadoopConfig =
+                plugin.buildHadoopConfiguration(flussConfig);
+
+        String providers = hadoopConfig.get(PROVIDER_CONFIG, "");
+        assertThat(providers)
+                .isEqualTo("com.amazonaws.auth.EnvironmentVariableCredentialsProvider");
+        assertThat(providers).doesNotContain(DynamicTemporaryAWSCredentialsProvider.NAME);
+    }
+
+    @Test
+    void testDelegationConfigPassthrough() {
+        Configuration flussConfig = new Configuration();
+        flussConfig.setString("fs.s3a.access.key", "serverKey");
+        flussConfig.setString("fs.s3a.secret.key", "serverSecret");
+        flussConfig.setString("fs.delegation.s3a.access.key", "delegationKey");
+        flussConfig.setString("fs.delegation.s3a.secret.key", "delegationSecret");
+
+        S3FileSystemPlugin plugin = new S3FileSystemPlugin();
+        org.apache.hadoop.conf.Configuration hadoopConfig =
+                plugin.buildHadoopConfiguration(flussConfig);
+
+        // Server keys are in fs.s3a.* namespace
+        assertThat(hadoopConfig.get("fs.s3a.access.key")).isEqualTo("serverKey");
+        assertThat(hadoopConfig.get("fs.s3a.secret.key")).isEqualTo("serverSecret");
+        // Delegation keys are preserved as-is in fs.delegation.s3a.* namespace
+        assertThat(hadoopConfig.get("fs.delegation.s3a.access.key")).isEqualTo("delegationKey");
+        assertThat(hadoopConfig.get("fs.delegation.s3a.secret.key")).isEqualTo("delegationSecret");
+    }
+
+    @Test
+    void testDelegationMirroredKeys() {
+        Configuration flussConfig = new Configuration();
+        flussConfig.setString("fs.s3a.access.key", "serverKey");
+        flussConfig.setString("fs.s3a.secret.key", "serverSecret");
+        flussConfig.setString("fs.delegation.s3a.access-key", "delegationKey");
+        flussConfig.setString("fs.delegation.s3a.secret-key", "delegationSecret");
+
+        S3FileSystemPlugin plugin = new S3FileSystemPlugin();
+        org.apache.hadoop.conf.Configuration hadoopConfig =
+                plugin.buildHadoopConfiguration(flussConfig);
+
+        // Mirrored: hyphenated keys get mapped to dotted equivalents
+        assertThat(hadoopConfig.get("fs.delegation.s3a.access.key")).isEqualTo("delegationKey");
+        assertThat(hadoopConfig.get("fs.delegation.s3a.secret.key")).isEqualTo("delegationSecret");
+    }
 }

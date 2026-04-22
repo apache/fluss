@@ -98,6 +98,13 @@ public class DefaultSecurityTokenManager implements SecurityTokenManager {
             AtomicReference<ObtainedSecurityToken> tokenContainer = new AtomicReference<>();
             Optional<Long> nextRenewal = obtainSecurityTokensAndGetNextRenewal(tokenContainer);
 
+            if (tokenContainer.get() != null && tokenContainer.get().isEmpty()) {
+                LOG.info(
+                        "Delegation is disabled (empty token received). "
+                                + "Skipping token distribution and renewal scheduling.");
+                return;
+            }
+
             if (tokenContainer.get() != null) {
                 securityTokenReceiverRepository.onNewTokensObtained(tokenContainer.get());
             } else {

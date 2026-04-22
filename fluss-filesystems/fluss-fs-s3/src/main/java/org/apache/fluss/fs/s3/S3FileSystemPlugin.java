@@ -40,7 +40,9 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
 
     private static final Logger LOG = LoggerFactory.getLogger(S3FileSystemPlugin.class);
 
-    private static final String[] FLUSS_CONFIG_PREFIXES = {"s3.", "s3a.", "fs.s3a."};
+    private static final String[] FLUSS_CONFIG_PREFIXES = {
+        "s3.", "s3a.", "fs.s3a.", "fs.delegation.s3a."
+    };
 
     private static final String HADOOP_CONFIG_PREFIX = "fs.s3a.";
 
@@ -49,10 +51,14 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
 
     private static final String ROLE_ARN_KEY = "fs.s3a.assumed.role.arn";
 
+    private static final String DELEGATION_CONFIG_PREFIX = "fs.delegation.s3a.";
+
     private static final String[][] MIRRORED_CONFIG_KEYS = {
         {"fs.s3a.access-key", "fs.s3a.access.key"},
         {"fs.s3a.secret-key", "fs.s3a.secret.key"},
-        {"fs.s3a.path-style-access", "fs.s3a.path.style.access"}
+        {"fs.s3a.path-style-access", "fs.s3a.path.style.access"},
+        {"fs.delegation.s3a.access-key", "fs.delegation.s3a.access.key"},
+        {"fs.delegation.s3a.secret-key", "fs.delegation.s3a.secret.key"}
     };
 
     @Override
@@ -74,7 +80,7 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
     org.apache.hadoop.conf.Configuration buildHadoopConfiguration(Configuration flussConfig) {
         org.apache.hadoop.conf.Configuration hadoopConfig =
                 mirrorCertainHadoopConfig(getHadoopConfiguration(flussConfig));
-        setCredentialProvider(hadoopConfig);
+        setCredentialProvider(hadoopConfig, flussConfig);
         return hadoopConfig;
     }
 
@@ -87,10 +93,17 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
         for (String key : flussConfig.keySet()) {
             for (String prefix : FLUSS_CONFIG_PREFIXES) {
                 if (key.startsWith(prefix)) {
-                    String newKey = HADOOP_CONFIG_PREFIX + key.substring(prefix.length());
                     String newValue =
                             flussConfig.getString(
                                     ConfigBuilder.key(key).stringType().noDefaultValue(), null);
+                    // Delegation keys (fs.delegation.s3a.*) pass through as-is;
+                    // other prefixes are remapped to fs.s3a.*
+                    String newKey;
+                    if (key.startsWith(DELEGATION_CONFIG_PREFIX)) {
+                        newKey = key;
+                    } else {
+                        newKey = HADOOP_CONFIG_PREFIX + key.substring(prefix.length());
+                    }
                     conf.set(newKey, newValue);
 
                     LOG.debug(
@@ -129,17 +142,48 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
         return fsUri;
     }
 
-    private void setCredentialProvider(org.apache.hadoop.conf.Configuration hadoopConfig) {
+    /**
+     * Checks whether a Hadoop config key was explicitly set through Fluss configuration, by
+     * checking all possible Fluss prefixes that map to the given Hadoop key.
+     */
+    private static boolean hasFlussConfigKey(Configuration flussConfig, String hadoopKey) {
+        if (flussConfig == null) {
+            return false;
+        }
+        // The hadoopKey (e.g., "fs.s3a.aws.credentials.provider") could come from any
+        // Fluss prefix: "s3.", "s3a.", or "fs.s3a.". Check all possibilities.
+        for (String key : flussConfig.keySet()) {
+            for (String prefix : FLUSS_CONFIG_PREFIXES) {
+                if (key.startsWith(prefix)) {
+                    String mappedHadoopKey = HADOOP_CONFIG_PREFIX + key.substring(prefix.length());
+                    if (mappedHadoopKey.equals(hadoopKey)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private void setCredentialProvider(
+            org.apache.hadoop.conf.Configuration hadoopConfig, Configuration flussConfig) {
         boolean hasStaticKeys =
                 hadoopConfig.get(ACCESS_KEY_ID) != null
                         && hadoopConfig.get(ACCESS_KEY_SECRET) != null;
         boolean hasRoleArn = hadoopConfig.get(ROLE_ARN_KEY) != null;
+        // Check if the user explicitly set a credentials provider in Fluss config.
+        // We cannot check hadoopConfig because Hadoop's core-default.xml provides defaults.
+        boolean hasExplicitProvider = hasFlussConfigKey(flussConfig, PROVIDER_CONFIG_NAME);
 
         if (hasStaticKeys || hasRoleArn) {
             LOG.info(
                     hasStaticKeys
                             ? "Using provided static credentials."
                             : "Using default AWS credential chain with AssumeRole.");
+        } else if (hasExplicitProvider) {
+            LOG.info(
+                    "Using explicitly configured credential provider: {}.",
+                    hadoopConfig.get(PROVIDER_CONFIG_NAME));
         } else {
             if (Objects.equals(getScheme(), "s3")) {
                 S3DelegationTokenReceiver.updateHadoopConfig(hadoopConfig);
