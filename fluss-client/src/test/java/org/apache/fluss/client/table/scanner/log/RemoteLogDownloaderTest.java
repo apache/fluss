@@ -216,8 +216,11 @@ class RemoteLogDownloaderTest {
                     });
             // make sure 4 threads are used.
             assertThat(fileDownloader.threadNames.size()).isEqualTo(4);
-            // only 4 segments are pre-fetched.
-            assertThat(remoteLogDownloader.getSizeOfSegmentsToFetch()).isEqualTo(totalSegments - 4);
+            // only 4 segments are pre-fetched; the download thread may have polled one additional
+            // segment from the queue before blocking on the semaphore, so queue size is
+            // either totalSegments-4 (nothing extra polled) or totalSegments-5 (one extra polled).
+            assertThat(remoteLogDownloader.getSizeOfSegmentsToFetch())
+                    .isBetween(totalSegments - 4 - 1, totalSegments - 4);
 
             for (int i = 3; i < totalSegments; i++) {
                 RemoteLogSegment segment = remoteLogSegments.get(i);
