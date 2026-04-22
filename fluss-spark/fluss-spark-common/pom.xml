@@ -69,28 +69,6 @@
                 </configuration>
             </plugin>
 
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-shade-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <id>shade-fluss</id>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>shade</goal>
-                        </goals>
-                        <configuration>
-                            <artifactSet>
-                                <includes combine.children="append">
-                                    <include>org.apache.fluss:fluss-spark-common</include>
-                                    <include>org.apache.fluss:fluss-client</include>
-                                </includes>
-                            </artifactSet>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-
             <!-- Configure Javadoc to limit source scanning to only the main Scala source directory.
                  This excludes ANTLR4 generated code from target/generated-sources/antlr4 which causes issues with release=8 config.
                  Without this exclusion, the javadoc plugin scans generated parser files and fails with
