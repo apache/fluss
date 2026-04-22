@@ -464,6 +464,50 @@ class KvTabletTest {
     }
 
     @Test
+    void testPartialUpdateFirstInsertThenUpdate() throws Exception {
+        initLogTabletAndKvTablet(DATA2_SCHEMA, new HashMap<>());
+        RowType rowType = DATA2_SCHEMA.getRowType();
+        KvRecordTestUtils.KvRecordFactory data2kvRecordFactory =
+                KvRecordTestUtils.KvRecordFactory.of(rowType);
+
+        // First insert: partial update columns a and b, column c should be null
+        KvRecordBatch batch1 =
+                kvRecordBatchFactory.ofRecords(
+                        data2kvRecordFactory.ofRecord(
+                                "k1".getBytes(), new Object[] {1, "v1", "ignored"}));
+        kvTablet.putAsLeader(batch1, new int[] {0, 1});
+        long endOffset = logTablet.localLogEndOffset();
+
+        // Verify first insert stored correctly with null for non-target column
+        assertThat(kvTablet.getKvPreWriteBuffer().get(Key.of("k1".getBytes())))
+                .isEqualTo(valueOf(compactedRow(rowType, new Object[] {1, "v1", null})));
+
+        // Second update: partial update columns a and c, column b should retain "v1"
+        KvRecordBatch batch2 =
+                kvRecordBatchFactory.ofRecords(
+                        data2kvRecordFactory.ofRecord(
+                                "k1".getBytes(), new Object[] {1, "ignored2", "c1"}));
+        kvTablet.putAsLeader(batch2, new int[] {0, 2});
+
+        // Verify: b should retain "v1" from first insert, c should be updated to "c1"
+        assertThat(kvTablet.getKvPreWriteBuffer().get(Key.of("k1".getBytes())))
+                .isEqualTo(valueOf(compactedRow(rowType, new Object[] {1, "v1", "c1"})));
+
+        // Verify CDC log for the second update
+        LogRecords actualLogRecords = readLogRecords(endOffset);
+        List<MemoryLogRecords> expectedLogs =
+                Collections.singletonList(
+                        logRecords(
+                                rowType,
+                                endOffset,
+                                Arrays.asList(ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER),
+                                Arrays.asList(
+                                        new Object[] {1, "v1", null},
+                                        new Object[] {1, "v1", "c1"})));
+        checkEqual(actualLogRecords, expectedLogs, rowType);
+    }
+
+    @Test
     void testPutWithMultiThread() throws Exception {
         initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
         // create two kv batches

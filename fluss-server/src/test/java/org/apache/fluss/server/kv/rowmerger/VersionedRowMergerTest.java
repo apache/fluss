@@ -144,6 +144,22 @@ class VersionedRowMergerTest {
     }
 
     @Test
+    void testMergeWithNullOldValueReturnsNewValue() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .build();
+        RowType rowType = schema.getRowType();
+        VersionedRowMerger merger = new VersionedRowMerger("a", DeleteBehavior.DISABLE);
+        merger.configureTargetColumns(null, (short) 1, schema);
+
+        BinaryValue newValue = binaryValue(rowType, new Object[] {42, "first"});
+        BinaryValue result = merger.merge(null, newValue);
+        assertThat(result).isSameAs(newValue);
+    }
+
+    @Test
     void testNormal() {
         Schema schema =
                 Schema.newBuilder()
