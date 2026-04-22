@@ -218,7 +218,7 @@ SELECT SUM(total_amount) AS total_revenue FROM fluss_order_with_lake;
 The union read works for both **log tables** and **primary key tables**:
 
 - **Log tables**: Combines Fluss log data with lake historical data
-- **Primary key tables**: Merges the latest Fluss snapshot with log changes and lake history to provide the most up-to-date view
+- **Primary key tables**: Combines lake snapshot data with recent KV log changes using sort-merge to provide the most up-to-date view
 
 #### Example
 
