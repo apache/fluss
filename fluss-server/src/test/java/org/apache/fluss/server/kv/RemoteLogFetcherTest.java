@@ -28,6 +28,7 @@ import org.apache.fluss.server.replica.Replica;
 import org.junit.jupiter.api.Test;
 
 import java.io.File;
+import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -432,4 +433,104 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         field.setAccessible(true);
         field.set(target, value);
     }
+
+    @Test
+    void testSecondFetchClosesPreviousIteratorAndOldIteratorStops() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        makeLogTableAsLeader(tb, false);
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        List<RemoteLogSegment> segments = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(segments).hasSizeGreaterThanOrEqualTo(2);
+        long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
+
+        File logTabletDir = logTablet.getLogDir();
+        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir)) {
+            Iterable<LogRecordBatch> firstIterable = fetcher.fetch(0, remoteEndOffset);
+            Iterator<LogRecordBatch> firstIterator = firstIterable.iterator();
+
+            assertThat(firstIterator.hasNext()).isTrue();
+            firstIterator.next();
+
+            // Trigger a second fetch. This should close the previous active iterator.
+            Iterable<LogRecordBatch> secondIterable = fetcher.fetch(0, remoteEndOffset);
+            Iterator<LogRecordBatch> secondIterator = secondIterable.iterator();
+
+            // The old iterator should stop immediately after being closed.
+            assertThat(firstIterator.hasNext()).isFalse();
+
+            // The new iterator should still work normally.
+            assertThat(secondIterator.hasNext()).isTrue();
+        }
+    }
+
+    @Test
+    void testSecondFetchAfterRealAsyncPrefetchDoesNotLetOldIteratorContinue() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        makeLogTableAsLeader(tb, false);
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 8);
+
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        List<RemoteLogSegment> segments = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(segments).hasSizeGreaterThanOrEqualTo(2);
+        long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
+
+        File logTabletDir = logTablet.getLogDir();
+        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir)) {
+            Path tempDir = fetcher.getTempDir();
+
+            Iterator<LogRecordBatch> firstIterator = fetcher.fetch(0, remoteEndOffset).iterator();
+
+            // This opens the first segment and starts async prefetch for the next segment.
+            assertThat(firstIterator.hasNext()).isTrue();
+            firstIterator.next();
+
+            // Wait until async prefetch has a chance to finish and write another .log file.
+            waitUntilLogFileCountAtLeast(tempDir, 2);
+
+            long fileCountBeforeSecondFetch = countLogFiles(tempDir);
+            assertThat(fileCountBeforeSecondFetch).isGreaterThanOrEqualTo(2);
+
+            Iterator<LogRecordBatch> secondIterator = fetcher.fetch(0, remoteEndOffset).iterator();
+
+            // The old iterator was closed by the second fetch and must not continue.
+            assertThat(firstIterator.hasNext()).isFalse();
+
+            // The new iterator should still be usable.
+            assertThat(secondIterator.hasNext()).isTrue();
+
+            // tempDir itself should still exist. The second fetch should not delete the shared temp dir.
+            assertThat(Files.exists(tempDir)).isTrue();
+        }
+    }
+
+    private static void waitUntilLogFileCountAtLeast(Path dir, int expectedCount) throws Exception {
+        long deadline = System.currentTimeMillis() + 5_000L;
+        while (System.currentTimeMillis() < deadline) {
+            if (Files.exists(dir) && countLogFiles(dir) >= expectedCount) {
+                return;
+            }
+            Thread.sleep(50L);
+        }
+
+        assertThat(countLogFiles(dir)).isGreaterThanOrEqualTo(expectedCount);
+    }
+
+    private static long countLogFiles(Path dir) throws IOException {
+        if (!Files.exists(dir)) {
+            return 0L;
+        }
+
+        try (java.util.stream.Stream<Path> paths = Files.list(dir)) {
+            return paths.filter(path -> path.getFileName().toString().endsWith(".log")).count();
+        }
+    }
+
 }

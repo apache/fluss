@@ -25,6 +25,7 @@ import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
 import org.apache.fluss.server.log.remote.RemoteLogStorage;
+import org.apache.fluss.utils.ExponentialBackoff;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
 
@@ -44,7 +45,9 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.UUID;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -76,6 +79,11 @@ public class RemoteLogFetcher implements Closeable {
     private static final Logger LOG = LoggerFactory.getLogger(RemoteLogFetcher.class);
 
     private static final String REMOTE_LOG_RECOVERY_DIR_PREFIX = "remote-log-recovery-";
+    private static final long DOWNLOAD_RETRY_BACKOFF_INITIAL_MS = 100L;
+    private static final int DOWNLOAD_RETRY_BACKOFF_MULTIPLIER = 2;
+    private static final long DOWNLOAD_RETRY_BACKOFF_MAX_MS = 5_000L;
+    private static final double DOWNLOAD_RETRY_BACKOFF_JITTER = 0.25D;
+    private static final int DOWNLOAD_MAX_RETRIES = 5;
 
     private final RemoteLogManager remoteLogManager;
     private final TableBucket tableBucket;
@@ -176,12 +184,30 @@ public class RemoteLogFetcher implements Closeable {
             }
         } finally {
             downloadExecutor.shutdownNow();
-            // Remove the entire "tmp" parent directory to clean up our subdirectory as well
-            // as any stale recovery directories left by a previous failed recovery.
-            Path tmpDir = tempDir.getParent();
-            if (tmpDir != null && Files.exists(tmpDir)) {
-                LOG.info("Cleaning up remote log recovery tmp dir: {}", tmpDir);
-                deleteDirectoryQuietly(tmpDir.toFile());
+
+            boolean terminated = false;
+            try {
+                terminated = downloadExecutor.awaitTermination(1, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                LOG.warn(
+                        "Interrupted while waiting for remote log fetcher download executor termination for table bucket {}.",
+                        tableBucket,
+                        e);
+            }
+
+            if (terminated) {
+                // Remove the entire "tmp" parent directory to clean up our subdirectory as well
+                // as any stale recovery directories left by a previous failed recovery.
+                Path tmpDir = tempDir.getParent();
+                if (tmpDir != null && Files.exists(tmpDir)) {
+                    LOG.info("Cleaning up remote log recovery tmp dir: {}", tmpDir);
+                    deleteDirectoryQuietly(tmpDir.toFile());
+                }
+            } else {
+                LOG.warn(
+                        "Skip cleaning remote log recovery tmp dir because download executor did not terminate within 1 second for table bucket {}.",
+                        tableBucket);
             }
         }
     }
@@ -211,14 +237,73 @@ public class RemoteLogFetcher implements Closeable {
                 segment.remoteLogEndOffset(),
                 localFile);
 
+        boolean success = false;
         try (InputStream inputStream = remoteLogStorage.fetchLogData(segment);
                 OutputStream outputStream = Files.newOutputStream(localFile.toPath())) {
             IOUtils.copyBytes(inputStream, outputStream, false);
+            success = true;
         } catch (RemoteStorageException e) {
             throw new IOException(
                     "Failed to download remote log segment: " + segment.remoteLogSegmentId(), e);
+        } finally {
+            if (!success) {
+                try {
+                    Files.deleteIfExists(localFile.toPath());
+                } catch (IOException cleanupException) {
+                    LOG.warn(
+                            "Failed to cleanup partial local segment file {} for segment {}.",
+                            localFile,
+                            segment.remoteLogSegmentId(),
+                            cleanupException);
+                }
+            }
         }
         return localFile;
+    }
+
+    private File downloadSegmentWithRetry(RemoteLogSegment segment) throws IOException {
+        ExponentialBackoff backoff =
+                new ExponentialBackoff(
+                        DOWNLOAD_RETRY_BACKOFF_INITIAL_MS,
+                        DOWNLOAD_RETRY_BACKOFF_MULTIPLIER,
+                        DOWNLOAD_RETRY_BACKOFF_MAX_MS,
+                        DOWNLOAD_RETRY_BACKOFF_JITTER);
+
+        IOException lastException = null;
+        for (int attempt = 0; attempt <= DOWNLOAD_MAX_RETRIES; attempt++) {
+            try {
+                return downloadSegment(segment);
+            } catch (IOException e) {
+                lastException = e;
+                if (attempt == DOWNLOAD_MAX_RETRIES) {
+                    break;
+                }
+
+                long retryDelayMs = backoff.backoff(attempt);
+                LOG.warn(
+                        "Failed to download remote log segment {} on attempt {}/{}. Retry after {} ms.",
+                        segment.remoteLogSegmentId(),
+                        attempt + 1,
+                        DOWNLOAD_MAX_RETRIES + 1,
+                        retryDelayMs,
+                        e);
+
+                try {
+                    Thread.sleep(retryDelayMs);
+                } catch (InterruptedException interruptedException) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException(
+                            "Interrupted while retrying remote log segment download: "
+                                    + segment.remoteLogSegmentId(),
+                            interruptedException);
+                }
+            }
+        }
+
+        throw new IOException(
+                "Failed to download remote log segment after retries: "
+                        + segment.remoteLogSegmentId(),
+                lastException);
     }
 
     /**
@@ -253,6 +338,8 @@ public class RemoteLogFetcher implements Closeable {
         public void close() {
             if (!closed) {
                 closed = true;
+                finished = true;  // Mark as finished to stop any ongoing processing
+                nextBatch = null;  // Clear any pending batch
                 cancelPrefetch();
                 closeCurrentFileLogRecords();
             }
@@ -260,6 +347,10 @@ public class RemoteLogFetcher implements Closeable {
 
         @Override
         public boolean hasNext() {
+            // Return false immediately if closed
+            if (closed) {
+                return false;
+            }
             // Lazily advance: only fetch next batch when needed. This ensures the
             // previously returned FileChannelLogRecordBatch has been fully consumed
             // by the caller before advance() potentially closes its underlying file.
@@ -280,6 +371,12 @@ public class RemoteLogFetcher implements Closeable {
         }
 
         private void advance() {
+            // Early return if closed
+            if (closed) {
+                finished = true;
+                return;
+            }
+
             nextBatch = null;
             while (!finished) {
                 // try to get next batch from current iterator
@@ -357,7 +454,7 @@ public class RemoteLogFetcher implements Closeable {
         }
 
         private File fetchSegmentFile(RemoteLogSegment segment) throws IOException {
-            if (segment.equals(prefetchedSegment) && nextDownloadedSegmentFuture != null) {
+            if (isSameSegmentId(segment, prefetchedSegment) && nextDownloadedSegmentFuture != null) {
                 try {
                     return nextDownloadedSegmentFuture.get();
                 } catch (InterruptedException e) {
@@ -366,21 +463,38 @@ public class RemoteLogFetcher implements Closeable {
                             "Interrupted while waiting for remote log segment download: "
                                     + segment.remoteLogSegmentId(),
                             e);
+                } catch (CancellationException e) {
+                    LOG.warn(
+                            "Prefetched segment {} was cancelled, fallback to sync download.",
+                            segment.remoteLogSegmentId(),
+                            e);
+                    return downloadSegmentWithRetry(segment);
                 } catch (ExecutionException e) {
                     LOG.warn(
                             "Prefetched segment {} failed, fallback to sync download.",
                             segment.remoteLogSegmentId(),
                             e.getCause());
-                    return downloadSegment(segment);
+                    return downloadSegmentWithRetry(segment);
                 } finally {
                     nextDownloadedSegmentFuture = null;
                     prefetchedSegment = null;
                 }
             }
-            return downloadSegment(segment);
+            return downloadSegmentWithRetry(segment);
+        }
+
+        private boolean isSameSegmentId(RemoteLogSegment left, RemoteLogSegment right) {
+            return left != null
+                    && right != null
+                    && left.remoteLogSegmentId().equals(right.remoteLogSegmentId());
         }
 
         private void prefetchNextSegment() {
+            // Don't start new downloads if closed
+            if (closed) {
+                return;
+            }
+
             cancelPrefetch();
             RemoteLogSegment nextSegment = findNextFetchableSegment(currentSegmentIndex);
             if (nextSegment == null) {
@@ -418,10 +532,34 @@ public class RemoteLogFetcher implements Closeable {
 
         private void cancelPrefetch() {
             if (nextDownloadedSegmentFuture != null) {
-                nextDownloadedSegmentFuture.cancel(true);
+                if (nextDownloadedSegmentFuture.isDone()) {
+                    try {
+                        cleanupUnusedPrefetchedFile(nextDownloadedSegmentFuture.getNow(null));
+                    } catch (CancellationException | CompletionException ignored) {
+                        // no local file to clean up
+                    }
+                } else {
+                    nextDownloadedSegmentFuture.cancel(true);
+                }
                 nextDownloadedSegmentFuture = null;
             }
             prefetchedSegment = null;
+        }
+
+        private void cleanupUnusedPrefetchedFile(File prefetchedFile) {
+            if (prefetchedFile == null) {
+                return;
+            }
+
+            try {
+                Files.deleteIfExists(prefetchedFile.toPath());
+            } catch (IOException cleanupException) {
+                LOG.warn(
+                        "Failed to cleanup unused prefetched segment file {} for table bucket {}.",
+                        prefetchedFile,
+                        tableBucket,
+                        cleanupException);
+            }
         }
 
         private void closeCurrentFileLogRecords() {
