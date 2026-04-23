@@ -444,7 +444,7 @@ public class FlinkTableSourceFilterPushDownTest {
         }
 
         @Test
-        void testRejectedLakeFiltersFallbackToFlinkSideFiltering() {
+        void testRejectedLakeFiltersDoNotBlockFlussPushdown() {
             lakeSource = new TrackingLakeSource(true);
             setLakeSource(tableSource, lakeSource);
 
@@ -462,9 +462,9 @@ public class FlinkTableSourceFilterPushDownTest {
             FlinkTableSource.Result result = tableSource.applyFilters(filters);
 
             assertThat(lakeSource.getWithFiltersCalls()).isEqualTo(1);
-            assertThat(result.getAcceptedFilters()).isEmpty();
+            assertThat(result.getAcceptedFilters()).hasSize(1);
             assertThat(result.getRemainingFilters()).hasSize(1);
-            assertThat(tableSource.getLogRecordBatchFilter()).isNull();
+            assertThat(tableSource.getLogRecordBatchFilter()).isNotNull();
         }
     }
 
@@ -759,6 +759,39 @@ public class FlinkTableSourceFilterPushDownTest {
             assertThat(tableSource.getLogRecordBatchFilter())
                     .isNotNull(); // Record batch filter pushed down for non-PK partitioned log
             // table
+        }
+
+        @Test
+        void testPartitionedLakeSourcePushdownDoesNotBlockFlussPushdown() {
+            TrackingLakeSource lakeSource = new TrackingLakeSource(true);
+            setLakeSource(tableSource, lakeSource);
+
+            FieldReferenceExpression regionFieldRef =
+                    new FieldReferenceExpression("region", DataTypes.STRING(), 0, 3);
+            FieldReferenceExpression idFieldRef =
+                    new FieldReferenceExpression("id", DataTypes.INT(), 0, 0);
+
+            CallExpression regionEqualCall =
+                    new CallExpression(
+                            BuiltInFunctionDefinitions.EQUALS,
+                            Arrays.asList(regionFieldRef, new ValueLiteralExpression("us-east")),
+                            DataTypes.BOOLEAN());
+            CallExpression idEqualCall =
+                    new CallExpression(
+                            BuiltInFunctionDefinitions.EQUALS,
+                            Arrays.asList(idFieldRef, new ValueLiteralExpression(5)),
+                            DataTypes.BOOLEAN());
+
+            List<ResolvedExpression> filters = Arrays.asList(regionEqualCall, idEqualCall);
+
+            FlinkTableSource.Result result = tableSource.applyFilters(filters);
+
+            assertThat(lakeSource.getWithFiltersCalls()).isEqualTo(1);
+            assertThat(lakeSource.getReceivedPredicates()).hasSize(2);
+            assertThat(result.getAcceptedFilters()).hasSize(2);
+            assertThat(result.getRemainingFilters()).hasSize(2);
+            assertThat(tableSource.getPartitionFilters()).isNotNull();
+            assertThat(tableSource.getLogRecordBatchFilter()).isNotNull();
         }
     }
 
