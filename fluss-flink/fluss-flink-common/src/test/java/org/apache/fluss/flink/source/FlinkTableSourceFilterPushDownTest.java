@@ -22,6 +22,11 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
+import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
+import org.apache.fluss.lake.source.LakeSource;
+import org.apache.fluss.lake.source.LakeSplit;
+import org.apache.fluss.lake.source.Planner;
+import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.row.BinaryString;
@@ -40,6 +45,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -352,6 +359,111 @@ public class FlinkTableSourceFilterPushDownTest {
             // No filters should be accepted or remain
             assertThat(result.getAcceptedFilters()).isEmpty();
             assertThat(result.getRemainingFilters()).isEmpty();
+            assertThat(tableSource.getLogRecordBatchFilter()).isNull();
+        }
+    }
+
+    @Nested
+    class NonPartitionedLakeSourceTests {
+        private FlinkTableSource tableSource;
+        private TrackingLakeSource lakeSource;
+
+        @BeforeEach
+        void setUp() {
+            RowType tableOutputType =
+                    (RowType)
+                            DataTypes.ROW(
+                                            DataTypes.FIELD("id", DataTypes.INT()),
+                                            DataTypes.FIELD("name", DataTypes.STRING()),
+                                            DataTypes.FIELD("value", DataTypes.BIGINT()),
+                                            DataTypes.FIELD("region", DataTypes.STRING()))
+                                    .getLogicalType();
+
+            TablePath tablePath = TablePath.of("test_db", "test_lake_log_table");
+            Configuration flussConfig = new Configuration();
+            flussConfig.setString(FlinkConnectorOptions.BOOTSTRAP_SERVERS.key(), "localhost:9092");
+
+            Configuration tableConfig = new Configuration();
+            tableConfig.set(ConfigOptions.TABLE_STATISTICS_COLUMNS, "*");
+
+            FlinkConnectorOptionsUtils.StartupOptions startupOptions =
+                    new FlinkConnectorOptionsUtils.StartupOptions();
+            startupOptions.startupMode = FlinkConnectorOptions.ScanStartupMode.FULL;
+
+            tableSource =
+                    new FlinkTableSource(
+                            tablePath,
+                            flussConfig,
+                            new TableConfig(tableConfig),
+                            tableOutputType,
+                            new int[] {}, // no primary key indexes
+                            new int[] {}, // bucket key indexes
+                            new int[] {}, // partition key indexes
+                            false, // batch mode
+                            startupOptions,
+                            false, // lookup async
+                            false, // insert if not exists
+                            null, // cache
+                            1000L, // scan partition discovery interval
+                            false, // is data lake enabled
+                            null, // merge engine type
+                            Maps.newHashMap(),
+                            null); // lease context
+        }
+
+        @Test
+        void testNonPartitionedLakeSourcePushesDownFilters() {
+            lakeSource = new TrackingLakeSource(false);
+            setLakeSource(tableSource, lakeSource);
+
+            FieldReferenceExpression regionFieldRef =
+                    new FieldReferenceExpression("region", DataTypes.STRING(), 0, 3);
+            FieldReferenceExpression valueFieldRef =
+                    new FieldReferenceExpression("value", DataTypes.BIGINT(), 0, 2);
+
+            CallExpression regionEqualCall =
+                    new CallExpression(
+                            BuiltInFunctionDefinitions.EQUALS,
+                            Arrays.asList(regionFieldRef, new ValueLiteralExpression("HangZhou")),
+                            DataTypes.BOOLEAN());
+            CallExpression valueRangeCall =
+                    new CallExpression(
+                            BuiltInFunctionDefinitions.GREATER_THAN,
+                            Arrays.asList(valueFieldRef, new ValueLiteralExpression(1000L)),
+                            DataTypes.BOOLEAN());
+
+            List<ResolvedExpression> filters = Arrays.asList(regionEqualCall, valueRangeCall);
+
+            FlinkTableSource.Result result = tableSource.applyFilters(filters);
+
+            assertThat(lakeSource.getWithFiltersCalls()).isEqualTo(1);
+            assertThat(lakeSource.getReceivedPredicates()).hasSize(2);
+            assertThat(result.getAcceptedFilters()).hasSize(2);
+            assertThat(result.getRemainingFilters()).hasSize(2);
+            assertThat(tableSource.getLogRecordBatchFilter()).isNotNull();
+        }
+
+        @Test
+        void testRejectedLakeFiltersFallbackToFlinkSideFiltering() {
+            lakeSource = new TrackingLakeSource(true);
+            setLakeSource(tableSource, lakeSource);
+
+            FieldReferenceExpression fieldRef =
+                    new FieldReferenceExpression("region", DataTypes.STRING(), 0, 3);
+            CallExpression equalCall =
+                    new CallExpression(
+                            BuiltInFunctionDefinitions.EQUALS,
+                            Arrays.asList(fieldRef, new ValueLiteralExpression("HangZhou")),
+                            DataTypes.BOOLEAN());
+
+            List<ResolvedExpression> filters =
+                    Collections.<ResolvedExpression>singletonList(equalCall);
+
+            FlinkTableSource.Result result = tableSource.applyFilters(filters);
+
+            assertThat(lakeSource.getWithFiltersCalls()).isEqualTo(1);
+            assertThat(result.getAcceptedFilters()).isEmpty();
+            assertThat(result.getRemainingFilters()).hasSize(1);
             assertThat(tableSource.getLogRecordBatchFilter()).isNull();
         }
     }
@@ -1057,6 +1169,71 @@ public class FlinkTableSourceFilterPushDownTest {
             assertThat(result.getAcceptedFilters()).isEmpty();
             assertThat(result.getRemainingFilters()).hasSize(1);
             assertThat(nonFullStartupTableSource.getSingleRowFilter()).isNull();
+        }
+    }
+
+    private static void setLakeSource(
+            FlinkTableSource tableSource, LakeSource<LakeSplit> trackingLakeSource) {
+        try {
+            Field lakeSourceField = FlinkTableSource.class.getDeclaredField("lakeSource");
+            lakeSourceField.setAccessible(true);
+            lakeSourceField.set(tableSource, trackingLakeSource);
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException("Failed to inject LakeSource for test.", e);
+        }
+    }
+
+    private static final class TrackingLakeSource implements LakeSource<LakeSplit> {
+        private final boolean rejectLastPredicate;
+        private final List<Predicate> receivedPredicates = new ArrayList<>();
+        private int withFiltersCalls;
+
+        private TrackingLakeSource(boolean rejectLastPredicate) {
+            this.rejectLastPredicate = rejectLastPredicate;
+        }
+
+        @Override
+        public void withProject(int[][] project) {}
+
+        @Override
+        public void withLimit(int limit) {}
+
+        @Override
+        public FilterPushDownResult withFilters(List<Predicate> predicates) {
+            withFiltersCalls++;
+            receivedPredicates.clear();
+            receivedPredicates.addAll(predicates);
+
+            if (rejectLastPredicate && !predicates.isEmpty()) {
+                return FilterPushDownResult.of(
+                        predicates.subList(0, predicates.size() - 1),
+                        predicates.subList(predicates.size() - 1, predicates.size()));
+            }
+
+            return FilterPushDownResult.of(predicates, Collections.<Predicate>emptyList());
+        }
+
+        @Override
+        public Planner<LakeSplit> createPlanner(PlannerContext context) {
+            throw new UnsupportedOperationException("Not needed for this test.");
+        }
+
+        @Override
+        public RecordReader createRecordReader(ReaderContext<LakeSplit> context) {
+            throw new UnsupportedOperationException("Not needed for this test.");
+        }
+
+        @Override
+        public SimpleVersionedSerializer<LakeSplit> getSplitSerializer() {
+            throw new UnsupportedOperationException("Not needed for this test.");
+        }
+
+        private int getWithFiltersCalls() {
+            return withFiltersCalls;
+        }
+
+        private List<Predicate> getReceivedPredicates() {
+            return receivedPredicates;
         }
     }
 }

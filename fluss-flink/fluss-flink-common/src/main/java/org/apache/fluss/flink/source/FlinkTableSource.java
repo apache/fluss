@@ -561,27 +561,11 @@ public class FlinkTableSource
                 }
             }
             partitionFilters = converted.isEmpty() ? null : PredicateBuilder.and(converted);
+        }
 
-            // lake source is not null
-            if (lakeSource != null) {
-                List<Predicate> lakePredicates = new ArrayList<>();
-                for (ResolvedExpression filter : filters) {
-                    Optional<Predicate> predicateOptional =
-                            convertToFlussPredicate(tableOutputType, filter);
-                    predicateOptional.ifPresent(lakePredicates::add);
-                }
-
-                if (!lakePredicates.isEmpty()) {
-                    final LakeSource.FilterPushDownResult filterPushDownResult =
-                            lakeSource.withFilters(lakePredicates);
-                    if (filterPushDownResult.acceptedPredicates().size() != lakePredicates.size()) {
-                        LOG.info(
-                                "LakeSource rejected some partition filters. Falling back to Flink-side filtering.");
-                        // Flink will apply all filters to preserve correctness
-                        return Result.of(Collections.emptyList(), filters);
-                    }
-                }
-            }
+        Result lakeFilterPushDownResult = pushdownLakeFilters(filters);
+        if (lakeFilterPushDownResult != null) {
+            return lakeFilterPushDownResult;
         }
 
         if (acceptedFilters.isEmpty() && remainingFilters.isEmpty()) {
@@ -639,6 +623,34 @@ public class FlinkTableSource
             this.logRecordBatchFilter = null;
         }
         return Result.of(acceptedFilters, remainingFilters);
+    }
+
+    @Nullable
+    private Result pushdownLakeFilters(List<ResolvedExpression> filters) {
+        if (lakeSource == null) {
+            return null;
+        }
+
+        List<Predicate> lakePredicates = new ArrayList<>();
+        for (ResolvedExpression filter : filters) {
+            Optional<Predicate> predicateOptional =
+                    convertToFlussPredicate(tableOutputType, filter);
+            predicateOptional.ifPresent(lakePredicates::add);
+        }
+
+        if (lakePredicates.isEmpty()) {
+            return null;
+        }
+
+        LakeSource.FilterPushDownResult filterPushDownResult =
+                lakeSource.withFilters(lakePredicates);
+        if (filterPushDownResult.acceptedPredicates().size() != lakePredicates.size()) {
+            LOG.info("LakeSource rejected some filters. Falling back to Flink-side filtering.");
+            // Flink will apply all filters to preserve correctness.
+            return Result.of(Collections.<ResolvedExpression>emptyList(), filters);
+        }
+
+        return null;
     }
 
     /**
