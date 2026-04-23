@@ -572,7 +572,19 @@ public class FlinkTableSource
             acceptedFilters.addAll(recordBatchResult.getAcceptedFilters());
         }
 
-        pushdownLakeFilters(filters, acceptedFilters);
+        if (lakeSource != null) {
+            // Lake pushdown only contributes extra accepted filters.
+            // We intentionally do not mutate remainingFilters here:
+            // 1. partition/record-batch pushdown has already established the Fluss-side scan
+            //    behavior;
+            // 2. FLINK-38635 requires returning the original filters as remaining so Flink keeps
+            //    applying them as a correctness safety net;
+            // 3. LakeSource reports accepted predicates in converted Predicate form rather than the
+            //    original ResolvedExpression instances, so adjusting remainingFilters here would
+            //    add bookkeeping complexity without changing runtime behavior.
+            pushdownLakeFilters(filters, acceptedFilters);
+        }
+
         // FLINK-38635 We cannot determine whether this source will ultimately be used as a
         // scan source or a lookup source. If used as a lookup source, the accepted filters
         // (partition filters, record batch filters) are not enforced in the lookup path.
@@ -624,10 +636,6 @@ public class FlinkTableSource
 
     private void pushdownLakeFilters(
             List<ResolvedExpression> filters, List<ResolvedExpression> acceptedFilters) {
-        if (lakeSource == null) {
-            return;
-        }
-
         List<Predicate> lakePredicates = new ArrayList<>();
         List<ResolvedExpression> convertedFilters = new ArrayList<>();
         for (ResolvedExpression filter : filters) {
@@ -644,18 +652,18 @@ public class FlinkTableSource
         }
 
         LakeSource.FilterPushDownResult filterPushDownResult =
-                lakeSource.withFilters(lakePredicates);
+                checkNotNull(lakeSource).withFilters(lakePredicates);
+        // acceptedFilters tracks which original Flink expressions are confirmed as pushed down to
+        // at least one backend. For lake pushdown we append the corresponding source expressions
+        // here, but we intentionally leave remainingFilters unchanged; applyFilters() still returns
+        // the full original filter list as remaining so Flink re-applies all predicates after the
+        // source read.
         List<Predicate> acceptedLakePredicates = filterPushDownResult.acceptedPredicates();
         for (int i = 0; i < lakePredicates.size(); i++) {
             if (acceptedLakePredicates.contains(lakePredicates.get(i))
                     && !acceptedFilters.contains(convertedFilters.get(i))) {
                 acceptedFilters.add(convertedFilters.get(i));
             }
-        }
-
-        if (acceptedLakePredicates.size() != lakePredicates.size()) {
-            LOG.info(
-                    "LakeSource rejected some filters. Keep Flink-side filtering as the safety net.");
         }
     }
 
