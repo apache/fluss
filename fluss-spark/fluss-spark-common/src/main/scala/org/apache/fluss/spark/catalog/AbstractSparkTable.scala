@@ -18,8 +18,7 @@
 package org.apache.fluss.spark.catalog
 
 import org.apache.fluss.client.admin.Admin
-import org.apache.fluss.config.{Configuration => FlussConfiguration}
-import org.apache.fluss.metadata.{TableInfo, TablePath}
+import org.apache.fluss.metadata.TableInfo
 import org.apache.fluss.spark.SparkConversions
 
 import org.apache.spark.sql.CatalogV2UtilShim
@@ -38,7 +37,18 @@ abstract class AbstractSparkTable(val admin: Admin, val tableInfo: TableInfo) ex
   protected lazy val _partitionSchema = new StructType(
     _schema.fields.filter(e => tableInfo.getPartitionKeys.contains(e.name)))
 
-  override def name(): String = tableInfo.toString
+  override def name(): String = tableInfo.getTablePath.getTableName
+
+  override def properties(): util.Map[String, String] = {
+    val props = new util.HashMap[String, String]()
+    val descriptor = tableInfo.getTableDescriptor
+    // Only expose user-defined custom properties.
+    // Internal metadata (tableId, schemaId, timestamps, etc.) should not
+    // be surfaced here as they pollute DESC FORMATTED output.
+    Option(descriptor.getComment.orElse(null)).foreach(c => props.put("comment", c))
+    props.putAll(descriptor.getCustomProperties)
+    props
+  }
 
   override def schema(): StructType = _schema
 
