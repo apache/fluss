@@ -91,6 +91,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -573,15 +574,8 @@ public class FlinkTableSource
         }
 
         if (lakeSource != null) {
-            // Lake pushdown only contributes extra accepted filters.
-            // We intentionally do not mutate remainingFilters here:
-            // 1. partition/record-batch pushdown has already established the Fluss-side scan
-            //    behavior;
-            // 2. FLINK-38635 requires returning the original filters as remaining so Flink keeps
-            //    applying them as a correctness safety net;
-            // 3. LakeSource reports accepted predicates in converted Predicate form rather than the
-            //    original ResolvedExpression instances, so adjusting remainingFilters here would
-            //    add bookkeeping complexity without changing runtime behavior.
+            // Lake pushdown only contributes extra accepted filters; see
+            // pushdownLakeFilters(...) for why remainingFilters must stay unchanged.
             pushdownLakeFilters(filters, acceptedFilters);
         }
 
@@ -634,6 +628,20 @@ public class FlinkTableSource
         return Result.of(acceptedFilters, remainingFilters);
     }
 
+    /**
+     * Adds lake-accepted predicates into {@code acceptedFilters}.
+     *
+     * <p>This method intentionally does not mutate {@code remainingFilters}:
+     *
+     * <p>1. partition/record-batch pushdown has already established the Fluss-side scan behavior;
+     *
+     * <p>2. FLINK-38635 requires returning the original filters as remaining so Flink keeps
+     * applying them as a correctness safety net;
+     *
+     * <p>3. {@link LakeSource.FilterPushDownResult} reports accepted predicates in converted {@link
+     * Predicate} form rather than original {@link ResolvedExpression} instances, so adjusting
+     * remainingFilters here would add bookkeeping complexity without changing runtime behavior.
+     */
     private void pushdownLakeFilters(
             List<ResolvedExpression> filters, List<ResolvedExpression> acceptedFilters) {
         List<Predicate> lakePredicates = new ArrayList<>();
@@ -653,12 +661,9 @@ public class FlinkTableSource
 
         LakeSource.FilterPushDownResult filterPushDownResult =
                 checkNotNull(lakeSource).withFilters(lakePredicates);
-        // acceptedFilters tracks which original Flink expressions are confirmed as pushed down to
-        // at least one backend. For lake pushdown we append the corresponding source expressions
-        // here, but we intentionally leave remainingFilters unchanged; applyFilters() still returns
-        // the full original filter list as remaining so Flink re-applies all predicates after the
-        // source read.
-        List<Predicate> acceptedLakePredicates = filterPushDownResult.acceptedPredicates();
+        Set<Predicate> acceptedLakePredicates =
+                Collections.newSetFromMap(new IdentityHashMap<Predicate, Boolean>());
+        acceptedLakePredicates.addAll(filterPushDownResult.acceptedPredicates());
         for (int i = 0; i < lakePredicates.size(); i++) {
             if (acceptedLakePredicates.contains(lakePredicates.get(i))
                     && !acceptedFilters.contains(convertedFilters.get(i))) {
