@@ -170,9 +170,8 @@ public class RemoteLogDownloader implements Closeable {
 
             long startTime = System.currentTimeMillis();
             // download the remote file to local
-            CompletableFuture<Long> completableFuture = new CompletableFuture<>();
-            remoteFileDownloader.downloadFileAsync(
-                    fsPathAndFileName, localLogDir, completableFuture);
+            CompletableFuture<Long> completableFuture =
+                    remoteFileDownloader.downloadFileAsync(fsPathAndFileName, localLogDir);
             completableFuture.whenComplete(
                     (bytes, throwable) -> {
                         if (closed) {
@@ -180,12 +179,14 @@ public class RemoteLogDownloader implements Closeable {
                                     "RemoteLogDownloader closed when remote log segment file {} for table bucket {}.",
                                     fsPathAndFileName.getFileName(),
                                     tableBucket);
-                            // In-flight download completed after close. Release the
-                            // semaphore (no consumer will recycle) and clean up any
-                            // orphan files/dirs the download may have recreated via
-                            // Files.createDirectories — even on failure, since the
-                            // directory may already have been re-created before the
-                            // error occurred.
+                            // In-flight download completed after close. Cancel the
+                            // external future so consumers blocked on .get() are
+                            // unblocked, release the semaphore (no consumer will
+                            // recycle) and clean up any orphan files/dirs the
+                            // download may have recreated via Files.createDirectories
+                            // — even on failure, since the directory may already have
+                            // been re-created before the error occurred.
+                            request.future.cancel(false);
                             prefetchSemaphore.release();
                             deleteDirectoryQuietly(localLogDir.toFile());
                             return;
@@ -217,6 +218,8 @@ public class RemoteLogDownloader implements Closeable {
             // only re-queue the request if the downloader is still active
             if (!closed) {
                 segmentsToFetch.add(request);
+            } else {
+                request.future.cancel(false);
             }
             scannerMetricGroup.remoteFetchErrorCount().inc();
             // log the error and continue instead of shutdown the download thread

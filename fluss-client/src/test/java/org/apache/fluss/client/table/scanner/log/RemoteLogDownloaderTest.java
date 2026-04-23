@@ -362,6 +362,7 @@ class RemoteLogDownloaderTest {
             // Wait for 2 in-flight downloads finished.
             blockLatch.countDown();
             assertThat(inFlightFinished.await(30, TimeUnit.SECONDS)).isTrue();
+            retry(Duration.ofMinutes(1), () -> assertThat(futures.get(1).isDone()).isTrue());
 
             // Verify that ultimately the local directory does not exist.
             retry(Duration.ofMinutes(1), () -> assertThat(localLogDir.toFile().exists()).isFalse());

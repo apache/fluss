@@ -17,7 +17,6 @@
 
 package org.apache.fluss.client.table.scanner;
 
-import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.fs.FSDataInputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
@@ -39,8 +38,6 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.ThreadPoolExecutor;
 
 /**
  * The downloader that has a IO thread pool to download the remote files (like kv snapshots files,
@@ -68,11 +65,10 @@ public class RemoteFileDownloader implements Closeable {
      * returns a Future object of the number of downloaded bytes. The Future will fail if the
      * download fails after retrying for RETRY_COUNT times.
      */
-    public Future<?> downloadFileAsync(
-            FsPathAndFileName fsPathAndFileName,
-            Path targetDirectory,
-            CompletableFuture<Long> future) {
-        return downloadThreadPool.submit(
+    public CompletableFuture<Long> downloadFileAsync(
+            FsPathAndFileName fsPathAndFileName, Path targetDirectory) {
+        CompletableFuture<Long> future = new CompletableFuture<>();
+        downloadThreadPool.submit(
                 () -> {
                     try {
                         Path targetFilePath =
@@ -84,6 +80,7 @@ public class RemoteFileDownloader implements Closeable {
                         future.completeExceptionally(t);
                     }
                 });
+        return future;
     }
 
     /**
@@ -123,10 +120,5 @@ public class RemoteFileDownloader implements Closeable {
                 new FileDownloadSpec(fsPathAndFileNames, targetDirectory);
         FileDownloadUtils.transferAllDataToDirectory(
                 Collections.singleton(fileDownloadSpec), closeableRegistry, downloadThreadPool);
-    }
-
-    @VisibleForTesting
-    public ThreadPoolExecutor getDownloadThreadPool() {
-        return ((ThreadPoolExecutor) downloadThreadPool);
     }
 }
