@@ -406,7 +406,7 @@ public final class LocalDiskManager implements Closeable {
      * returned directory is {@code /data-0}.
      */
     public synchronized File resolveDataDir(File path) {
-        Path pathToResolve = path.toPath();
+        Path pathToResolve = path.toPath().toAbsolutePath().normalize();
         for (File dataDir : dataDirs) {
             if (pathToResolve.startsWith(dataDir.toPath())) {
                 return dataDir;
@@ -548,13 +548,13 @@ public final class LocalDiskManager implements Closeable {
         }
 
         private int serverIdAsInt(File dataDir) throws IOException {
-            if (serverId == null || serverId.trim().isEmpty()) {
+            if (serverId == null || serverId.isEmpty()) {
                 throw new IOException(
                         "Missing server.id in disk.properties under " + dataDir.getAbsolutePath());
             }
 
             try {
-                return Integer.parseInt(serverId.trim());
+                return Integer.parseInt(serverId);
             } catch (NumberFormatException e) {
                 throw new IOException(
                         "Invalid server.id in disk.properties under "
@@ -566,11 +566,11 @@ public final class LocalDiskManager implements Closeable {
         }
 
         private String diskId(File dataDir) throws IOException {
-            if (diskId == null || diskId.trim().isEmpty()) {
+            if (diskId == null || diskId.isEmpty()) {
                 throw new IOException(
                         "Missing disk.id in disk.properties under " + dataDir.getAbsolutePath());
             }
-            return diskId.trim();
+            return diskId;
         }
 
         @Override
@@ -660,7 +660,7 @@ public final class LocalDiskManager implements Closeable {
                     String serverId = properties.getProperty(SERVER_ID_KEY);
                     return new DiskProperties(parsedVersion, diskId, serverId);
                 } catch (NoSuchFileException e) {
-                    LOG.warn("No disk.properties file under dir {}", file.getAbsolutePath());
+                    LOG.info("No disk.properties file under dir {}", file.getAbsolutePath());
                     return null;
                 } catch (Exception e) {
                     LOG.error(

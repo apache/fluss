@@ -20,6 +20,7 @@ package org.apache.fluss.server.log.remote;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.RemoteStorageException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -244,11 +245,8 @@ public class RemoteLogManager implements Closeable {
 
     /** Get the position of the given offset in the remote log segment. */
     public int lookupPositionForOffset(RemoteLogSegment remoteLogSegment, long offset) {
-        RemoteLogIndexCache remoteLogIndexCache =
-                remoteLogIndexCacheForBucket(remoteLogSegment.tableBucket());
-        return remoteLogIndexCache == null
-                ? -1
-                : remoteLogIndexCache.lookupPosition(remoteLogSegment, offset);
+        return remoteLogIndexCacheForBucket(remoteLogSegment.tableBucket())
+                .lookupPosition(remoteLogSegment, offset);
     }
 
     /**
@@ -269,10 +267,8 @@ public class RemoteLogManager implements Closeable {
         if (segment == null) {
             return -1L;
         } else {
-            RemoteLogIndexCache remoteLogIndexCache = remoteLogIndexCacheForBucket(tableBucket);
-            return remoteLogIndexCache == null
-                    ? -1L
-                    : remoteLogIndexCache.lookupOffsetForTimestamp(segment, timestamp);
+            return remoteLogIndexCacheForBucket(tableBucket)
+                    .lookupOffsetForTimestamp(segment, timestamp);
         }
     }
 
@@ -433,13 +429,13 @@ public class RemoteLogManager implements Closeable {
         return rlmTasks.get(tableBucket);
     }
 
-    private @Nullable RemoteLogIndexCache remoteLogIndexCacheForBucket(TableBucket tableBucket) {
+    private RemoteLogIndexCache remoteLogIndexCacheForBucket(TableBucket tableBucket) {
         Optional<LogTablet> logTabletOpt = logManager.getLog(tableBucket);
         if (!logTabletOpt.isPresent()) {
-            LOG.error(
-                    "Can't resolve remote log index cache for bucket {} because no local log exists.",
-                    tableBucket);
-            return null;
+            throw new NotLeaderOrFollowerException(
+                    String.format(
+                            "Can't resolve remote log index cache for bucket %s because no local log exists.",
+                            tableBucket));
         }
         return remoteLogIndexCache(localDiskManager.resolveDataDir(logTabletOpt.get().getLogDir()));
     }

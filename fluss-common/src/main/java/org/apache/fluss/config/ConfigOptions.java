@@ -923,8 +923,8 @@ public class ConfigOptions {
                     .memoryType()
                     .defaultValue(MemorySize.parse("1gb"))
                     .withDescription(
-                            "The total size of the space allocated to store index files fetched "
-                                    + "from remote storage in the local storage.");
+                            "The size of the space allocated per local data directory to store "
+                                    + "index files fetched from remote storage in the local storage.");
 
     public static final ConfigOption<Integer> REMOTE_LOG_MANAGER_THREAD_POOL_SIZE =
             key("remote.log-manager.thread-pool-size")

@@ -76,6 +76,7 @@ import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.zk.NOPErrorHandler;
+import org.apache.fluss.server.testutils.ServerTestTags;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.testutils.DataTestUtils;
@@ -2421,7 +2422,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
     // ---- JBOD multi-directory tests ----
 
     @Test
-    @Tag(ReplicaTestBase.JBOD_MULTI_DIR_TAG)
+    @Tag(ServerTestTags.JBOD_MULTI_DIR_TAG)
     void testNewBucketsDistributedAcrossDataDirs() throws Exception {
         File dataDir1 = new File(tempDir, "data-1");
         File dataDir2 = new File(tempDir, "data-2");
@@ -2437,7 +2438,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
     }
 
     @Test
-    @Tag(ReplicaTestBase.JBOD_MULTI_DIR_TAG)
+    @Tag(ServerTestTags.JBOD_MULTI_DIR_TAG)
     void testLogAndKvCoLocatedForPrimaryKeyTable() throws Exception {
         File dataDir1 = new File(tempDir, "data-1");
         File dataDir2 = new File(tempDir, "data-2");
@@ -2457,7 +2458,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
     }
 
     @Test
-    @Tag(ReplicaTestBase.JBOD_MULTI_DIR_TAG)
+    @Tag(ServerTestTags.JBOD_MULTI_DIR_TAG)
     void testHighWatermarkCheckpointIsWrittenPerDirectory() throws Exception {
         File dataDir1 = new File(tempDir, "data-1");
         File dataDir2 = new File(tempDir, "data-2");

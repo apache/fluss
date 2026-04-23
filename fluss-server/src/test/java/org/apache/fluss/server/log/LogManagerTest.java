@@ -27,6 +27,7 @@ import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.storage.LocalDiskManager;
+import org.apache.fluss.server.testutils.ServerTestTags;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
@@ -72,8 +73,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** Test for {@link LogManager}. */
 final class LogManagerTest extends LogTestBase {
 
-    private static final String JBOD_MULTI_DIR_TAG = "jbod-multidir";
-
     @RegisterExtension
     public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
             new AllCallbackWrapper<>(new ZooKeeperExtension());
@@ -100,7 +99,7 @@ final class LogManagerTest extends LogTestBase {
     @BeforeEach
     public void setup(TestInfo testInfo) throws Exception {
         super.before();
-        if (testInfo.getTags().contains(JBOD_MULTI_DIR_TAG)) {
+        if (testInfo.getTags().contains(ServerTestTags.JBOD_MULTI_DIR_TAG)) {
             conf.set(
                     ConfigOptions.DATA_DIRS,
                     Arrays.asList(
@@ -321,7 +320,7 @@ final class LogManagerTest extends LogTestBase {
     }
 
     @Test
-    @Tag(JBOD_MULTI_DIR_TAG)
+    @Tag(ServerTestTags.JBOD_MULTI_DIR_TAG)
     void testCheckpointRecoveryPointsAreWrittenPerDirectory() throws Exception {
         File dataDir1 = new File(tempDir, "data-1");
         File dataDir2 = new File(tempDir, "data-2");
@@ -355,7 +354,7 @@ final class LogManagerTest extends LogTestBase {
     }
 
     @Test
-    @Tag(JBOD_MULTI_DIR_TAG)
+    @Tag(ServerTestTags.JBOD_MULTI_DIR_TAG)
     void testPerDirectoryCleanShutdownAndRecovery() throws Exception {
         File dataDir1 = new File(tempDir, "data-1");
         File dataDir2 = new File(tempDir, "data-2");

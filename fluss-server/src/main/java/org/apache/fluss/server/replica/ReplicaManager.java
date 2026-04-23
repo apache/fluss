@@ -1511,19 +1511,22 @@ public class ReplicaManager implements ServerReconfigurable {
         // of RemoteLogSegment. For client fetcher, it will fetch the log from remote in client.
         // For follower, it can update its local metadata to adjust the next fetch offset.
         else if (canFetchFromRemoteLog(replica, fetchOffset)) {
-            RemoteLogFetchInfo remoteLogFetchInfo = fetchLogFromRemote(replica, fetchOffset);
-            if (remoteLogFetchInfo != null) {
-                return new FetchLogResultForBucket(
-                        tb, remoteLogFetchInfo, replica.getLogHighWatermark());
-            } else {
-                return new FetchLogResultForBucket(
-                        tb,
-                        ApiError.fromThrowable(
-                                new LogOffsetOutOfRangeException(
-                                        String.format(
-                                                "The fetch offset %s is out of range for table bucket %s",
-                                                fetchOffset, tb))));
+            try {
+                RemoteLogFetchInfo remoteLogFetchInfo = fetchLogFromRemote(replica, fetchOffset);
+                if (remoteLogFetchInfo != null) {
+                    return new FetchLogResultForBucket(
+                            tb, remoteLogFetchInfo, replica.getLogHighWatermark());
+                }
+            } catch (Exception ex) {
+                return new FetchLogResultForBucket(tb, ApiError.fromThrowable(ex));
             }
+            return new FetchLogResultForBucket(
+                    tb,
+                    ApiError.fromThrowable(
+                            new LogOffsetOutOfRangeException(
+                                    String.format(
+                                            "The fetch offset %s is out of range for table bucket %s",
+                                            fetchOffset, tb))));
         } else {
             return new FetchLogResultForBucket(tb, ApiError.fromThrowable(e));
         }
@@ -1603,19 +1606,14 @@ public class ReplicaManager implements ServerReconfigurable {
                     .put(logTablet.getTableBucket(), logTablet.getHighWatermark());
         }
 
-        try {
-            for (Map.Entry<File, Map<TableBucket, Long>> entry : highWatermarksByDir.entrySet()) {
-                if (!entry.getValue().isEmpty()) {
-                    try {
-                        highWatermarkCheckpoints.get(entry.getKey()).write(entry.getValue());
-                    } catch (Exception e) {
-                        throw new LogStorageException(
-                                "Error while writing to high watermark file", e);
-                    }
+        for (Map.Entry<File, Map<TableBucket, Long>> entry : highWatermarksByDir.entrySet()) {
+            if (!entry.getValue().isEmpty()) {
+                try {
+                    highWatermarkCheckpoints.get(entry.getKey()).write(entry.getValue());
+                } catch (Exception e) {
+                    throw new LogStorageException("Error while writing to high watermark file", e);
                 }
             }
-        } catch (LogStorageException e) {
-            throw e;
         }
     }
 

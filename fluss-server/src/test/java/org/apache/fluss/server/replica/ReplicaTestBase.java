@@ -55,6 +55,7 @@ import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metrics.group.BucketMetricGroup;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.storage.LocalDiskManager;
+import org.apache.fluss.server.testutils.ServerTestTags;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
@@ -127,7 +128,6 @@ import static org.apache.fluss.utils.FlussPaths.remoteLogTabletDir;
  * function managed by {@link ReplicaManager}.
  */
 public class ReplicaTestBase {
-    public static final String JBOD_MULTI_DIR_TAG = "jbod-multidir";
 
     @RegisterExtension
     public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
@@ -178,7 +178,7 @@ public class ReplicaTestBase {
     public void setup(TestInfo testInfo) throws Exception {
         conf = getServerConf();
         conf.set(ConfigOptions.TABLET_SERVER_ID, TABLET_SERVER_ID);
-        if (testInfo != null && testInfo.getTags().contains(JBOD_MULTI_DIR_TAG)) {
+        if (testInfo != null && testInfo.getTags().contains(ServerTestTags.JBOD_MULTI_DIR_TAG)) {
             conf.set(
                     ConfigOptions.DATA_DIRS,
                     Arrays.asList(
