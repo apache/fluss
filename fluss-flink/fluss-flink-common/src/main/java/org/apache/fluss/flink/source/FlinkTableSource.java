@@ -86,9 +86,11 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.apache.fluss.flink.utils.LakeSourceUtils.createLakeSource;
 import static org.apache.fluss.flink.utils.PredicateConverter.convertToFlussPredicate;
@@ -567,9 +569,45 @@ public class FlinkTableSource
             // source or a lookup source. Since fluss lookup sources cannot accept filters yet, to
             // be safe, we return all filters to the Flink planner.
             return Result.of(acceptedFilters, filters);
+        } else {
+            acceptedFilters = new ArrayList<>();
+            if (lakeSource != null) {
+                acceptedFilters = pushdownLakeFilters(filters);
+            }
         }
 
-        return Result.of(Collections.emptyList(), filters);
+        return Result.of(acceptedFilters, filters);
+    }
+
+    private List<ResolvedExpression> pushdownLakeFilters(List<ResolvedExpression> filters) {
+        List<Predicate> lakePredicates = new ArrayList<>();
+        List<ResolvedExpression> convertedFilters = new ArrayList<>();
+        for (ResolvedExpression filter : filters) {
+            Optional<Predicate> predicateOptional =
+                    convertToFlussPredicate(tableOutputType, filter);
+            if (predicateOptional.isPresent()) {
+                lakePredicates.add(predicateOptional.get());
+                convertedFilters.add(filter);
+            }
+        }
+
+        List<ResolvedExpression> acceptedFilters = new ArrayList<>();
+
+        if (lakePredicates.isEmpty()) {
+            return acceptedFilters;
+        }
+
+        LakeSource.FilterPushDownResult filterPushDownResult =
+                checkNotNull(lakeSource).withFilters(lakePredicates);
+        Set<Predicate> acceptedLakePredicates =
+                Collections.newSetFromMap(new IdentityHashMap<Predicate, Boolean>());
+        acceptedLakePredicates.addAll(filterPushDownResult.acceptedPredicates());
+        for (int i = 0; i < lakePredicates.size(); i++) {
+            if (acceptedLakePredicates.contains(lakePredicates.get(i))) {
+                acceptedFilters.add(convertedFilters.get(i));
+            }
+        }
+        return acceptedFilters;
     }
 
     @Override
