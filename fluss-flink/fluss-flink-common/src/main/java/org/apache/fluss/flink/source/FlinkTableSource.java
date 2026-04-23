@@ -628,20 +628,6 @@ public class FlinkTableSource
         return Result.of(acceptedFilters, remainingFilters);
     }
 
-    /**
-     * Adds lake-accepted predicates into {@code acceptedFilters}.
-     *
-     * <p>This method intentionally does not mutate {@code remainingFilters}:
-     *
-     * <p>1. partition/record-batch pushdown has already established the Fluss-side scan behavior;
-     *
-     * <p>2. FLINK-38635 requires returning the original filters as remaining so Flink keeps
-     * applying them as a correctness safety net;
-     *
-     * <p>3. {@link LakeSource.FilterPushDownResult} reports accepted predicates in converted {@link
-     * Predicate} form rather than original {@link ResolvedExpression} instances, so adjusting
-     * remainingFilters here would add bookkeeping complexity without changing runtime behavior.
-     */
     private void pushdownLakeFilters(
             List<ResolvedExpression> filters, List<ResolvedExpression> acceptedFilters) {
         List<Predicate> lakePredicates = new ArrayList<>();
