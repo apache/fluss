@@ -69,6 +69,7 @@ class FlussLakeUpsertPartitionReader(
     while (true) {
       if (mergedIterator.hasNext) {
         currentRow = convertToSparkRow(mergedIterator.next())
+        numRowsRead += 1
         return true
       }
 

@@ -24,6 +24,7 @@ import org.apache.fluss.spark.SparkConversions
 import org.apache.fluss.spark.read.lake.{FlussLakeAppendBatch, FlussLakeUpsertBatch}
 
 import org.apache.spark.sql.connector.expressions.filter.Predicate
+import org.apache.spark.sql.connector.metric.CustomMetric
 import org.apache.spark.sql.connector.read.{Batch, Scan}
 import org.apache.spark.sql.connector.read.streaming.MicroBatchStream
 import org.apache.spark.sql.types.StructType
@@ -33,11 +34,21 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap
 trait FlussScan extends Scan {
   def tableInfo: TableInfo
 
+  def tablePath: TablePath
+
   def requiredSchema: Option[StructType]
+
+  protected def scanType: String
 
   override def readSchema(): StructType = {
     requiredSchema.getOrElse(SparkConversions.toSparkDataType(tableInfo.getRowType))
   }
+
+  override def description(): String =
+    s"FlussScan: [$tablePath], Type: [$scanType]"
+
+  override def supportedCustomMetrics(): Array[CustomMetric] =
+    Array(FlussNumRowsReadMetric())
 }
 
 /** Fluss Append Scan. */
@@ -50,6 +61,8 @@ case class FlussAppendScan(
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussScan {
+
+  override protected val scanType: String = "Append"
 
   override def toBatch: Batch = {
     new FlussAppendBatch(tablePath, tableInfo, readSchema, pushedPredicate, options, flussConfig)
@@ -81,6 +94,8 @@ case class FlussLakeAppendScan(
     flussConfig: Configuration)
   extends FlussScan {
 
+  override protected val scanType: String = "LakeAppend"
+
   override def toBatch: Batch = {
     new FlussLakeAppendBatch(tablePath, tableInfo, readSchema, options, flussConfig)
   }
@@ -105,6 +120,8 @@ case class FlussUpsertScan(
     flussConfig: Configuration)
   extends FlussScan {
 
+  override protected val scanType: String = "Upsert"
+
   override def toBatch: Batch = {
     new FlussUpsertBatch(tablePath, tableInfo, readSchema, options, flussConfig)
   }
@@ -128,6 +145,8 @@ case class FlussLakeUpsertScan(
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussScan {
+
+  override protected val scanType: String = "LakeUpsert"
 
   override def toBatch: Batch = {
     new FlussLakeUpsertBatch(tablePath, tableInfo, readSchema, options, flussConfig)

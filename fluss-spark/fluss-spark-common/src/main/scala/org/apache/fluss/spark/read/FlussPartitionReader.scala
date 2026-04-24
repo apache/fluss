@@ -29,6 +29,7 @@ import org.apache.fluss.types.RowType
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.connector.metric.CustomTaskMetric
 import org.apache.spark.sql.connector.read.PartitionReader
 
 import java.time.Duration
@@ -46,8 +47,12 @@ abstract class FlussPartitionReader(tablePath: TablePath, flussConfig: Configura
 
   protected var currentRow: InternalRow = _
   protected var closed = false
+  protected var numRowsRead: Long = 0L
 
   override def get(): InternalRow = currentRow
+
+  override def currentMetricsValues(): Array[CustomTaskMetric] =
+    Array(FlussNumRowsReadTaskMetric(numRowsRead))
 
   def close0(): Unit
 

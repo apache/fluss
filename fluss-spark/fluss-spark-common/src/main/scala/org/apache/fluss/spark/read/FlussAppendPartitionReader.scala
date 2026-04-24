@@ -71,6 +71,7 @@ class FlussAppendPartitionReader(
     if (currentRecords.hasNext) {
       val scanRecord = currentRecords.next()
       currentRow = convertToSparkRow(scanRecord)
+      numRowsRead += 1
       currentOffset = scanRecord.logOffset() + 1
       true
     } else if (currentOffset < flussPartition.stopOffset) {

@@ -93,6 +93,7 @@ class FlussUpsertPartitionReader(
 
     if (mergedIterator.hasNext) {
       currentRow = convertToSparkRow(mergedIterator.next())
+      numRowsRead += 1
       true
     } else {
       false

@@ -17,6 +17,10 @@
 
 package org.apache.fluss.spark
 
+import org.apache.fluss.spark.read.{FlussMetrics, FlussScan}
+
+import org.apache.spark.sql.Row
+import org.apache.spark.sql.execution.datasources.v2.{BatchScanExec, DataSourceV2ScanRelation}
 import org.apache.fluss.spark.read.FlussAppendScan
 
 import org.apache.spark.sql.{DataFrame, Row}
@@ -485,5 +489,41 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
     assert(
       expected.exists(pushed.contains),
       s"Expected any of $expected in pushed predicates, got $pushed")
+  }
+
+  test("Spark Read: log table scan metrics") {
+    withTable("t") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t (id INT, name STRING)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e')
+             |""".stripMargin)
+
+      val df = sql(s"SELECT * FROM $DEFAULT_DATABASE.t")
+
+      // Verify scan description and supportedCustomMetrics before execution
+      val scan = df.queryExecution.optimizedPlan
+        .collectFirst { case r: DataSourceV2ScanRelation => r }
+        .get
+        .scan
+        .asInstanceOf[FlussScan]
+
+      assert(scan.description().contains("FlussScan"))
+      assert(scan.description().contains("Append"))
+      assert(scan.supportedCustomMetrics().exists(_.name() == FlussMetrics.NUM_ROWS_READ))
+
+      // Execute the query to trigger metric accumulation
+      df.collect()
+
+      // Verify numRowsRead is accumulated in BatchScanExec after execution
+      val batchScanExec = df.queryExecution.executedPlan.collectFirst {
+        case b: BatchScanExec => b
+      }.get
+
+      val numRowsRead = batchScanExec.metrics(FlussMetrics.NUM_ROWS_READ).value
+      assert(numRowsRead == 5L, s"Expected 5 rows read, got $numRowsRead")
+    }
   }
 }

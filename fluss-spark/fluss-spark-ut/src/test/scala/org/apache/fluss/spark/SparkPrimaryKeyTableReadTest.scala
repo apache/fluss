@@ -20,9 +20,10 @@ package org.apache.fluss.spark
 import org.apache.fluss.client.initializer.{BucketOffsetsRetrieverImpl, OffsetsInitializer}
 import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.metadata.{TableBucket, TablePath}
-import org.apache.fluss.spark.read.FlussUpsertInputPartition
+import org.apache.fluss.spark.read.{FlussMetrics, FlussScan, FlussUpsertInputPartition}
 
 import org.apache.spark.sql.Row
+import org.apache.spark.sql.execution.datasources.v2.{BatchScanExec, DataSourceV2ScanRelation}
 import org.assertj.core.api.Assertions.assertThat
 
 import scala.collection.JavaConverters._
@@ -334,5 +335,45 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
 
   private def hasSnapshotData(inputPartition: FlussUpsertInputPartition): Boolean = {
     inputPartition.snapshotId >= 0
+  }
+
+  test("Spark Read: primary key table scan metrics") {
+    withTable("t") {
+      val tablePath = createTablePath("t")
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t (id INT, name STRING)
+             |TBLPROPERTIES("primary.key" = "id", "bucket.num" = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t VALUES (1, 'a'), (2, 'b'), (3, 'c')
+             |""".stripMargin)
+
+      flussServer.triggerAndWaitSnapshot(tablePath)
+
+      val df = sql(s"SELECT * FROM $DEFAULT_DATABASE.t")
+
+      // Verify scan description and supportedCustomMetrics before execution
+      val scan = df.queryExecution.optimizedPlan
+        .collectFirst { case r: DataSourceV2ScanRelation => r }
+        .get
+        .scan
+        .asInstanceOf[FlussScan]
+
+      assert(scan.description().contains("FlussScan"))
+      assert(scan.description().contains("Upsert"))
+      assert(scan.supportedCustomMetrics().exists(_.name() == FlussMetrics.NUM_ROWS_READ))
+
+      // Execute the query to trigger metric accumulation
+      df.collect()
+
+      // Verify numRowsRead is accumulated in BatchScanExec after execution
+      val batchScanExec = df.queryExecution.executedPlan.collectFirst {
+        case b: BatchScanExec => b
+      }.get
+
+      val numRowsRead = batchScanExec.metrics(FlussMetrics.NUM_ROWS_READ).value
+      assert(numRowsRead == 3L, s"Expected 3 rows read, got $numRowsRead")
+    }
   }
 }
