@@ -208,11 +208,11 @@ Fluss Spark connector supports **union read** that combines both layers to provi
 
 #### Union Read
 
-To read the full dataset, simply query the table without any suffix. The Spark connector automatically unions data from Fluss and the lake storage:
+To read the full dataset, simply query the table directly. The Spark connector automatically unions data from Fluss and the lake storage:
 
 ```sql title="Spark SQL"
 -- Query will union data from Fluss and lake
-SELECT SUM(total_amount) AS total_revenue FROM fluss_order_with_lake;
+SELECT SUM(total_price) AS total_revenue FROM fluss_order_with_lake;
 ```
 
 The union read works for both **log tables** and **primary key tables**:
@@ -234,7 +234,6 @@ CREATE TABLE fluss_order_with_lake (
   clerk STRING
 ) TBLPROPERTIES (
   'table.datalake.enabled' = 'true',
-  'table.datalake.format' = 'paimon',
   'table.datalake.freshness' = '30s'
 );
 ```
@@ -252,7 +251,7 @@ INSERT INTO fluss_order_with_lake VALUES
 
 ```sql title="Spark SQL"
 -- Returns complete view combining Fluss and lake data
-SELECT * FROM fluss_order_with_lake ORDER BY order_key;
+SELECT SUM(total_price) AS total_revenue FROM fluss_order_with_lake;
 ```
 
 ## All Data Types
