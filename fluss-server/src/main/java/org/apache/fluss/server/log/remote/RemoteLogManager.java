@@ -124,7 +124,7 @@ public class RemoteLogManager implements Closeable {
         this.coordinatorGateway = coordinatorGateway;
         this.logManager = logManager;
         this.localDiskManager = localDiskManager;
-        this.remoteLogIndexCachesByDir = MapUtils.newConcurrentHashMap();
+        this.remoteLogIndexCachesByDir = new ConcurrentHashMap<>();
         for (File dataDir : localDiskManager.dataDirs()) {
             remoteLogIndexCachesByDir.put(
                     dataDir,
