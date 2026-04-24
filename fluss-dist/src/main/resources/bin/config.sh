@@ -236,8 +236,8 @@ else
 fi
 
 # Verify that the Java version is at least 11
-if ! is_jdk_version_ge_11 ${JAVA_RUN}; then
-    java_version=$(${JAVA_RUN} -version 2>&1 | grep 'version' | head -n 1)
+if ! is_jdk_version_ge_11 "$JAVA_RUN"; then
+    java_version=$("$JAVA_RUN" -version 2>&1 | grep 'version' | head -n 1)
     echo "[ERROR] Fluss requires Java 11 or higher. Current Java version: ${java_version}."
     echo "[ERROR] Please set JAVA_HOME to a Java 11+ installation."
     exit 1
