@@ -1999,6 +1999,26 @@ public class ConfigOptions {
                     .withDescription(
                             "The max fetch size for fetching log to apply to kv during recovering kv.");
 
+    public static final ConfigOption<Integer> KV_RECOVERY_REMOTE_LOG_PREFETCH_NUM =
+            key("kv.recover.remote-log.prefetch-num")
+                    .intType()
+                    .defaultValue(4)
+                    .withDescription(
+                            "The maximum number of remote log segments that can be downloaded "
+                                    + "but not yet consumed during KV recovery. A larger value "
+                                    + "overlaps more remote storage downloads with consumption, "
+                                    + "at the cost of extra local disk usage. Setting to 1 keeps "
+                                    + "the historical behavior (one-step prefetch).");
+
+    public static final ConfigOption<Integer> KV_RECOVERY_REMOTE_LOG_DOWNLOAD_THREADS =
+            key("kv.recover.remote-log.download-threads")
+                    .intType()
+                    .defaultValue(3)
+                    .withDescription(
+                            "The number of threads used to download remote log segments during "
+                                    + "KV recovery. Should be less than or equal to "
+                                    + "'kv.recover.remote-log.prefetch-num'.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for metrics
     // ------------------------------------------------------------------------

@@ -23,9 +23,11 @@ import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.remote.RemoteLogSegment;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * A testing implementation of {@link org.apache.fluss.server.log.remote.RemoteLogStorage} which can
@@ -43,6 +45,30 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
     public final AtomicInteger copySegmentFailAfterNCopies = new AtomicInteger(-1);
 
     private final AtomicInteger copySegmentCount = new AtomicInteger(0);
+
+    /**
+     * When set to a positive value, each call to {@link #fetchLogData} will sleep for the given
+     * number of milliseconds before delegating to the real implementation. Used by integration
+     * tests that need to simulate a slow remote storage backend.
+     */
+    public final AtomicLong fetchLogDataDelayMs = new AtomicLong(0L);
+
+    /**
+     * When set to a positive value N, the first N {@link #fetchLogData} calls (across <b>all</b>
+     * segments) will throw a {@link RemoteStorageException}. Subsequent calls behave normally.
+     * Useful to exercise the exponential-backoff retry loop inside {@code
+     * RemoteLogFetcher#downloadSegmentWithRetry}.
+     */
+    public final AtomicInteger fetchLogDataFailFirstN = new AtomicInteger(0);
+
+    /**
+     * When set to {@code true}, every {@link #fetchLogData} call throws a {@link
+     * RemoteStorageException}. Used to validate that retries are exhausted and the failure is
+     * correctly propagated.
+     */
+    public final AtomicBoolean fetchLogDataAlwaysFail = new AtomicBoolean(false);
+
+    private final AtomicInteger fetchLogDataCount = new AtomicInteger(0);
 
     public TestingRemoteLogStorage(Configuration conf, ExecutorService ioExecutor)
             throws IOException {
@@ -69,5 +95,39 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
             throw new RuntimeException("failed to upload remote log manifest snapshot");
         }
         return super.writeRemoteLogManifestSnapshot(manifest);
+    }
+
+    @Override
+    public InputStream fetchLogData(RemoteLogSegment remoteLogSegment)
+            throws RemoteStorageException {
+        int idx = fetchLogDataCount.getAndIncrement();
+        if (fetchLogDataAlwaysFail.get()) {
+            throw new RemoteStorageException(
+                    "Simulated persistent fetchLogData failure for segment "
+                            + remoteLogSegment.remoteLogSegmentId());
+        }
+        int failFirstN = fetchLogDataFailFirstN.get();
+        if (idx < failFirstN) {
+            throw new RemoteStorageException(
+                    "Simulated transient fetchLogData failure, attempt "
+                            + (idx + 1)
+                            + "/"
+                            + failFirstN);
+        }
+        long delayMs = fetchLogDataDelayMs.get();
+        if (delayMs > 0L) {
+            try {
+                Thread.sleep(delayMs);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RemoteStorageException("Interrupted while simulating slow download", e);
+            }
+        }
+        return super.fetchLogData(remoteLogSegment);
+    }
+
+    /** Returns how many times {@link #fetchLogData} has been invoked since construction. */
+    public int fetchLogDataInvocationCount() {
+        return fetchLogDataCount.get();
     }
 }

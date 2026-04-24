@@ -29,7 +29,6 @@ import org.junit.jupiter.api.Test;
 
 import java.io.File;
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -43,6 +42,26 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link RemoteLogFetcher}. */
 class RemoteLogFetcherTest extends RemoteLogTestBase {
+
+    /** Default knobs for the tests: prefetch depth 2, 2 download threads. */
+    private static final int DEFAULT_TEST_PREFETCH_NUM = 2;
+
+    private static final int DEFAULT_TEST_DOWNLOAD_THREADS = 2;
+
+    private RemoteLogFetcher newFetcher(TableBucket tb, File logTabletDir) {
+        return new RemoteLogFetcher(
+                remoteLogManager,
+                tb,
+                logTabletDir,
+                DEFAULT_TEST_PREFETCH_NUM,
+                DEFAULT_TEST_DOWNLOAD_THREADS);
+    }
+
+    private RemoteLogFetcher newFetcher(
+            TableBucket tb, File logTabletDir, int prefetchNum, int downloadThreads) {
+        return new RemoteLogFetcher(
+                remoteLogManager, tb, logTabletDir, prefetchNum, downloadThreads);
+    }
 
     @Test
     void testBasicFetch() throws Exception {
@@ -63,7 +82,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
 
         File logTabletDir = logTablet.getLogDir();
-        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir)) {
+        try (RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir)) {
             // Fetch all remote log batches from offset 0 to remoteEndOffset.
             Iterable<LogRecordBatch> batches = fetcher.fetch(0, remoteEndOffset);
             List<LogRecordBatch> batchList = new ArrayList<>();
@@ -101,7 +120,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
 
         File logTabletDir = logTablet.getLogDir();
-        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir)) {
+        try (RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir)) {
             Iterable<LogRecordBatch> batches = fetcher.fetch(startOffset, remoteEndOffset);
             List<LogRecordBatch> batchList = new ArrayList<>();
             for (LogRecordBatch batch : batches) {
@@ -133,7 +152,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         long localLogStartOffset = segments.get(1).remoteLogStartOffset();
 
         File logTabletDir = logTablet.getLogDir();
-        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir)) {
+        try (RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir)) {
             Iterable<LogRecordBatch> batches = fetcher.fetch(0, localLogStartOffset);
             List<LogRecordBatch> batchList = new ArrayList<>();
             for (LogRecordBatch batch : batches) {
@@ -157,7 +176,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
 
         Replica replica = replicaManager.getReplicaOrException(tb);
         File logTabletDir = replica.getLogTablet().getLogDir();
-        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir)) {
+        try (RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir)) {
             assertThatThrownBy(() -> fetcher.fetch(0, 100))
                     .isInstanceOf(RemoteStorageException.class)
                     .hasMessageContaining("No remote log segments found");
@@ -185,7 +204,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
 
         // Simulate next startup: creating and closing a new RemoteLogFetcher should
         // clean up the entire tmp directory including all stale recovery directories.
-        RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir);
+        RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir);
         fetcher.close();
 
         assertThat(Files.exists(staleDir1)).isFalse();
@@ -208,7 +227,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
 
         File logTabletDir = logTablet.getLogDir();
-        RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir);
+        RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir);
         Path tempDir = fetcher.getTempDir();
 
         // Not yet created before fetch.
@@ -245,7 +264,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
 
         File logTabletDir = logTablet.getLogDir();
-        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir)) {
+        try (RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir)) {
             Iterable<LogRecordBatch> batches = fetcher.fetch(0, remoteEndOffset);
 
             long prevNextOffset = 0;
@@ -282,7 +301,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         long sameOffset = segments.get(0).remoteLogStartOffset();
 
         File logTabletDir = logTablet.getLogDir();
-        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir)) {
+        try (RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir)) {
             Iterable<LogRecordBatch> batches = fetcher.fetch(sameOffset, sameOffset);
             List<LogRecordBatch> batchList = new ArrayList<>();
             for (LogRecordBatch batch : batches) {
@@ -307,7 +326,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
 
         File logTabletDir = logTablet.getLogDir();
-        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir)) {
+        try (RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir)) {
             Path tempDir = fetcher.getTempDir();
 
             // Consume all batches to trigger downloading.
@@ -327,34 +346,6 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
     }
 
     @Test
-    void testFetchTwiceCancelsPreviousIteratorAndStillWorks() throws Exception {
-        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
-        makeLogTableAsLeader(tb, false);
-        Replica replica = replicaManager.getReplicaOrException(tb);
-        LogTablet logTablet = replica.getLogTablet();
-        addMultiSegmentsToLogTablet(logTablet, 5);
-
-        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
-
-        List<RemoteLogSegment> segments = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
-        assertThat(segments).isNotEmpty();
-        long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
-
-        File logTabletDir = logTablet.getLogDir();
-        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir)) {
-            Iterator<LogRecordBatch> firstIterator = fetcher.fetch(0, remoteEndOffset).iterator();
-            assertThat(firstIterator.hasNext()).isTrue();
-            firstIterator.next();
-
-            int secondFetchBatchCount = 0;
-            for (LogRecordBatch ignored : fetcher.fetch(0, remoteEndOffset)) {
-                secondFetchBatchCount++;
-            }
-            assertThat(secondFetchBatchCount).isGreaterThan(0);
-        }
-    }
-
-    @Test
     void testPrefetchFailureFallsBackToSyncDownload() throws Exception {
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
         makeLogTableAsLeader(tb, false);
@@ -369,16 +360,16 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
 
         File logTabletDir = logTablet.getLogDir();
-        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir)) {
+        try (RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir)) {
             Iterator<LogRecordBatch> iterator = fetcher.fetch(0, remoteEndOffset).iterator();
             assertThat(iterator.hasNext()).isTrue();
             iterator.next();
 
-            Object activeIterator = getPrivateField(fetcher, "activeIterator");
+            // Inject a failed prefetch for the very next segment to prove the iterator
+            // transparently falls back to a synchronous download.
             CompletableFuture<File> failedFuture = new CompletableFuture<>();
             failedFuture.completeExceptionally(new RuntimeException("injected prefetch failure"));
-            setPrivateField(activeIterator, "prefetchedSegment", segments.get(1));
-            setPrivateField(activeIterator, "nextDownloadedSegmentFuture", failedFuture);
+            fetcher.injectPrefetchEntryForTest(segments.get(1), failedFuture);
 
             int count = 1;
             while (iterator.hasNext()) {
@@ -404,34 +395,20 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
 
         File logTabletDir = logTablet.getLogDir();
-        RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir);
+        RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir);
         try {
             Iterator<LogRecordBatch> iterator = fetcher.fetch(0, remoteEndOffset).iterator();
             assertThat(iterator.hasNext()).isTrue();
             iterator.next();
 
-            Object activeIterator = getPrivateField(fetcher, "activeIterator");
             CompletableFuture<File> pendingFuture = new CompletableFuture<>();
-            setPrivateField(activeIterator, "prefetchedSegment", segments.get(0));
-            setPrivateField(activeIterator, "nextDownloadedSegmentFuture", pendingFuture);
+            fetcher.injectPrefetchEntryForTest(segments.get(0), pendingFuture);
 
             fetcher.close();
             assertThat(pendingFuture.isCancelled()).isTrue();
         } finally {
             fetcher.close();
         }
-    }
-
-    private static Object getPrivateField(Object target, String fieldName) throws Exception {
-        Field field = target.getClass().getDeclaredField(fieldName);
-        field.setAccessible(true);
-        return field.get(target);
-    }
-
-    private static void setPrivateField(Object target, String fieldName, Object value) throws Exception {
-        Field field = target.getClass().getDeclaredField(fieldName);
-        field.setAccessible(true);
-        field.set(target, value);
     }
 
     @Test
@@ -449,7 +426,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
 
         File logTabletDir = logTablet.getLogDir();
-        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir)) {
+        try (RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir)) {
             Iterable<LogRecordBatch> firstIterable = fetcher.fetch(0, remoteEndOffset);
             Iterator<LogRecordBatch> firstIterator = firstIterable.iterator();
 
@@ -460,10 +437,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
             Iterable<LogRecordBatch> secondIterable = fetcher.fetch(0, remoteEndOffset);
             Iterator<LogRecordBatch> secondIterator = secondIterable.iterator();
 
-            // The old iterator should stop immediately after being closed.
             assertThat(firstIterator.hasNext()).isFalse();
-
-            // The new iterator should still work normally.
             assertThat(secondIterator.hasNext()).isTrue();
         }
     }
@@ -483,16 +457,14 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
 
         File logTabletDir = logTablet.getLogDir();
-        try (RemoteLogFetcher fetcher = new RemoteLogFetcher(remoteLogManager, tb, logTabletDir)) {
+        try (RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir)) {
             Path tempDir = fetcher.getTempDir();
 
             Iterator<LogRecordBatch> firstIterator = fetcher.fetch(0, remoteEndOffset).iterator();
 
-            // This opens the first segment and starts async prefetch for the next segment.
             assertThat(firstIterator.hasNext()).isTrue();
             firstIterator.next();
 
-            // Wait until async prefetch has a chance to finish and write another .log file.
             waitUntilLogFileCountAtLeast(tempDir, 2);
 
             long fileCountBeforeSecondFetch = countLogFiles(tempDir);
@@ -500,14 +472,325 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
 
             Iterator<LogRecordBatch> secondIterator = fetcher.fetch(0, remoteEndOffset).iterator();
 
-            // The old iterator was closed by the second fetch and must not continue.
             assertThat(firstIterator.hasNext()).isFalse();
-
-            // The new iterator should still be usable.
             assertThat(secondIterator.hasNext()).isTrue();
-
-            // tempDir itself should still exist. The second fetch should not delete the shared temp dir.
             assertThat(Files.exists(tempDir)).isTrue();
+        }
+    }
+
+    // ======================================================================================
+    // New tests specific to the configurable prefetch window / multi-threaded download
+    // ======================================================================================
+
+    @Test
+    void testPrefetchDepthGreaterThanOnePrefetchesMultipleSegments() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        makeLogTableAsLeader(tb, false);
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 8);
+
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        List<RemoteLogSegment> segments = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(segments).hasSizeGreaterThanOrEqualTo(4);
+        long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
+
+        File logTabletDir = logTablet.getLogDir();
+        // prefetchNum=3, downloadThreads=3 — should populate 3 concurrent downloads.
+        try (RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir, 3, 3)) {
+            Path tempDir = fetcher.getTempDir();
+            Iterator<LogRecordBatch> iterator = fetcher.fetch(0, remoteEndOffset).iterator();
+            assertThat(iterator.hasNext()).isTrue();
+            iterator.next();
+
+            // After consuming one batch the first segment is opened and the window refills.
+            // We expect >= 3 .log files to appear on disk before we iterate further.
+            waitUntilLogFileCountAtLeast(tempDir, 3);
+            assertThat(countLogFiles(tempDir)).isGreaterThanOrEqualTo(3);
+        }
+    }
+
+    @Test
+    void testPrefetchWindowRefillsAfterSegmentConsumed() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        makeLogTableAsLeader(tb, false);
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 8);
+
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        List<RemoteLogSegment> segments = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(segments).hasSizeGreaterThanOrEqualTo(4);
+        long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
+
+        File logTabletDir = logTablet.getLogDir();
+        // Small window (2) forces the refill path to trigger repeatedly.
+        try (RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir, 2, 2)) {
+            Iterable<LogRecordBatch> batches = fetcher.fetch(0, remoteEndOffset);
+            int batchCount = 0;
+            long prevNextOffset = 0;
+            for (LogRecordBatch batch : batches) {
+                assertThat(batch.baseLogOffset()).isGreaterThanOrEqualTo(prevNextOffset);
+                prevNextOffset = batch.nextLogOffset();
+                batchCount++;
+            }
+            // With 4+ segments and 10 batches each we expect clearly more than 2*windowSize.
+            assertThat(batchCount).isGreaterThan(10);
+        }
+    }
+
+    @Test
+    void testPrefetchDepthOfOnePreservesLegacyBehavior() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        makeLogTableAsLeader(tb, false);
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        List<RemoteLogSegment> segments = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(segments).isNotEmpty();
+        long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
+
+        File logTabletDir = logTablet.getLogDir();
+        try (RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir, 1, 1)) {
+            assertThat(fetcher.getPrefetchNum()).isEqualTo(1);
+
+            Iterable<LogRecordBatch> batches = fetcher.fetch(0, remoteEndOffset);
+            int batchCount = 0;
+            long prevNextOffset = 0;
+            for (LogRecordBatch batch : batches) {
+                assertThat(batch.baseLogOffset()).isGreaterThanOrEqualTo(prevNextOffset);
+                prevNextOffset = batch.nextLogOffset();
+                batchCount++;
+            }
+            assertThat(batchCount).isGreaterThan(0);
+        }
+    }
+
+    @Test
+    void testCloseReleasesAllPrefetchPermitsAndCancelsQueue() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        makeLogTableAsLeader(tb, false);
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        List<RemoteLogSegment> segments = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(segments).isNotEmpty();
+        long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
+
+        File logTabletDir = logTablet.getLogDir();
+        RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir, 2, 2);
+        try {
+            Iterator<LogRecordBatch> iterator = fetcher.fetch(0, remoteEndOffset).iterator();
+            assertThat(iterator.hasNext()).isTrue();
+            iterator.next();
+
+            CompletableFuture<File> pendingFuture = new CompletableFuture<>();
+            fetcher.injectPrefetchEntryForTest(segments.get(0), pendingFuture);
+
+            List<CompletableFuture<File>> futures = fetcher.snapshotPrefetchFuturesForTest();
+            assertThat(futures).containsExactly(pendingFuture);
+
+            fetcher.close();
+
+            assertThat(pendingFuture.isCancelled()).isTrue();
+        } finally {
+            fetcher.close();
+        }
+    }
+
+    // ======================================================================================
+    // Integration tests: exercise the real download path with a slow / failing remote storage.
+    // These tests piggy-back on the per-test TestingRemoteLogStorage that ReplicaTestBase wires
+    // into the RemoteLogManager, and toggle injection knobs *after* segments have been uploaded
+    // so only the consumer-side fetchLogData() calls are affected.
+    // ======================================================================================
+
+    @Test
+    void testSlowDownloadOverlappedWithConsumption() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        makeLogTableAsLeader(tb, false);
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 8);
+
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        List<RemoteLogSegment> segments = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(segments).hasSizeGreaterThanOrEqualTo(4);
+        long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
+
+        // After uploads are done, slow every fetchLogData by 200ms so we can observe overlap.
+        remoteLogStorage.fetchLogDataDelayMs.set(200L);
+
+        File logTabletDir = logTablet.getLogDir();
+        // prefetchNum=3, downloadThreads=3 — three concurrent slow downloads should overlap with
+        // the consumer reading the first segment.
+        try (RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir, 3, 3)) {
+            Path tempDir = fetcher.getTempDir();
+            long startNanos = System.nanoTime();
+
+            Iterator<LogRecordBatch> iterator = fetcher.fetch(0, remoteEndOffset).iterator();
+            assertThat(iterator.hasNext()).isTrue();
+            iterator.next();
+
+            long firstBatchElapsedMs =
+                    java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+                            System.nanoTime() - startNanos);
+
+            // Within ~5s the prefetch window should hold at least 3 concurrently downloaded
+            // .log files on disk, proving downloads run in parallel rather than serially.
+            waitUntilLogFileCountAtLeast(tempDir, 3);
+            assertThat(countLogFiles(tempDir)).isGreaterThanOrEqualTo(3);
+
+            int batchCount = 1;
+            while (iterator.hasNext()) {
+                iterator.next();
+                batchCount++;
+            }
+
+            // Sanity: with 4+ segments * 10 batches we expect plenty of records.
+            assertThat(batchCount).isGreaterThan(10);
+
+            // If downloads were serial we'd need at least 4 * 200ms before the FIRST batch can
+            // be returned (head segment must be downloaded first). The first-batch wait must
+            // therefore be close to a single 200ms slot, not multiplied by the segment count.
+            // We give a generous upper bound to keep the test stable on slow CI.
+            assertThat(firstBatchElapsedMs).isLessThan(2_000L);
+        } finally {
+            remoteLogStorage.fetchLogDataDelayMs.set(0L);
+        }
+    }
+
+    @Test
+    void testPersistentDownloadFailureTriggersRetryAndPropagates() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        makeLogTableAsLeader(tb, false);
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        List<RemoteLogSegment> segments = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(segments).isNotEmpty();
+        long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
+
+        // Force every fetchLogData to fail once uploads are done.
+        remoteLogStorage.fetchLogDataAlwaysFail.set(true);
+
+        File logTabletDir = logTablet.getLogDir();
+        try (RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir, 1, 1)) {
+            int countBefore = remoteLogStorage.fetchLogDataInvocationCount();
+
+            // The very first hasNext() will trigger downloadSegmentWithRetry on the head
+            // segment, which exhausts MAX_RETRIES (5) + initial attempt = 6 calls, then
+            // surfaces an IOException wrapped as RuntimeException by advance().
+            assertThatThrownBy(() -> fetcher.fetch(0, remoteEndOffset).iterator().hasNext())
+                    .isInstanceOf(RuntimeException.class)
+                    .hasMessageContaining("Failed to fetch remote log segment");
+
+            int countAfter = remoteLogStorage.fetchLogDataInvocationCount();
+            // 1 initial attempt + 5 retries = 6 invocations expected. We assert >= 6 to also
+            // tolerate the eager prefetch path performing one extra invocation before the
+            // sync fallback begins.
+            assertThat(countAfter - countBefore).isGreaterThanOrEqualTo(6);
+        } finally {
+            remoteLogStorage.fetchLogDataAlwaysFail.set(false);
+        }
+    }
+
+    @Test
+    void testTransientDownloadFailureRecoversOnRetry() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        makeLogTableAsLeader(tb, false);
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        List<RemoteLogSegment> segments = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(segments).isNotEmpty();
+        long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
+
+        // The first 2 fetchLogData invocations fail; from the 3rd onward they succeed. With
+        // prefetchNum=1 and a single segment to consume, the retry loop must recover and the
+        // iterator must produce all batches without leaking permits.
+        remoteLogStorage.fetchLogDataFailFirstN.set(2);
+
+        File logTabletDir = logTablet.getLogDir();
+        try (RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir, 1, 1)) {
+            int batchCount = 0;
+            long prevNextOffset = 0;
+            for (LogRecordBatch batch : fetcher.fetch(0, remoteEndOffset)) {
+                assertThat(batch.baseLogOffset()).isGreaterThanOrEqualTo(prevNextOffset);
+                prevNextOffset = batch.nextLogOffset();
+                batchCount++;
+            }
+
+            assertThat(batchCount).isGreaterThan(0);
+            // We expect at least 2 (failed) + 1 (succeeded) = 3 invocations on the head segment
+            // alone, plus normal downloads for the remaining segments.
+            assertThat(remoteLogStorage.fetchLogDataInvocationCount()).isGreaterThanOrEqualTo(3);
+        }
+    }
+
+    @Test
+    void testCloseInterruptsOngoingDownload() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        makeLogTableAsLeader(tb, false);
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        List<RemoteLogSegment> segments = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(segments).isNotEmpty();
+        long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
+
+        // Make every fetchLogData sleep 5s so the prefetch worker is guaranteed to be in the
+        // middle of a download when we close the fetcher.
+        remoteLogStorage.fetchLogDataDelayMs.set(5_000L);
+
+        File logTabletDir = logTablet.getLogDir();
+        RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir, 2, 2);
+        try {
+            // fetch() returns immediately because the iterator is lazy. The prefetch worker is
+            // now stuck in the simulated 5s sleep inside fetchLogData.
+            fetcher.fetch(0, remoteEndOffset);
+
+            // Snapshot the in-flight futures BEFORE close so we can assert on them afterwards.
+            List<CompletableFuture<File>> inflight = fetcher.snapshotPrefetchFuturesForTest();
+            assertThat(inflight).isNotEmpty();
+
+            long closeStart = System.nanoTime();
+            fetcher.close();
+            long closeMs =
+                    java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
+                            System.nanoTime() - closeStart);
+
+            // close() must not block for the full simulated 5s sleep — it should cancel the
+            // in-flight futures and return promptly (well under 5s on any healthy machine).
+            assertThat(closeMs).isLessThan(4_000L);
+
+            // Every in-flight future captured pre-close must end up cancelled or completed
+            // exceptionally (an interrupted Thread.sleep surfaces as InterruptedException).
+            for (CompletableFuture<File> f : inflight) {
+                assertThat(f.isDone()).isTrue();
+                assertThat(f.isCancelled() || f.isCompletedExceptionally()).isTrue();
+            }
+        } finally {
+            remoteLogStorage.fetchLogDataDelayMs.set(0L);
+            fetcher.close();
         }
     }
 
@@ -532,5 +815,4 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
             return paths.filter(path -> path.getFileName().toString().endsWith(".log")).count();
         }
     }
-
 }
