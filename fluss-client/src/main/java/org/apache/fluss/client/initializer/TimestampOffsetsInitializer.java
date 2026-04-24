@@ -43,4 +43,8 @@ public class TimestampOffsetsInitializer implements OffsetsInitializer {
             BucketOffsetsRetriever bucketOffsetsRetriever) {
         return bucketOffsetsRetriever.offsetsFromTimestamp(partitionName, buckets, timestamp);
     }
+
+    public long getTimestamp() {
+        return timestamp;
+    }
 }

@@ -25,6 +25,7 @@ import org.apache.fluss.client.initializer.NoStoppingOffsetsInitializer;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.client.initializer.OffsetsInitializer.BucketOffsetsRetriever;
 import org.apache.fluss.client.initializer.SnapshotOffsetsInitializer;
+import org.apache.fluss.client.initializer.TimestampOffsetsInitializer;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -417,33 +418,56 @@ public class FlinkSourceEnumerator
 
     /** Apply partition filter. */
     private List<PartitionInfo> applyPartitionFilter(List<PartitionInfo> partitionInfos) {
+        List<PartitionInfo> result = partitionInfos;
         if (partitionFilters == null) {
-            return partitionInfos;
+            LOG.debug("No partition filter configured for table {}", tablePath);
         } else {
             int originalSize = partitionInfos.size();
-            List<PartitionInfo> filteredPartitionInfos =
+            result =
                     partitionInfos.stream()
                             .filter(partition -> partitionFilters.test(toInternalRow(partition)))
                             .collect(Collectors.toList());
 
-            int filteredSize = filteredPartitionInfos.size();
+            int filteredSize = result.size();
             if (originalSize != filteredSize) {
-                LOG.debug(
+                LOG.info(
                         "Applied partition filter for table {}: {} partitions filtered down to {} "
                                 + "matching partitions with predicate: {}. Matching partitions after filtering: {}",
                         tablePath,
                         originalSize,
                         filteredSize,
                         partitionFilters,
-                        filteredPartitionInfos);
+                        result);
             } else {
                 LOG.debug(
                         "Partition filter applied for table {}, but all {} partitions matched the predicate",
                         tablePath,
                         originalSize);
             }
-            return filteredPartitionInfos;
         }
+
+        if (startingOffsetsInitializer instanceof TimestampOffsetsInitializer) {
+            long startupTimestamp =
+                    ((TimestampOffsetsInitializer) startingOffsetsInitializer).getTimestamp();
+            List<PartitionInfo> filteredByTimestamp =
+                    StartupTimestampPartitionFilter.filter(
+                            result,
+                            startupTimestamp,
+                            tableInfo.getPartitionKeys(),
+                            tableInfo.getTableConfig().getAutoPartitionStrategy());
+            if (filteredByTimestamp.size() != result.size()) {
+                LOG.info(
+                        "Startup timestamp {} ms: filtered partitioned table {} from {} to {} "
+                                + "partitions by auto-partition time bounds.",
+                        startupTimestamp,
+                        tablePath,
+                        result.size(),
+                        filteredByTimestamp.size());
+            }
+            result = filteredByTimestamp;
+        }
+
+        return result;
     }
 
     private static InternalRow toInternalRow(PartitionInfo partitionInfo) {
