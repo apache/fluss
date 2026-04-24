@@ -27,6 +27,8 @@ import java.util.List;
 /** Split for Iceberg table. */
 public class IcebergSplit implements LakeSplit {
 
+    private static final long serialVersionUID = 1L;
+
     private final FileScanTask fileScanTask;
     private final int bucket;
     private final List<String> partition;
