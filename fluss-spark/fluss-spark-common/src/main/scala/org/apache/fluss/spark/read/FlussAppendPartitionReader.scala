@@ -58,7 +58,7 @@ class FlussAppendPartitionReader(
     currentRecords = scanRecords.records(tableBucket).iterator()
   }
 
-  override def next(): Boolean = {
+  override def next0(): Boolean = {
     if (closed || currentOffset >= flussPartition.stopOffset) {
       return false
     }
@@ -71,7 +71,6 @@ class FlussAppendPartitionReader(
     if (currentRecords.hasNext) {
       val scanRecord = currentRecords.next()
       currentRow = convertToSparkRow(scanRecord)
-      numRowsRead += 1
       currentOffset = scanRecord.logOffset() + 1
       true
     } else if (currentOffset < flussPartition.stopOffset) {

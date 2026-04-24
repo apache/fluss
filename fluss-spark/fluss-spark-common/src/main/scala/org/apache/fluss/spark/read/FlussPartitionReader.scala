@@ -54,6 +54,16 @@ abstract class FlussPartitionReader(tablePath: TablePath, flussConfig: Configura
   override def currentMetricsValues(): Array[CustomTaskMetric] =
     Array(FlussNumRowsReadTaskMetric(numRowsRead))
 
+  def next0(): Boolean
+
+  override def next(): Boolean = {
+    val hasNext = next0()
+    if (hasNext) {
+      numRowsRead += 1
+    }
+    hasNext
+  }
+
   def close0(): Unit
 
   override def close(): Unit = {

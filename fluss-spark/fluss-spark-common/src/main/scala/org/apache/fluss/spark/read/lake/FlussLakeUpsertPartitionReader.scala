@@ -60,7 +60,7 @@ class FlussLakeUpsertPartitionReader(
 
   override lazy val projectedRowType: RowType = rowType.project(projection)
 
-  override def next(): Boolean = {
+  override def next0(): Boolean = {
     if (closed || scanFinished) {
       return false
     }
@@ -69,7 +69,6 @@ class FlussLakeUpsertPartitionReader(
     while (true) {
       if (mergedIterator.hasNext) {
         currentRow = convertToSparkRow(mergedIterator.next())
-        numRowsRead += 1
         return true
       }
 

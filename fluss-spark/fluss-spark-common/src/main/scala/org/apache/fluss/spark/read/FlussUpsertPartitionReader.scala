@@ -86,14 +86,13 @@ class FlussUpsertPartitionReader(
   // initialize scanners
   initialize()
 
-  override def next(): Boolean = {
+  override def next0(): Boolean = {
     if (closed) {
       return false
     }
 
     if (mergedIterator.hasNext) {
       currentRow = convertToSparkRow(mergedIterator.next())
-      numRowsRead += 1
       true
     } else {
       false
