@@ -126,7 +126,11 @@ class RemoteLogDownloaderTest {
 
             futures.get(1).getRecycleCallback().run();
             futures.get(2).getRecycleCallback().run();
-            assertThat(remoteLogDownloader.getPrefetchSemaphore().availablePermits()).isEqualTo(2);
+            // The 2 semaphores are released, so there should be 2 permits available. However,
+            // fetchOnce() may be called concurrently at this point and acquire a permit, so we
+            // assert the permits are between 1 and 2.
+            assertThat(remoteLogDownloader.getPrefetchSemaphore().availablePermits())
+                    .isBetween(1, 2);
             // the removal of log files are async, so we need to wait for the removal.
             retry(
                     Duration.ofMinutes(1),
