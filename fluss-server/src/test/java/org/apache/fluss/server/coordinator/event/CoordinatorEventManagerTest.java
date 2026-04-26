@@ -92,7 +92,14 @@ class CoordinatorEventManagerTest {
                             TestingMetricGroups.COORDINATOR_METRICS
                                     .getMetrics()
                                     .get(MetricNames.ACTIVE_TABLET_SERVER_COUNT);
-            assertThat(activeTabletServerCount.getValue()).isEqualTo(2);
+            // The gauge reads the volatile tabletServerCount field which is updated
+            // after the AccessContextEvent future completes. Use retry to handle
+            // the brief window between metricsUpdateCount increment (inside the
+            // event processor) and the volatile field assignment (after
+            // getResultFuture().get() in updateMetricsViaAccessContext).
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> assertThat(activeTabletServerCount.getValue()).isEqualTo(2));
         } finally {
             manager.close();
             TestingMetricGroups.COORDINATOR_METRICS.close();
