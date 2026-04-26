@@ -246,15 +246,21 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
         if (latestLakeSnapshotIdOfFluss != null) {
             Snapshot latestLakeSnapshotOfFluss = icebergTable.snapshot(latestLakeSnapshotIdOfFluss);
             if (latestLakeSnapshotOfFluss == null) {
-                throw new IllegalStateException(
-                        "Referenced Fluss snapshot "
-                                + latestLakeSnapshotIdOfFluss
-                                + " not found in Iceberg table");
-            }
-            // note: we need to use sequence number to compare,
-            // we can't use snapshot id as the snapshot id is not ordered
-            if (latestLakeSnapshot.sequenceNumber() <= latestLakeSnapshotOfFluss.sequenceNumber()) {
-                return null;
+                // The referenced snapshot was expired from Iceberg. Since Iceberg never
+                // expires the current snapshot, the latest Fluss-committed snapshot we found
+                // above must be newer than the expired one — treat as a missing snapshot.
+                LOG.warn(
+                        "Referenced Fluss snapshot {} was expired from Iceberg table. "
+                                + "The latest Fluss-committed snapshot {} will be used for recovery.",
+                        latestLakeSnapshotIdOfFluss,
+                        latestLakeSnapshot.snapshotId());
+            } else {
+                // note: we need to use sequence number to compare,
+                // we can't use snapshot id as the snapshot id is not ordered
+                if (latestLakeSnapshot.sequenceNumber()
+                        <= latestLakeSnapshotOfFluss.sequenceNumber()) {
+                    return null;
+                }
             }
         }
 

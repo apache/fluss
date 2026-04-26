@@ -19,6 +19,7 @@ package org.apache.fluss.lake.iceberg.tiering;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
@@ -49,6 +50,7 @@ import org.apache.iceberg.data.Record;
 import org.apache.iceberg.io.CloseableIterator;
 import org.apache.iceberg.types.Types;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -320,7 +322,8 @@ class IcebergTieringTest {
                                 ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT,
                                 isTableAutoExpireSnapshot)
                         .build();
-        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
+        TableInfo tableInfo =
+                TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
 
         Configuration lakeTieringConfig = new Configuration();
         lakeTieringConfig.set(
@@ -347,6 +350,108 @@ class IcebergTieringTest {
         } else {
             // if auto snapshot expiration is disabled, all snapshots should be retained
             assertThat(snapshotCount).isEqualTo(5);
+        }
+    }
+
+    /**
+     * Validates that snapshot expiration can cause recovery failure.
+     *
+     * <p>Scenario: The tiering service commits multiple snapshots with auto-expire enabled. With
+     * aggressive settings (MIN_SNAPSHOTS_TO_KEEP=1), only the latest snapshot is retained. If the
+     * Flink checkpoint references an earlier (now-expired) snapshot ID, then on recovery
+     * getMissingLakeSnapshot will fail because it calls icebergTable.snapshot(expiredSnapshotId)
+     * which returns null, throwing an IllegalStateException.
+     */
+    @Test
+    void testSnapshotExpirationDoesNotBreakRecovery() throws Exception {
+        int bucketNum = 1;
+        TablePath tablePath = TablePath.of("iceberg", "test_expire_recovery");
+
+        // Aggressive expiration: keep only 1 snapshot, expire after 1ms
+        Map<String, String> tableProperties = new HashMap<>();
+        tableProperties.put(TableProperties.MIN_SNAPSHOTS_TO_KEEP, "1");
+        tableProperties.put(TableProperties.MAX_SNAPSHOT_AGE_MS, "1");
+        createTable(tablePath, false, false, tableProperties);
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                org.apache.fluss.metadata.Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .column("c3", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(bucketNum)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT, true)
+                        .build();
+        TableInfo tableInfo =
+                TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
+
+        Configuration lakeTieringConfig = new Configuration();
+        lakeTieringConfig.set(ConfigOptions.LAKE_TIERING_AUTO_EXPIRE_SNAPSHOT, false);
+
+        // Round 1: Write and commit, capture snapshot ID (simulating Flink checkpoint saving it)
+        long firstSnapshotId;
+        Map<String, String> snapshotProperties =
+                Collections.singletonMap(
+                        LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "/path/to/offsets-1");
+        {
+            List<IcebergWriteResult> writeResults = new ArrayList<>();
+            for (int bucket = 0; bucket < bucketNum; bucket++) {
+                try (LakeWriter<IcebergWriteResult> writer =
+                        createLakeWriter(tablePath, bucket, null, null, tableInfo)) {
+                    for (LogRecord record : genLogTableRecords(null, bucket, 3).f0) {
+                        writer.write(record);
+                    }
+                    writeResults.add(writer.complete());
+                }
+            }
+            try (LakeCommitter<IcebergWriteResult, IcebergCommittable> lakeCommitter =
+                    createLakeCommitter(tablePath, tableInfo, lakeTieringConfig)) {
+                IcebergCommittable committable = lakeCommitter.toCommittable(writeResults);
+                firstSnapshotId =
+                        lakeCommitter
+                                .commit(committable, snapshotProperties)
+                                .getCommittedSnapshotId();
+            }
+        }
+
+        // Verify first snapshot exists
+        Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
+        assertThat(icebergTable.snapshot(firstSnapshotId)).isNotNull();
+
+        // Small delay to ensure snapshot age exceeds MAX_SNAPSHOT_AGE_MS=1ms
+        Thread.sleep(50);
+
+        // Round 2 & 3: Write more data with auto-expire enabled to trigger expiration
+        for (int round = 0; round < 2; round++) {
+            writeData(tablePath, tableInfo, lakeTieringConfig, bucketNum);
+            Thread.sleep(50);
+        }
+
+        // Verify the first snapshot has been expired
+        icebergTable.refresh();
+        assertThat(icebergTable.snapshot(firstSnapshotId))
+                .as("First snapshot should have been expired by aggressive expiration settings")
+                .isNull();
+
+        // Simulate recovery: Flink restarts from checkpoint which has firstSnapshotId
+        // This is what TieringCommitOperator.checkFlussNotMissingLakeSnapshot does.
+        // Even though firstSnapshotId was expired, getMissingLakeSnapshot should
+        // gracefully return the latest Fluss-committed snapshot (like Paimon's pickOrLatest).
+        try (LakeCommitter<IcebergWriteResult, IcebergCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo, lakeTieringConfig)) {
+            CommittedLakeSnapshot missingSnapshot =
+                    lakeCommitter.getMissingLakeSnapshot(firstSnapshotId);
+            assertThat(missingSnapshot)
+                    .as(
+                            "Recovery should succeed even when referenced snapshot is expired, "
+                                    + "returning the latest Fluss-committed snapshot")
+                    .isNotNull();
+            // The returned snapshot should be the latest one (from round 2 or 3), not the expired
+            // one
+            assertThat(missingSnapshot.getLakeSnapshotId()).isNotEqualTo(firstSnapshotId);
         }
     }
 
