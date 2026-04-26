@@ -1,4 +1,7 @@
 # CSP permissions for fluss.apache.org - Additional allowances to be coordinated with privacy team
 # See the CSP request mail for allowing Fluss project to use Algolia, YouTube and Google Calendar:
 # https://lists.apache.org/thread/xt0ggzc7f4dj8g91b92w4tk5g8cdslwd
-SetEnv CSP_PROJECT_DOMAINS "https://www.youtube-nocookie.com https://www.youtube.com https://*.algolia.net/ https://*.algolianet.com/ https://*.algolia.io/ https://calendar.google.com"
+# Allow Kapa AI Widget (Ask AI button): the widget bundle is hosted on *.kapa.ai,
+# it loads Google reCAPTCHA Enterprise for anti-bot verification, and its chat-stream
+# backend proxy is hosted on Google Cloud Run (*.a.run.app).
+SetEnv CSP_PROJECT_DOMAINS "https://www.youtube-nocookie.com https://www.youtube.com https://*.algolia.net/ https://*.algolianet.com/ https://*.algolia.io/ https://calendar.google.com https://*.kapa.ai/ https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/ https://*.a.run.app"
