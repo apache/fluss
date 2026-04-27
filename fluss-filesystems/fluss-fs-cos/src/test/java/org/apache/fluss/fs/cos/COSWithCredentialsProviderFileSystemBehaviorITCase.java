@@ -45,7 +45,7 @@ class COSWithCredentialsProviderFileSystemBehaviorITCase extends FileSystemBehav
         // credentials from the COSN_SECRET_ID / COSN_SECRET_KEY environment variables
         // (the same ones already required by COSTestCredentials).
         final Configuration conf = new Configuration();
-        conf.setString(ENDPOINT_KEY, COSTestCredentials.getCOSEndpoint());
+        conf.setString(ENDPOINT_KEY, COSTestCredentials.getCOSEndpointSuffix());
         conf.setString(
                 CREDENTIALS_PROVIDER, EnvironmentVariableCredentialsProvider.class.getName());
         FileSystem.initialize(conf, null);

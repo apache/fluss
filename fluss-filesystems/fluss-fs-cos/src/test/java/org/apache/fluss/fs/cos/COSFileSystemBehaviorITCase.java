@@ -44,7 +44,7 @@ class COSFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
         COSTestCredentials.assumeCredentialsAvailable();
 
         final Configuration conf = new Configuration();
-        conf.setString(ENDPOINT_KEY, COSTestCredentials.getCOSEndpoint());
+        conf.setString(ENDPOINT_KEY, COSTestCredentials.getCOSEndpointSuffix());
         conf.setString(SECRET_ID, COSTestCredentials.getCOSSecretId());
         conf.setString(SECRET_KEY, COSTestCredentials.getCOSSecretKey());
         FileSystem.initialize(conf, null);

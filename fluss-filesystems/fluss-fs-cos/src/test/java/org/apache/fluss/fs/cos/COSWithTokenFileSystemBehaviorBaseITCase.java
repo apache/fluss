@@ -34,7 +34,7 @@ abstract class COSWithTokenFileSystemBehaviorBaseITCase extends FileSystemBehavi
 
         // first init filesystem with secretId/secretKey
         final Configuration conf = new Configuration();
-        conf.setString(ENDPOINT_KEY, COSTestCredentials.getCOSEndpoint());
+        conf.setString(ENDPOINT_KEY, COSTestCredentials.getCOSEndpointSuffix());
         conf.setString(REGION, COSTestCredentials.getCOSRegion());
         conf.setString(SECRET_ID, COSTestCredentials.getCOSSecretId());
         conf.setString(SECRET_KEY, COSTestCredentials.getCOSSecretKey());

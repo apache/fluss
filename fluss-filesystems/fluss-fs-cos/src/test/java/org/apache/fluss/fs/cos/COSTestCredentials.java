@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /** Access to credentials to access COS buckets during integration tests. */
 public class COSTestCredentials {
-    @Nullable private static final String ENDPOINT = System.getenv("COSN_ENDPOINT");
+    @Nullable private static final String ENDPOINT_SUFFIX = System.getenv("COSN_ENDPOINT_SUFFIX");
 
     @Nullable private static final String BUCKET = System.getenv("COSN_BUCKET");
 
@@ -36,7 +36,7 @@ public class COSTestCredentials {
     // ------------------------------------------------------------------------
 
     public static boolean credentialsAvailable() {
-        return isNotEmpty(ENDPOINT)
+        return isNotEmpty(ENDPOINT_SUFFIX)
                 && isNotEmpty(BUCKET)
                 && isNotEmpty(SECRET_ID)
                 && isNotEmpty(SECRET_KEY)
@@ -54,15 +54,15 @@ public class COSTestCredentials {
     }
 
     /**
-     * Get COS endpoint used to connect.
+     * Get COS endpoint suffix used to connect.
      *
-     * @return COS endpoint
+     * @return COS endpoint suffix
      */
-    public static String getCOSEndpoint() {
-        if (ENDPOINT != null) {
-            return ENDPOINT;
+    public static String getCOSEndpointSuffix() {
+        if (ENDPOINT_SUFFIX != null) {
+            return ENDPOINT_SUFFIX;
         } else {
-            throw new IllegalStateException("COS endpoint is not available");
+            throw new IllegalStateException("COS endpoint suffix is not available");
         }
     }
 
