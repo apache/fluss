@@ -98,6 +98,12 @@
             <outputDirectory>plugins/lance/</outputDirectory>
             <destName>fluss-lake-lance-${project.version}.jar</destName>
         </file>
+        <file>
+            <source>../fluss-lake/fluss-lake-hudi/target/fluss-lake-hudi-${project.version}.jar</source>
+            <outputDirectory>plugins/hudi/</outputDirectory>
+            <destName>fluss-lake-hudi-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
   </files>
 
 </assembly>

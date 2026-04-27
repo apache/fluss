@@ -15,23 +15,24 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.metadata;
+package org.apache.fluss.lake.hudi;
 
-/** An enum for datalake format. */
-public enum DataLakeFormat {
-    PAIMON("paimon"),
-    LANCE("lance"),
-    ICEBERG("iceberg"),
-    HUDI("hudi");
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.lakestorage.LakeStorage;
+import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
 
-    private final String value;
+/** Implement of Hudi Lake Storage Plugin. */
+public class HudiLakeStoragePlugin implements LakeStoragePlugin {
 
-    DataLakeFormat(String value) {
-        this.value = value;
+    private static final String IDENTIFIER = "hudi";
+
+    @Override
+    public String identifier() {
+        return IDENTIFIER;
     }
 
     @Override
-    public String toString() {
-        return value;
+    public LakeStorage createLakeStorage(Configuration configuration) {
+        return new HudiLakeStorage(configuration);
     }
 }

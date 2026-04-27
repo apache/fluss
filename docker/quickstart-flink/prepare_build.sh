@@ -115,6 +115,7 @@ check_prerequisites() {
         "$PROJECT_ROOT/fluss-filesystems/fluss-fs-s3/target"
         "$PROJECT_ROOT/fluss-lake/fluss-lake-paimon/target"
         "$PROJECT_ROOT/fluss-lake/fluss-lake-iceberg/target"
+        "$PROJECT_ROOT/fluss-lake/fluss-lake-hudi/target"
         "$PROJECT_ROOT/fluss-flink/fluss-flink-tiering/target"
     )
 
