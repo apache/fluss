@@ -93,28 +93,15 @@ readFromConfig() {
     [ -z "$value" ] && echo "$defaultValue" || echo "$value"
 }
 
-is_jdk_version_ge_11() {
+is_jdk_version_ge() {
   java_command=$1
+  target_version=$2
 
   # get the java version using the java command
   java_version=$($java_command -version 2>&1 | grep 'version' | cut -d '"' -f 2)
   major_version=$(echo "$java_version" | cut -d. -f1)
 
-  if [ "$major_version" -ge 11 ]; then
-      return 0 # for true
-  else
-      return 1 # for false
-  fi
-}
-
-is_jdk_version_ge_17() {
-  java_command=$1
-
-  # get the java version using the java command
-  java_version=$($java_command -version 2>&1 | grep 'version' | cut -d '"' -f 2)
-  major_version=$(echo "$java_version" | cut -d. -f1)
-
-  if [ "$major_version" -ge 17 ]; then
+  if [ "$major_version" -ge "$target_version" ]; then
       return 0 # for true
   else
       return 1 # for false
@@ -236,7 +223,7 @@ else
 fi
 
 # Verify that the Java version is at least 11
-if ! is_jdk_version_ge_11 "$JAVA_RUN"; then
+if ! is_jdk_version_ge "$JAVA_RUN" 11; then
     java_version=$("$JAVA_RUN" -version 2>&1 | grep 'version' | head -n 1)
     echo "[ERROR] Fluss requires Java 11 or higher. Current Java version: ${java_version}."
     echo "[ERROR] Please set JAVA_HOME to a Java 11+ installation."
