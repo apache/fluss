@@ -18,12 +18,10 @@
 package org.apache.fluss.spark
 
 import org.apache.fluss.spark.read.{FlussMetrics, FlussScan}
-
-import org.apache.spark.sql.Row
-import org.apache.spark.sql.execution.datasources.v2.{BatchScanExec, DataSourceV2ScanRelation}
 import org.apache.fluss.spark.read.FlussAppendScan
 
 import org.apache.spark.sql.{DataFrame, Row}
+import org.apache.spark.sql.Row
 import org.apache.spark.sql.connector.expressions.filter.Predicate
 import org.apache.spark.sql.execution.datasources.v2.{BatchScanExec, DataSourceV2ScanRelation}
 import org.assertj.core.api.Assertions.assertThat
