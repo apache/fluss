@@ -60,9 +60,15 @@ class SetClusterConfigsProcedure(tableCatalog: TableCatalog) extends BaseProcedu
   override def call(args: InternalRow): Array[InternalRow] = {
     val configPairs = if (args.numFields > 0 && !args.isNullAt(0)) {
       val pairsArray = args.getArray(0)
-      (0 until pairsArray.numElements())
-        .map(i => pairsArray.getUTF8String(i).toString)
-        .toArray
+      (0 until pairsArray.numElements()).map {
+        i =>
+          if (pairsArray.isNullAt(i)) {
+            throw new IllegalArgumentException(
+              s"config_pairs contains a null element at position $i. " +
+                "Please specify valid configuration key/value pairs.")
+          }
+          pairsArray.getUTF8String(i).toString
+      }.toArray
     } else {
       Array.empty[String]
     }

@@ -57,9 +57,15 @@ class ResetClusterConfigsProcedure(tableCatalog: TableCatalog) extends BaseProce
   override def call(args: InternalRow): Array[InternalRow] = {
     val configKeys = if (args.numFields > 0 && !args.isNullAt(0)) {
       val keysArray = args.getArray(0)
-      (0 until keysArray.numElements())
-        .map(i => keysArray.getUTF8String(i).toString)
-        .toArray
+      (0 until keysArray.numElements()).map {
+        i =>
+          if (keysArray.isNullAt(i)) {
+            throw new IllegalArgumentException(
+              s"config_keys contains a null element at position $i. " +
+                "Please specify valid configuration keys.")
+          }
+          keysArray.getUTF8String(i).toString
+      }.toArray
     } else {
       Array.empty[String]
     }
