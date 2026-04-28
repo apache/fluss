@@ -56,12 +56,18 @@ abstract class FlussBatch(
 
   protected def projection: Array[Int] = {
     val columnNameToIndex = tableInfo.getSchema.getColumnNames.asScala.zipWithIndex.toMap
-    readSchema.fields.map {
+    val projected = readSchema.fields.map {
       field =>
         columnNameToIndex.getOrElse(
           field.name,
           throw new IllegalArgumentException(s"Invalid field name: ${field.name}"))
     }
+    // Spark may push down an empty projection (e.g. for COUNT(*) / COUNT(1)) when no
+    // column values are needed. The Fluss server does not currently support empty Arrow
+    // projections and would reject the request with InvalidColumnProjectionException.
+    // Fall back to projecting the first column so the row count is preserved while still
+    // avoiding fetching unnecessary columns.
+    if (projected.isEmpty) Array(0) else projected
   }
 
   protected def createUpsertPartitions(

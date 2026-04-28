@@ -121,6 +121,19 @@ public class FileLogProjection {
             SchemaGetter schemaGetter,
             ArrowCompressionInfo compressionInfo,
             int[] selectedFieldPositions) {
+        // Empty projection (selectedFieldPositions.length == 0) is currently not supported on the
+        // server side: the Arrow metadata length estimate disagrees with the serialized length for
+        // a zero-field schema, which would surface as
+        // {@code IllegalStateException("Invalid metadata length")} and cause the client to retry
+        // indefinitely. Fail fast with a clear, non-retriable error instead.
+        if (selectedFieldPositions != null && selectedFieldPositions.length == 0) {
+            throw new InvalidColumnProjectionException(
+                    "Empty projection is not supported. "
+                            + "Please project at least one column. "
+                            + "For aggregations like COUNT(*) / COUNT(1), "
+                            + "the connector should push down a projection that selects "
+                            + "at least one column.");
+        }
         this.tableId = tableId;
         this.schemaGetter = schemaGetter;
         this.compressionInfo = compressionInfo;

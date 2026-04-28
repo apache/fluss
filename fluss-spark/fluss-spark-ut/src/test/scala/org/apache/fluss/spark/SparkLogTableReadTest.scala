@@ -562,6 +562,20 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
     body
   }
 
+  test("Spark Read: COUNT(*) without filter") {
+    withSampleTable {
+      val query = sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t")
+      checkAnswer(query, Row(5L) :: Nil)
+    }
+  }
+
+  test("Spark Read: COUNT(1) without filter") {
+    withSampleTable {
+      val query = sql(s"SELECT COUNT(1) FROM $DEFAULT_DATABASE.t")
+      checkAnswer(query, Row(5L) :: Nil)
+    }
+  }
+
   private def withSampleTable(body: => Unit): Unit = withTable("t") {
     sql(s"""
            |CREATE TABLE $DEFAULT_DATABASE.t (

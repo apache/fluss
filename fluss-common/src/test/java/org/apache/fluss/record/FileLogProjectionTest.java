@@ -164,6 +164,40 @@ class FileLogProjectionTest {
                         "The projection indexes should not contain duplicated fields, but is [0, 0, 0]");
     }
 
+    /**
+     * When the client pushes down an empty column projection (selectedFieldPositions = []), e.g.
+     * for {@code COUNT(*)} / {@code COUNT(1)} aggregations, the server should reject it eagerly
+     * with a clear {@link InvalidColumnProjectionException} instead of failing with an internal
+     * {@code IllegalStateException("Invalid metadata length")} that callers would retry
+     * indefinitely.
+     */
+    @Test
+    void testEmptyProjectionRejectsWithClearError() throws Exception {
+        long tableId = 1L;
+        short schemaId = (short) 2;
+        FileLogRecords recordsOfData2RowType =
+                createFileLogRecords(
+                        schemaId,
+                        LOG_MAGIC_VALUE_V1,
+                        TestData.DATA2_ROW_TYPE,
+                        TestData.DATA2,
+                        TestData.DATA2);
+        FileLogProjection projection = new FileLogProjection(new ProjectionPushdownCache());
+
+        // Empty projection - emulates Spark COUNT(*)/COUNT(1) optimisation.
+        assertThatThrownBy(
+                        () ->
+                                doProjection(
+                                        tableId,
+                                        schemaId,
+                                        projection,
+                                        recordsOfData2RowType,
+                                        new int[] {},
+                                        recordsOfData2RowType.sizeInBytes()))
+                .isInstanceOf(InvalidColumnProjectionException.class)
+                .hasMessageContaining("Empty projection is not supported");
+    }
+
     @Test
     void testProjectionOldDataWithNewSchema() throws Exception {
         // Currently, we only support add column at last.

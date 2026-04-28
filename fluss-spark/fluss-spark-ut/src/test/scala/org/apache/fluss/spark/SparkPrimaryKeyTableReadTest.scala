@@ -379,6 +379,24 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
     }
   }
 
+  test("Spark Read: primary key table COUNT(*) without filter") {
+    withTable("t") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t (orderId BIGINT, itemId BIGINT, amount INT, address STRING)
+             |TBLPROPERTIES("primary.key" = "orderId", "bucket.num" = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t VALUES
+             |(600L, 21L, 601, "addr1"), (700L, 22L, 602, "addr2"),
+             |(800L, 23L, 603, "addr3"), (900L, 24L, 604, "addr4"),
+             |(1000L, 25L, 605, "addr5")
+             |""".stripMargin)
+
+      checkAnswer(sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t"), Row(5L) :: Nil)
+    }
+  }
+
   test("Spark Read: partition pushdown — equality on partition key (PK table)") {
     withPkPartitionedTable {
       val query =

@@ -72,12 +72,15 @@ abstract class FlussMicroBatchStream(
 
   protected def projection: Array[Int] = {
     val columnNameToIndex = tableInfo.getSchema.getColumnNames.asScala.zipWithIndex.toMap
-    readSchema.fields.map {
+    val projected = readSchema.fields.map {
       field =>
         columnNameToIndex.getOrElse(
           field.name,
           throw new IllegalArgumentException(s"Invalid field name: ${field.name}"))
     }
+    // See FlussBatch.projection: empty projection from Spark (e.g. COUNT(*)) is not
+    // supported by the Fluss server, so fall back to projecting the first column.
+    if (projected.isEmpty) Array(0) else projected
   }
 
   override def close(): Unit = {
