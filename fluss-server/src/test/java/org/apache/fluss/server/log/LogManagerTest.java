@@ -29,6 +29,8 @@ import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
+import org.apache.fluss.server.zk.data.BucketAssignment;
+import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.utils.clock.SystemClock;
@@ -47,6 +49,7 @@ import javax.annotation.Nullable;
 
 import java.io.File;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -298,6 +301,49 @@ final class LogManagerTest extends LogTestBase {
 
         log1 = getOrCreateLog(tablePath1, partitionName, tableBucket1);
         assertThat(logManager.getLog(log1.getTableBucket()).isPresent()).isTrue();
+    }
+
+    /**
+     * When a partitioned bucket's on-disk data remains but the partition was removed from metadata,
+     * startup should skip normal recovery and delete the residual log directory.
+     */
+    @Test
+    void testLogRecoverySkipWhenPartitionDropped() throws Exception {
+        String partitionName = "2024";
+        long partitionId = 11L;
+        PartitionAssignment partitionAssignment =
+                new PartitionAssignment(
+                        DATA1_TABLE_ID, Collections.singletonMap(1, BucketAssignment.of(1, 2)));
+        zkClient.registerPartitionAssignmentAndMetadata(
+                partitionId,
+                partitionName,
+                partitionAssignment,
+                DEFAULT_REMOTE_DATA_DIR,
+                tablePath1,
+                DATA1_TABLE_ID);
+
+        initTableBuckets(partitionName);
+        LogTablet log1 = getOrCreateLog(tablePath1, partitionName, tableBucket1);
+        File logDir = log1.getLogDir();
+        assertThat(logDir).exists();
+
+        logManager.shutdown();
+        logManager = null;
+
+        zkClient.deletePartition(tablePath1, partitionName);
+
+        LogManager newLogManager =
+                LogManager.create(
+                        conf,
+                        zkClient,
+                        new FlussScheduler(1),
+                        SystemClock.getInstance(),
+                        TestingMetricGroups.TABLET_SERVER_METRICS);
+        newLogManager.startup();
+        logManager = newLogManager;
+
+        assertThat(logDir).doesNotExist();
+        assertThat(logManager.getLog(tableBucket1).isPresent()).isFalse();
     }
 
     private LogTablet getOrCreateLog(
