@@ -107,6 +107,7 @@ public final class LogTablet {
     private volatile int tieredLogLocalSegments;
     private final Clock clock;
     private final boolean isChangeLog;
+    private final long logTtlMs;
 
     @GuardedBy("lock")
     private volatile LogOffsetMetadata highWatermarkMetadata;
@@ -153,6 +154,7 @@ public final class LogTablet {
                 (int) conf.get(ConfigOptions.WRITER_ID_EXPIRATION_CHECK_INTERVAL).toMillis();
         this.writerStateManager = writerStateManager;
         this.highWatermarkMetadata = new LogOffsetMetadata(0L);
+        this.logTtlMs = conf.get(ConfigOptions.TABLE_LOG_TTL).toMillis();
 
         this.scheduler = scheduler;
         // scheduler the writer expiration interval check.
@@ -1187,7 +1189,7 @@ public final class LogTablet {
     }
 
     /** Returns the segments that can be deleted by checking log end offset. */
-    private List<LogSegment> deletableSegments(long endOffset) {
+    private List<LogSegment> deletableSegments(long endOffset) throws IOException {
         if (localLog.getSegments().isEmpty()) {
             return Collections.emptyList();
         }
@@ -1196,15 +1198,25 @@ public final class LogTablet {
         // readers is in progress.
         List<LogSegment> deletableSegments = new ArrayList<>();
         List<LogSegment> logSegments = localLog.getSegments().values();
-        // ignore the segments configured to be retained
-        for (int i = 0; i < logSegments.size() - tieredLogLocalSegments; i++) {
-            if (logSegments.get(i + 1).getBaseOffset() <= endOffset) {
-                deletableSegments.add(logSegments.get(i));
-            } else {
+        int tierProtectedStartIndex = logSegments.size() - tieredLogLocalSegments;
+        long now = clock.milliseconds();
+
+        for (int i = 0; i < logSegments.size() - 1; i++) {
+            if (logSegments.get(i + 1).getBaseOffset() > endOffset) {
                 break;
+            }
+            if (i < tierProtectedStartIndex || isSegmentExpired(now, logSegments.get(i))) {
+                deletableSegments.add(logSegments.get(i));
             }
         }
         return deletableSegments;
+    }
+
+    private boolean isSegmentExpired(long now, LogSegment segment) throws IOException {
+        if (logTtlMs <= 0L) {
+            return false;
+        }
+        return now - segment.maxTimestampSoFar() > logTtlMs;
     }
 
     private void deleteSegments(List<LogSegment> deletableSegments, SegmentDeletionReason reason)
