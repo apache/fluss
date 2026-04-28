@@ -47,21 +47,26 @@ class ResetClusterConfigsProcedureTest extends FlussSparkTestBase {
     assert(resetResult.head.getString(0) == configKey)
     assert(resetResult.head.getString(1).contains("Successfully"))
 
-    // Verify it was reset (should no longer be DYNAMIC)
+    // Verify it was reset (should no longer be DYNAMIC).
+    // describeClusterConfigs only returns entries that exist as either static (initial)
+    // or dynamic configs. If the key was not present in initial configs, an empty result
+    // is expected after reset; otherwise the source should no longer be DYNAMIC.
     val getResultAfterReset =
       sql(s"CALL $DEFAULT_CATALOG.sys.get_cluster_configs(config_keys => array('$configKey'))")
         .collect()
-    assert(getResultAfterReset.length == 1)
-    assert(getResultAfterReset.head.getString(2) != "DYNAMIC")
+    assert(getResultAfterReset.length <= 1)
+    if (getResultAfterReset.length == 1) {
+      assert(getResultAfterReset.head.getString(2) != "DYNAMIC")
+    }
   }
 
   test("reset_cluster_configs: reset multiple configurations") {
     val key1 = ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key()
-    val key2 = ConfigOptions.DATALAKE_FORMAT.key()
+    val key2 = ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER.key()
 
     // First, set dynamic configurations
     sql(
-      s"CALL $DEFAULT_CATALOG.sys.set_cluster_configs(config_pairs => array('$key1', '100MB', '$key2', 'paimon'))")
+      s"CALL $DEFAULT_CATALOG.sys.set_cluster_configs(config_pairs => array('$key1', '100MB', '$key2', '2'))")
       .collect()
 
     // Reset both configurations

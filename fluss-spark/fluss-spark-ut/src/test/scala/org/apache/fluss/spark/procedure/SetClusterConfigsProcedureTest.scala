@@ -49,8 +49,8 @@ class SetClusterConfigsProcedureTest extends FlussSparkTestBase {
   test("set_cluster_configs: set multiple configurations") {
     val key1 = ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key()
     val value1 = "100MB"
-    val key2 = ConfigOptions.DATALAKE_FORMAT.key()
-    val value2 = "paimon"
+    val key2 = ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER.key()
+    val value2 = "2"
 
     val result = sql(
       s"CALL $DEFAULT_CATALOG.sys.set_cluster_configs(config_pairs => array('$key1', '$value1', '$key2', '$value2'))")
