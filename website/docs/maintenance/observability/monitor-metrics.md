@@ -639,17 +639,29 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="1"><strong>coordinator</strong></th>
+      <th rowspan="2"><strong>coordinator</strong></th>
       <td rowspan="1">request</td>
       <td>requestQueueSize</td>
       <td>The CoordinatorServer node network waiting queue size.</td>
       <td>Gauge</td>
     </tr>
     <tr>
-      <th rowspan="8">tabletserver</th>
+      <td rowspan="1">request_processor_index</td>
+      <td>requestQueueSize</td>
+      <td>The CoordinatorServer node network waiting queue size labeled with <code>processor_index</code>.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <th rowspan="9">tabletserver</th>
       <td rowspan="1">request</td>
       <td>requestQueueSize</td>
       <td>The TabletServer node network waiting queue size.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td rowspan="1">request_processor_index</td>
+      <td>requestQueueSize</td>
+      <td>The TabletServer node network waiting queue size labeled with <code>processor_index</code>.</td>
       <td>Gauge</td>
     </tr>
     <tr>
