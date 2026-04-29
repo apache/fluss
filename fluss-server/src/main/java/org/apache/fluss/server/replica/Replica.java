@@ -189,6 +189,10 @@ public final class Replica {
     // logFormat and arrowCompressionInfo are used in hot-path, so cache them here.
     private final LogFormat logFormat;
     private final ArrowCompressionInfo arrowCompressionInfo;
+
+    // Caches the latest log TTL so that followers without a RemoteLogTablet retain the value for
+    // leader promotion.
+    private volatile long latestLogTtlMs;
     private final AtomicReference<Integer> leaderReplicaIdOpt = new AtomicReference<>();
     private final ReentrantReadWriteLock leaderIsrUpdateLock = new ReentrantReadWriteLock();
     private final Clock clock;
@@ -274,6 +278,7 @@ public final class Replica {
         this.tableConfig = tableInfo.getTableConfig();
         this.logFormat = tableConfig.getLogFormat();
         this.arrowCompressionInfo = tableConfig.getArrowCompressionInfo();
+        this.latestLogTtlMs = tableConfig.getLogTTLMs();
         this.snapshotContext = snapshotContext;
         // create a closeable registry for the replica
         this.closeableRegistry = new CloseableRegistry();
@@ -382,7 +387,7 @@ public final class Replica {
     }
 
     public long getLogTTLMs() {
-        return tableConfig.getLogTTLMs();
+        return latestLogTtlMs;
     }
 
     public int writerIdCount() {
@@ -702,20 +707,37 @@ public final class Replica {
                 tieredLogLocalSegments);
     }
 
-    /** Updates the log TTLs after the table configuration is altered. */
+    /**
+     * Updates the log TTLs after the table configuration is altered. The value is always cached in
+     * this Replica (even for followers without a RemoteLogTablet) so that leader promotion uses the
+     * up-to-date ttl.
+     */
     public void updateLogTtls(long logTtlMs, long localLogTtlMs) {
-        long oldValue = logTablet.getEffectiveLocalLogTtlMs();
+        latestLogTtlMs = logTtlMs;
+
+        long oldEffectiveTtl = logTablet.getEffectiveLocalLogTtlMs();
         logTablet.updateLogTtls(logTtlMs, localLogTtlMs);
-        long newValue = logTablet.getEffectiveLocalLogTtlMs();
-        if (oldValue == newValue) {
+        long newEffectiveTtl = logTablet.getEffectiveLocalLogTtlMs();
+
+        Optional<Long> remoteOldValueOpt = remoteLogManager.updateLogTtlMs(tableBucket, logTtlMs);
+        if (!remoteOldValueOpt.isPresent()) {
+            LOG.debug(
+                    "RemoteLogTablet for {} is unavailable; cached new logTtlMs={} "
+                            + "(remote logging may be disabled or the replica is still initializing).",
+                    tableBucket,
+                    logTtlMs);
+            return;
+        }
+
+        if (oldEffectiveTtl == newEffectiveTtl) {
             return;
         }
 
         LOG.info(
                 "Replica for {} effectiveLocalLogTtlMs changed from {} to {}",
                 tableBucket,
-                oldValue,
-                newValue);
+                oldEffectiveTtl,
+                newEffectiveTtl);
     }
 
     private void createKv() {

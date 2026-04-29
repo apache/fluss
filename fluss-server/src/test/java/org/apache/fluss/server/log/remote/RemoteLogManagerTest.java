@@ -793,6 +793,64 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
+    void testUpdateLogTtlMsDelegation(boolean partitionedTable) throws Exception {
+        long tableId =
+                registerTableInZkClient(
+                        DATA1_TABLE_PATH,
+                        DATA1_SCHEMA,
+                        201L,
+                        Collections.emptyList(),
+                        Collections.emptyMap());
+        TableBucket tb = makeTableBucket(tableId, partitionedTable);
+        makeLogTableAsLeader(tb, partitionedTable);
+
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        RemoteLogTablet remoteLog = remoteLogManager.remoteLogTablet(tb);
+
+        // Verify initial ttl matches the configured default.
+        long defaultTtlMs = ConfigOptions.TABLE_LOG_TTL.defaultValue().toMillis();
+        assertThat(remoteLog.getTtlMs()).isEqualTo(defaultTtlMs);
+
+        // Update ttl and verify RemoteLogTablet reflects the new value.
+        long newTtlMs = Duration.ofDays(1).toMillis();
+        replica.updateLogTtls(newTtlMs, newTtlMs);
+        assertThat(remoteLog.getTtlMs()).isEqualTo(newTtlMs);
+
+        // no-op: same value must not break anything.
+        replica.updateLogTtls(newTtlMs, newTtlMs);
+        assertThat(remoteLog.getTtlMs()).isEqualTo(newTtlMs);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testLogTtlSurvivesFollowerPromotion(boolean partitionedTable) throws Exception {
+        long tableId =
+                registerTableInZkClient(
+                        DATA1_TABLE_PATH,
+                        DATA1_SCHEMA,
+                        202L,
+                        Collections.emptyList(),
+                        Collections.emptyMap());
+        TableBucket tb = makeTableBucket(tableId, partitionedTable);
+        makeLogTableAsLeader(tb, partitionedTable);
+
+        Replica replica = replicaManager.getReplicaOrException(tb);
+
+        // Simulate follower: no RemoteLogTablet registered.
+        remoteLogManager.stopLogTiering(replica);
+
+        // TTL update must be cached even without a RemoteLogTablet.
+        long newTtlMs = Duration.ofDays(30).toMillis();
+        replica.updateLogTtls(newTtlMs, newTtlMs);
+        assertThat(replica.getLogTTLMs()).isEqualTo(newTtlMs);
+
+        // Simulate promotion: registerReplica must use the cached TTL.
+        remoteLogManager.registerReplica(replica);
+        assertThat(remoteLogManager.remoteLogTablet(tb).getTtlMs()).isEqualTo(newTtlMs);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
     void testCopySegmentPartialFailureCommitsSuccessfulOnes(boolean partitionTable)
             throws Exception {
         TableBucket tb = makeTableBucket(partitionTable);

@@ -19,6 +19,7 @@ package org.apache.fluss.server.log;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaTestBase;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -127,5 +128,49 @@ final class LocalSegmentTTLTest extends ReplicaTestBase {
         logTablet.updateLogTtls(Duration.ofHours(2).toMillis(), Duration.ofMinutes(30).toMillis());
 
         assertThat(logTablet.getEffectiveLocalLogTtlMs()).isEqualTo(Duration.ofHours(2).toMillis());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testUpdateLogTtlMsAffectsLocalSegmentCleanup(boolean partitionTable) throws Exception {
+        TableBucket tb =
+                partitionTable
+                        ? new TableBucket(DATA1_TABLE_ID, 0L, 0)
+                        : new TableBucket(DATA1_TABLE_ID, 0);
+        conf.set(ConfigOptions.LOG_RETENTION_ROLL_ACTIVE_SEGMENT_ENABLED, true);
+        logManager.reconfigure(conf);
+        makeLogTableAsLeader(tb, partitionTable);
+
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        LogTablet logTablet = replica.getLogTablet();
+
+        // Remote log is disabled in this test base, so updateLogTtls must still reach LogTablet.
+        assertThatThrownBy(() -> remoteLogManager.remoteLogTablet(tb))
+                .isInstanceOf(IllegalStateException.class);
+
+        addMultiSegmentsToLogTablet(logTablet, 1);
+
+        // Advance 30min — within the 1h TTL, segment is not expired.
+        manualClock.advanceTime(Duration.ofMinutes(30));
+        logManager.cleanupExpiredLocalLogSegments();
+        assertThat(logTablet.getSegments()).hasSize(1);
+
+        // Shrink TTL to 1ms; the segment should now be expired.
+        replica.updateLogTtls(1L, 1L);
+        logManager.cleanupExpiredLocalLogSegments();
+        // The expired active segment is rolled, creating a new empty segment at offset 10.
+        assertThat(logTablet.getSegments()).hasSize(2);
+        assertThat(logTablet.activeLogSegment().getBaseOffset()).isEqualTo(10L);
+
+        // Second pass deletes the now-inactive expired segment.
+        logManager.cleanupExpiredLocalLogSegments();
+        assertThat(logTablet.getSegments()).hasSize(1);
+        assertThat(logTablet.localLogStartOffset()).isEqualTo(10L);
+
+        // Disable expiration; the remaining segment must survive even after a long time.
+        replica.updateLogTtls(-1L, -1L);
+        manualClock.advanceTime(Duration.ofDays(365));
+        logManager.cleanupExpiredLocalLogSegments();
+        assertThat(logTablet.getSegments()).hasSize(1);
     }
 }

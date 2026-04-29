@@ -430,8 +430,45 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testAlterTableLogTtl() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "alter_table_log_ttl");
+        admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
+        // verify initial value matches DEFAULT_TABLE_DESCRIPTOR (1 day)
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        assertThat(tableInfo.getTableConfig().getLogTTLMs())
+                .isEqualTo(Duration.ofDays(1).toMillis());
+
+        // alter to 3d and verify metadata
+        List<TableChange> tableChanges =
+                Collections.singletonList(TableChange.set(ConfigOptions.TABLE_LOG_TTL.key(), "3d"));
+        admin.alterTable(tablePath, tableChanges, false).get();
+
+        tableInfo = admin.getTableInfo(tablePath).get();
+        assertThat(tableInfo.getTableConfig().getLogTTLMs())
+                .isEqualTo(Duration.ofDays(3).toMillis());
+
+        // alter to 30d to verify multiple updates work.
+        tableChanges =
+                Collections.singletonList(
+                        TableChange.set(ConfigOptions.TABLE_LOG_TTL.key(), "30d"));
+        admin.alterTable(tablePath, tableChanges, false).get();
+        tableInfo = admin.getTableInfo(tablePath).get();
+        assertThat(tableInfo.getTableConfig().getLogTTLMs())
+                .isEqualTo(Duration.ofDays(30).toMillis());
+
+        // reset; value falls back to default.
+        tableChanges =
+                Collections.singletonList(TableChange.reset(ConfigOptions.TABLE_LOG_TTL.key()));
+        admin.alterTable(tablePath, tableChanges, false).get();
+        tableInfo = admin.getTableInfo(tablePath).get();
+        assertThat(tableInfo.toTableDescriptor().getProperties())
+                .doesNotContainKey(ConfigOptions.TABLE_LOG_TTL.key());
+        assertThat(tableInfo.getTableConfig().getLogTTLMs())
+                .isEqualTo(ConfigOptions.TABLE_LOG_TTL.defaultValue().toMillis());
+    }
+
+    @Test
     void testAlterTableColumn() throws Exception {
-        // create table
         TablePath tablePath = TablePath.of("test_db", "alter_table_1");
         admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
 
