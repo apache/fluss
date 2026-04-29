@@ -78,7 +78,7 @@ public class RemoteLogTablet {
     /** The lock to protect the remote log segment list. */
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
 
-    private final long ttlMs;
+    private volatile long ttlMs;
 
     /** The registered metrics for remote log. */
     private volatile MetricGroup remoteLogMetrics;
@@ -363,6 +363,23 @@ public class RemoteLogTablet {
 
     private boolean logExpireEnable() {
         return ttlMs > 0;
+    }
+
+    /** Returns the current ttl in milliseconds for remote log segments. */
+    @VisibleForTesting
+    public long getTtlMs() {
+        return ttlMs;
+    }
+
+    /**
+     * Update the ttl in milliseconds for remote log segments. This is invoked when the user alters
+     * the table option {@code table.log.ttl}. The new value takes effect on the next round of
+     * expired-segment evaluation.
+     *
+     * @param newTtlMs the new ttl in milliseconds; a non-positive value disables expiration
+     */
+    public void updateTtlMs(long newTtlMs) {
+        this.ttlMs = newTtlMs;
     }
 
     private void reset() {

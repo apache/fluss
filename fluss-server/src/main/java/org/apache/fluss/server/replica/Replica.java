@@ -88,6 +88,7 @@ import org.apache.fluss.server.log.LogReadInfo;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
+import org.apache.fluss.server.log.remote.RemoteLogTablet;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metrics.group.BucketMetricGroup;
@@ -682,6 +683,39 @@ public final class Replica {
                 tableBucket,
                 oldValue,
                 tieredLogLocalSegments);
+    }
+
+    /**
+     * Update the ttl in milliseconds for remote log segments. This method is called when the table
+     * configuration {@code table.log.ttl} is altered, so that the new ttl takes effect immediately
+     * for the next round of expired-segment evaluation, without requiring a server restart or table
+     * re-creation.
+     *
+     * @param newTtlMs the new ttl in milliseconds; a non-positive value disables expiration
+     */
+    public void updateLogTtlMs(long newTtlMs) {
+        final RemoteLogTablet remoteLogTablet;
+        try {
+            remoteLogTablet = remoteLogManager.remoteLogTablet(tableBucket);
+        } catch (IllegalStateException e) {
+            // RemoteLogTablet may not be registered yet during the early stage of replica
+            // creation. In that case, the alter is a no-op here because the Replica will read the
+            // up-to-date ttl from the persisted TableInfo when constructing the RemoteLogTablet.
+            LOG.warn(
+                    "RemoteLogTablet for {} is not registered yet, skip applying new logTtlMs={}.",
+                    tableBucket,
+                    newTtlMs);
+            return;
+        }
+
+        long oldValue = remoteLogTablet.getTtlMs();
+        if (oldValue == newTtlMs) {
+            return;
+        }
+
+        remoteLogTablet.updateTtlMs(newTtlMs);
+
+        LOG.info("Replica for {} logTtlMs changed from {} to {}", tableBucket, oldValue, newTtlMs);
     }
 
     private void createKv() {
