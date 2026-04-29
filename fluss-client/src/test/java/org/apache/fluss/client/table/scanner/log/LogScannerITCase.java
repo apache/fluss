@@ -93,85 +93,6 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testPollArrowBatchesWithSchemaEvolution() throws Exception {
-        TablePath tablePath = TablePath.of("test_db_1", "test_arrow_batches_with_schema_evolution");
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(DATA1_SCHEMA)
-                        .distributedBy(1)
-                        .logFormat(LogFormat.ARROW)
-                        .build();
-        createTable(tablePath, tableDescriptor, false);
-
-        // write 3 rows with the original schema (a: INT, b: STRING)
-        try (Table table = conn.getTable(tablePath)) {
-            AppendWriter appendWriter = table.newAppend().createWriter();
-            for (int i = 0; i < 3; i++) {
-                appendWriter.append(row(i, "value-" + i));
-            }
-            appendWriter.flush();
-        }
-
-        // add column c: STRING
-        admin.alterTable(
-                        tablePath,
-                        Collections.singletonList(
-                                TableChange.addColumn(
-                                        "c",
-                                        DataTypes.STRING(),
-                                        null,
-                                        TableChange.ColumnPosition.last())),
-                        false)
-                .get();
-
-        // write 3 more rows with the evolved schema (a: INT, b: STRING, c: STRING)
-        try (Table table = conn.getTable(tablePath)) {
-            AppendWriter appendWriter = table.newAppend().createWriter();
-            for (int i = 3; i < 6; i++) {
-                appendWriter.append(row(i, "value-" + i, "extra-" + i));
-            }
-            appendWriter.flush();
-
-            int totalRecords = 6;
-            try (LogScannerImpl scanner = (LogScannerImpl) table.newScan().createLogScanner()) {
-                scanner.subscribeFromBeginning(0);
-
-                int count = 0;
-                long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
-                while (count < totalRecords) {
-                    assertThat(System.nanoTime())
-                            .as("Timed out waiting for %s records, got %s", totalRecords, count)
-                            .isLessThan(deadline);
-                    ArrowScanRecords records = scanner.pollRecordBatch(Duration.ofSeconds(1));
-                    for (ArrowBatchData batch : records) {
-                        try (ArrowBatchData b = batch) {
-                            IntVector intVector = (IntVector) b.getVectorSchemaRoot().getVector(0);
-                            VarCharVector stringVector =
-                                    (VarCharVector) b.getVectorSchemaRoot().getVector(1);
-                            VarCharVector extraVector =
-                                    (VarCharVector) b.getVectorSchemaRoot().getVector(2);
-                            for (int rowId = 0; rowId < b.getRecordCount(); rowId++) {
-                                assertThat(intVector.get(rowId)).isEqualTo(count);
-                                assertThat(stringVector.getObject(rowId).toString())
-                                        .isEqualTo("value-" + count);
-                                if (count < 3) {
-                                    assertThat(extraVector.isNull(rowId)).isTrue();
-                                } else {
-                                    assertThat(extraVector.getObject(rowId).toString())
-                                            .isEqualTo("extra-" + count);
-                                }
-                                assertThat(b.getLogOffset(rowId)).isEqualTo(count);
-                                count++;
-                            }
-                        }
-                    }
-                }
-                assertThat(count).isEqualTo(totalRecords);
-            }
-        }
-    }
-
-    @Test
     void testPollWhileCreateTableNotReady() throws Exception {
         // create one table with 30 buckets.
         int bucketNumber = 30;
@@ -551,5 +472,99 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
                                         "The fetching offset %s is out of range", Long.MIN_VALUE));
             }
         }
+    }
+
+    @Test
+    void testPollArrowBatchesWithSchemaEvolution() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_arrow_batches_with_schema_evolution");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA)
+                        .distributedBy(1)
+                        .logFormat(LogFormat.ARROW)
+                        .build();
+        createTable(tablePath, tableDescriptor, false);
+
+        // write 3 rows with the original schema (a: INT, b: STRING)
+        try (Table table = conn.getTable(tablePath)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            for (int i = 0; i < 3; i++) {
+                appendWriter.append(row(i, "value-" + i));
+            }
+            appendWriter.flush();
+        }
+
+        // add column c: STRING
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "c",
+                                        DataTypes.STRING(),
+                                        null,
+                                        TableChange.ColumnPosition.last())),
+                        false)
+                .get();
+
+        // write 3 more rows with the evolved schema (a: INT, b: STRING, c: STRING)
+        try (Table table = conn.getTable(tablePath)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            for (int i = 3; i < 6; i++) {
+                appendWriter.append(row(i, "value-" + i, "extra-" + i));
+            }
+            appendWriter.flush();
+
+            int totalRecords = 6;
+            // subscribe from beginning and verify all 6 records
+            try (LogScannerImpl scanner = (LogScannerImpl) table.newScan().createLogScanner()) {
+                scanner.subscribeFromBeginning(0);
+                pollAndVerifyArrowBatches(scanner, totalRecords, 0);
+            }
+
+            // subscribe from the middle of the first batch (offset 1)
+            // to ensure records before the subscribe offset are not returned
+            int subscribeOffset = 1;
+            try (LogScannerImpl scanner2 = (LogScannerImpl) table.newScan().createLogScanner()) {
+                scanner2.subscribe(0, subscribeOffset);
+                pollAndVerifyArrowBatches(
+                        scanner2, totalRecords - subscribeOffset, subscribeOffset);
+            }
+        }
+    }
+
+    private void pollAndVerifyArrowBatches(
+            LogScannerImpl scanner, int expectedRecords, int minExpectedOffset) {
+        int count = 0;
+        long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        while (count < expectedRecords) {
+            assertThat(System.nanoTime())
+                    .as("Timed out waiting for %s records, got %s", expectedRecords, count)
+                    .isLessThan(deadline);
+            ArrowScanRecords records = scanner.pollRecordBatch(Duration.ofSeconds(1));
+            for (ArrowBatchData batch : records) {
+                try (ArrowBatchData b = batch) {
+                    IntVector intVector = (IntVector) b.getVectorSchemaRoot().getVector(0);
+                    VarCharVector stringVector =
+                            (VarCharVector) b.getVectorSchemaRoot().getVector(1);
+                    VarCharVector extraVector =
+                            (VarCharVector) b.getVectorSchemaRoot().getVector(2);
+                    for (int rowId = 0; rowId < b.getRecordCount(); rowId++) {
+                        int expectedValue = (int) (b.getBaseLogOffset() + rowId);
+                        assertThat(expectedValue).isGreaterThanOrEqualTo(minExpectedOffset);
+                        assertThat(intVector.get(rowId)).isEqualTo(expectedValue);
+                        assertThat(stringVector.getObject(rowId).toString())
+                                .isEqualTo("value-" + expectedValue);
+                        if (expectedValue < 3) {
+                            assertThat(extraVector.isNull(rowId)).isTrue();
+                        } else {
+                            assertThat(extraVector.getObject(rowId).toString())
+                                    .isEqualTo("extra-" + expectedValue);
+                        }
+                        count++;
+                    }
+                }
+            }
+        }
+        assertThat(count).isEqualTo(expectedRecords);
     }
 }

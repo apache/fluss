@@ -22,6 +22,8 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.utils.AbstractIterator;
 
+import javax.annotation.Nonnull;
+
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
@@ -69,6 +71,7 @@ public class ArrowScanRecords implements Iterable<ArrowBatchData> {
     }
 
     @Override
+    @Nonnull
     public Iterator<ArrowBatchData> iterator() {
         return new ConcatenatedIterable(records.values()).iterator();
     }
@@ -82,6 +85,7 @@ public class ArrowScanRecords implements Iterable<ArrowBatchData> {
         }
 
         @Override
+        @Nonnull
         public Iterator<ArrowBatchData> iterator() {
             return new AbstractIterator<ArrowBatchData>() {
                 final Iterator<? extends Iterable<ArrowBatchData>> iters = iterables.iterator();

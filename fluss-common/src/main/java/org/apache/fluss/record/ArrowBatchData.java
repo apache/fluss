@@ -19,7 +19,6 @@ package org.apache.fluss.record;
 
 import org.apache.fluss.annotation.Internal;
 
-import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.VectorSchemaRoot;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -36,19 +35,13 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 public class ArrowBatchData implements AutoCloseable {
 
     private final VectorSchemaRoot vectorSchemaRoot;
-    private final BufferAllocator allocator;
     private final long baseLogOffset;
     private final long timestamp;
     private final int schemaId;
 
     public ArrowBatchData(
-            VectorSchemaRoot vectorSchemaRoot,
-            BufferAllocator allocator,
-            long baseLogOffset,
-            long timestamp,
-            int schemaId) {
+            VectorSchemaRoot vectorSchemaRoot, long baseLogOffset, long timestamp, int schemaId) {
         this.vectorSchemaRoot = checkNotNull(vectorSchemaRoot, "vectorSchemaRoot must not be null");
-        this.allocator = checkNotNull(allocator, "allocator must not be null");
         this.baseLogOffset = baseLogOffset;
         this.timestamp = timestamp;
         this.schemaId = schemaId;
@@ -57,11 +50,6 @@ public class ArrowBatchData implements AutoCloseable {
     /** Returns the Arrow vectors of this batch. */
     public VectorSchemaRoot getVectorSchemaRoot() {
         return vectorSchemaRoot;
-    }
-
-    /** Returns the allocator that owns the Arrow buffers of this batch. */
-    public BufferAllocator getAllocator() {
-        return allocator;
     }
 
     /** Returns the schema id of this batch. */
@@ -84,54 +72,32 @@ public class ArrowBatchData implements AutoCloseable {
         return vectorSchemaRoot.getRowCount();
     }
 
-    /** Returns the log offset of the given row. */
-    public long getLogOffset(int rowId) {
-        validateRowId(rowId);
-        return baseLogOffset + rowId;
-    }
-
     /**
      * Creates a new {@link ArrowBatchData} containing a contiguous slice of this batch's rows and
      * releases the original vector data.
      *
      * <p>After this method returns, the original {@link ArrowBatchData} instance MUST NOT be used
-     * or closed. The caller is responsible for closing the returned instance, which owns both the
-     * sliced vectors and the shared allocator.
+     * or closed. The caller is responsible for closing the returned instance.
      *
-     * @param startRow the starting row index (0-based, inclusive)
-     * @param numRows the number of rows in the slice
-     * @return a new {@link ArrowBatchData} containing only the specified rows
+     * @param skipRows the number of leading rows to skip
+     * @return a new {@link ArrowBatchData} containing the remaining rows after skipping
      */
-    public ArrowBatchData sliceAndTransferOwnership(int startRow, int numRows) {
-        checkArgument(startRow >= 0, "startRow must be >= 0, but is %s", startRow);
-        checkArgument(numRows > 0, "numRows must be > 0, but is %s", numRows);
+    public ArrowBatchData sliceAndTransferOwnership(int skipRows) {
+        checkArgument(skipRows >= 0, "skipRows must be >= 0, but is %s", skipRows);
         checkArgument(
-                startRow + numRows <= getRecordCount(),
-                "startRow(%s) + numRows(%s) must be <= recordCount(%s)",
-                startRow,
-                numRows,
+                skipRows < getRecordCount(),
+                "skipRows(%s) must be < recordCount(%s)",
+                skipRows,
                 getRecordCount());
-        VectorSchemaRoot slicedRoot = vectorSchemaRoot.slice(startRow, numRows);
+        int remainingRows = getRecordCount() - skipRows;
+        VectorSchemaRoot slicedRoot = vectorSchemaRoot.slice(skipRows, remainingRows);
         // release original vector buffers; sliced vectors hold independent copies
         vectorSchemaRoot.close();
-        return new ArrowBatchData(
-                slicedRoot, allocator, baseLogOffset + startRow, timestamp, schemaId);
-    }
-
-    private void validateRowId(int rowId) {
-        checkArgument(
-                rowId >= 0 && rowId < getRecordCount(),
-                "rowId must be in [0, %s), but is %s",
-                getRecordCount(),
-                rowId);
+        return new ArrowBatchData(slicedRoot, baseLogOffset + skipRows, timestamp, schemaId);
     }
 
     @Override
     public void close() {
-        try {
-            vectorSchemaRoot.close();
-        } finally {
-            allocator.close();
-        }
+        vectorSchemaRoot.close();
     }
 }

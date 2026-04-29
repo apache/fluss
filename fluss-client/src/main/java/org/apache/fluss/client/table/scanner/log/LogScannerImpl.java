@@ -68,7 +68,7 @@ public class LogScannerImpl implements LogScanner {
     private final LogFetcher logFetcher;
     private final long tableId;
     private final boolean isPartitionedTable;
-    private final boolean arrowLogFormat;
+    private final boolean isArrowLogFormat;
     private final boolean isLogTable;
     private final boolean hasProjection;
     // metrics
@@ -94,7 +94,7 @@ public class LogScannerImpl implements LogScanner {
         this.tablePath = tableInfo.getTablePath();
         this.tableId = tableInfo.getTableId();
         this.isPartitionedTable = tableInfo.isPartitioned();
-        this.arrowLogFormat = tableInfo.getTableConfig().getLogFormat() == LogFormat.ARROW;
+        this.isArrowLogFormat = tableInfo.getTableConfig().getLogFormat() == LogFormat.ARROW;
         this.isLogTable = !tableInfo.hasPrimaryKey();
         this.hasProjection = projectedFields != null;
         // add this table to metadata updater.
@@ -151,7 +151,7 @@ public class LogScannerImpl implements LogScanner {
      */
     @Internal
     public ArrowScanRecords pollRecordBatch(Duration timeout) {
-        if (!arrowLogFormat) {
+        if (!isArrowLogFormat) {
             throw new UnsupportedOperationException(
                     "Arrow record batch polling is only supported for tables whose log format is ARROW.");
         }

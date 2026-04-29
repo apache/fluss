@@ -30,7 +30,6 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.AllocationManager;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocatorUtil;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ChunkedAllocationManager;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
@@ -57,8 +56,10 @@ public class LogRecordReadContext
     private final RowType dataRowType;
     // the static schemaId of the table, should support dynamic schema evolution in the future
     private final int targetSchemaId;
-    // the Arrow memory buffer allocator for the table, should be null if not ARROW log format
-    @Nullable private volatile BufferAllocator bufferAllocator;
+    // the shaded Arrow memory buffer allocator, should be null if not ARROW log format
+    @Nullable private final BufferAllocator bufferAllocator;
+    // the unshaded Arrow memory buffer allocator, declared as AutoCloseable to avoid
+    // importing unshaded Arrow classes in this module (they are provided-scope)
     @Nullable private volatile AutoCloseable unshadedBufferAllocator;
     private final FieldGetter[] selectedFieldGetters;
     // whether the projection is push downed to the server side and the returned data is pruned.
@@ -66,7 +67,6 @@ public class LogRecordReadContext
     private final SchemaGetter schemaGetter;
     private final ConcurrentHashMap<Integer, VectorSchemaRoot> vectorSchemaRootMap =
             new ConcurrentHashMap<>();
-    private final Object arrowResourceLock = new Object();
     private final Object unshadedArrowResourceLock = new Object();
 
     public static LogRecordReadContext createReadContext(
@@ -362,19 +362,12 @@ public class LogRecordReadContext
                     "Only Arrow log format provides vector schema root.");
         }
 
-        synchronized (arrowResourceLock) {
-            VectorSchemaRoot vectorSchemaRoot = vectorSchemaRootMap.get(schemaId);
-            if (vectorSchemaRoot != null) {
-                return vectorSchemaRoot;
-            }
-
-            RowType rowType = getRowType(schemaId);
-            vectorSchemaRoot =
-                    VectorSchemaRoot.create(
-                            ArrowUtils.toArrowSchema(rowType), getOrCreateBufferAllocator());
-            vectorSchemaRootMap.put(schemaId, vectorSchemaRoot);
-            return vectorSchemaRoot;
-        }
+        RowType rowType = getRowType(schemaId);
+        return vectorSchemaRootMap.computeIfAbsent(
+                schemaId,
+                (id) ->
+                        VectorSchemaRoot.create(
+                                ArrowUtils.toArrowSchema(rowType), bufferAllocator));
     }
 
     @Override
@@ -382,7 +375,7 @@ public class LogRecordReadContext
         if (logFormat != LogFormat.ARROW) {
             throw new IllegalArgumentException("Only Arrow log format provides buffer allocator.");
         }
-        return getOrCreateBufferAllocator();
+        return bufferAllocator;
     }
 
     @Override
@@ -410,33 +403,14 @@ public class LogRecordReadContext
     }
 
     public void close() {
-        synchronized (arrowResourceLock) {
-            vectorSchemaRootMap.values().forEach(VectorSchemaRoot::close);
-            vectorSchemaRootMap.clear();
-            if (bufferAllocator != null) {
-                bufferAllocator.close();
-                bufferAllocator = null;
-            }
+        vectorSchemaRootMap.values().forEach(VectorSchemaRoot::close);
+        vectorSchemaRootMap.clear();
+        if (bufferAllocator != null) {
+            bufferAllocator.close();
         }
 
-        synchronized (unshadedArrowResourceLock) {
-            IOUtils.closeQuietly(unshadedBufferAllocator);
-            unshadedBufferAllocator = null;
-        }
-    }
-
-    private BufferAllocator getOrCreateBufferAllocator() {
-        BufferAllocator allocator = bufferAllocator;
-        if (allocator != null) {
-            return allocator;
-        }
-
-        synchronized (arrowResourceLock) {
-            if (bufferAllocator == null) {
-                bufferAllocator = new RootAllocator(Long.MAX_VALUE);
-            }
-            return bufferAllocator;
-        }
+        IOUtils.closeQuietly(unshadedBufferAllocator);
+        unshadedBufferAllocator = null;
     }
 
     private AutoCloseable getOrCreateUnshadedBufferAllocator() {
@@ -457,13 +431,10 @@ public class LogRecordReadContext
         private final org.apache.arrow.memory.BufferAllocator allocator;
         private org.apache.arrow.vector.VectorSchemaRoot readRoot;
         private org.apache.arrow.vector.VectorSchemaRoot outputRoot;
-        private boolean ownershipTransferred;
 
         private UnshadedArrowBatchAccessImpl(int schemaId) {
-            org.apache.arrow.memory.BufferAllocator parentAllocator =
-                    (org.apache.arrow.memory.BufferAllocator) getOrCreateUnshadedBufferAllocator();
             this.allocator =
-                    parentAllocator.newChildAllocator("log-record-read-batch", 0, Long.MAX_VALUE);
+                    (org.apache.arrow.memory.BufferAllocator) getOrCreateUnshadedBufferAllocator();
             this.readRoot =
                     org.apache.arrow.vector.VectorSchemaRoot.create(
                             org.apache.fluss.utils.UnshadedArrowReadUtils.toArrowSchema(
@@ -490,8 +461,7 @@ public class LogRecordReadContext
                 readRoot = null;
             }
             ArrowBatchData arrowBatchData =
-                    new ArrowBatchData(outputRoot, allocator, baseLogOffset, timestamp, schemaId);
-            ownershipTransferred = true;
+                    new ArrowBatchData(outputRoot, baseLogOffset, timestamp, schemaId);
             outputRoot = null;
             readRoot = null;
             return arrowBatchData;
@@ -499,15 +469,10 @@ public class LogRecordReadContext
 
         @Override
         public void close() {
-            if (ownershipTransferred) {
-                return;
-            }
-
             IOUtils.closeQuietly(outputRoot);
             if (outputRoot != readRoot) {
                 IOUtils.closeQuietly(readRoot);
             }
-            IOUtils.closeQuietly(allocator);
         }
     }
 

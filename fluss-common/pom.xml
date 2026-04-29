@@ -62,6 +62,10 @@
             <artifactId>fluss-shaded-arrow</artifactId>
         </dependency>
 
+        <!-- Unshaded Arrow dependencies used by UnshadedArrowReadUtils to load Arrow batches
+             with original Arrow classes (for ArrowBatchData / log scanner arrow batch scan).
+             Marked as provided because the actual Arrow classes are supplied at runtime by
+             downstream modules (e.g. fluss-client); fluss-common only needs them for compilation. -->
         <dependency>
             <groupId>org.apache.arrow</groupId>
             <artifactId>arrow-vector</artifactId>

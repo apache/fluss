@@ -288,7 +288,6 @@ public abstract class CompletedFetch {
                 ArrowBatchData arrowBatchData = batch.loadArrowBatch(readContext);
                 if (arrowBatchData.getRecordCount() == 0) {
                     arrowBatchData.close();
-                    nextFetchOffset = batch.nextLogOffset();
                     continue;
                 }
 
@@ -299,18 +298,15 @@ public abstract class CompletedFetch {
                     int skipRows = (int) (nextFetchOffset - batchBaseOffset);
                     if (skipRows >= arrowBatchData.getRecordCount()) {
                         arrowBatchData.close();
-                        nextFetchOffset = batch.nextLogOffset();
                         continue;
                     }
-                    int remainingRows = arrowBatchData.getRecordCount() - skipRows;
-                    arrowBatchData =
-                            arrowBatchData.sliceAndTransferOwnership(skipRows, remainingRows);
+                    arrowBatchData = arrowBatchData.sliceAndTransferOwnership(skipRows);
                 }
 
                 arrowBatches.add(arrowBatchData);
                 recordsRead += arrowBatchData.getRecordCount();
                 recordsFetched += arrowBatchData.getRecordCount();
-                advanceNextFetchOffset(batch.nextLogOffset());
+                nextFetchOffset = batch.nextLogOffset();
             }
         } catch (Exception e) {
             closeArrowBatches(arrowBatches);
@@ -375,23 +371,11 @@ public abstract class CompletedFetch {
         // When filteredEndOffset is set, use the max of the batch-derived offset and
         // filteredEndOffset to skip already-scanned-and-filtered trailing batches.
         if (currentBatch != null) {
-            advanceNextFetchOffset(Math.max(currentBatch.nextLogOffset(), filteredEndOffset));
+            nextFetchOffset = Math.max(currentBatch.nextLogOffset(), filteredEndOffset);
         } else if (filteredEndOffset != NO_FILTERED_END_OFFSET) {
-            advanceNextFetchOffset(filteredEndOffset);
+            nextFetchOffset = filteredEndOffset;
         }
         drain();
-    }
-
-    /**
-     * Advances {@code nextFetchOffset} to the given offset, ensuring it never decreases. A
-     * decreasing offset can happen when an earlier batch in the response is fully skipped (its
-     * entire range is before {@code nextFetchOffset}), and its {@code nextLogOffset()} is less than
-     * the current {@code nextFetchOffset}. Without this guard, subsequent batches whose base offset
-     * falls between the regressed value and the original {@code nextFetchOffset} would bypass the
-     * slice logic and be returned un-trimmed.
-     */
-    private void advanceNextFetchOffset(long offset) {
-        nextFetchOffset = Math.max(nextFetchOffset, offset);
     }
 
     private void maybeEnsureValid(LogRecordBatch batch) {
