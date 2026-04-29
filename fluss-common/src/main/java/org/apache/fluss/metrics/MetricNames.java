@@ -229,6 +229,7 @@ public class MetricNames {
 
     // for log tablet
     public static final String LOG_NUM_SEGMENTS = "numSegments";
+    public static final String LOG_START_OFFSET = "startOffset";
     public static final String LOG_END_OFFSET = "endOffset";
     public static final String REMOTE_LOG_SIZE = "size";
     public static final String LOG_LAKE_TIMESTAMP_LAG = "timestampLag";

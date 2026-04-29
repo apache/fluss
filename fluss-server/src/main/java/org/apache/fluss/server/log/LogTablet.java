@@ -355,6 +355,7 @@ public final class LogTablet {
         MetricGroup metricGroup = bucketMetricGroup.addGroup("log");
         metricGroup.gauge(
                 MetricNames.LOG_NUM_SEGMENTS, () -> localLog.getSegments().numberOfSegments());
+        metricGroup.gauge(MetricNames.LOG_START_OFFSET, localLog::getLocalLogStartOffset);
         metricGroup.gauge(MetricNames.LOG_END_OFFSET, localLog::getLocalLogEndOffset);
     }
 
