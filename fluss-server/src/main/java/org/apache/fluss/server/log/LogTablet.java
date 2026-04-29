@@ -932,6 +932,32 @@ public final class LogTablet {
         }
     }
 
+    /**
+     * Rolls the active segment if it is non-empty and all of its records have passed the log TTL.
+     *
+     * <p>This keeps an empty active segment available for future appends while making the expired
+     * segment eligible for remote tiering and local cleanup.
+     */
+    public void rollActiveSegmentIfExpired() throws Exception {
+        if (logTtlMs <= 0L) {
+            return;
+        }
+
+        synchronized (lock) {
+            LogSegment activeSegment = localLog.getSegments().activeSegment();
+            if (activeSegment.getSizeInBytes() == 0
+                    || !isSegmentExpired(clock.milliseconds(), activeSegment)) {
+                return;
+            }
+
+            LOG.info(
+                    "Rolling expired active log segment {} for bucket {}.",
+                    activeSegment,
+                    getTableBucket());
+            roll(Optional.empty());
+        }
+    }
+
     /** Truncate this log so that it ends with the greatest offset < targetOffset. */
     boolean truncateTo(long targetOffset) throws LogStorageException {
         if (targetOffset < 0) {

@@ -127,6 +127,7 @@ public class LogTieringTask implements Runnable {
             TableMetricGroup metricGroup = replica.tableMetrics();
             maybeUpdateCopiedOffset(logTablet);
 
+            logTablet.rollActiveSegmentIfExpired();
             // Get these candidate log segments to copy and these expired remote log segments to
             // clean up.
             List<EnrichedLogSegment> candidateToCopySegments =
