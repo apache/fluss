@@ -17,12 +17,6 @@
 
 package org.apache.fluss.server.coordinator;
 
-import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
-import static org.apache.fluss.utils.PartitionUtils.generateAutoPartition;
-import static org.apache.fluss.utils.PartitionUtils.generateAutoPartitionTime;
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
-import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
-
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
@@ -43,8 +37,12 @@ import org.apache.fluss.utils.AutoPartitionStrategy;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nullable;
+import javax.annotation.concurrent.GuardedBy;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -67,8 +65,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
-import javax.annotation.Nullable;
-import javax.annotation.concurrent.GuardedBy;
+import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
+import static org.apache.fluss.utils.PartitionUtils.generateAutoPartition;
+import static org.apache.fluss.utils.PartitionUtils.generateAutoPartitionTime;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /**
  * An auto partition manager which will trigger auto partition for the tables in cluster
