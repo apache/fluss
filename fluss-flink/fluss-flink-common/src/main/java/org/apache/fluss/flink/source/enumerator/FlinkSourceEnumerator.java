@@ -363,6 +363,10 @@ public class FlinkSourceEnumerator
                         List<SourceSplitBase> splits = generateHybridLakeFlussSplits();
                         // No lake snapshot exists, fall back to Fluss-only splits
                         if (splits == null) {
+                            LOG.info(
+                                    "No lake snapshot found for table {},"
+                                            + " falling back to Fluss-only splits.",
+                                    tablePath);
                             if (isPartitioned) {
                                 Set<PartitionInfo> partitionInfos = listPartitions();
                                 Collection<Partition> partitions =
