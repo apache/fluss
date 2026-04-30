@@ -39,6 +39,10 @@ import org.apache.iceberg.types.Types;
 
 import javax.annotation.Nullable;
 
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -100,7 +104,23 @@ public class IcebergConversions {
                         Types.StructType.of(field),
                         RowType.of(convertIcebergTypeToFlussType(field.type())),
                         flussRow);
+        if (field.type() instanceof Types.TimestampType) {
+            return toIcebergTimestampLiteral(flussRowAsIcebergRecord.get(0));
+        }
         return flussRowAsIcebergRecord.get(0, field.type().typeId().javaClass());
+    }
+
+    private static long toIcebergTimestampLiteral(Object timestamp) {
+        if (timestamp instanceof OffsetDateTime) {
+            OffsetDateTime offsetDateTime = (OffsetDateTime) timestamp;
+            return offsetDateTime.toEpochSecond() * 1_000_000L + offsetDateTime.getNano() / 1_000L;
+        } else if (timestamp instanceof LocalDateTime) {
+            return ChronoUnit.MICROS.between(
+                    LocalDateTime.ofEpochSecond(0, 0, ZoneOffset.UTC), (LocalDateTime) timestamp);
+        } else {
+            throw new IllegalArgumentException(
+                    "Unsupported Iceberg timestamp literal: " + timestamp);
+        }
     }
 
     /** Converts Iceberg data types to Fluss data types. */

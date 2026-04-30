@@ -28,6 +28,7 @@ import org.apache.fluss.predicate.LeafPredicate;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.IntType;
@@ -62,7 +63,7 @@ class PaimonLakeSourceTest extends PaimonSourceTestBase {
                     .column("name", org.apache.paimon.types.DataTypes.STRING())
                     .column("__bucket", org.apache.paimon.types.DataTypes.INT())
                     .column("__offset", org.apache.paimon.types.DataTypes.BIGINT())
-                    .column("__timestamp", org.apache.paimon.types.DataTypes.TIMESTAMP(6))
+                    .column("__timestamp", org.apache.paimon.types.DataTypes.TIMESTAMP_LTZ_MILLIS())
                     .primaryKey("id")
                     .option(CoreOptions.BUCKET.key(), "1")
                     .build();
@@ -89,7 +90,7 @@ class PaimonLakeSourceTest extends PaimonSourceTestBase {
                             BinaryString.fromString("name" + i),
                             0,
                             (long) i,
-                            Timestamp.fromEpochMillis(System.currentTimeMillis())));
+                            Timestamp.fromEpochMillis(i * 1000L)));
         }
         writeRecord(tablePath, rows);
 
@@ -102,7 +103,7 @@ class PaimonLakeSourceTest extends PaimonSourceTestBase {
                             BinaryString.fromString("name" + i),
                             0,
                             (long) i,
-                            Timestamp.fromEpochMillis(System.currentTimeMillis())));
+                            Timestamp.fromEpochMillis(i * 1000L)));
         }
         writeRecord(tablePath, rows);
 
@@ -139,6 +140,37 @@ class PaimonLakeSourceTest extends PaimonSourceTestBase {
                             TransformingCloseableIterator.transform(iterator, LogRecord::getRow)));
         }
         assertThat(actual.toString()).isEqualTo("[+I[2, name2], +I[3, name3]]");
+
+        Predicate timestampFilter =
+                new PredicateBuilder(
+                                RowType.of(
+                                        DataTypes.INT(),
+                                        DataTypes.STRING(),
+                                        DataTypes.INT(),
+                                        DataTypes.BIGINT(),
+                                        DataTypes.TIMESTAMP_LTZ(3)))
+                        .greaterOrEqual(4, TimestampLtz.fromEpochMillis(10_000L));
+        lakeSource = lakeStorage.createLakeSource(tablePath);
+        filterPushDownResult = lakeSource.withFilters(Collections.singletonList(timestampFilter));
+        assertThat(filterPushDownResult.acceptedPredicates())
+                .isEqualTo(Collections.singletonList(timestampFilter));
+        assertThat(filterPushDownResult.remainingPredicates()).isEmpty();
+
+        paimonSplits = lakeSource.createPlanner(() -> 2).plan();
+        actual = new ArrayList<>();
+        for (PaimonSplit split : paimonSplits) {
+            recordReader = lakeSource.createRecordReader(() -> split);
+            try (CloseableIterator<LogRecord> iterator = recordReader.read()) {
+                actual.addAll(
+                        convertToFlinkRow(
+                                fieldGetters,
+                                TransformingCloseableIterator.transform(
+                                        iterator, LogRecord::getRow)));
+            }
+        }
+        assertThat(actual.toString())
+                .isEqualTo(
+                        "[+I[10, name10], +I[11, name11], +I[12, name12], +I[13, name13], +I[14, name14]]");
 
         // test mix one unaccepted filter
         Predicate nonConvertibleFilter =

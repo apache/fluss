@@ -55,6 +55,7 @@ public class LakeSplitGenerator {
     private final TableInfo tableInfo;
     private final Admin flussAdmin;
     private final OffsetsInitializer.BucketOffsetsRetriever bucketOffsetsRetriever;
+    private final OffsetsInitializer startingOffsetInitializer;
     private final OffsetsInitializer stoppingOffsetInitializer;
     private final int bucketCount;
     private final Supplier<Set<PartitionInfo>> listPartitionSupplier;
@@ -66,6 +67,7 @@ public class LakeSplitGenerator {
             Admin flussAdmin,
             LakeSource<LakeSplit> lakeSource,
             OffsetsInitializer.BucketOffsetsRetriever bucketOffsetsRetriever,
+            OffsetsInitializer startingOffsetInitializer,
             OffsetsInitializer stoppingOffsetInitializer,
             int bucketCount,
             Supplier<Set<PartitionInfo>> listPartitionSupplier) {
@@ -73,6 +75,7 @@ public class LakeSplitGenerator {
         this.flussAdmin = flussAdmin;
         this.lakeSource = lakeSource;
         this.bucketOffsetsRetriever = bucketOffsetsRetriever;
+        this.startingOffsetInitializer = startingOffsetInitializer;
         this.stoppingOffsetInitializer = stoppingOffsetInitializer;
         this.bucketCount = bucketCount;
         this.listPartitionSupplier = listPartitionSupplier;
@@ -229,32 +232,28 @@ public class LakeSplitGenerator {
             if (lakeSplits != null) {
                 splits.addAll(toLakeSnapshotSplits(lakeSplits, partitionName, partitionId));
             }
+            Map<Integer, Long> bucketStartOffset =
+                    startingOffsetInitializer.getBucketOffsets(
+                            partitionName,
+                            IntStream.range(0, bucketCount).boxed().collect(Collectors.toList()),
+                            bucketOffsetsRetriever);
             for (int bucket = 0; bucket < bucketCount; bucket++) {
                 TableBucket tableBucket =
                         new TableBucket(tableInfo.getTableId(), partitionId, bucket);
                 Long snapshotLogOffset = tableBucketSnapshotLogOffset.get(tableBucket);
+                Long startingOffset = bucketStartOffset.get(bucket);
                 Long stoppingOffset = bucketEndOffset.get(bucket);
-                if (snapshotLogOffset == null) {
-                    // no data committed to lake for this bucket, scan from fluss log
-                    if (stoppingOffset == NO_STOPPING_OFFSET || stoppingOffset > 0) {
-                        splits.add(
-                                new LogSplit(
-                                        tableBucket,
-                                        partitionName,
-                                        EARLIEST_OFFSET,
-                                        stoppingOffset));
-                    }
-                } else {
-                    // need to read remain fluss log
-                    if (stoppingOffset == NO_STOPPING_OFFSET
-                            || snapshotLogOffset < stoppingOffset) {
-                        splits.add(
-                                new LogSplit(
-                                        tableBucket,
-                                        partitionName,
-                                        snapshotLogOffset,
-                                        stoppingOffset));
-                    }
+                long splitStartingOffset =
+                        snapshotLogOffset == null
+                                ? startingOffset
+                                : Math.max(snapshotLogOffset, startingOffset);
+                if (stoppingOffset == NO_STOPPING_OFFSET || splitStartingOffset < stoppingOffset) {
+                    splits.add(
+                            new LogSplit(
+                                    tableBucket,
+                                    partitionName,
+                                    splitStartingOffset,
+                                    stoppingOffset));
                 }
             }
         } else {

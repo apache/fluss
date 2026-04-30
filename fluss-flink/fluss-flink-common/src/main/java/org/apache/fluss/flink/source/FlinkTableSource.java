@@ -44,6 +44,8 @@ import org.apache.fluss.predicate.PartitionPredicateVisitor;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.predicate.PredicateVisitor;
+import org.apache.fluss.row.TimestampLtz;
+import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.RowType;
 
@@ -102,6 +104,9 @@ import static org.apache.fluss.flink.utils.PredicateConverter.convertToFlussPred
 import static org.apache.fluss.flink.utils.PushdownUtils.ValueConversion.FLINK_INTERNAL_VALUE;
 import static org.apache.fluss.flink.utils.PushdownUtils.extractFieldEquals;
 import static org.apache.fluss.flink.utils.StringifyPredicateVisitor.stringifyPartitionPredicate;
+import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
+import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
+import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Flink table source to scan Fluss data. */
@@ -168,6 +173,9 @@ public class FlinkTableSource
 
     @Nullable private LakeSource<LakeSplit> lakeSource;
     @Nullable private Predicate logRecordBatchFilter;
+
+    // to avoid duplicate lake filter
+    private List<Predicate> acceptedLakePredicates = Collections.emptyList();
 
     public FlinkTableSource(
             TablePath tablePath,
@@ -346,6 +354,11 @@ public class FlinkTableSource
             case TIMESTAMP:
                 offsetsInitializer =
                         OffsetsInitializer.timestamp(startupOptions.startupTimestampMs);
+                // todo: startup timestamp filter for PK table
+                enableLakeSource = lakeSource != null && !hasPrimaryKey();
+                if (enableLakeSource) {
+                    applyTimestampStartupLakeFilter(startupOptions.startupTimestampMs);
+                }
                 break;
             default:
                 throw new IllegalArgumentException(
@@ -647,15 +660,57 @@ public class FlinkTableSource
 
         LakeSource.FilterPushDownResult filterPushDownResult =
                 checkNotNull(lakeSource).withFilters(lakePredicates);
-        Set<Predicate> acceptedLakePredicates =
+        Set<Predicate> lakeAcceptedPredicateSet =
                 Collections.newSetFromMap(new IdentityHashMap<Predicate, Boolean>());
-        acceptedLakePredicates.addAll(filterPushDownResult.acceptedPredicates());
+        lakeAcceptedPredicateSet.addAll(filterPushDownResult.acceptedPredicates());
+        List<Predicate> acceptedPredicates = new ArrayList<>();
         for (int i = 0; i < lakePredicates.size(); i++) {
-            if (acceptedLakePredicates.contains(lakePredicates.get(i))
-                    && !acceptedFilters.contains(convertedFilters.get(i))) {
-                acceptedFilters.add(convertedFilters.get(i));
+            if (lakeAcceptedPredicateSet.contains(lakePredicates.get(i))) {
+                acceptedPredicates.add(lakePredicates.get(i));
+                if (!acceptedFilters.contains(convertedFilters.get(i))) {
+                    acceptedFilters.add(convertedFilters.get(i));
+                }
             }
         }
+        this.acceptedLakePredicates = acceptedPredicates;
+    }
+
+    private void applyTimestampStartupLakeFilter(long startupTimestampMs) {
+        Predicate timestampPredicate = createLakeTimestampPredicate(startupTimestampMs);
+        List<Predicate> lakePredicates = new ArrayList<>(acceptedLakePredicates);
+        lakePredicates.add(timestampPredicate);
+
+        LakeSource.FilterPushDownResult filterPushDownResult =
+                checkNotNull(lakeSource).withFilters(lakePredicates);
+        if (!filterPushDownResult.acceptedPredicates().containsAll(acceptedLakePredicates)) {
+            throw new IllegalStateException(
+                    String.format(
+                            "Lake source for table %s does not preserve accepted user filters when applying timestamp startup filter %s.",
+                            tablePath, timestampPredicate));
+        }
+        if (!filterPushDownResult.acceptedPredicates().contains(timestampPredicate)) {
+            throw new IllegalStateException(
+                    String.format(
+                            "Lake source for table %s does not support timestamp startup filter %s.",
+                            tablePath, timestampPredicate));
+        }
+        acceptedLakePredicates = filterPushDownResult.acceptedPredicates();
+    }
+
+    private Predicate createLakeTimestampPredicate(long startupTimestampMs) {
+        RowType rowType = FlinkConversions.toFlussRowType(tableOutputType);
+        List<DataField> lakeFields = new ArrayList<>(rowType.getFields());
+        lakeFields.add(new DataField(BUCKET_COLUMN_NAME, org.apache.fluss.types.DataTypes.INT()));
+        lakeFields.add(
+                new DataField(OFFSET_COLUMN_NAME, org.apache.fluss.types.DataTypes.BIGINT()));
+        lakeFields.add(
+                new DataField(
+                        TIMESTAMP_COLUMN_NAME, org.apache.fluss.types.DataTypes.TIMESTAMP_LTZ(3)));
+        RowType lakeRowType = new RowType(rowType.isNullable(), lakeFields);
+        PredicateBuilder predicateBuilder = new PredicateBuilder(lakeRowType);
+        return predicateBuilder.greaterOrEqual(
+                predicateBuilder.indexOf(TIMESTAMP_COLUMN_NAME),
+                TimestampLtz.fromEpochMillis(startupTimestampMs));
     }
 
     /**
