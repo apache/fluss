@@ -70,7 +70,7 @@ public class IcebergSplitPlanner implements Planner<IcebergSplit> {
         Function<FileScanTask, Integer> bucketExtractor = createBucketExtractor(table);
         TableScan tableScan = table.newScan().useSnapshot(snapshotId);
         if (filter != null) {
-            tableScan = tableScan.includeColumnStats().filter(filter);
+            tableScan = tableScan.filter(filter);
         }
         try (CloseableIterable<FileScanTask> tasks = tableScan.planFiles()) {
             tasks.forEach(
