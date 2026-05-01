@@ -70,6 +70,27 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
 
     private final AtomicInteger fetchLogDataCount = new AtomicInteger(0);
 
+    /**
+     * Optional test hook invoked at the start of {@link #fetchLogData} (after the injected-failure
+     * branches but before the {@link #fetchLogDataDelayMs} sleep and the real fetch). When
+     * non-null, the barrier runs on the worker thread so tests can block the worker on their own
+     * {@link java.util.concurrent.CountDownLatch}s (captured by the lambda) and assert real
+     * interruption by observing the latch they count down from inside the barrier. Default null
+     * preserves existing behavior.
+     *
+     * <p>If the barrier throws {@link InterruptedException}, the worker's interrupt status is
+     * re-asserted and a {@link RemoteStorageException} is propagated — the same exception surface
+     * as the {@link #fetchLogDataDelayMs} sleep path, so prefetch-worker error handling does not
+     * need to distinguish the two.
+     */
+    public volatile FetchLogDataBarrier fetchLogDataBarrier = null;
+
+    /** Interruptible test hook for {@link TestingRemoteLogStorage#fetchLogDataBarrier}. */
+    @FunctionalInterface
+    public interface FetchLogDataBarrier {
+        void run() throws InterruptedException;
+    }
+
     public TestingRemoteLogStorage(Configuration conf, ExecutorService ioExecutor)
             throws IOException {
         super(conf, ioExecutor);
@@ -113,6 +134,15 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
                             + (idx + 1)
                             + "/"
                             + failFirstN);
+        }
+        FetchLogDataBarrier barrier = fetchLogDataBarrier;
+        if (barrier != null) {
+            try {
+                barrier.run();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RemoteStorageException("Interrupted at fetchLogData test barrier", e);
+            }
         }
         long delayMs = fetchLogDataDelayMs.get();
         if (delayMs > 0L) {

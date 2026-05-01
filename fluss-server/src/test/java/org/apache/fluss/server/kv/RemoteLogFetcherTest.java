@@ -34,7 +34,12 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -572,7 +577,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
     }
 
     @Test
-    void testCloseReleasesAllPrefetchPermitsAndCancelsQueue() throws Exception {
+    void testCloseCancelsAllPendingPrefetchFutures() throws Exception {
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
         makeLogTableAsLeader(tb, false);
         Replica replica = replicaManager.getReplicaOrException(tb);
@@ -595,7 +600,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
             CompletableFuture<File> pendingFuture = new CompletableFuture<>();
             fetcher.injectPrefetchEntryForTest(segments.get(0), pendingFuture);
 
-            List<CompletableFuture<File>> futures = fetcher.snapshotPrefetchFuturesForTest();
+            List<Future<File>> futures = fetcher.snapshotPrefetchFuturesForTest();
             assertThat(futures).containsExactly(pendingFuture);
 
             fetcher.close();
@@ -723,7 +728,7 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
 
         // The first 2 fetchLogData invocations fail; from the 3rd onward they succeed. With
         // prefetchNum=1 and a single segment to consume, the retry loop must recover and the
-        // iterator must produce all batches without leaking permits.
+        // iterator must produce all batches without leaking prefetch slots.
         remoteLogStorage.fetchLogDataFailFirstN.set(2);
 
         File logTabletDir = logTablet.getLogDir();
@@ -757,39 +762,83 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         assertThat(segments).isNotEmpty();
         long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
 
-        // Make every fetchLogData sleep 5s so the prefetch worker is guaranteed to be in the
-        // middle of a download when we close the fetcher.
-        remoteLogStorage.fetchLogDataDelayMs.set(5_000L);
+        // prefetch=2 + 2 download threads → up to 2 workers may enter fetchLogData
+        // concurrently. The release latch is never counted down by the test — the ONLY way
+        // out for a stuck worker is Thread.interrupt() arriving at `release.await()`, which
+        // is the exact behavior we need to assert. The `finished` latch is counted down in
+        // a finally block inside the barrier so it fires whether await() returned normally
+        // or was interrupted — but since `release` is never counted down, any observed
+        // countDown on `finished` is definitive evidence that the worker was interrupted.
+        int expectedInFlight = 2;
+        CountDownLatch entered = new CountDownLatch(expectedInFlight);
+        CountDownLatch release = new CountDownLatch(1);
+        CountDownLatch finished = new CountDownLatch(expectedInFlight);
+
+        remoteLogStorage.fetchLogDataBarrier =
+                () -> {
+                    entered.countDown();
+                    try {
+                        release.await();
+                    } finally {
+                        // Single countDown point — fires on both the normal-release path and
+                        // the interrupted path, so the barrier contract is always honored.
+                        finished.countDown();
+                    }
+                };
 
         File logTabletDir = logTablet.getLogDir();
         RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir, 2, 2);
         try {
-            // fetch() returns immediately because the iterator is lazy. The prefetch worker is
-            // now stuck in the simulated 5s sleep inside fetchLogData.
+            // fetch() is lazy — kicks off prefetch workers that will block on `release`.
             fetcher.fetch(0, remoteEndOffset);
 
+            // (1) Real-progress evidence: prefetch workers actually entered fetchLogData.
+            assertThat(entered.await(30, TimeUnit.SECONDS))
+                    .as("prefetch workers should have entered fetchLogData")
+                    .isTrue();
+
             // Snapshot the in-flight futures BEFORE close so we can assert on them afterwards.
-            List<CompletableFuture<File>> inflight = fetcher.snapshotPrefetchFuturesForTest();
+            List<Future<File>> inflight = fetcher.snapshotPrefetchFuturesForTest();
             assertThat(inflight).isNotEmpty();
 
             long closeStart = System.nanoTime();
             fetcher.close();
-            long closeMs =
-                    java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(
-                            System.nanoTime() - closeStart);
+            long closeMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - closeStart);
 
-            // close() must not block for the full simulated 5s sleep — it should cancel the
-            // in-flight futures and return promptly (well under 5s on any healthy machine).
-            assertThat(closeMs).isLessThan(4_000L);
+            // (2) Real-interruption evidence: because `release` is never counted down by the
+            // test, the only way `finished` can reach zero is if Thread.interrupt() unblocked
+            // `release.await()` inside the barrier. This is the assertion fresh-borzoni asked
+            // for — f.isCancelled() alone can't prove this, but finished.await() can.
+            assertThat(finished.await(10, TimeUnit.SECONDS))
+                    .as(
+                            "close() should have interrupted the blocked prefetch workers,"
+                                    + " causing them to exit fetchLogData")
+                    .isTrue();
 
-            // Every in-flight future captured pre-close must end up cancelled or completed
-            // exceptionally (an interrupted Thread.sleep surfaces as InterruptedException).
-            for (CompletableFuture<File> f : inflight) {
+            // (3) close() must not block waiting for `release` — it should shut the executor
+            // down promptly (well under 5s on any healthy machine).
+            assertThat(closeMs).isLessThan(5_000L);
+
+            // (4) API-level state: every captured in-flight future must end up done and
+            // cancelled or completed exceptionally (an interrupted await surfaces as an
+            // InterruptedException wrapped in RemoteStorageException).
+            for (Future<File> f : inflight) {
                 assertThat(f.isDone()).isTrue();
-                assertThat(f.isCancelled() || f.isCompletedExceptionally()).isTrue();
+                boolean exceptional = false;
+                try {
+                    f.get();
+                } catch (CancellationException | ExecutionException expected) {
+                    exceptional = true;
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+                assertThat(f.isCancelled() || exceptional).isTrue();
             }
         } finally {
-            remoteLogStorage.fetchLogDataDelayMs.set(0L);
+            remoteLogStorage.fetchLogDataBarrier = null;
+            // Belt-and-braces: release any straggler worker that might still be blocked
+            // (e.g. if close() didn't fully propagate the interrupt for some reason).
+            release.countDown();
             fetcher.close();
         }
     }
