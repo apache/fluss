@@ -21,7 +21,7 @@ import org.apache.fluss.config.{Configuration => FlussConfiguration}
 import org.apache.fluss.metadata.{LogFormat, TableInfo, TablePath}
 import org.apache.fluss.predicate.{Predicate => FlussPredicate}
 import org.apache.fluss.spark.read.lake.{FlussLakeBatch, FlussLakeUtils}
-import org.apache.fluss.spark.utils.SparkPredicateConverter
+import org.apache.fluss.spark.utils.{SparkPartitionPredicate, SparkPredicateConverter}
 
 import org.apache.spark.sql.connector.expressions.filter.Predicate
 import org.apache.spark.sql.connector.read.{Scan, ScanBuilder, SupportsPushDownRequiredColumns, SupportsPushDownV2Filters}
@@ -42,10 +42,25 @@ trait FlussScanBuilder extends ScanBuilder with SupportsPushDownRequiredColumns 
   }
 }
 
-/** Predicate pushdown mixin: converts what it can, returns all predicates as residual. */
-trait FlussSupportsPushDownV2Filters extends FlussScanBuilder with SupportsPushDownV2Filters {
+/** Extracts a partition-key predicate so the scan can skip partitions that can't match. */
+trait FlussSupportsPushDownPartitionFilters
+  extends FlussScanBuilder
+  with SupportsPushDownV2Filters {
 
   def tableInfo: TableInfo
+
+  protected var partitionPredicate: Option[FlussPredicate] = None
+
+  override def pushPredicates(predicates: Array[Predicate]): Array[Predicate] = {
+    partitionPredicate = SparkPartitionPredicate.extract(tableInfo, predicates.toSeq)
+    predicates
+  }
+
+  override def pushedPredicates(): Array[Predicate] = Array.empty
+}
+
+/** Adds ARROW server-side log filtering on top of partition pushdown. */
+trait FlussSupportsPushDownV2Filters extends FlussSupportsPushDownPartitionFilters {
 
   protected var pushedPredicate: Option[FlussPredicate] = None
   protected var acceptedPredicates: Array[Predicate] = Array.empty[Predicate]
@@ -58,6 +73,7 @@ trait FlussSupportsPushDownV2Filters extends FlussScanBuilder with SupportsPushD
   }
 
   override def pushPredicates(predicates: Array[Predicate]): Array[Predicate] = {
+    super.pushPredicates(predicates)
     // Server-side batch filter only supports ARROW; other log formats reject it.
     if (tableInfo.getTableConfig.getLogFormat == LogFormat.ARROW) {
       convertAndStorePredicates(predicates)
@@ -112,6 +128,7 @@ class FlussAppendScanBuilder(
       tableInfo,
       requiredSchema,
       pushedPredicate,
+      partitionPredicate,
       acceptedPredicates.toSeq,
       options,
       flussConfig)
@@ -141,13 +158,13 @@ class FlussLakeAppendScanBuilder(
 /** Fluss Upsert Scan Builder. */
 class FlussUpsertScanBuilder(
     tablePath: TablePath,
-    tableInfo: TableInfo,
+    val tableInfo: TableInfo,
     options: CaseInsensitiveStringMap,
     flussConfig: FlussConfiguration)
-  extends FlussScanBuilder {
+  extends FlussSupportsPushDownPartitionFilters {
 
   override def build(): Scan = {
-    FlussUpsertScan(tablePath, tableInfo, requiredSchema, options, flussConfig)
+    FlussUpsertScan(tablePath, tableInfo, requiredSchema, partitionPredicate, options, flussConfig)
   }
 }
 

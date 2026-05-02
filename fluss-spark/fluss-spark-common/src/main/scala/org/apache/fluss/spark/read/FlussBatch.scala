@@ -25,6 +25,7 @@ import org.apache.fluss.client.table.scanner.log.LogScanner
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.metadata.{PartitionInfo, TableBucket, TableInfo, TablePath}
 import org.apache.fluss.predicate.Predicate
+import org.apache.fluss.spark.utils.SparkPartitionPredicate
 
 import org.apache.spark.sql.connector.read.{Batch, InputPartition, PartitionReaderFactory}
 import org.apache.spark.sql.types.StructType
@@ -78,6 +79,7 @@ class FlussAppendBatch(
     tableInfo: TableInfo,
     readSchema: StructType,
     pushedPredicate: Option[Predicate],
+    partitionPredicate: Option[Predicate],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussBatch(tablePath, tableInfo, readSchema, flussConfig) {
@@ -116,7 +118,9 @@ class FlussAppendBatch(
     }
 
     if (tableInfo.isPartitioned) {
-      partitionInfos.asScala
+      val matching =
+        SparkPartitionPredicate.filterPartitions(partitionInfos.asScala.toSeq, partitionPredicate)
+      matching
         .map {
           partitionInfo =>
             val startBucketOffsets = startOffsetsInitializer.getBucketOffsets(
@@ -172,6 +176,7 @@ class FlussUpsertBatch(
     tablePath: TablePath,
     tableInfo: TableInfo,
     readSchema: StructType,
+    partitionPredicate: Option[Predicate],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussBatch(tablePath, tableInfo, readSchema, flussConfig) {
@@ -234,7 +239,9 @@ class FlussUpsertBatch(
     }
 
     if (tableInfo.isPartitioned) {
-      partitionInfos.asScala.flatMap {
+      val matching =
+        SparkPartitionPredicate.filterPartitions(partitionInfos.asScala.toSeq, partitionPredicate)
+      matching.flatMap {
         partitionInfo =>
           val partitionName = partitionInfo.getPartitionName
           val kvSnapshots =

@@ -20,9 +20,9 @@ package org.apache.fluss.spark
 import org.apache.fluss.client.initializer.{BucketOffsetsRetrieverImpl, OffsetsInitializer}
 import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.metadata.{TableBucket, TablePath}
-import org.apache.fluss.spark.read.{FlussMetrics, FlussScan, FlussUpsertInputPartition}
+import org.apache.fluss.spark.read.{FlussMetrics, FlussScan, FlussUpsertInputPartition, FlussUpsertScan}
 
-import org.apache.spark.sql.Row
+import org.apache.spark.sql.{DataFrame, Row}
 import org.apache.spark.sql.execution.datasources.v2.{BatchScanExec, DataSourceV2ScanRelation}
 import org.assertj.core.api.Assertions.assertThat
 
@@ -375,5 +375,75 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
       val numRowsRead = batchScanExec.metrics(FlussMetrics.NUM_ROWS_READ).value
       assert(numRowsRead == 3L, s"Expected 3 rows read, got $numRowsRead")
     }
+  }
+
+  test("Spark Read: partition pushdown — equality on partition key (PK table)") {
+    withPkPartitionedTable {
+      val query =
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01' ORDER BY orderId")
+      checkAnswer(
+        query,
+        Row(600L, 21L, 601, "addr1", "2026-01-01") ::
+          Row(700L, 22L, 602, "addr2", "2026-01-01") :: Nil)
+      assert(partitionPredicate(query).isDefined)
+    }
+  }
+
+  test("Spark Read: partition pushdown — IN on partition key (PK table)") {
+    withPkPartitionedTable {
+      val query = sql(s"""
+                         |SELECT orderId, dt FROM $DEFAULT_DATABASE.t
+                         |WHERE dt IN ('2026-01-01', '2026-01-03') ORDER BY orderId""".stripMargin)
+      checkAnswer(
+        query,
+        Row(600L, "2026-01-01") ::
+          Row(700L, "2026-01-01") ::
+          Row(1000L, "2026-01-03") :: Nil)
+      assert(partitionPredicate(query).isDefined)
+    }
+  }
+
+  test("Spark Read: partition pushdown — non-matching partition prunes to empty (PK table)") {
+    withPkPartitionedTable {
+      val query = sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt = '2099-01-01'")
+      checkAnswer(query, Nil)
+      assert(partitionPredicate(query).isDefined)
+    }
+  }
+
+  test("Spark Read: partition pushdown — predicate on non-partition column not extracted") {
+    withPkPartitionedTable {
+      val query = sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE amount = 603 ORDER BY orderId")
+      checkAnswer(query, Row(800L, 23L, 603, "addr3", "2026-01-02") :: Nil)
+      // amount is not a partition key — no partition predicate extracted.
+      assert(partitionPredicate(query).isEmpty)
+    }
+  }
+
+  private def withPkPartitionedTable(body: => Unit): Unit = withTable("t") {
+    sql(s"""
+           |CREATE TABLE $DEFAULT_DATABASE.t (
+           |  orderId BIGINT, itemId BIGINT, amount INT, address STRING, dt STRING
+           |)
+           |PARTITIONED BY (dt)
+           |TBLPROPERTIES("primary.key" = "orderId,dt", "bucket.num" = 1)""".stripMargin)
+    sql(s"""
+           |INSERT INTO $DEFAULT_DATABASE.t VALUES
+           |(600L, 21L, 601, "addr1", "2026-01-01"), (700L, 22L, 602, "addr2", "2026-01-01"),
+           |(800L, 23L, 603, "addr3", "2026-01-02"), (900L, 24L, 604, "addr4", "2026-01-02"),
+           |(1000L, 25L, 605, "addr5", "2026-01-03")
+           |""".stripMargin)
+    body
+  }
+
+  private def partitionPredicate(df: DataFrame): Option[org.apache.fluss.predicate.Predicate] = {
+    // AQE hides the scan under an adaptive wrapper in executedPlan, so check optimizedPlan too.
+    val scans =
+      df.queryExecution.executedPlan.collect {
+        case b: BatchScanExec => b.scan
+      } ++ df.queryExecution.optimizedPlan.collect {
+        case DataSourceV2ScanRelation(_, scan, _, _, _) => scan
+      }
+    scans.collectFirst { case f: FlussUpsertScan => f }.flatMap(_.partitionPredicate)
   }
 }

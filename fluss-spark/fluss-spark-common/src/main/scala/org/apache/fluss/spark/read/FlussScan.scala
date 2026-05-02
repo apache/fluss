@@ -63,6 +63,7 @@ case class FlussAppendScan(
     tableInfo: TableInfo,
     requiredSchema: Option[StructType],
     pushedPredicate: Option[FlussPredicate],
+    partitionPredicate: Option[FlussPredicate],
     override val pushedSparkPredicates: Seq[Predicate],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
@@ -71,7 +72,14 @@ case class FlussAppendScan(
   override protected val scanType: String = "Append"
 
   override def toBatch: Batch = {
-    new FlussAppendBatch(tablePath, tableInfo, readSchema, pushedPredicate, options, flussConfig)
+    new FlussAppendBatch(
+      tablePath,
+      tableInfo,
+      readSchema,
+      pushedPredicate,
+      partitionPredicate,
+      options,
+      flussConfig)
   }
 
   override def toMicroBatchStream(checkpointLocation: String): MicroBatchStream = {
@@ -124,6 +132,7 @@ case class FlussUpsertScan(
     tablePath: TablePath,
     tableInfo: TableInfo,
     requiredSchema: Option[StructType],
+    partitionPredicate: Option[FlussPredicate],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussScan {
@@ -131,7 +140,7 @@ case class FlussUpsertScan(
   override protected val scanType: String = "Upsert"
 
   override def toBatch: Batch = {
-    new FlussUpsertBatch(tablePath, tableInfo, readSchema, options, flussConfig)
+    new FlussUpsertBatch(tablePath, tableInfo, readSchema, partitionPredicate, options, flussConfig)
   }
 
   override def toMicroBatchStream(checkpointLocation: String): MicroBatchStream = {

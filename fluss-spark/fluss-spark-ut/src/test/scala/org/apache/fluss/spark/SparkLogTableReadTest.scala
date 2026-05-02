@@ -448,7 +448,69 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
         sql(s"SELECT orderId, amount, dt FROM $DEFAULT_DATABASE.t WHERE amount = 603")
       checkAnswer(query, Row(800L, 603, "2026-01-02") :: Nil)
       assertPushedNames(query, Set("="))
+      // amount is not a partition key — no partition predicate extracted.
+      assert(partitionPredicate(query).isEmpty)
     }
+  }
+
+  test("Spark Read: partition pushdown — equality on partition key") {
+    withPartitionedTable {
+      val query =
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01' ORDER BY orderId")
+      checkAnswer(
+        query,
+        Row(600L, 21L, 601, "addr1", "2026-01-01") ::
+          Row(700L, 22L, 602, "addr2", "2026-01-01") :: Nil)
+      assert(partitionPredicate(query).isDefined)
+    }
+  }
+
+  test("Spark Read: partition pushdown — IN on partition key") {
+    withPartitionedTable {
+      val query = sql(s"""
+                         |SELECT orderId, dt FROM $DEFAULT_DATABASE.t
+                         |WHERE dt IN ('2026-01-01', '2026-01-03') ORDER BY orderId""".stripMargin)
+      checkAnswer(
+        query,
+        Row(600L, "2026-01-01") ::
+          Row(700L, "2026-01-01") ::
+          Row(1000L, "2026-01-03") :: Nil)
+      assert(partitionPredicate(query).isDefined)
+    }
+  }
+
+  test("Spark Read: partition pushdown — mixed partition and data column") {
+    withPartitionedTable {
+      // dt portion goes to partition pruning; amount portion is residual / data-side pushdown.
+      val query = sql(s"""
+                         |SELECT orderId FROM $DEFAULT_DATABASE.t
+                         |WHERE dt = '2026-01-02' AND amount > 603 ORDER BY orderId""".stripMargin)
+      checkAnswer(query, Row(900L) :: Nil)
+      assert(partitionPredicate(query).isDefined)
+    }
+  }
+
+  test("Spark Read: partition pushdown — non-matching partition prunes to empty") {
+    withPartitionedTable {
+      val query = sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt = '2099-01-01'")
+      checkAnswer(query, Nil)
+      assert(partitionPredicate(query).isDefined)
+    }
+  }
+
+  private def withPartitionedTable(body: => Unit): Unit = withTable("t") {
+    sql(s"""
+           |CREATE TABLE $DEFAULT_DATABASE.t (
+           |  orderId BIGINT, itemId BIGINT, amount INT, address STRING, dt STRING
+           |)
+           |PARTITIONED BY (dt)""".stripMargin)
+    sql(s"""
+           |INSERT INTO $DEFAULT_DATABASE.t VALUES
+           |(600L, 21L, 601, "addr1", "2026-01-01"), (700L, 22L, 602, "addr2", "2026-01-01"),
+           |(800L, 23L, 603, "addr3", "2026-01-02"), (900L, 24L, 604, "addr4", "2026-01-02"),
+           |(1000L, 25L, 605, "addr5", "2026-01-03")
+           |""".stripMargin)
+    body
   }
 
   private def withSampleTable(body: => Unit): Unit = withTable("t") {
@@ -469,6 +531,14 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
   }
 
   private def pushedPredicates(df: DataFrame): Array[Predicate] = {
+    flussAppendScans(df).flatMap(_.pushedSparkPredicates).toArray
+  }
+
+  private def partitionPredicate(df: DataFrame): Option[org.apache.fluss.predicate.Predicate] = {
+    flussAppendScans(df).flatMap(_.partitionPredicate).headOption
+  }
+
+  private def flussAppendScans(df: DataFrame): Seq[FlussAppendScan] = {
     // AQE hides the scan under an adaptive wrapper in executedPlan, so check optimizedPlan too.
     val scans =
       df.queryExecution.executedPlan.collect {
@@ -476,10 +546,7 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
       } ++ df.queryExecution.optimizedPlan.collect {
         case DataSourceV2ScanRelation(_, scan, _, _, _) => scan
       }
-    scans
-      .collect { case f: FlussAppendScan => f.pushedSparkPredicates }
-      .flatten
-      .toArray
+    scans.collect { case f: FlussAppendScan => f }
   }
 
   private def assertPushedNames(df: DataFrame, expected: Set[String]): Unit = {
