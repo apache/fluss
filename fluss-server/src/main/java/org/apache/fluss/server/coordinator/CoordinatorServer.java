@@ -68,6 +68,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.config.FlussConfigUtils.validateCoordinatorConfigs;
+import static org.apache.fluss.metadata.SystemTableConstants.SYSTEM_DATABASE;
 
 /**
  * Coordinator server implementation. The coordinator server is responsible to:
@@ -243,6 +244,7 @@ public class CoordinatorServer extends ServerBase {
                             new LakeTieringMetricGroup(metricRegistry, serverMetricGroup));
 
             this.metadataManager = new MetadataManager(zkClient, conf, lakeCatalogDynamicLoader);
+
             this.ioExecutor =
                     Executors.newFixedThreadPool(
                             conf.get(ConfigOptions.SERVER_IO_POOL_SIZE),
@@ -326,6 +328,7 @@ public class CoordinatorServer extends ServerBase {
                             kvSnapshotLeaseManager);
             coordinatorEventProcessor.startup();
 
+            createSystemDatabase();
             createDefaultDatabase();
         }
     }
@@ -352,6 +355,7 @@ public class CoordinatorServer extends ServerBase {
             }
 
             // Clean up leader-specific resources in reverse order of initialization
+
             try {
                 if (coordinatorEventProcessor != null) {
                     coordinatorEventProcessor.shutdown();
@@ -490,18 +494,26 @@ public class CoordinatorServer extends ServerBase {
         void run() throws Exception;
     }
 
+    private void createSystemDatabase() {
+        MetadataManager metadataManager =
+                new MetadataManager(zkClient, conf, lakeCatalogDynamicLoader);
+        if (!metadataManager.databaseExists(SYSTEM_DATABASE)) {
+            metadataManager.createDatabase(SYSTEM_DATABASE, DatabaseDescriptor.EMPTY, true);
+            LOG.info("Created system database '{}'.", SYSTEM_DATABASE);
+        }
+    }
+
     private void createDefaultDatabase() {
         MetadataManager metadataManager =
                 new MetadataManager(zkClient, conf, lakeCatalogDynamicLoader);
-        List<String> databases = metadataManager.listDatabases();
-        if (databases.isEmpty()) {
+        if (!metadataManager.databaseExists(DEFAULT_DATABASE)) {
             metadataManager.createDatabase(DEFAULT_DATABASE, DatabaseDescriptor.EMPTY, true);
-            LOG.info("Created default database '{}' because no database exists.", DEFAULT_DATABASE);
+            LOG.info("Created default database '{}'.", DEFAULT_DATABASE);
         }
         // create Kafka default database if Kafka is enabled.
         if (conf.get(ConfigOptions.KAFKA_ENABLED)) {
             String kafkaDB = conf.get(ConfigOptions.KAFKA_DATABASE);
-            if (!databases.contains(kafkaDB)) {
+            if (!metadataManager.databaseExists(kafkaDB)) {
                 metadataManager.createDatabase(kafkaDB, DatabaseDescriptor.EMPTY, true);
                 LOG.info("Created default database '{}' for Kafka protocol.", kafkaDB);
             }

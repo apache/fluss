@@ -23,6 +23,7 @@ import org.apache.fluss.client.lookup.Lookup;
 import org.apache.fluss.client.lookup.TableLookup;
 import org.apache.fluss.client.metadata.ClientSchemaGetter;
 import org.apache.fluss.client.table.scanner.Scan;
+import org.apache.fluss.client.table.scanner.SystemViewScan;
 import org.apache.fluss.client.table.scanner.TableScan;
 import org.apache.fluss.client.table.writer.Append;
 import org.apache.fluss.client.table.writer.TableAppend;
@@ -64,17 +65,22 @@ public class FlussTable implements Table {
 
     @Override
     public Scan newScan() {
+        if (tableInfo.isSystemView()) {
+            return new SystemViewScan(tableInfo, conn);
+        }
         return new TableScan(conn, tableInfo, schemaGetter);
     }
 
     @Override
     public Lookup newLookup() {
+        checkState(!tableInfo.isSystemView(), "System view %s doesn't support lookups.", tablePath);
         return new TableLookup(
                 tableInfo, schemaGetter, conn.getMetadataUpdater(), conn.getOrCreateLookupClient());
     }
 
     @Override
     public Append newAppend() {
+        checkState(!tableInfo.isSystemView(), "System view %s doesn't support writes.", tablePath);
         checkState(
                 !hasPrimaryKey,
                 "Table %s is not a Log Table and doesn't support AppendWriter.",
@@ -84,6 +90,7 @@ public class FlussTable implements Table {
 
     @Override
     public Upsert newUpsert() {
+        checkState(!tableInfo.isSystemView(), "System view %s doesn't support writes.", tablePath);
         checkState(
                 hasPrimaryKey,
                 "Table %s is not a Primary Key Table and doesn't support UpsertWriter.",

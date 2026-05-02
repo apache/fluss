@@ -91,6 +91,7 @@ import java.util.Map;
 import java.util.concurrent.ExecutionException;
 
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
+import static org.apache.fluss.metadata.SystemTableConstants.SYSTEM_DATABASE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
@@ -348,7 +349,8 @@ public class FlussAuthorizationITCase {
                 .containsExactlyInAnyOrderElementsOf(Collections.emptyList());
         assertThat(rootAdmin.listDatabases().get())
                 .containsExactlyInAnyOrderElementsOf(
-                        Lists.newArrayList("fluss", DATA1_TABLE_PATH_PK.getDatabaseName()));
+                        Lists.newArrayList(
+                                "fluss", DATA1_TABLE_PATH_PK.getDatabaseName(), SYSTEM_DATABASE));
 
         List<AclBinding> aclBindings =
                 Collections.singletonList(
@@ -361,7 +363,7 @@ public class FlussAuthorizationITCase {
                                         PermissionType.ALLOW)));
         rootAdmin.createAcls(aclBindings).all().get();
         FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
-        assertThat(guestAdmin.listDatabases().get()).isEqualTo(Collections.singletonList("fluss"));
+        assertThat(guestAdmin.listDatabases().get()).containsExactlyInAnyOrder("fluss");
 
         aclBindings =
                 Collections.singletonList(
@@ -376,7 +378,8 @@ public class FlussAuthorizationITCase {
         FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
         assertThat(guestAdmin.listDatabases().get())
                 .containsExactlyInAnyOrderElementsOf(
-                        Lists.newArrayList("fluss", DATA1_TABLE_PATH_PK.getDatabaseName()));
+                        Lists.newArrayList(
+                                "fluss", DATA1_TABLE_PATH_PK.getDatabaseName(), SYSTEM_DATABASE));
     }
 
     @Test

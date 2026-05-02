@@ -412,6 +412,10 @@ public class FlinkCatalog extends AbstractCatalog {
                     newOptions.put(key, lakePropertyEntry.getValue());
                 }
             }
+            // mark system views using tableKind from server response
+            if (tableInfo.isSystemView()) {
+                newOptions.put(FlinkConnectorOptions.SYSTEM_VIEW_OPTION_KEY, "true");
+            }
             if (CatalogBaseTable.TableKind.TABLE == catalogBaseTable.getTableKind()) {
                 CatalogTable table = ((CatalogTable) catalogBaseTable).copy(newOptions);
                 if (supportIndex()) {

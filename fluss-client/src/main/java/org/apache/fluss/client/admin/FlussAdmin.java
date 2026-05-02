@@ -41,6 +41,7 @@ import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
+import org.apache.fluss.metadata.SystemTableConstants;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -315,7 +316,10 @@ public class FlussAdmin implements Admin {
                                         // clusters do not include the remote data dir
                                         r.hasRemoteDataDir() ? r.getRemoteDataDir() : null,
                                         r.getCreatedTime(),
-                                        r.getModifiedTime()));
+                                        r.getModifiedTime(),
+                                        r.hasTableKind()
+                                                ? r.getTableKind()
+                                                : SystemTableConstants.TABLE_KIND_TABLE));
     }
 
     @Override

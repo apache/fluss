@@ -110,6 +110,8 @@ import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
+import org.apache.fluss.rpc.messages.ScanSystemViewRequest;
+import org.apache.fluss.rpc.messages.ScanSystemViewResponse;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
@@ -458,6 +460,11 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     public CompletableFuture<DescribeClusterConfigsResponse> describeClusterConfigs(
             DescribeClusterConfigsRequest request) {
         throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<ScanSystemViewResponse> scanSystemView(ScanSystemViewRequest request) {
+        return null;
     }
 
     @Override

@@ -86,6 +86,16 @@ public class TablePath implements Serializable {
     }
 
     /**
+     * Returns {@code true} if this table path belongs to the system database.
+     *
+     * <p>System paths use the reserved {@code sys} database and are managed internally by Fluss.
+     * They bypass the normal name validation that rejects the {@code __} prefix.
+     */
+    public boolean isSystemTablePath() {
+        return SystemTableConstants.isSystemTablePath(this);
+    }
+
+    /**
      * Validate the table path. A table path is valid if both the database and table names are
      * valid.
      *

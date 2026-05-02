@@ -21,9 +21,10 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.registry.NOPMetricRegistry;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.metadata.ServerInfo;
-import org.apache.fluss.server.metrics.group.TestingMetricGroups;
+import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.zk.ZkEpoch;
 
 import org.junit.jupiter.api.Test;
@@ -52,6 +53,10 @@ class CoordinatorEventManagerTest {
      */
     @Test
     void testMetricsUpdatedImmediatelyOnStartup() {
+        // Create a local metric group to avoid shared static state issues
+        CoordinatorMetricGroup metricGroup =
+                new CoordinatorMetricGroup(NOPMetricRegistry.INSTANCE, "cluster1", "host", "0");
+
         CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
         context.addLiveCoordinator("coordinator-0");
         context.addLiveTabletServer(
@@ -76,8 +81,7 @@ class CoordinatorEventManagerTest {
                     }
                 };
 
-        CoordinatorEventManager manager =
-                new CoordinatorEventManager(testProcessor, TestingMetricGroups.COORDINATOR_METRICS);
+        CoordinatorEventManager manager = new CoordinatorEventManager(testProcessor, metricGroup);
         manager.start();
 
         try {
@@ -88,14 +92,11 @@ class CoordinatorEventManagerTest {
                     () -> assertThat(metricsUpdateCount.get()).isGreaterThan(0));
 
             Gauge activeTabletServerCount =
-                    (Gauge)
-                            TestingMetricGroups.COORDINATOR_METRICS
-                                    .getMetrics()
-                                    .get(MetricNames.ACTIVE_TABLET_SERVER_COUNT);
+                    (Gauge) metricGroup.getMetrics().get(MetricNames.ACTIVE_TABLET_SERVER_COUNT);
             assertThat(activeTabletServerCount.getValue()).isEqualTo(2);
         } finally {
             manager.close();
-            TestingMetricGroups.COORDINATOR_METRICS.close();
+            metricGroup.close();
         }
     }
 

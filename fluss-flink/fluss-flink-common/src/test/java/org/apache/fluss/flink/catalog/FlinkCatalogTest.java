@@ -84,6 +84,7 @@ import static org.apache.fluss.flink.utils.CatalogTableTestUtils.addOptions;
 import static org.apache.fluss.flink.utils.CatalogTableTestUtils.checkEqualsIgnoreSchema;
 import static org.apache.fluss.flink.utils.CatalogTableTestUtils.checkEqualsRespectSchema;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
+import static org.apache.fluss.metadata.SystemTableConstants.SYSTEM_DATABASE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -611,7 +612,8 @@ class FlinkCatalogTest {
         CatalogTable expectedTable = addOptions(table, addedOptions);
         checkEqualsRespectSchema((CatalogTable) tableCreated, expectedTable);
         assertThat(catalog.listTables("db1")).isEqualTo(Collections.singletonList("t1"));
-        assertThat(catalog.listDatabases()).isEqualTo(Arrays.asList("db1", "db2", DEFAULT_DB));
+        assertThat(catalog.listDatabases())
+                .containsExactlyInAnyOrder("db1", "db2", DEFAULT_DB, SYSTEM_DATABASE);
         // test drop db1;
         // should throw exception since db1 is not empty and we set cascade = false
         assertThatThrownBy(() -> catalog.dropDatabase("db1", false, false))
@@ -627,10 +629,11 @@ class FlinkCatalogTest {
         // should be ok since we set ignoreIfNotExists = true
         catalog.dropDatabase("db1", true, true);
         // test list db
-        assertThat(catalog.listDatabases()).isEqualTo(Arrays.asList("db2", DEFAULT_DB));
+        assertThat(catalog.listDatabases())
+                .containsExactlyInAnyOrder("db2", DEFAULT_DB, SYSTEM_DATABASE);
         catalog.dropDatabase("db2", false, true);
         // should be empty
-        assertThat(catalog.listDatabases()).isEqualTo(Collections.singletonList(DEFAULT_DB));
+        assertThat(catalog.listDatabases()).containsExactlyInAnyOrder(DEFAULT_DB, SYSTEM_DATABASE);
         // should throw exception since the db is not exist and we set ignoreIfNotExists = false
         assertThatThrownBy(() -> catalog.listTables("unknown"))
                 .isInstanceOf(DatabaseNotExistException.class)

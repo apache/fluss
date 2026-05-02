@@ -229,6 +229,13 @@ public class FlinkConnectorOptions {
                     BOOTSTRAP_SERVERS.key());
 
     // -------------------------------------------------------------------------------------------
+    // Only used internally to identify system views
+    // -------------------------------------------------------------------------------------------
+
+    /** Internal option key to mark a table as a system view. */
+    public static final String SYSTEM_VIEW_OPTION_KEY = "fluss.system-view";
+
+    // -------------------------------------------------------------------------------------------
     // Only used internally to support materialized table
     // -------------------------------------------------------------------------------------------
 
