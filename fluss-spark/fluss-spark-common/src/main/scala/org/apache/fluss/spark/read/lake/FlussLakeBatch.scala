@@ -19,12 +19,17 @@ package org.apache.fluss.spark.read.lake
 
 import org.apache.fluss.client.initializer.{BucketOffsetsRetrieverImpl, OffsetsInitializer}
 import org.apache.fluss.config.Configuration
+import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
 import org.apache.fluss.metadata.{TableInfo, TablePath}
+import org.apache.fluss.predicate.{Predicate => FlussPredicate}
 import org.apache.fluss.spark.read._
 
 import org.apache.spark.sql.connector.read.InputPartition
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
+import org.slf4j.LoggerFactory
+
+import java.util.Collections
 
 import scala.collection.JavaConverters._
 
@@ -60,5 +65,19 @@ abstract class FlussLakeBatch(
       .asScala
       .map(e => (e._1.intValue(), Long2long(e._2)))
       .toMap
+  }
+}
+
+object FlussLakeBatch {
+
+  private val LOG = LoggerFactory.getLogger(classOf[FlussLakeBatch])
+
+  def applyLakeFilters(lakeSource: LakeSource[LakeSplit], predicate: FlussPredicate): Unit = {
+    val result = lakeSource.withFilters(Collections.singletonList(predicate))
+    if (LOG.isDebugEnabled) {
+      val accepted = result.acceptedPredicates().size()
+      val remaining = result.remainingPredicates().size()
+      LOG.debug(s"Lake source accepted $accepted of ${accepted + remaining} pushed predicates")
+    }
   }
 }

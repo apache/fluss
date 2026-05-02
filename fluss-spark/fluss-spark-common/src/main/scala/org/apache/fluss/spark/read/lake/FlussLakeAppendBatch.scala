@@ -22,7 +22,8 @@ import org.apache.fluss.client.table.scanner.log.LogScanner
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException
 import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
-import org.apache.fluss.metadata.{ResolvedPartitionSpec, TableBucket, TableInfo, TablePath}
+import org.apache.fluss.metadata.{LogFormat, ResolvedPartitionSpec, TableBucket, TableInfo, TablePath}
+import org.apache.fluss.predicate.{Predicate => FlussPredicate}
 import org.apache.fluss.spark.read._
 import org.apache.fluss.utils.ExceptionUtils
 
@@ -38,6 +39,7 @@ class FlussLakeAppendBatch(
     tablePath: TablePath,
     tableInfo: TableInfo,
     readSchema: StructType,
+    pushedPredicate: Option[FlussPredicate],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussLakeBatch(tablePath, tableInfo, readSchema, options, flussConfig) {
@@ -45,14 +47,25 @@ class FlussLakeAppendBatch(
   // Required by FlussLakeBatch but unused — lake snapshot determines start offsets.
   override val startOffsetsInitializer: OffsetsInitializer = OffsetsInitializer.earliest()
 
+  // Server-side log filter requires ARROW format.
+  private val logTailPredicate: Option[FlussPredicate] =
+    if (tableInfo.getTableConfig.getLogFormat == LogFormat.ARROW) pushedPredicate else None
+
   override def createReaderFactory(): PartitionReaderFactory = {
     if (isFallback) {
-      new FlussAppendPartitionReaderFactory(tablePath, projection, None, options, flussConfig)
+      new FlussAppendPartitionReaderFactory(
+        tablePath,
+        projection,
+        logTailPredicate,
+        options,
+        flussConfig)
     } else {
       new FlussLakePartitionReaderFactory(
         tableInfo.getProperties.toMap,
         tablePath,
         projection,
+        pushedPredicate,
+        logTailPredicate,
         flussConfig)
     }
   }
@@ -75,6 +88,7 @@ class FlussLakeAppendBatch(
 
     val lakeSource = FlussLakeUtils.createLakeSource(tableInfo.getProperties.toMap, tablePath)
     lakeSource.withProject(FlussLakeUtils.lakeProjection(projection))
+    pushedPredicate.foreach(FlussLakeBatch.applyLakeFilters(lakeSource, _))
 
     val lakeSplits = lakeSource
       .createPlanner(new LakeSource.PlannerContext {

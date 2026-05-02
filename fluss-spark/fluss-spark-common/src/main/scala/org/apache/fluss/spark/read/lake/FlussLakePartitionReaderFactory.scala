@@ -20,6 +20,7 @@ package org.apache.fluss.spark.read.lake
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
 import org.apache.fluss.metadata.TablePath
+import org.apache.fluss.predicate.{Predicate => FlussPredicate}
 import org.apache.fluss.spark.read.{FlussAppendInputPartition, FlussAppendPartitionReader}
 
 import org.apache.spark.sql.catalyst.InternalRow
@@ -32,12 +33,15 @@ class FlussLakePartitionReaderFactory(
     tableProperties: util.Map[String, String],
     tablePath: TablePath,
     projection: Array[Int],
+    flussPredicate: Option[FlussPredicate],
+    logTailPredicate: Option[FlussPredicate],
     flussConfig: Configuration)
   extends PartitionReaderFactory {
 
   @transient private lazy val lakeSource: LakeSource[LakeSplit] = {
     val source = FlussLakeUtils.createLakeSource(tableProperties, tablePath)
     source.withProject(FlussLakeUtils.lakeProjection(projection))
+    flussPredicate.foreach(FlussLakeBatch.applyLakeFilters(source, _))
     source
   }
 
@@ -51,7 +55,12 @@ class FlussLakePartitionReaderFactory(
           projection,
           flussConfig)
       case logSplit: FlussAppendInputPartition =>
-        new FlussAppendPartitionReader(tablePath, projection, None, logSplit, flussConfig)
+        new FlussAppendPartitionReader(
+          tablePath,
+          projection,
+          logTailPredicate,
+          logSplit,
+          flussConfig)
       case mixedSplit: FlussLakeUpsertInputPartition =>
         new FlussLakeUpsertPartitionReader(
           tablePath,

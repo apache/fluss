@@ -328,6 +328,56 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
     }
   }
 
+  test("Spark Lake Read: pk filter pushdown — lake-only on non-pk column") {
+    withTable("t_pd_pk_lake") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_pd_pk_lake (id INT, name STRING, score INT)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${PRIMARY_KEY.key()}' = 'id',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_pd_pk_lake VALUES
+             |(1, 'alice', 90), (2, 'bob', 85), (3, 'charlie', 95), (4, 'dave', 70)
+             |""".stripMargin)
+      tierToLake("t_pd_pk_lake")
+
+      val query =
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.t_pd_pk_lake WHERE score >= 90 ORDER BY id")
+      checkAnswer(query, Row(1, "alice", 90) :: Row(3, "charlie", 95) :: Nil)
+      assertPushedNames(query, Set(">="))
+    }
+  }
+
+  test("Spark Lake Read: pk filter pushdown — union (lake + kv tail)") {
+    withTable("t_pd_pk_union") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_pd_pk_union (id INT, name STRING, score INT)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${PRIMARY_KEY.key()}' = 'id',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_pd_pk_union VALUES
+             |(1, 'alice', 90), (2, 'bob', 85), (3, 'charlie', 95)
+             |""".stripMargin)
+      tierToLake("t_pd_pk_union")
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_pd_pk_union VALUES
+             |(4, 'dave', 88), (5, 'eve', 92)
+             |""".stripMargin)
+
+      val query =
+        sql(s"SELECT id, score FROM $DEFAULT_DATABASE.t_pd_pk_union WHERE score >= 90 ORDER BY id")
+      checkAnswer(query, Row(1, 90) :: Row(3, 95) :: Row(5, 92) :: Nil)
+      assertPushedNames(query, Set(">="))
+    }
+  }
+
   test("Spark Lake Read: primary key table projection with type-dependent columns") {
     withTable("t") {
       val tablePath = createTablePath("t")
@@ -381,6 +431,7 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
       )
     }
   }
+
 }
 
 class SparkLakePaimonPrimaryKeyTableReadTest extends SparkLakePrimaryKeyTableReadTestBase {

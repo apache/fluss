@@ -23,6 +23,7 @@ import org.apache.fluss.config.Configuration
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException
 import org.apache.fluss.lake.source.LakeSplit
 import org.apache.fluss.metadata.{ResolvedPartitionSpec, TableBucket, TableInfo, TablePath}
+import org.apache.fluss.predicate.{Predicate => FlussPredicate}
 import org.apache.fluss.spark.read._
 import org.apache.fluss.utils.ExceptionUtils
 
@@ -41,6 +42,7 @@ class FlussLakeUpsertBatch(
     tablePath: TablePath,
     tableInfo: TableInfo,
     readSchema: StructType,
+    pushedPredicate: Option[FlussPredicate],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussLakeBatch(tablePath, tableInfo, readSchema, options, flussConfig) {
@@ -57,10 +59,13 @@ class FlussLakeUpsertBatch(
     if (isFallback) {
       new FlussUpsertPartitionReaderFactory(tablePath, projection, options, flussConfig)
     } else {
+      // PK kv-tail reader does not consume server-side log filters.
       new FlussLakePartitionReaderFactory(
         tableInfo.getProperties.toMap,
         tablePath,
         projection,
+        pushedPredicate,
+        None,
         flussConfig)
     }
   }
@@ -83,6 +88,7 @@ class FlussLakeUpsertBatch(
 
     val lakeSource = FlussLakeUtils.createLakeSource(tableInfo.getProperties.toMap, tablePath)
     lakeSource.withProject(FlussLakeUtils.lakeProjection(projection))
+    pushedPredicate.foreach(FlussLakeBatch.applyLakeFilters(lakeSource, _))
 
     val lakeSplits = lakeSource
       .createPlanner(() => lakeSnapshot.getSnapshotId)

@@ -398,6 +398,132 @@ abstract class SparkLakeLogTableReadTest extends SparkLakeTableReadTestBase {
     }
   }
 
+  test("Spark Lake Read: filter pushdown — lake-only (all data in lake)") {
+    withTable("t_pd_lake") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_pd_lake (id INT, amount INT, name STRING)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_pd_lake VALUES
+             |(1, 100, 'alpha'), (2, 200, 'beta'), (3, 300, 'gamma')
+             |""".stripMargin)
+      tierToLake("t_pd_lake")
+
+      val query =
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.t_pd_lake WHERE amount > 150 ORDER BY id")
+      checkAnswer(query, Row(2, 200, "beta") :: Row(3, 300, "gamma") :: Nil)
+      assertPushedNames(query, Set(">"))
+    }
+  }
+
+  test("Spark Lake Read: filter pushdown — union (lake + log tail)") {
+    withTable("t_pd_union") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_pd_union (id INT, amount INT, name STRING)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_pd_union VALUES
+             |(1, 100, 'alpha'), (2, 200, 'beta'), (3, 300, 'gamma')
+             |""".stripMargin)
+      tierToLake("t_pd_union")
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_pd_union VALUES
+             |(4, 400, 'delta'), (5, 500, 'epsilon')
+             |""".stripMargin)
+
+      val query =
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.t_pd_union WHERE amount >= 200 ORDER BY id")
+      checkAnswer(
+        query,
+        Row(2, 200, "beta") ::
+          Row(3, 300, "gamma") ::
+          Row(4, 400, "delta") ::
+          Row(5, 500, "epsilon") :: Nil
+      )
+      assertPushedNames(query, Set(">="))
+    }
+  }
+
+  test("Spark Lake Read: filter pushdown — fallback (no lake snapshot)") {
+    withTable("t_pd_fallback") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_pd_fallback (id INT, amount INT, name STRING)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_pd_fallback VALUES
+             |(1, 100, 'alpha'), (2, 200, 'beta'), (3, 300, 'gamma')
+             |""".stripMargin)
+
+      val query =
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.t_pd_fallback WHERE amount = 200")
+      checkAnswer(query, Row(2, 200, "beta") :: Nil)
+      assertPushedNames(query, Set("="))
+    }
+  }
+
+  test("Spark Lake Read: filter pushdown — partitioned lake table") {
+    withTable("t_pd_partitioned") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_pd_partitioned
+             |  (id INT, amount INT, name STRING, dt STRING)
+             | PARTITIONED BY (dt)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_pd_partitioned VALUES
+             |(1, 100, 'alpha', '2026-01-01'),
+             |(2, 200, 'beta', '2026-01-01'),
+             |(3, 300, 'gamma', '2026-01-02')
+             |""".stripMargin)
+      tierToLake("t_pd_partitioned")
+
+      val query = sql(s"""
+                         |SELECT id, amount, dt FROM $DEFAULT_DATABASE.t_pd_partitioned
+                         |WHERE amount >= 200 ORDER BY id""".stripMargin)
+      checkAnswer(query, Row(2, 200, "2026-01-01") :: Row(3, 300, "2026-01-02") :: Nil)
+      assertPushedNames(query, Set(">="))
+    }
+  }
+
+  test("Spark Lake Read: filter pushdown — non-pushable predicate falls back to Spark") {
+    withTable("t_pd_nonpushable") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_pd_nonpushable (id INT, amount INT, name STRING)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_pd_nonpushable VALUES
+             |(1, 100, 'alpha'), (2, 200, 'beta'), (3, 300, 'gamma'), (4, 400, 'delta')
+             |""".stripMargin)
+      tierToLake("t_pd_nonpushable")
+
+      val query =
+        sql(s"SELECT id FROM $DEFAULT_DATABASE.t_pd_nonpushable WHERE amount % 200 = 0 ORDER BY id")
+      checkAnswer(query, Row(2) :: Row(4) :: Nil)
+      // The modulo expression is not convertible; nothing should be pushed.
+      val pushed = pushedPredicates(query).map(_.name())
+      assert(pushed.forall(_ != "%"))
+    }
+  }
+
   test("Spark Lake Read: non-FULL startup mode skips lake path") {
     withTable("t_earliest") {
       sql(s"""
@@ -427,6 +553,7 @@ abstract class SparkLakeLogTableReadTest extends SparkLakeTableReadTestBase {
       }
     }
   }
+
 }
 
 class SparkLakePaimonLogTableReadTest extends SparkLakeLogTableReadTest {
