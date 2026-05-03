@@ -23,6 +23,7 @@ import org.apache.fluss.metrics.Metric;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.reporter.ScheduledMetricReporter;
 import org.apache.fluss.utils.MapUtils;
+import org.apache.fluss.utils.StringUtils;
 
 import com.influxdb.v3.client.InfluxDBClient;
 import com.influxdb.v3.client.Point;
@@ -32,10 +33,12 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.AbstractMap;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /** {@link ScheduledMetricReporter} that exports {@link Metric Metrics} via InfluxDB. */
 public class InfluxdbReporter implements ScheduledMetricReporter {
@@ -44,22 +47,24 @@ public class InfluxdbReporter implements ScheduledMetricReporter {
 
     private static final char SCOPE_SEPARATOR = '_';
     private static final String SCOPE_PREFIX = "fluss" + SCOPE_SEPARATOR;
+    private static final Pattern INVALID_CHAR_PATTERN = Pattern.compile("[^a-zA-Z0-9_:]");
 
-    private final Map<Metric, String> metricNames;
-    private final Map<Metric, List<Map.Entry<String, String>>> metricTags;
+    final Map<Metric, String> metricNames;
+    final Map<Metric, List<Map.Entry<String, String>>> metricTags;
     private final InfluxDBClient client;
     private final Duration pushInterval;
     private final InfluxdbPointProducer pointProducer;
 
     public InfluxdbReporter(
             String hostUrl, String org, String bucket, String token, Duration pushInterval) {
-        ClientConfig clientConfig =
-                new ClientConfig.Builder()
-                        .host(hostUrl)
-                        .token(token.toCharArray())
-                        .organization(org)
-                        .database(bucket)
-                        .build();
+        ClientConfig.Builder clientConfigBuilder =
+                new ClientConfig.Builder().host(hostUrl).token(token.toCharArray());
+
+        if (!StringUtils.isNullOrWhitespaceOnly(org)) {
+            clientConfigBuilder.organization(org);
+        }
+
+        ClientConfig clientConfig = clientConfigBuilder.database(bucket).build();
 
         this.client = InfluxDBClient.getInstance(clientConfig);
         this.pushInterval = pushInterval;
@@ -94,7 +99,8 @@ public class InfluxdbReporter implements ScheduledMetricReporter {
         for (Map.Entry<Metric, String> entry : metricNames.entrySet()) {
             Metric metric = entry.getKey();
             String metricName = entry.getValue();
-            List<Map.Entry<String, String>> tags = metricTags.get(metric);
+            List<Map.Entry<String, String>> tags =
+                    metricTags.getOrDefault(metric, Collections.emptyList());
 
             try {
                 Point point = pointProducer.createPoint(metric, metricName, tags, now);
@@ -104,7 +110,13 @@ public class InfluxdbReporter implements ScheduledMetricReporter {
             }
         }
 
-        client.writePoints(points);
+        if (!points.isEmpty()) {
+            try {
+                client.writePoints(points);
+            } catch (Exception e) {
+                LOG.warn("Failed to write points to InfluxDB", e);
+            }
+        }
     }
 
     @Override
@@ -138,13 +150,13 @@ public class InfluxdbReporter implements ScheduledMetricReporter {
         List<Map.Entry<String, String>> tags = new ArrayList<>();
         for (Map.Entry<String, String> entry : group.getAllVariables().entrySet()) {
             tags.add(
-                    new HashMap.SimpleEntry<>(
+                    new AbstractMap.SimpleEntry<>(
                             filterCharacters(entry.getKey()), filterCharacters(entry.getValue())));
         }
         return tags;
     }
 
     private String filterCharacters(String input) {
-        return input.replaceAll("[^a-zA-Z0-9_:]", String.valueOf(SCOPE_SEPARATOR));
+        return INVALID_CHAR_PATTERN.matcher(input).replaceAll(String.valueOf(SCOPE_SEPARATOR));
     }
 }

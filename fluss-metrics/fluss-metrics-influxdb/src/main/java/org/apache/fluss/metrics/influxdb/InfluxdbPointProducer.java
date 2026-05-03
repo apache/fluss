@@ -44,8 +44,10 @@ public class InfluxdbPointProducer {
             Metric metric, String metricName, List<Map.Entry<String, String>> tags, Instant time) {
         Point point = Point.measurement(metricName).setTimestamp(time);
 
-        for (Map.Entry<String, String> tag : tags) {
-            point.setTag(tag.getKey(), tag.getValue());
+        if (tags != null) {
+            for (Map.Entry<String, String> tag : tags) {
+                point.setTag(tag.getKey(), tag.getValue());
+            }
         }
 
         if (metric instanceof Counter) {
@@ -75,9 +77,9 @@ public class InfluxdbPointProducer {
         Object value = gauge.getValue();
 
         if (value instanceof Number) {
-            return point.setField("value", ((Number) value));
+            return point.setField("value", (Number) value);
         } else if (value instanceof Boolean) {
-            return point.setField("value", ((boolean) value));
+            return point.setField("value", ((Boolean) value).booleanValue());
         } else {
             return point.setField("value", String.valueOf(value));
         }

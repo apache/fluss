@@ -30,6 +30,7 @@ import static org.apache.fluss.config.ConfigOptions.METRICS_REPORTER_INFLUXDB_HO
 import static org.apache.fluss.config.ConfigOptions.METRICS_REPORTER_INFLUXDB_ORG;
 import static org.apache.fluss.config.ConfigOptions.METRICS_REPORTER_INFLUXDB_PUSH_INTERVAL;
 import static org.apache.fluss.config.ConfigOptions.METRICS_REPORTER_INFLUXDB_TOKEN;
+import static org.apache.fluss.config.ConfigOptions.METRICS_REPORTER_INFLUXDB_VERSION;
 
 /** {@link MetricReporterPlugin} for {@link InfluxdbReporter}. */
 public class InfluxdbReporterPlugin implements MetricReporterPlugin {
@@ -38,6 +39,7 @@ public class InfluxdbReporterPlugin implements MetricReporterPlugin {
 
     @Override
     public MetricReporter createMetricReporter(Configuration configuration) {
+        String version = configuration.getString(METRICS_REPORTER_INFLUXDB_VERSION);
         String hostUrl = configuration.getString(METRICS_REPORTER_INFLUXDB_HOST_URL);
         String org = configuration.getString(METRICS_REPORTER_INFLUXDB_ORG);
         String bucket = configuration.getString(METRICS_REPORTER_INFLUXDB_BUCKET);
@@ -50,11 +52,11 @@ public class InfluxdbReporterPlugin implements MetricReporterPlugin {
                             + METRICS_REPORTER_INFLUXDB_HOST_URL.key()
                             + "'");
         }
-        if (StringUtils.isNullOrWhitespaceOnly(org)) {
+        if ("v2".equalsIgnoreCase(version) && StringUtils.isNullOrWhitespaceOnly(org)) {
             throw new IllegalArgumentException(
                     "InfluxDB organization must be configured via '"
                             + METRICS_REPORTER_INFLUXDB_ORG.key()
-                            + "'");
+                            + "' when using InfluxDB v2");
         }
         if (StringUtils.isNullOrWhitespaceOnly(bucket)) {
             throw new IllegalArgumentException(

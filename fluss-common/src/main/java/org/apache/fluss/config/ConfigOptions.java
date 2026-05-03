@@ -1993,6 +1993,14 @@ public class ConfigOptions {
     // ------------------------------------------------------------------------
     //  ConfigOptions for influxdb reporter
     // ------------------------------------------------------------------------
+    public static final ConfigOption<String> METRICS_REPORTER_INFLUXDB_VERSION =
+            key("metrics.reporter.influxdb.version")
+                    .stringType()
+                    .defaultValue("v3")
+                    .withDescription(
+                            "The InfluxDB version to connect to. Supported values are 'v2' and 'v3'. "
+                                    + "For InfluxDB v2, the 'org' configuration is required; for InfluxDB v3, it is not needed.");
+
     public static final ConfigOption<String> METRICS_REPORTER_INFLUXDB_HOST_URL =
             key("metrics.reporter.influxdb.host-url")
                     .stringType()
@@ -2011,7 +2019,8 @@ public class ConfigOptions {
             key("metrics.reporter.influxdb.org")
                     .stringType()
                     .noDefaultValue()
-                    .withDescription("The InfluxDB organization name.");
+                    .withDescription(
+                            "The InfluxDB organization name. Required for InfluxDB v2, not needed for InfluxDB v3.");
 
     public static final ConfigOption<String> METRICS_REPORTER_INFLUXDB_TOKEN =
             key("metrics.reporter.influxdb.token")

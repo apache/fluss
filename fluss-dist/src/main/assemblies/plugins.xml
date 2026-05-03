@@ -80,6 +80,13 @@
             <fileMode>0644</fileMode>
         </file>
 
+        <file>
+            <source>../fluss-metrics/fluss-metrics-influxdb/target/fluss-metrics-influxdb-${project.version}.jar</source>
+            <outputDirectory>plugins/influxdb/</outputDirectory>
+            <destName>fluss-metrics-influxdb-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+
         <!-- lake formats -->
         <file>
             <source>../fluss-lake/fluss-lake-paimon/target/fluss-lake-paimon-${project.version}.jar</source>

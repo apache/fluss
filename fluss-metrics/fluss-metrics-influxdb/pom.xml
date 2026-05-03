@@ -45,7 +45,6 @@
             <groupId>com.influxdb</groupId>
             <artifactId>influxdb3-java</artifactId>
             <version>${influxdb3.version}</version>
-            <scope>provided</scope>
         </dependency>
 
         <!-- test dependencies -->
@@ -53,12 +52,20 @@
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-test-utils</artifactId>
         </dependency>
+
         <dependency>
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-common</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
             <type>test-jar</type>
+        </dependency>
+
+        <dependency>
+            <groupId>com.github.tomakehurst</groupId>
+            <artifactId>wiremock-jre8</artifactId>
+            <version>2.32.0</version>
+            <scope>test</scope>
         </dependency>
     </dependencies>
 
@@ -73,6 +80,74 @@
                     <!-- compilation of test sources -->
                     <skip>${skip.on.java8}</skip>
                 </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>shade-fluss</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <artifactSet>
+                                <includes>
+                                    <include>com.influxdb:*</include>
+                                    <include>org.apache.arrow:*</include>
+                                    <include>io.grpc:*</include>
+                                    <include>io.netty:*</include>
+                                    <include>com.google.protobuf:*</include>
+                                    <include>com.google.guava:*</include>
+                                    <include>com.fasterxml.jackson.core:*</include>
+                                    <include>com.google.flatbuffers:*</include>
+                                    <include>io.perfmark:*</include>
+                                    <include>com.google.code.findbugs:*</include>
+                                    <include>org.codehaus.mojo:*</include>
+                                </includes>
+                            </artifactSet>
+                            <relocations>
+                                <relocation>
+                                    <pattern>com.influxdb</pattern>
+                                    <shadedPattern>org.apache.fluss.metrics.influxdb.shaded.com.influxdb</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.apache.arrow</pattern>
+                                    <shadedPattern>org.apache.fluss.metrics.influxdb.shaded.org.apache.arrow</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>io.grpc</pattern>
+                                    <shadedPattern>org.apache.fluss.metrics.influxdb.shaded.io.grpc</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>io.netty</pattern>
+                                    <shadedPattern>org.apache.fluss.metrics.influxdb.shaded.io.netty</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.google.protobuf</pattern>
+                                    <shadedPattern>org.apache.fluss.metrics.influxdb.shaded.com.google.protobuf</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.google.common</pattern>
+                                    <shadedPattern>org.apache.fluss.metrics.influxdb.shaded.com.google.common</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.fasterxml.jackson</pattern>
+                                    <shadedPattern>org.apache.fluss.metrics.influxdb.shaded.com.fasterxml.jackson</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>com.google.flatbuffers</pattern>
+                                    <shadedPattern>org.apache.fluss.metrics.influxdb.shaded.com.google.flatbuffers</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.codehaus.mojo.annotations</pattern>
+                                    <shadedPattern>org.apache.fluss.metrics.influxdb.shaded.org.codehaus.mojo.annotations</shadedPattern>
+                                </relocation>
+                            </relocations>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>
