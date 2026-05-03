@@ -20,6 +20,7 @@ package org.apache.fluss.server;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.cluster.ConfigEntry;
+import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.KvSnapshotNotExistException;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
@@ -34,6 +35,7 @@ import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.SchemaInfo;
+import org.apache.fluss.metadata.SystemTableConstants;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -71,6 +73,8 @@ import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbApiVersion;
 import org.apache.fluss.rpc.messages.PbTablePath;
+import org.apache.fluss.rpc.messages.ScanSystemViewRequest;
+import org.apache.fluss.rpc.messages.ScanSystemViewResponse;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.netty.server.Session;
@@ -83,6 +87,9 @@ import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.coordinator.CoordinatorService;
 import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.coordinator.system.SystemTableResolver;
+import org.apache.fluss.server.coordinator.system.SystemViewDefinition;
+import org.apache.fluss.server.coordinator.system.TabletServersViewProvider;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.metadata.MetadataProvider;
 import org.apache.fluss.server.metadata.PartitionMetadata;
@@ -94,6 +101,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -111,6 +119,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.metadata.SystemTableConstants.TABLE_KIND_SYSTEM_VIEW;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclFilter;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toResolvedPartitionSpec;
 import static org.apache.fluss.security.acl.Resource.TABLE_SPLITTER;
@@ -143,6 +152,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     protected final @Nullable Authorizer authorizer;
     protected final DynamicConfigManager dynamicConfigManager;
 
+    protected final SystemTableResolver systemTableResolver;
+
     private long tokenLastUpdateTimeMs = 0;
     private ObtainedSecurityToken securityToken = null;
 
@@ -164,7 +175,35 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         this.authorizer = authorizer;
         this.dynamicConfigManager = dynamicConfigManager;
         this.ioExecutor = ioExecutor;
+        this.systemTableResolver = createSystemTableResolver();
     }
+
+    /** Returns the system table resolver initialized for this server. */
+    public SystemTableResolver getSystemTableResolver() {
+        return systemTableResolver;
+    }
+
+    /**
+     * Creates and initializes the {@link SystemTableResolver} for this server.
+     *
+     * <p>The base implementation registers common system views (e.g., {@code tablet_servers}) that
+     * are shared across all server types, then delegates to {@link
+     * #registerServerSpecificSystemViews(SystemTableResolver)} for server-specific registration.
+     */
+    private SystemTableResolver createSystemTableResolver() {
+        SystemTableResolver resolver = new SystemTableResolver();
+        // Register common system view providers for all server types.
+        // it is registered as a full provider (definition + data serving).
+        resolver.registerViewProvider(new TabletServersViewProvider(zkClient));
+        registerServerSpecificSystemViews(resolver);
+        return resolver;
+    }
+
+    /**
+     * Override by subclasses (TabletService or CoordinatorService) to register server-specific
+     * system views.
+     */
+    protected void registerServerSpecificSystemViews(SystemTableResolver resolver) {}
 
     @Override
     public ServerType providerType() {
@@ -205,7 +244,12 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     @Override
     public CompletableFuture<ListDatabasesResponse> listDatabases(ListDatabasesRequest request) {
         ListDatabasesResponse response = new ListDatabasesResponse();
-        Collection<String> databaseNames = metadataManager.listDatabases();
+        Collection<String> databaseNames = new ArrayList<>(metadataManager.listDatabases());
+
+        // Ensure the system database is always listed
+        if (!databaseNames.contains(SystemTableConstants.SYSTEM_DATABASE)) {
+            databaseNames.add(SystemTableConstants.SYSTEM_DATABASE);
+        }
 
         if (authorizer != null) {
             Collection<Resource> authorizedDatabase =
@@ -247,7 +291,11 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     public CompletableFuture<DatabaseExistsResponse> databaseExists(DatabaseExistsRequest request) {
         // By design: database exists not need to check database authorization.
         DatabaseExistsResponse response = new DatabaseExistsResponse();
-        boolean exists = metadataManager.databaseExists(request.getDatabaseName());
+        String databaseName = request.getDatabaseName();
+        // The system database always exists when system views are registered
+        boolean exists =
+                metadataManager.databaseExists(databaseName)
+                        || SystemTableConstants.isSystemDatabase(databaseName);
         response.setExists(exists);
         return CompletableFuture.completedFuture(response);
     }
@@ -255,7 +303,34 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     @Override
     public CompletableFuture<ListTablesResponse> listTables(ListTablesRequest request) {
         ListTablesResponse response = new ListTablesResponse();
-        List<String> tableNames = metadataManager.listTables(request.getDatabaseName());
+        String databaseName = request.getDatabaseName();
+        boolean isSystemDb = SystemTableConstants.isSystemDatabase(databaseName);
+
+        // For the system database, the ZK database may not exist.
+        // We still need to list system views even if the ZK database is absent.
+        List<String> tableNames;
+        try {
+            tableNames = metadataManager.listTables(databaseName);
+        } catch (DatabaseNotExistException e) {
+            if (isSystemDb) {
+                tableNames = new ArrayList<>();
+            } else {
+                throw e;
+            }
+        }
+
+        // Collect system view names for the system database (bypass authorization).
+        // System views are always listed because their definitions are available in-memory
+        // on every server.
+        List<String> systemNames = new ArrayList<>();
+        if (isSystemDb) {
+            for (String name : systemTableResolver.getAllSystemViewNames()) {
+                if (!tableNames.contains(name)) {
+                    systemNames.add(name);
+                }
+            }
+        }
+
         if (authorizer != null) {
             List<Resource> resources =
                     tableNames.stream()
@@ -270,6 +345,12 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                             .collect(Collectors.toList());
         }
 
+        // Add system names after authorization filtering (system tables/views bypass auth)
+        if (!systemNames.isEmpty()) {
+            tableNames = new ArrayList<>(tableNames);
+            tableNames.addAll(systemNames);
+        }
+
         response.addAllTableNames(tableNames);
         return CompletableFuture.completedFuture(response);
     }
@@ -277,6 +358,24 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     @Override
     public CompletableFuture<GetTableInfoResponse> getTableInfo(GetTableInfoRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
+
+        // Check if this is a system view -- bypass authorization for views
+        if (systemTableResolver.isSystemView(tablePath)) {
+            Optional<SystemViewDefinition> viewDefinitionOpt =
+                    systemTableResolver.getViewDefinition(tablePath);
+            if (viewDefinitionOpt.isPresent()) {
+                SystemViewDefinition viewDefinition = viewDefinitionOpt.get();
+                GetTableInfoResponse response = new GetTableInfoResponse();
+                response.setTableJson(viewDefinition.tableDescriptor().toJsonBytes())
+                        .setSchemaId(viewDefinition.schemaId())
+                        .setTableId(TableInfo.UNKNOWN_TABLE_ID)
+                        .setCreatedTime(0)
+                        .setModifiedTime(0)
+                        .setTableKind(TABLE_KIND_SYSTEM_VIEW);
+                return CompletableFuture.completedFuture(response);
+            }
+        }
+
         authorizeTable(OperationType.DESCRIBE, tablePath);
 
         GetTableInfoResponse response = new GetTableInfoResponse();
@@ -310,7 +409,10 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     public CompletableFuture<TableExistsResponse> tableExists(TableExistsRequest request) {
         // By design: table exists not need to check table authorization.
         TableExistsResponse response = new TableExistsResponse();
-        boolean exists = metadataManager.tableExists(toTablePath(request.getTablePath()));
+        TablePath tablePath = toTablePath(request.getTablePath());
+        boolean exists =
+                metadataManager.tableExists(tablePath)
+                        || systemTableResolver.isSystemView(tablePath);
         response.setExists(exists);
         return CompletableFuture.completedFuture(response);
     }
@@ -541,6 +643,13 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         List<ConfigEntry> configs = dynamicConfigManager.describeConfigs();
         return CompletableFuture.completedFuture(
                 new DescribeClusterConfigsResponse().addAllConfigs(toPbConfigEntries(configs)));
+    }
+
+    @Override
+    public CompletableFuture<ScanSystemViewResponse> scanSystemView(ScanSystemViewRequest request) {
+        return FutureUtils.completedExceptionally(
+                new FlussRuntimeException(
+                        "scanSystemView is only supported on the CoordinatorServer."));
     }
 
     protected MetadataResponse processMetadataRequest(

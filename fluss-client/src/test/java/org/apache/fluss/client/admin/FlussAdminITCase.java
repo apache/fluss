@@ -977,7 +977,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         admin.createDatabase("db2", DatabaseDescriptor.EMPTY, true).get();
         admin.createDatabase("db3", DatabaseDescriptor.EMPTY, true).get();
         assertThat(admin.listDatabases().get())
-                .containsExactlyInAnyOrder("test_db", "db1", "db2", "db3", "fluss");
+                .containsExactlyInAnyOrder("test_db", "db1", "db2", "db3", "fluss", "sys");
         Map<String, Integer> databaseSummaries =
                 admin.listDatabaseSummaries().get().stream()
                         .collect(

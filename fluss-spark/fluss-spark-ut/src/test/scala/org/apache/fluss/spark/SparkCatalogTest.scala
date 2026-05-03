@@ -37,11 +37,13 @@ class SparkCatalogTest extends FlussSparkTestBase {
   protected def lakeFormat: Option[DataLakeFormat] = None
 
   test("Catalog: namespaces") {
-    // Always a default database 'fluss'.
-    checkAnswer(sql("SHOW DATABASES"), Row(DEFAULT_DATABASE) :: Nil)
+    // Always a default database 'fluss' and system database 'sys'.
+    checkAnswer(sql("SHOW DATABASES"), Row(DEFAULT_DATABASE) :: Row(SYSTEM_DATABASE) :: Nil)
 
     sql("CREATE DATABASE testdb COMMENT 'created by spark'")
-    checkAnswer(sql("SHOW DATABASES"), Row(DEFAULT_DATABASE) :: Row("testdb") :: Nil)
+    checkAnswer(
+      sql("SHOW DATABASES"),
+      Row(DEFAULT_DATABASE) :: Row(SYSTEM_DATABASE) :: Row("testdb") :: Nil)
 
     checkAnswer(
       sql("DESC DATABASE testdb").filter("info_name != 'Owner'"),
@@ -51,7 +53,7 @@ class SparkCatalogTest extends FlussSparkTestBase {
     )
 
     sql("DROP DATABASE testdb")
-    checkAnswer(sql("SHOW DATABASES"), Row(DEFAULT_DATABASE) :: Nil)
+    checkAnswer(sql("SHOW DATABASES"), Row(DEFAULT_DATABASE) :: Row(SYSTEM_DATABASE) :: Nil)
   }
 
   test("Catalog: basic table") {
@@ -161,7 +163,9 @@ class SparkCatalogTest extends FlussSparkTestBase {
     val dbDesc = DatabaseDescriptor.builder().comment("created by admin").build()
     admin.createDatabase(dbName, dbDesc, true).get()
     assert(catalog.namespaceExists(Array(dbName)))
-    checkAnswer(sql("SHOW DATABASES"), Row(DEFAULT_DATABASE) :: Row(dbName) :: Nil)
+    checkAnswer(
+      sql("SHOW DATABASES"),
+      Row(DEFAULT_DATABASE) :: Row(dbName) :: Row(SYSTEM_DATABASE) :: Nil)
 
     // check table
     val tablePath = TablePath.of(dbName, tblName)
@@ -196,7 +200,7 @@ class SparkCatalogTest extends FlussSparkTestBase {
     checkAnswer(sql(s"SHOW TABLES IN $dbName"), Nil)
 
     admin.dropDatabase(dbName, true, true).get()
-    checkAnswer(sql("SHOW DATABASES"), Row(DEFAULT_DATABASE) :: Nil)
+    checkAnswer(sql("SHOW DATABASES"), Row(DEFAULT_DATABASE) :: Row(SYSTEM_DATABASE) :: Nil)
   }
 
   protected def modifyTablePropertiesWithCheck(): Unit = {

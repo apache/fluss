@@ -74,6 +74,7 @@ import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
+import static org.apache.fluss.metadata.SystemTableConstants.SYSTEM_DATABASE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -741,10 +742,14 @@ abstract class FlinkCatalogITCase {
 
         assertThat(databases.stream().map(Row::toString).collect(Collectors.toList()))
                 .containsExactlyInAnyOrderElementsOf(
-                        Arrays.asList(String.format("+I[%s]", DEFAULT_DB), "+I[test_db]"));
+                        Arrays.asList(
+                                String.format("+I[%s]", DEFAULT_DB),
+                                String.format("+I[%s]", SYSTEM_DATABASE),
+                                "+I[test_db]"));
         tEnv.executeSql("drop database test_db");
         databases = CollectionUtil.iteratorToList(tEnv.executeSql("show databases").collect());
-        assertThat(databases.toString()).isEqualTo(String.format("[+I[%s]]", DEFAULT_DB));
+        assertThat(databases)
+                .containsExactlyInAnyOrder(Row.of(DEFAULT_DB), Row.of(SYSTEM_DATABASE));
     }
 
     @Test
@@ -908,7 +913,7 @@ abstract class FlinkCatalogITCase {
                             Collections::emptyMap);
             authenticateCatalog.open();
             assertThat(authenticateCatalog.listDatabases())
-                    .containsExactlyInAnyOrderElementsOf(Collections.singletonList(DEFAULT_DB));
+                    .containsExactlyInAnyOrder(DEFAULT_DB, SYSTEM_DATABASE);
 
         } finally {
             if (authenticateCatalog != null) {

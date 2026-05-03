@@ -68,6 +68,7 @@ public final class TableInfo {
 
     private final long createdTime;
     private final long modifiedTime;
+    private final int tableKind;
 
     private int[] cachedStatsIndexMapping = null;
 
@@ -85,6 +86,38 @@ public final class TableInfo {
             @Nullable String comment,
             long createdTime,
             long modifiedTime) {
+        this(
+                tablePath,
+                tableId,
+                schemaId,
+                schema,
+                bucketKeys,
+                partitionKeys,
+                numBuckets,
+                properties,
+                customProperties,
+                remoteDataDir,
+                comment,
+                createdTime,
+                modifiedTime,
+                SystemTableConstants.TABLE_KIND_TABLE);
+    }
+
+    public TableInfo(
+            TablePath tablePath,
+            long tableId,
+            int schemaId,
+            Schema schema,
+            List<String> bucketKeys,
+            List<String> partitionKeys,
+            int numBuckets,
+            Configuration properties,
+            Configuration customProperties,
+            @Nullable String remoteDataDir,
+            @Nullable String comment,
+            long createdTime,
+            long modifiedTime,
+            int tableKind) {
         this.tablePath = tablePath;
         this.tableId = tableId;
         this.schemaId = schemaId;
@@ -102,6 +135,7 @@ public final class TableInfo {
         this.comment = comment;
         this.createdTime = createdTime;
         this.modifiedTime = modifiedTime;
+        this.tableKind = tableKind;
     }
 
     /**
@@ -393,6 +427,19 @@ public final class TableInfo {
     }
 
     /**
+     * Returns the table kind. See {@link SystemTableConstants#TABLE_KIND_TABLE} and {@link
+     * SystemTableConstants#TABLE_KIND_SYSTEM_VIEW}.
+     */
+    public int getTableKind() {
+        return tableKind;
+    }
+
+    /** Returns {@code true} if this table is a system view (virtual, no independent storage). */
+    public boolean isSystemView() {
+        return tableKind == SystemTableConstants.TABLE_KIND_SYSTEM_VIEW;
+    }
+
+    /**
      * Converts this table info to a {@link TableDescriptor}.
      *
      * <p>NOTE: It is not recommended to use this method to get metadata of a table, such as bucket
@@ -420,15 +467,40 @@ public final class TableInfo {
             String remoteDataDir,
             long createdTime,
             long modifiedTime) {
+        return of(
+                tablePath,
+                tableId,
+                schemaId,
+                tableDescriptor,
+                remoteDataDir,
+                createdTime,
+                modifiedTime,
+                SystemTableConstants.TABLE_KIND_TABLE);
+    }
+
+    /** Utility to create a {@link TableInfo} with an explicit table kind. */
+    public static TableInfo of(
+            TablePath tablePath,
+            long tableId,
+            int schemaId,
+            TableDescriptor tableDescriptor,
+            String remoteDataDir,
+            long createdTime,
+            long modifiedTime,
+            int tableKind) {
         Schema schema = tableDescriptor.getSchema();
-        int numBuckets =
-                tableDescriptor
-                        .getTableDistribution()
-                        .flatMap(TableDescriptor.TableDistribution::getBucketCount)
-                        .orElseThrow(
-                                () ->
-                                        new IllegalArgumentException(
-                                                "Bucket count is required for creating table info."));
+        int numBuckets = 0;
+        if (tableKind != SystemTableConstants.TABLE_KIND_SYSTEM_VIEW) {
+            numBuckets =
+                    tableDescriptor
+                            .getTableDistribution()
+                            .flatMap(TableDescriptor.TableDistribution::getBucketCount)
+                            .orElseThrow(
+                                    () ->
+                                            new IllegalArgumentException(
+                                                    "Bucket count is required for creating table info."));
+        }
+
         return new TableInfo(
                 tablePath,
                 tableId,
@@ -442,7 +514,8 @@ public final class TableInfo {
                 remoteDataDir,
                 tableDescriptor.getComment().orElse(null),
                 createdTime,
-                modifiedTime);
+                modifiedTime,
+                tableKind);
     }
 
     @Override
@@ -455,6 +528,7 @@ public final class TableInfo {
         return tableId == that.tableId
                 && schemaId == that.schemaId
                 && numBuckets == that.numBuckets
+                && tableKind == that.tableKind
                 && Objects.equals(tablePath, that.tablePath)
                 && Objects.equals(rowType, that.rowType)
                 && Objects.equals(primaryKeys, that.primaryKeys)
@@ -483,7 +557,8 @@ public final class TableInfo {
                 properties,
                 customProperties,
                 remoteDataDir,
-                comment);
+                comment,
+                tableKind);
     }
 
     @Override
@@ -518,6 +593,8 @@ public final class TableInfo {
                 + createdTime
                 + ", modifiedTime="
                 + modifiedTime
+                + ", tableKind="
+                + tableKind
                 + '}';
     }
 

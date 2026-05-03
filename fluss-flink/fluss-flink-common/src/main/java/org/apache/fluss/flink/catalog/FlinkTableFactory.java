@@ -28,6 +28,7 @@ import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.flink.source.BinlogFlinkTableSource;
 import org.apache.fluss.flink.source.ChangelogFlinkTableSource;
 import org.apache.fluss.flink.source.FlinkTableSource;
+import org.apache.fluss.flink.source.SystemViewTableSource;
 import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.metadata.MergeEngineType;
@@ -102,6 +103,16 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         // Check if this is a $binlog suffix in table name
         if (tableName.endsWith(FlinkCatalog.BINLOG_TABLE_SUFFIX)) {
             return createBinlogTableSource(context, tableIdentifier, tableName);
+        }
+
+        // Check if this is a system view
+        Map<String, String> options = context.getCatalogTable().getOptions();
+        if ("true".equals(options.get(FlinkConnectorOptions.SYSTEM_VIEW_OPTION_KEY))) {
+            RowType tableOutputType = (RowType) context.getPhysicalRowDataType().getLogicalType();
+            return new SystemViewTableSource(
+                    toFlussTablePath(context.getObjectIdentifier()),
+                    toFlussClientConfig(options, context.getConfiguration()),
+                    tableOutputType);
         }
 
         FactoryUtil.TableFactoryHelper helper = FactoryUtil.createTableFactoryHelper(this, context);

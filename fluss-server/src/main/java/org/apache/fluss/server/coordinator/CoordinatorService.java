@@ -55,6 +55,7 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseResponse;
@@ -125,9 +126,12 @@ import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
 import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
+import org.apache.fluss.rpc.messages.ScanSystemViewRequest;
+import org.apache.fluss.rpc.messages.ScanSystemViewResponse;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.rpc.util.PredicateMessageUtils;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
 import org.apache.fluss.security.acl.FlussPrincipal;
@@ -154,6 +158,7 @@ import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseHandler;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.producer.ProducerOffsetsManager;
 import org.apache.fluss.server.coordinator.rebalance.goal.Goal;
+import org.apache.fluss.server.coordinator.system.SystemViewProvider;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.DatabasePropertyChanges;
 import org.apache.fluss.server.entity.LakeTieringTableInfo;
@@ -424,6 +429,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<DropDatabaseResponse> dropDatabase(DropDatabaseRequest request) {
         authorizeDatabase(OperationType.DROP, request.getDatabaseName());
+
         DropDatabaseResponse response = new DropDatabaseResponse();
         metadataManager.dropDatabase(
                 request.getDatabaseName(), request.isIgnoreIfNotExists(), request.isCascade());
@@ -1299,6 +1305,57 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         @Override
         public TableDescriptor getExpectedTable() {
             return expectedTable;
+        }
+    }
+
+    // ==================================================================================
+    // System View Scan API
+    // ==================================================================================
+
+    @Override
+    public CompletableFuture<ScanSystemViewResponse> scanSystemView(ScanSystemViewRequest request) {
+        TablePath viewPath = TablePath.of(request.getDatabaseName(), request.getViewName());
+
+        Optional<SystemViewProvider> viewProvider = systemTableResolver.getViewProvider(viewPath);
+        if (!viewProvider.isPresent()) {
+            ScanSystemViewResponse response = new ScanSystemViewResponse();
+            response.setErrorCode(Errors.TABLE_NOT_EXIST.code());
+            response.setErrorMessage(
+                    "System view provider for'"
+                            + viewPath
+                            + "' does not exist in "
+                            + providerType().name());
+            return CompletableFuture.completedFuture(response);
+        }
+
+        try {
+            SystemViewProvider provider = viewProvider.get();
+
+            // Deserialize filter predicate if present
+            Predicate filterPredicate = null;
+            if (request.hasFilterPredicate()) {
+                filterPredicate =
+                        PredicateMessageUtils.toPredicate(
+                                request.getFilterPredicate(), provider.schema().getRowType());
+            }
+
+            // Extract projected fields if present
+            int[] projectedFields = null;
+            if (request.getProjectedFieldsCount() > 0) {
+                projectedFields = request.getProjectedFields();
+            }
+
+            byte[] records = provider.scanRows(projectedFields, filterPredicate);
+
+            ScanSystemViewResponse response = new ScanSystemViewResponse();
+            response.setRecords(records);
+            return CompletableFuture.completedFuture(response);
+        } catch (Exception e) {
+            ScanSystemViewResponse response = new ScanSystemViewResponse();
+            response.setErrorCode(Errors.UNKNOWN_SERVER_ERROR.code());
+            response.setErrorMessage(
+                    "Failed to scan system view '" + viewPath + "': " + e.getMessage());
+            return CompletableFuture.completedFuture(response);
         }
     }
 

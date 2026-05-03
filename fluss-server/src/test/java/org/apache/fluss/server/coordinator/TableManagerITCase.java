@@ -95,6 +95,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.config.ConfigOptions.CURRENT_KV_FORMAT_VERSION;
 import static org.apache.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
+import static org.apache.fluss.metadata.SystemTableConstants.SYSTEM_DATABASE;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newAlterTableRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newCreateDatabaseRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newCreateTableRequest;
@@ -223,7 +224,8 @@ class TableManagerITCase {
 
         // list database
         assertThat(gateway.listDatabases(new ListDatabasesRequest()).get().getDatabaseNamesList())
-                .containsExactlyInAnyOrderElementsOf(Arrays.asList(db1, db2, "fluss"));
+                .containsExactlyInAnyOrderElementsOf(
+                        Arrays.asList(db1, db2, "fluss", SYSTEM_DATABASE));
 
         // list the table, should be empty
         assertThat(gateway.listTables(newListTablesRequest(db1)).get().getTableNamesList())
@@ -239,7 +241,7 @@ class TableManagerITCase {
         adminGateway.dropDatabase(newDropDatabaseRequest(db1, false, true)).get();
 
         assertThat(gateway.listDatabases(new ListDatabasesRequest()).get().getDatabaseNamesList())
-                .isEqualTo(Arrays.asList(db2, "fluss"));
+                .containsExactlyInAnyOrder(db2, "fluss", SYSTEM_DATABASE);
 
         // drop a not exist database without ignore if not exists, should throw exception
         assertThatThrownBy(

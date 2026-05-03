@@ -38,6 +38,7 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
 
   protected val DEFAULT_CATALOG = "fluss_catalog"
   protected val DEFAULT_DATABASE = "fluss"
+  protected val SYSTEM_DATABASE = "sys";
 
   protected var conn: Connection = _
   protected var admin: Admin = _

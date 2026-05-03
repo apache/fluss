@@ -85,6 +85,8 @@ import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
 import org.apache.fluss.rpc.messages.ScanKvRequest;
 import org.apache.fluss.rpc.messages.ScanKvResponse;
+import org.apache.fluss.rpc.messages.ScanSystemViewRequest;
+import org.apache.fluss.rpc.messages.ScanSystemViewResponse;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
@@ -363,6 +365,11 @@ public class TestTabletServerGateway implements TabletServerGateway {
     @Override
     public CompletableFuture<DescribeClusterConfigsResponse> describeClusterConfigs(
             DescribeClusterConfigsRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<ScanSystemViewResponse> scanSystemView(ScanSystemViewRequest request) {
         throw new UnsupportedOperationException();
     }
 

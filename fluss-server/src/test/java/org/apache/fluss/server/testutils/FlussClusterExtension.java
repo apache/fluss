@@ -25,6 +25,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.fs.local.LocalFileSystem;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.SystemTableConstants;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.registry.MetricRegistry;
@@ -185,14 +186,16 @@ public final class FlussClusterExtension
         CoordinatorGateway coordinatorGateway = newCoordinatorClient();
         List<CompletableFuture<?>> dropFutures = new ArrayList<>();
         for (String db : dbs) {
+            if (SystemTableConstants.isSystemDatabase(db)) {
+                continue;
+            }
             if (BUILTIN_DATABASE.equals(db)) {
-                // if it's built-in database, we just drop all tables in it but not drop the
-                // database itself.
-                List<String> tables = metadataManager.listTables(BUILTIN_DATABASE);
+                // if it's built-in database or system database, we just drop all tables in it
+                // but not drop the database itself.
+                List<String> tables = metadataManager.listTables(db);
                 for (String table : tables) {
                     dropFutures.add(
-                            coordinatorGateway.dropTable(
-                                    newDropTableRequest(BUILTIN_DATABASE, table, true)));
+                            coordinatorGateway.dropTable(newDropTableRequest(db, table, true)));
                 }
             } else {
                 dropFutures.add(

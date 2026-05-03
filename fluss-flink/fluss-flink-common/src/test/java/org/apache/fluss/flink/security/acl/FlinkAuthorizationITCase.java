@@ -57,6 +57,7 @@ import java.util.concurrent.ExecutionException;
 
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertQueryResultExactOrder;
 import static org.apache.fluss.flink.utils.FlinkTestBase.waitUntilPartitions;
+import static org.apache.fluss.metadata.SystemTableConstants.SYSTEM_DATABASE;
 import static org.apache.fluss.security.acl.OperationType.CREATE;
 import static org.apache.fluss.security.acl.OperationType.DESCRIBE;
 import static org.apache.fluss.security.acl.OperationType.DROP;
@@ -159,7 +160,8 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
         addAcl(Resource.cluster(), CREATE);
         tEnv.executeSql(createDatabaseDDL).await();
         assertThat(CollectionUtil.iteratorToList(tEnv.executeSql("show databases").collect()))
-                .containsExactlyInAnyOrder(Row.of(DEFAULT_DB), Row.of(databaseName));
+                .containsExactlyInAnyOrder(
+                        Row.of(DEFAULT_DB), Row.of(SYSTEM_DATABASE), Row.of(databaseName));
 
         // test drop database
         String dropDatabaseDDL = "drop database " + databaseName;
@@ -173,7 +175,7 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
         addAcl(Resource.database(databaseName), DROP);
         tEnv.executeSql(dropDatabaseDDL).await();
         assertThat(CollectionUtil.iteratorToList(tEnv.executeSql("show databases").collect()))
-                .containsExactlyInAnyOrder(Row.of(DEFAULT_DB));
+                .containsExactlyInAnyOrder(Row.of(DEFAULT_DB), Row.of(SYSTEM_DATABASE));
     }
 
     @Test

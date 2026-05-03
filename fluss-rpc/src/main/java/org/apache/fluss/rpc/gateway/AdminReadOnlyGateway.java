@@ -46,6 +46,8 @@ import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
+import org.apache.fluss.rpc.messages.ScanSystemViewRequest;
+import org.apache.fluss.rpc.messages.ScanSystemViewResponse;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.protocol.ApiKeys;
@@ -192,4 +194,15 @@ public interface AdminReadOnlyGateway extends RpcGateway {
     @RPC(api = ApiKeys.DESCRIBE_CLUSTER_CONFIGS)
     CompletableFuture<DescribeClusterConfigsResponse> describeClusterConfigs(
             DescribeClusterConfigsRequest request);
+
+    // ------ system views ------
+
+    /**
+     * Scan a system view and return its records.
+     *
+     * @param request the scan system view request specifying database and view name
+     * @return a future returns the scan system view response containing records
+     */
+    @RPC(api = ApiKeys.SCAN_SYSTEM_VIEW)
+    CompletableFuture<ScanSystemViewResponse> scanSystemView(ScanSystemViewRequest request);
 }
