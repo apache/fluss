@@ -22,7 +22,6 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metrics.Metric;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.reporter.ScheduledMetricReporter;
-import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.StringUtils;
 
 import com.influxdb.v3.client.InfluxDBClient;
@@ -38,6 +37,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 /** {@link ScheduledMetricReporter} that exports {@link Metric Metrics} via InfluxDB. */
@@ -68,8 +68,8 @@ public class InfluxdbReporter implements ScheduledMetricReporter {
 
         this.client = InfluxDBClient.getInstance(clientConfig);
         this.pushInterval = pushInterval;
-        this.metricNames = MapUtils.newConcurrentHashMap();
-        this.metricTags = MapUtils.newConcurrentHashMap();
+        this.metricNames = new ConcurrentHashMap<>();
+        this.metricTags = new ConcurrentHashMap<>();
         this.pointProducer = InfluxdbPointProducer.getInstance();
 
         LOG.info("Started InfluxDB reporter connecting to {}", hostUrl);
@@ -151,7 +151,7 @@ public class InfluxdbReporter implements ScheduledMetricReporter {
         for (Map.Entry<String, String> entry : group.getAllVariables().entrySet()) {
             tags.add(
                     new AbstractMap.SimpleEntry<>(
-                            filterCharacters(entry.getKey()), filterCharacters(entry.getValue())));
+                            filterCharacters(entry.getKey()), entry.getValue()));
         }
         return tags;
     }
