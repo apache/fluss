@@ -17,6 +17,8 @@ This website is built with Docusaurus, a modern static website generator optimiz
 
 This guide will walk you through the process of contributing to the Fluss documentation, from setting up your environment to submitting your changes.
 
+If you want to contribute a blog post instead of versioned documentation or community pages, use the separate [Contribute Blog Posts](contribute-blog-posts.md) guide. Blog content is maintained in the `apache/fluss-blog` repository rather than in the main website tree.
+
 ## Build Documentation
 
 ### Fork and Clone
