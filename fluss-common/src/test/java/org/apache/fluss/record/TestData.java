@@ -39,6 +39,7 @@ public final class TestData {
     public static final short DEFAULT_SCHEMA_ID = 1;
     public static final long BASE_OFFSET = 0L;
     public static final byte DEFAULT_MAGIC = CURRENT_LOG_MAGIC_VALUE;
+    public static final String DEFAULT_REMOTE_DATA_DIR = "/tmp/fluss/remote-data";
     // ---------------------------- data1 and related table info begin ---------------------------
     public static final List<Object[]> DATA1 =
             Arrays.asList(
@@ -93,6 +94,7 @@ public final class TestData {
                     DATA1_TABLE_ID,
                     1,
                     DATA1_TABLE_DESCRIPTOR,
+                    DEFAULT_REMOTE_DATA_DIR,
                     currentMillis,
                     currentMillis);
 
@@ -118,6 +120,7 @@ public final class TestData {
                     PARTITION_TABLE_ID,
                     1,
                     DATA1_PARTITIONED_TABLE_DESCRIPTOR,
+                    DEFAULT_REMOTE_DATA_DIR,
                     System.currentTimeMillis(),
                     System.currentTimeMillis());
 
@@ -148,6 +151,7 @@ public final class TestData {
                     DATA1_TABLE_ID_PK,
                     1,
                     DATA1_TABLE_DESCRIPTOR_PK,
+                    DEFAULT_REMOTE_DATA_DIR,
                     currentMillis,
                     currentMillis);
 
@@ -217,6 +221,7 @@ public final class TestData {
                     DATA2_TABLE_ID,
                     1,
                     DATA2_TABLE_DESCRIPTOR,
+                    DEFAULT_REMOTE_DATA_DIR,
                     System.currentTimeMillis(),
                     System.currentTimeMillis());
     // -------------------------------- data2 info end ------------------------------------
@@ -259,6 +264,94 @@ public final class TestData {
                     .build();
 
     // ---------------------------- data3 table info end ------------------------------
+
+    // ------------------- Statistics test data and schemas begin ----------------------
+    // Schema with mixed types for comprehensive statistics testing
+    public static final RowType STATISTICS_MIXED_TYPE_ROW_TYPE =
+            DataTypes.ROW(
+                    new DataField("id", DataTypes.INT()),
+                    new DataField("name", DataTypes.STRING()),
+                    new DataField("value", DataTypes.DOUBLE()),
+                    new DataField("flag", DataTypes.BOOLEAN()),
+                    new DataField("bigint_val", DataTypes.BIGINT()),
+                    new DataField("float_val", DataTypes.FLOAT()));
+
+    public static final List<Object[]> STATISTICS_MIXED_TYPE_DATA =
+            Arrays.asList(
+                    new Object[] {1, "a", 10.5, true, 100L, 1.23f},
+                    new Object[] {2, "b", 20.3, false, 200L, 2.34f},
+                    new Object[] {3, "c", 15.7, true, 150L, 3.45f},
+                    new Object[] {4, "d", 8.9, false, 300L, 4.56f},
+                    new Object[] {5, "e", 30.1, true, 250L, 5.67f});
+
+    // Schema with basic types for statistics testing
+    public static final RowType STATISTICS_BASIC_ROW_TYPE =
+            DataTypes.ROW(
+                    new DataField("id", DataTypes.INT()),
+                    new DataField("name", DataTypes.STRING()),
+                    new DataField("value", DataTypes.DOUBLE()));
+
+    public static final List<Object[]> STATISTICS_BASIC_DATA =
+            Arrays.asList(
+                    new Object[] {1, "a", 10.5},
+                    new Object[] {2, "b", 20.3},
+                    new Object[] {3, "c", 15.7},
+                    new Object[] {4, "d", 8.9},
+                    new Object[] {5, "e", 30.1});
+
+    // Schema with all common types including boolean
+    public static final RowType STATISTICS_WITH_BOOLEAN_ROW_TYPE =
+            DataTypes.ROW(
+                    new DataField("id", DataTypes.INT()),
+                    new DataField("name", DataTypes.STRING()),
+                    new DataField("value", DataTypes.DOUBLE()),
+                    new DataField("flag", DataTypes.BOOLEAN()));
+
+    public static final List<Object[]> STATISTICS_WITH_BOOLEAN_DATA =
+            Arrays.asList(
+                    new Object[] {1, "a", 10.5, true},
+                    new Object[] {2, "b", 20.3, false},
+                    new Object[] {3, "c", 15.7, true},
+                    new Object[] {4, "d", 8.9, false},
+                    new Object[] {5, "e", 30.1, true});
+
+    // Schema with nullable columns for statistics testing
+    public static final RowType STATISTICS_WITH_NULLS_ROW_TYPE =
+            DataTypes.ROW(
+                    new DataField("id", DataTypes.INT()),
+                    new DataField("name", DataTypes.STRING()),
+                    new DataField("value", DataTypes.DOUBLE()));
+
+    public static final List<Object[]> STATISTICS_WITH_NULLS_DATA =
+            Arrays.asList(
+                    new Object[] {1, "a", 10.5},
+                    new Object[] {null, "b", 20.3},
+                    new Object[] {3, null, 15.7},
+                    new Object[] {4, "d", null},
+                    new Object[] {5, "e", 30.1});
+
+    // Schema for filter testing
+    public static final RowType FILTER_TEST_ROW_TYPE =
+            DataTypes.ROW(
+                    DataTypes.FIELD("id", DataTypes.BIGINT()),
+                    DataTypes.FIELD("name", DataTypes.STRING()),
+                    DataTypes.FIELD("score", DataTypes.DOUBLE()));
+
+    public static final Schema FILTER_TEST_SCHEMA =
+            Schema.newBuilder()
+                    .fromColumns(
+                            Arrays.asList(
+                                    new Schema.Column("id", DataTypes.BIGINT(), null, 1),
+                                    new Schema.Column("name", DataTypes.STRING(), null, 2),
+                                    new Schema.Column("score", DataTypes.DOUBLE(), null, 3)))
+                    .build();
+
+    public static final List<Object[]> FILTER_TEST_DATA =
+            Arrays.asList(
+                    new Object[] {1L, "a", 1.0},
+                    new Object[] {5L, "m", 50.0},
+                    new Object[] {10L, "z", 100.0});
+    // ------------------- Statistics test data and schemas end ------------------------
 
     public static final TestingSchemaGetter TEST_SCHEMA_GETTER =
             new TestingSchemaGetter(DEFAULT_SCHEMA_ID, DATA2_SCHEMA);

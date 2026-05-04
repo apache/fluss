@@ -36,6 +36,7 @@ public class MetricNames {
     // metrics for coordinator server
     // --------------------------------------------------------------------------------------------
     public static final String ACTIVE_COORDINATOR_COUNT = "activeCoordinatorCount";
+    public static final String ALIVE_COORDINATOR_COUNT = "aliveCoordinatorCount";
     public static final String ACTIVE_TABLET_SERVER_COUNT = "activeTabletServerCount";
     public static final String OFFLINE_BUCKET_COUNT = "offlineBucketCount";
     public static final String TABLE_COUNT = "tableCount";
@@ -69,6 +70,8 @@ public class MetricNames {
     public static final String LAKE_TIERING_TABLE_FAILURES_TOTAL = "failuresTotal";
     public static final String LAKE_TIERING_TABLE_FILE_SIZE = "fileSize";
     public static final String LAKE_TIERING_TABLE_RECORD_COUNT = "recordCount";
+    public static final String LAKE_TIERING_TABLE_PENDING_TIME = "pendingTime";
+    public static final String LAKE_TIERING_TABLE_FRESHNESS = "freshness";
 
     // --------------------------------------------------------------------------------------------
     // metrics for tablet server
@@ -221,11 +224,13 @@ public class MetricNames {
     // metrics for table bucket
     // --------------------------------------------------------------------------------------------
 
+    // for tablet
+    public static final String LAKE_PENDING_RECORDS = "pendingRecords";
+
     // for log tablet
     public static final String LOG_NUM_SEGMENTS = "numSegments";
     public static final String LOG_END_OFFSET = "endOffset";
     public static final String REMOTE_LOG_SIZE = "size";
-    public static final String LOG_LAKE_PENDING_RECORDS = "pendingRecords";
     public static final String LOG_LAKE_TIMESTAMP_LAG = "timestampLag";
 
     // for logic storage
@@ -280,4 +285,12 @@ public class MetricNames {
     public static final String NETTY_NUM_ALLOCATIONS_PER_SECONDS = "numAllocationsPerSecond";
     public static final String NETTY_NUM_HUGE_ALLOCATIONS_PER_SECONDS =
             "numHugeAllocationsPerSecond";
+
+    // --------------------------------------------------------------------------------------------
+    // metrics for tiering service
+    // --------------------------------------------------------------------------------------------
+
+    // for lake tiering metrics - operator level
+    public static final String TIERING_SERVICE_READ_BYTES = "readBytes";
+    public static final String TIERING_SERVICE_READ_BYTES_RATE = "readBytesPerSecond";
 }

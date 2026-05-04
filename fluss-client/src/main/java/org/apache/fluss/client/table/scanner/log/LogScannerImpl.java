@@ -21,13 +21,13 @@ import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.ScannerMetricGroup;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
-import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.WakeupException;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.Projection;
@@ -41,8 +41,6 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.ConcurrentModificationException;
-import java.util.List;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -84,7 +82,8 @@ public class LogScannerImpl implements LogScanner {
             ClientMetricGroup clientMetricGroup,
             RemoteFileDownloader remoteFileDownloader,
             @Nullable int[] projectedFields,
-            SchemaGetter schemaGetter) {
+            SchemaGetter schemaGetter,
+            @Nullable Predicate recordBatchFilter) {
         this.tablePath = tableInfo.getTablePath();
         this.tableId = tableInfo.getTableId();
         this.isPartitionedTable = tableInfo.isPartitioned();
@@ -98,6 +97,7 @@ public class LogScannerImpl implements LogScanner {
                 new LogFetcher(
                         tableInfo,
                         projection,
+                        recordBatchFilter,
                         logScannerStatus,
                         conf,
                         metadataUpdater,
@@ -141,17 +141,17 @@ public class LogScannerImpl implements LogScanner {
             long timeoutNanos = timeout.toNanos();
             long startNanos = System.nanoTime();
             do {
-                Map<TableBucket, List<ScanRecord>> fetchRecords = pollForFetches();
-                if (fetchRecords.isEmpty()) {
+                ScanRecords scanRecords = pollForFetches();
+                if (scanRecords.isEmpty()) {
                     try {
                         if (!logFetcher.awaitNotEmpty(startNanos + timeoutNanos)) {
                             // logFetcher waits for the timeout and no data in buffer,
                             // so we return empty
-                            return new ScanRecords(fetchRecords);
+                            return scanRecords;
                         }
                     } catch (WakeupException e) {
                         // wakeup() is called, we need to return empty
-                        return new ScanRecords(fetchRecords);
+                        return scanRecords;
                     }
                 } else {
                     // before returning the fetched records, we can send off the next round of
@@ -159,7 +159,7 @@ public class LogScannerImpl implements LogScanner {
                     // while the user is handling the fetched records.
                     logFetcher.sendFetches();
 
-                    return new ScanRecords(fetchRecords);
+                    return scanRecords;
                 }
             } while (System.nanoTime() - startNanos < timeoutNanos);
 
@@ -247,10 +247,10 @@ public class LogScannerImpl implements LogScanner {
         logFetcher.wakeup();
     }
 
-    private Map<TableBucket, List<ScanRecord>> pollForFetches() {
-        Map<TableBucket, List<ScanRecord>> fetchedRecords = logFetcher.collectFetch();
-        if (!fetchedRecords.isEmpty()) {
-            return fetchedRecords;
+    private ScanRecords pollForFetches() {
+        ScanRecords scanRecords = logFetcher.collectFetch();
+        if (!scanRecords.isEmpty()) {
+            return scanRecords;
         }
 
         // send any new fetches (won't resend pending fetches).

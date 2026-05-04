@@ -26,6 +26,7 @@ import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.client.write.HashBucketAssigner;
 import org.apache.fluss.flink.tiering.TestingLakeTieringFactory;
 import org.apache.fluss.flink.tiering.TestingWriteResult;
+import org.apache.fluss.flink.tiering.source.metrics.TieringMetrics;
 import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSnapshotSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
@@ -38,6 +39,8 @@ import org.apache.fluss.row.encode.CompactedKeyEncoder;
 import org.apache.flink.api.connector.source.SourceSplit;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitsAddition;
+import org.apache.flink.metrics.testutils.MetricListener;
+import org.apache.flink.runtime.metrics.groups.InternalSourceReaderMetricGroup;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -277,7 +280,12 @@ class TieringSplitReaderTest extends FlinkTestBase {
     }
 
     private TieringSplitReader<TestingWriteResult> createTieringReader(Connection connection) {
-        return new TieringSplitReader<>(connection, new TestingLakeTieringFactory());
+        final TieringMetrics tieringMetrics =
+                new TieringMetrics(
+                        InternalSourceReaderMetricGroup.mock(
+                                new MetricListener().getMetricGroup()));
+        return new TieringSplitReader<>(
+                connection, new TestingLakeTieringFactory(), tieringMetrics);
     }
 
     private void verifyTieringRows(

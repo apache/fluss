@@ -70,6 +70,7 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin {
                 listenerName.equals(conf.get(ConfigOptions.INTERNAL_LISTENER_NAME)),
                 requestsMetrics,
                 conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds(),
+                (int) conf.get(ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE).getBytes(),
                 Optional.ofNullable(
                                 AuthenticationFactory.loadServerAuthenticatorSuppliers(conf)
                                         .get(listenerName))

@@ -248,12 +248,12 @@ public class PredicateConverter implements ExpressionVisitor<Predicate> {
         throw new UnsupportedExpression();
     }
 
-    private static Object fromFlinkObject(Object o, DataType type) {
-        if (o == null) {
+    private static Object fromFlinkObject(Object flinkValue, DataType type) {
+        if (flinkValue == null) {
             return null;
         }
         return InternalRow.createFieldGetter(FlinkConversions.toFlussType(type), 0)
-                .getFieldOrNull((new FlinkAsFlussRow()).replace(GenericRowData.of(o)));
+                .getFieldOrNull((new FlinkAsFlussRow()).replace(GenericRowData.of(flinkValue)));
     }
 
     private boolean supportsPredicate(LogicalType type) {

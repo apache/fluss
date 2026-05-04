@@ -110,7 +110,6 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
-import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.Scheduler;
 
@@ -132,6 +131,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
@@ -163,7 +163,7 @@ public class ReplicaManager implements ServerReconfigurable {
     private final OffsetCheckpointFile highWatermarkCheckpoint;
 
     @GuardedBy("replicaStateChangeLock")
-    private final Map<TableBucket, HostedReplica> allReplicas = MapUtils.newConcurrentHashMap();
+    private final Map<TableBucket, HostedReplica> allReplicas = new ConcurrentHashMap<>();
 
     private final TabletServerMetadataCache metadataCache;
     private final ExecutorService ioExecutor;
@@ -334,6 +334,11 @@ public class ReplicaManager implements ServerReconfigurable {
 
     public int getMinInSyncReplicas() {
         return minInSyncReplicas;
+    }
+
+    @VisibleForTesting
+    public int getCoordinatorEpoch() {
+        return coordinatorEpoch;
     }
 
     // ============ ServerReconfigurable Implementation ============
@@ -1092,10 +1097,14 @@ public class ReplicaManager implements ServerReconfigurable {
             TableBucket tb = data.getTableBucket();
             try {
                 Replica replica = getReplicaOrException(tb);
+                // register replica to remote log manager first.
+                remoteLogManager.registerReplica(replica);
+
                 replica.makeLeader(data);
                 if (replica.isDataLakeEnabled()) {
                     updateWithLakeTableSnapshot(replica);
                 }
+
                 // start the remote log tiering tasks for leaders
                 remoteLogManager.startLogTiering(replica);
                 result.put(tb, new NotifyLeaderAndIsrResultForBucket(tb));
@@ -1412,13 +1421,22 @@ public class ReplicaManager implements ServerReconfigurable {
                     fetchParams.markReadOneMessage();
                 }
                 limitBytes = Math.max(0, limitBytes - recordBatchSize);
-
+                FetchLogResultForBucket fetchLogResult;
+                if (fetchedData.hasFilteredEndOffset()) {
+                    fetchLogResult =
+                            new FetchLogResultForBucket(
+                                    tb,
+                                    fetchedData.getRecords(),
+                                    readInfo.getHighWatermark(),
+                                    fetchedData.getFilteredEndOffset());
+                } else {
+                    fetchLogResult =
+                            new FetchLogResultForBucket(
+                                    tb, fetchedData.getRecords(), readInfo.getHighWatermark());
+                }
                 logReadResult.put(
                         tb,
-                        new LogReadResult(
-                                new FetchLogResultForBucket(
-                                        tb, fetchedData.getRecords(), readInfo.getHighWatermark()),
-                                fetchedData.getFetchOffsetMetadata()));
+                        new LogReadResult(fetchLogResult, fetchedData.getFetchOffsetMetadata()));
 
                 // update metrics
                 if (isFromFollower) {
@@ -1870,9 +1888,14 @@ public class ReplicaManager implements ServerReconfigurable {
                             requestCoordinatorEpoch, requestName, this.coordinatorEpoch);
             LOG.warn("Ignore the {} request because {}", requestName, errorMessage);
             throw new InvalidCoordinatorException(errorMessage);
-        } else {
+        } else if (requestCoordinatorEpoch > this.coordinatorEpoch) {
+            LOG.info(
+                    "Update coordinator epoch from {} to {} for coordinator leader switch.",
+                    this.coordinatorEpoch,
+                    requestCoordinatorEpoch);
             this.coordinatorEpoch = requestCoordinatorEpoch;
         }
+        // ignore equal case
     }
 
     private void dropEmptyTableOrPartitionDir(Path dir, long id, String dirType) {
@@ -1921,7 +1944,8 @@ public class ReplicaManager implements ServerReconfigurable {
                                 fatalErrorHandler,
                                 bucketMetricGroup,
                                 tableInfo,
-                                clock);
+                                clock,
+                                remoteLogManager);
                 allReplicas.put(tb, new OnlineReplica(replica));
                 replicaOpt = Optional.of(replica);
             } else if (hostedReplica instanceof OnlineReplica) {

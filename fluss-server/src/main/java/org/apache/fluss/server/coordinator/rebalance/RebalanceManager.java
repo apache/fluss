@@ -36,7 +36,6 @@ import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.RebalanceTask;
-import org.apache.fluss.utils.MapUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,6 +52,7 @@ import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.CANCELED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
@@ -78,11 +78,11 @@ public class RebalanceManager {
 
     /** A mapping from table bucket to rebalance status of pending and running tasks. */
     private final Map<TableBucket, RebalanceResultForBucket> inProgressRebalanceTasks =
-            MapUtils.newConcurrentHashMap();
+            new ConcurrentHashMap<>();
 
     /** A mapping from table bucket to rebalance status of failed or completed tasks. */
     private final Map<TableBucket, RebalanceResultForBucket> finishedRebalanceTasks =
-            MapUtils.newConcurrentHashMap();
+            new ConcurrentHashMap<>();
 
     private final GoalOptimizer goalOptimizer;
     private volatile long registerTime;

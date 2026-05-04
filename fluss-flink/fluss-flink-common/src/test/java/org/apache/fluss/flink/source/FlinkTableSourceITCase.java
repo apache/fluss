@@ -24,6 +24,7 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
@@ -59,6 +60,8 @@ import javax.annotation.Nullable;
 
 import java.time.Duration;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -69,7 +72,6 @@ import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertQueryResultExactOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
@@ -128,7 +130,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         tEnv.executeSql(
                 String.format(
                         "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
-                        CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
+                        CATALOG_NAME, ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers));
         tEnv.executeSql("use catalog " + CATALOG_NAME);
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 4);
         tEnv.executeSql("create database " + DEFAULT_DB);
@@ -675,12 +677,19 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                                         tableName))
                         .collect();
         assertResultsIgnoreOrder(rowIter, expectedRowValues, false);
+        String partition1 =
+                LocalDateTime.now().minusYears(1).format(DateTimeFormatter.ofPattern("yyyy"));
+        String partition2 =
+                LocalDateTime.now().minusYears(2).format(DateTimeFormatter.ofPattern("yyyy"));
 
         // then create some new partitions, and write rows to the new partitions
-        tEnv.executeSql(String.format("alter table %s add partition (c = '2000')", tableName));
-        tEnv.executeSql(String.format("alter table %s add partition (c = '2001')", tableName));
+        tEnv.executeSql(
+                String.format("alter table %s add partition (c = '%s')", tableName, partition1));
+        tEnv.executeSql(
+                String.format("alter table %s add partition (c = '%s')", tableName, partition2));
         // write data to the new partitions
-        expectedRowValues = writeRowsToPartition(conn, tablePath, Arrays.asList("2000", "2001"));
+        expectedRowValues =
+                writeRowsToPartition(conn, tablePath, Arrays.asList(partition1, partition2));
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
     }
 
@@ -1303,7 +1312,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                                 + "filter=[=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")], "
                                 + "project=[a, c, d]]], fields=[a, c, d])");
 
-        // test column filter、partition filter and flink runtime filter
+        // test column filter, partition filter and flink runtime filter
         org.apache.flink.util.CloseableIterator<Row> rowIter =
                 tEnv.executeSql(
                                 "select a,c,d from combined_filters_table where c ='2025' and d % 200 = 0")
@@ -1320,7 +1329,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                                 + "filter=[=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")], "
                                 + "project=[a, c, d]]], fields=[a, c, d])");
 
-        // test column filter、partition filter and flink runtime filter
+        // test column filter, partition filter and flink runtime filter
         rowIter =
                 tEnv.executeSql(
                                 "select a,c,d from combined_filters_table where c ='2025' and d = 200")
@@ -1345,6 +1354,337 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         org.apache.flink.util.CloseableIterator<Row> rowIter =
                 tEnv.executeSql("select * from partitioned_table_no_filter").collect();
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+    }
+
+    @Test
+    void testStreamingReadNonPKTableWithCombinedFilters() throws Exception {
+        tEnv.executeSql(
+                "create table combined_filters_table"
+                        + " (a int not null, b varchar, c string, d int) partitioned by (c)"
+                        + " with ('table.statistics.columns' = 'd')");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "combined_filters_table");
+        tEnv.executeSql("alter table combined_filters_table add partition (c=2025)");
+        tEnv.executeSql("alter table combined_filters_table add partition (c=2026)");
+
+        List<InternalRow> rows = new ArrayList<>();
+        List<String> expectedRowValues = new ArrayList<>();
+
+        for (int i = 0; i < 10; i++) {
+            rows.add(row(i, "v" + i, "2025", i * 100));
+            if (i > 2) {
+                expectedRowValues.add(String.format("+I[%d, 2025, %d]", i, i * 100));
+            }
+        }
+        writeRows(conn, tablePath, rows, true);
+
+        List<InternalRow> rows2 = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            rows2.add(row(i, "v" + i, "2026", i * 100));
+        }
+
+        writeRows(conn, tablePath, rows2, true);
+
+        String plan =
+                tEnv.explainSql(
+                        "select a,c,d from combined_filters_table where c ='2025' and d > 200");
+
+        // assert both partition filter and record batch filter are pushed down
+        assertThat(plan)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, combined_filters_table, "
+                                + "filter=[and(=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"), >(d, 200))], "
+                                + "project=[a, c, d]]], fields=[a, c, d])");
+        // assert predicates are still retained in the Calc operator (FLINK-38635 safety net)
+        assertThat(plan).contains("where=");
+
+        // test column filter, partition filter and flink runtime filter
+        org.apache.flink.util.CloseableIterator<Row> rowIter =
+                tEnv.executeSql(
+                                "select a,c,d from combined_filters_table where c ='2025' and d > 200;")
+                        .collect();
+
+        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+    }
+
+    /**
+     * Test RecordBatchFilter push down with large dataset and multiple range filters to verify
+     * correctness when log segments have gaps due to filtering.
+     */
+    @Test
+    void testRecordBatchFilterPushDownWithLogGaps() throws Exception {
+        // Create a log table for testing record batch filter push down with specific batch size
+        // configurations
+        // to ensure predictable RecordBatch sizes during writing and reading
+        tEnv.executeSql(
+                "create table record_batch_filter_test "
+                        + "(id int, sequence_num int, name varchar, score double) "
+                        + "with ("
+                        + "'table.log.format' = 'ARROW', "
+                        + "'table.statistics.columns' = 'sequence_num', "
+                        // Writer configuration: aim for ~500 records per RecordBatch
+                        // Each record has: int(4) + int(4) + varchar(~12) + double(8) ≈ 28 bytes
+                        // So 500 records ≈ 14KB, set batch size to 32KB to account for overhead
+                        + "'client.writer.batch-size' = '32kb', "
+                        // Shorter timeout for predictable batching
+                        + "'client.writer.batch-timeout' = '10ms', "
+                        // limit read batch size to 500 records max
+                        + "'client.scanner.log.max-poll-records' = '500', "
+                        + "'client.scanner.log.fetch.max-bytes-for-bucket' = '32kb' "
+                        + ")");
+
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "record_batch_filter_test");
+
+        // Write 10,000 ordered rows with sequential sequence_num in controlled batches
+        // to ensure predictable RecordBatch sizes
+        int totalRecords = 10000;
+        int batchSize = 500;
+
+        for (int batchStart = 0; batchStart < totalRecords; batchStart += batchSize) {
+            List<InternalRow> batchRows = new ArrayList<>();
+            int batchEnd = Math.min(batchStart + batchSize, totalRecords);
+
+            for (int i = batchStart; i < batchEnd; i++) {
+                batchRows.add(row(i, i, "value_" + i, i * 0.1));
+            }
+
+            // Write each batch separately to ensure proper RecordBatch formation
+            writeRows(conn, tablePath, batchRows, true);
+        }
+
+        // Define three ranges to filter: 5500-5999, 8350-8400, 9400-9999
+        String query =
+                "select id, sequence_num, name from record_batch_filter_test "
+                        + "where (sequence_num >= 5500 and sequence_num < 6000) "
+                        + "or (sequence_num >= 8350 and sequence_num <= 8400) "
+                        + "or (sequence_num >= 9400 and sequence_num < 10000)";
+
+        // Verify that record batch filters are pushed down
+        String plan = tEnv.explainSql(query);
+        assertThat(plan)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, record_batch_filter_test, "
+                                + "filter=[OR(OR(AND(>=(sequence_num, 5500), <(sequence_num, 6000)), "
+                                + "AND(>=(sequence_num, 8350), <=(sequence_num, 8400))), "
+                                + "AND(>=(sequence_num, 9400), <(sequence_num, 10000)))]");
+
+        // Collect results and verify correctness
+        List<String> expectedResults = new ArrayList<>();
+
+        // Range 1: 5500-5999 (500 records)
+        for (int i = 5500; i < 6000; i++) {
+            expectedResults.add(String.format("+I[%d, %d, value_%d]", i, i, i));
+        }
+
+        // Range 2: 8350-8400 (51 records)
+        for (int i = 8350; i <= 8400; i++) {
+            expectedResults.add(String.format("+I[%d, %d, value_%d]", i, i, i));
+        }
+
+        // Range 3: 9400-9999 (600 records)
+        for (int i = 9400; i < 10000; i++) {
+            expectedResults.add(String.format("+I[%d, %d, value_%d]", i, i, i));
+        }
+
+        try (CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect()) {
+            assertResultsIgnoreOrder(rowIter, expectedResults, true);
+        }
+    }
+
+    /**
+     * Tests that ALTER TABLE can dynamically change statistics columns configuration, and filter
+     * pushdown works correctly across different statistics modes: disabled → subset → wildcard.
+     *
+     * <p>Each phase writes data, then verifies filter pushdown behavior. Since {@code writeRows}
+     * re-creates the Table instance each time, the writer picks up the latest TableInfo after ALTER
+     * TABLE, so new batches are written with the updated statistics configuration.
+     */
+    @Test
+    void testAlterTableStatisticsColumnsWithFilterPushDown() throws Exception {
+        // Create table WITHOUT statistics columns (disabled mode)
+        tEnv.executeSql(
+                "create table alter_stats_test "
+                        + "(id int, amount bigint, region varchar, score double) "
+                        + "with ("
+                        + "'table.log.format' = 'ARROW', "
+                        + "'client.writer.batch-size' = '16kb', "
+                        + "'client.writer.batch-timeout' = '10ms'"
+                        + ")");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "alter_stats_test");
+
+        // ========== Phase 1: Statistics DISABLED ==========
+        // Write data with amount range [0, 900], step=100
+        List<InternalRow> phase1Rows = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            phase1Rows.add(row(i, (long) (i * 100), "HangZhou", i * 1.5));
+        }
+        writeRows(conn, tablePath, phase1Rows, true);
+
+        // Without statistics columns configured, filter is NOT pushed to source for record
+        // batch filtering — it only appears in the Calc operator
+        String query1 = "select id, amount from alter_stats_test where amount > 500";
+        String plan1 = tEnv.explainSql(query1);
+        assertThat(plan1).contains("filter=[]");
+        assertThat(plan1).contains("where=");
+
+        // Verify correctness: amount > 500 means amount in {600, 700, 800, 900}
+        List<String> expected1 = new ArrayList<>();
+        for (int i = 6; i < 10; i++) {
+            expected1.add(String.format("+I[%d, %d]", i, i * 100));
+        }
+        try (CloseableIterator<Row> iter = tEnv.executeSql(query1).collect()) {
+            assertResultsIgnoreOrder(iter, expected1, true);
+        }
+
+        // ========== Phase 2: ALTER TABLE to enable statistics on subset ('amount') ==========
+        tEnv.executeSql("alter table alter_stats_test set ('table.statistics.columns' = 'amount')");
+
+        // Write new data with amount range [1000, 1900], step=100
+        List<InternalRow> phase2Rows = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            phase2Rows.add(row(10 + i, (long) (1000 + i * 100), "Shanghai", (10 + i) * 1.5));
+        }
+        writeRows(conn, tablePath, phase2Rows, true);
+
+        // Filter on 'amount' column — statistics should be collected for new batches
+        String query2 = "select id, amount from alter_stats_test where amount > 1500";
+        String plan2 = tEnv.explainSql(query2);
+        assertThat(plan2).contains("filter=[>(amount, 1500)]");
+
+        // Verify correctness: amount > 1500 means amount in {1600, 1700, 1800, 1900}
+        List<String> expected2 = new ArrayList<>();
+        for (int i = 6; i < 10; i++) {
+            expected2.add(String.format("+I[%d, %d]", 10 + i, 1000 + i * 100));
+        }
+        try (CloseableIterator<Row> iter = tEnv.executeSql(query2).collect()) {
+            assertResultsIgnoreOrder(iter, expected2, true);
+        }
+
+        // Filter on 'score' column — no statistics for 'score' in subset mode,
+        // filter is NOT pushed to source for record batch filtering, only in Calc operator.
+        // Select integer columns to avoid fragile double formatting in assertions.
+        String query2b = "select id, amount from alter_stats_test where score > 20.0";
+        String plan2b = tEnv.explainSql(query2b);
+        assertThat(plan2b).contains("filter=[]");
+        assertThat(plan2b).contains("where=");
+
+        List<String> expected2b = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            double score = (10 + i) * 1.5;
+            if (score > 20.0) {
+                expected2b.add(String.format("+I[%d, %d]", 10 + i, 1000 + i * 100));
+            }
+        }
+        try (CloseableIterator<Row> iter = tEnv.executeSql(query2b).collect()) {
+            assertResultsIgnoreOrder(iter, expected2b, true);
+        }
+
+        // ========== Phase 3: ALTER TABLE to wildcard '*' (all supported columns) ==========
+        tEnv.executeSql("alter table alter_stats_test set ('table.statistics.columns' = '*')");
+
+        // Write new data with amount range [2000, 2900], step=100
+        List<InternalRow> phase3Rows = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            phase3Rows.add(row(20 + i, (long) (2000 + i * 100), "Beijing", (20 + i) * 1.5));
+        }
+        writeRows(conn, tablePath, phase3Rows, true);
+
+        // Filter on 'amount' — statistics available
+        String query3 = "select id, amount, region from alter_stats_test where amount >= 2500";
+        String plan3 = tEnv.explainSql(query3);
+        assertThat(plan3).contains("filter=[>=(amount, 2500)]");
+
+        // Verify correctness: amount >= 2500 means amount in {2500, 2600, 2700, 2800, 2900}
+        List<String> expected3 = new ArrayList<>();
+        for (int i = 5; i < 10; i++) {
+            expected3.add(String.format("+I[%d, %d, Beijing]", 20 + i, 2000 + i * 100));
+        }
+        try (CloseableIterator<Row> iter = tEnv.executeSql(query3).collect()) {
+            assertResultsIgnoreOrder(iter, expected3, true);
+        }
+
+        // Combined filter on 'amount' and 'region' — both have statistics in wildcard mode,
+        // so the filter should be pushed to source (not empty)
+        String query3b =
+                "select id, amount, region from alter_stats_test "
+                        + "where amount >= 1000 and region = 'Beijing'";
+        String plan3b = tEnv.explainSql(query3b);
+        assertThat(plan3b)
+                .contains(
+                        "filter=[and(>=(amount, 1000), "
+                                + "=(region, _UTF-16LE'Beijing':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"))]");
+
+        // Verify: amount >= 1000 AND region = 'Beijing' → only phase3 rows
+        // (phase2 rows have region='Shanghai', so they are excluded by the region filter)
+        List<String> expected3b = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            expected3b.add(String.format("+I[%d, %d, Beijing]", 20 + i, 2000 + i * 100));
+        }
+        try (CloseableIterator<Row> iter = tEnv.executeSql(query3b).collect()) {
+            assertResultsIgnoreOrder(iter, expected3b, true);
+        }
+
+        // ========== Phase 4: Cross-phase query — all data, mixed statistics coverage ==========
+        // Query across all phases: phase1 batches have no stats, phase2 has partial (amount only),
+        // phase3 has full stats. The filter should still be pushed down because the latest
+        // table config has statistics enabled, and batches without stats are conservatively
+        // included.
+        String query4 =
+                "select id, amount from alter_stats_test "
+                        + "where amount >= 500 and amount < 1500";
+        String plan4 = tEnv.explainSql(query4);
+        assertThat(plan4).contains("filter=[and(>=(amount, 500), <(amount, 1500))]");
+
+        List<String> expected4 = new ArrayList<>();
+        // Phase 1 rows: amount in {500, 600, 700, 800, 900}
+        for (int i = 5; i < 10; i++) {
+            expected4.add(String.format("+I[%d, %d]", i, i * 100));
+        }
+        // Phase 2 rows: amount in {1000, 1100, 1200, 1300, 1400}
+        for (int i = 0; i < 5; i++) {
+            expected4.add(String.format("+I[%d, %d]", 10 + i, 1000 + i * 100));
+        }
+        try (CloseableIterator<Row> iter = tEnv.executeSql(query4).collect()) {
+            assertResultsIgnoreOrder(iter, expected4, true);
+        }
+    }
+
+    /** Tests that ALTER TABLE rejects statistics columns on primary key tables. */
+    @Test
+    void testAlterTableStatisticsColumnsOnPkTableShouldFail() {
+        // Create a PK table without statistics columns
+        tEnv.executeSql(
+                "create table pk_stats_reject_test "
+                        + "(id int not null, amount bigint, primary key (id) not enforced)");
+
+        // ALTER TABLE to add statistics columns should fail for PK tables
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "alter table pk_stats_reject_test "
+                                                + "set ('table.statistics.columns' = 'amount')"))
+                .rootCause()
+                .hasMessageContaining(
+                        "Statistics columns are not supported for primary key tables");
+    }
+
+    /** Tests that ALTER TABLE rejects invalid statistics columns on log tables. */
+    @Test
+    void testAlterTableInvalidStatisticsColumnsOnLogTableShouldFail() {
+        // Create a PK table without statistics columns
+        tEnv.executeSql(
+                "create table log_stats_reject_test "
+                        + "(id int not null, amount bigint, content bytes)");
+
+        // ALTER TABLE to add statistics columns should fail for PK tables
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "alter table log_stats_reject_test "
+                                                + "set ('table.statistics.columns' = 'content')"))
+                .rootCause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(
+                        "Column 'content' of type 'BYTES' is not supported for statistics collection.");
     }
 
     private List<String> writeRowsToTwoPartition(TablePath tablePath, Collection<String> partitions)
@@ -1446,7 +1786,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 .contains(
                         "TableSourceScan(table=[[testcatalog, defaultdb, combined_filters_table_in, filter=[OR(=(c, _UTF-16LE'2025'), =(c, _UTF-16LE'2026'))], project=[a, c, d]]], fields=[a, c, d])");
 
-        // test column filter、partition filter and flink runtime filter
+        // test column filter, partition filter and flink runtime filter
         org.apache.flink.util.CloseableIterator<Row> rowIter = tEnv.executeSql(query1).collect();
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
 

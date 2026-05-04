@@ -20,6 +20,8 @@
     "@docusaurus/plugin-client-redirects": "^3.9.2",
     "@docusaurus/plugin-pwa": "^3.9.2",
     "@docusaurus/preset-classic": "^3.9.2",
+    "@fontsource/inter": "^5.2.8",
+    "@fontsource/roboto": "^5.2.10",
     "@mdx-js/react": "^3.0.0",
     "algoliasearch": "^5.10.2",
     "clsx": "^2.0.0",
@@ -49,5 +51,9 @@
   },
   "engines": {
     "node": ">=20.0"
-  }
+  },
+  "overrides": {
+    "webpackbar": "^7.0.0"
+  },
+  "comment:overrides": "webpackbar 6.x passes its own options (name, color) as this.options, which webpack 5.106.0+ rejects via strict ProgressPlugin schema validation. webpackbar 7.0.0 fixes this. Remove this override once Docusaurus bumps its webpackbar dependency to ^7.0.0."
 }

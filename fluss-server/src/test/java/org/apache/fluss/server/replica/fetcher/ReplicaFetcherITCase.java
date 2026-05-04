@@ -155,7 +155,7 @@ public class ReplicaFetcherITCase {
                     new CompletableFuture<>();
             // mock client fetch from follower.
             replicaManager.fetchLogRecords(
-                    new FetchParams(-1, false, Integer.MAX_VALUE, -1, -1),
+                    new FetchParams(-1, false, Integer.MAX_VALUE, -1, -1, null),
                     Collections.singletonMap(tb, new FetchReqInfo(tableId, 0L, 1024 * 1024)),
                     null,
                     future::complete);
@@ -232,7 +232,7 @@ public class ReplicaFetcherITCase {
                     new CompletableFuture<>();
             // mock client fetch from follower.
             replicaManager.fetchLogRecords(
-                    new FetchParams(-1, false, Integer.MAX_VALUE, -1, -1),
+                    new FetchParams(-1, false, Integer.MAX_VALUE, -1, -1, null),
                     Collections.singletonMap(tb, new FetchReqInfo(tableId, 0L, 1024 * 1024)),
                     null,
                     future::complete);

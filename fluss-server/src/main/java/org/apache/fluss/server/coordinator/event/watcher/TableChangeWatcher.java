@@ -22,7 +22,6 @@ import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.event.CreatePartitionEvent;
 import org.apache.fluss.server.coordinator.event.CreateTableEvent;
@@ -33,6 +32,7 @@ import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
 import org.apache.fluss.server.coordinator.event.TableRegistrationChangeEvent;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.ZkData.DatabasesZNode;
@@ -114,6 +114,24 @@ public class TableChangeWatcher {
                             if (tablePathIntegerTuple2 != null) {
                                 processSchemaChange(
                                         tablePathIntegerTuple2.f0, tablePathIntegerTuple2.f1);
+                                break;
+                            }
+
+                            // Handle the case where CuratorCache fires NODE_CREATED with
+                            // full table data. This happens in two scenarios:
+                            // 1. CuratorCache async getData race: the table node is created
+                            //    empty (via creatingParentsIfNeeded) and setData follows
+                            //    immediately. CuratorCache's async getData() may read the
+                            //    post-setData state, causing NODE_CREATED to carry full data
+                            //    while NODE_CHANGED is suppressed.
+                            // 2. CuratorCache initial sync: when the watcher starts, existing
+                            //    table nodes are reported as NODE_CREATED with full data.
+                            // See CuratorCacheRaceConditionTest for details on the race.
+                            TablePath tablePath = TableZNode.parsePath(newData.getPath());
+                            if (tablePath != null
+                                    && newData.getData() != null
+                                    && newData.getData().length > 0) {
+                                processCreateTable(tablePath, newData);
                             }
                         }
                         break;
@@ -149,7 +167,8 @@ public class TableChangeWatcher {
                                 PartitionZNode.parsePath(oldData.getPath());
                         if (physicalTablePath != null) {
                             // it's for deletion of a table partition node
-                            TablePartition partition = PartitionZNode.decode(oldData.getData());
+                            PartitionRegistration partition =
+                                    PartitionZNode.decode(oldData.getData());
                             eventManager.put(
                                     new DropPartitionEvent(
                                             partition.getTableId(),
@@ -223,7 +242,7 @@ public class TableChangeWatcher {
 
         private void processCreatePartition(
                 TablePath tablePath, String partitionName, ChildData partitionData) {
-            TablePartition partition = PartitionZNode.decode(partitionData.getData());
+            PartitionRegistration partition = PartitionZNode.decode(partitionData.getData());
             long partitionId = partition.getPartitionId();
             long tableId = partition.getTableId();
             PartitionAssignment partitionAssignment;

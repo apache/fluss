@@ -20,9 +20,10 @@ package org.apache.fluss.spark
 import org.apache.fluss.client.initializer.{BucketOffsetsRetrieverImpl, OffsetsInitializer}
 import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.metadata.{TableBucket, TablePath}
-import org.apache.fluss.spark.read.FlussUpsertInputPartition
+import org.apache.fluss.spark.read.{FlussMetrics, FlussScan, FlussUpsertInputPartition}
 
 import org.apache.spark.sql.Row
+import org.apache.spark.sql.execution.datasources.v2.{BatchScanExec, DataSourceV2ScanRelation}
 import org.assertj.core.api.Assertions.assertThat
 
 import scala.collection.JavaConverters._
@@ -242,6 +243,66 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
     }
   }
 
+  test("Spark Read: primary key table with random project") {
+    withTable("t") {
+      sql(
+        "CREATE TABLE t (id int, name string, pk int, pk2 string) TBLPROPERTIES('primary.key'='pk,pk2')")
+      checkAnswer(sql("SELECT * FROM t"), Nil)
+      sql("INSERT INTO t VALUES (1, 'a', 10, 'x'), (2, 'b', 20, 'y')")
+      checkAnswer(
+        sql("SELECT * FROM t ORDER BY id"),
+        Row(1, "a", 10, "x") :: Row(2, "b", 20, "y") :: Nil)
+      checkAnswer(sql("SELECT pk, id FROM t ORDER BY id"), Row(10, 1) :: Row(20, 2) :: Nil)
+    }
+  }
+
+  test("Spark Read: primary key table projection with type-dependent columns") {
+    withTable("t") {
+      val tablePath = createTablePath("t")
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t (
+             |pk INT,
+             |ts TIMESTAMP,
+             |name STRING,
+             |arr ARRAY<INT>,
+             |struct_col STRUCT<col1: INT, col2: STRING>,
+             |ts_ltz TIMESTAMP_LTZ
+             |) TBLPROPERTIES("primary.key" = "pk", "bucket.num" = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t VALUES
+             |(1, TIMESTAMP "2026-01-01 12:00:00", "a", ARRAY(1, 2), STRUCT(10, 'x'),
+             | TIMESTAMP "2026-01-01 12:00:00"),
+             |(2, TIMESTAMP "2026-01-02 12:00:00", "b", ARRAY(3, 4), STRUCT(20, 'y'),
+             | TIMESTAMP "2026-01-02 12:00:00")
+             |""".stripMargin)
+
+      // Log-only: projection reorders type-dependent columns (PK not in projection)
+      checkAnswer(
+        sql(s"SELECT arr, ts, struct_col FROM $DEFAULT_DATABASE.t ORDER BY ts"),
+        Row(Seq(1, 2), java.sql.Timestamp.valueOf("2026-01-01 12:00:00"), Row(10, "x")) ::
+          Row(Seq(3, 4), java.sql.Timestamp.valueOf("2026-01-02 12:00:00"), Row(20, "y")) :: Nil
+      )
+
+      // Trigger snapshot, then test with snapshot + log merge
+      flussServer.triggerAndWaitSnapshot(tablePath)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t VALUES
+             |(1, TIMESTAMP "2026-03-01 12:00:00", "a_updated", ARRAY(10, 20), STRUCT(100, 'xx'),
+             | TIMESTAMP "2026-03-01 12:00:00")
+             |""".stripMargin)
+
+      // Snapshot + log: projection with type-dependent columns at shifted ordinals
+      checkAnswer(
+        sql(s"SELECT ts_ltz, arr, name FROM $DEFAULT_DATABASE.t ORDER BY name"),
+        Row(java.sql.Timestamp.valueOf("2026-03-01 12:00:00"), Seq(10, 20), "a_updated") ::
+          Row(java.sql.Timestamp.valueOf("2026-01-02 12:00:00"), Seq(3, 4), "b") :: Nil
+      )
+    }
+  }
+
   private def genInputPartition(
       tablePath: TablePath,
       partitionName: String): Array[FlussUpsertInputPartition] = {
@@ -274,5 +335,45 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
 
   private def hasSnapshotData(inputPartition: FlussUpsertInputPartition): Boolean = {
     inputPartition.snapshotId >= 0
+  }
+
+  test("Spark Read: primary key table scan metrics") {
+    withTable("t") {
+      val tablePath = createTablePath("t")
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t (id INT, name STRING)
+             |TBLPROPERTIES("primary.key" = "id", "bucket.num" = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t VALUES (1, 'a'), (2, 'b'), (3, 'c')
+             |""".stripMargin)
+
+      flussServer.triggerAndWaitSnapshot(tablePath)
+
+      val df = sql(s"SELECT * FROM $DEFAULT_DATABASE.t")
+
+      // Verify scan description and supportedCustomMetrics before execution
+      val scan = df.queryExecution.optimizedPlan
+        .collectFirst { case r: DataSourceV2ScanRelation => r }
+        .get
+        .scan
+        .asInstanceOf[FlussScan]
+
+      assert(scan.description().contains("FlussScan"))
+      assert(scan.description().contains("Upsert"))
+      assert(scan.supportedCustomMetrics().exists(_.name() == FlussMetrics.NUM_ROWS_READ))
+
+      // Execute the query to trigger metric accumulation
+      df.collect()
+
+      // Verify numRowsRead is accumulated in BatchScanExec after execution
+      val batchScanExec = df.queryExecution.executedPlan.collectFirst {
+        case b: BatchScanExec => b
+      }.get
+
+      val numRowsRead = batchScanExec.metrics(FlussMetrics.NUM_ROWS_READ).value
+      assert(numRowsRead == 3L, s"Expected 3 rows read, got $numRowsRead")
+    }
   }
 }

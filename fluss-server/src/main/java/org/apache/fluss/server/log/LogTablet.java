@@ -395,13 +395,42 @@ public final class LogTablet {
         return append(records, false);
     }
 
-    /** Read messages from the local log. */
+    /** Read messages from the local log without projection or filter. */
+    public FetchDataInfo read(
+            long readOffset, int maxLength, FetchIsolation fetchIsolation, boolean minOneMessage)
+            throws IOException {
+        return read(readOffset, maxLength, fetchIsolation, minOneMessage, null, null);
+    }
+
+    /** Read messages from the local log with projection but without filter. */
     public FetchDataInfo read(
             long readOffset,
             int maxLength,
             FetchIsolation fetchIsolation,
             boolean minOneMessage,
             @Nullable FileLogProjection projection)
+            throws IOException {
+        return read(readOffset, maxLength, fetchIsolation, minOneMessage, projection, null);
+    }
+
+    /**
+     * Read messages from the local log.
+     *
+     * @param readOffset the offset to start reading from
+     * @param maxLength the maximum number of bytes to read
+     * @param fetchIsolation the fetch isolation level
+     * @param minOneMessage if true, at least one message is returned even if it exceeds maxLength
+     * @param projection the column projection to apply, or null for no projection
+     * @param filterContext the filter context for server-side filter pushdown, or null for no
+     *     filtering
+     */
+    public FetchDataInfo read(
+            long readOffset,
+            int maxLength,
+            FetchIsolation fetchIsolation,
+            boolean minOneMessage,
+            @Nullable FileLogProjection projection,
+            @Nullable FilterContext filterContext)
             throws IOException {
         LogOffsetMetadata maxOffsetMetadata = null;
         if (fetchIsolation == FetchIsolation.LOG_END) {
@@ -410,7 +439,8 @@ public final class LogTablet {
             maxOffsetMetadata = fetchHighWatermarkMetadata();
         }
 
-        return localLog.read(readOffset, maxLength, minOneMessage, maxOffsetMetadata, projection);
+        return localLog.read(
+                readOffset, maxLength, minOneMessage, maxOffsetMetadata, projection, filterContext);
     }
 
     /**

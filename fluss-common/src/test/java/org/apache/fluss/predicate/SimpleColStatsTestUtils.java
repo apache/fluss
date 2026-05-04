@@ -18,6 +18,7 @@
 
 package org.apache.fluss.predicate;
 
+import org.apache.fluss.record.LogRecordBatchStatistics;
 import org.apache.fluss.row.GenericRow;
 
 /** Utils for testing with {@link SimpleColStats}. */
@@ -26,11 +27,13 @@ public class SimpleColStatsTestUtils {
     public static boolean test(Predicate predicate, long rowCount, SimpleColStats[] fieldStats) {
         Object[] min = new Object[fieldStats.length];
         Object[] max = new Object[fieldStats.length];
-        Long[] nullCounts = new Long[fieldStats.length];
+        int[] nullCounts = new int[fieldStats.length];
         for (int i = 0; i < fieldStats.length; i++) {
             min[i] = fieldStats[i].min();
             max[i] = fieldStats[i].max();
-            nullCounts[i] = fieldStats[i].nullCount();
+            Long nc = fieldStats[i].nullCount();
+            nullCounts[i] =
+                    nc == null ? LogRecordBatchStatistics.NULL_COUNT_UNAVAILABLE : nc.intValue();
         }
 
         return predicate.test(rowCount, GenericRow.of(min), GenericRow.of(max), nullCounts);

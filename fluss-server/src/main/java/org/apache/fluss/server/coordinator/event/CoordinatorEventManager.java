@@ -33,6 +33,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -62,6 +63,7 @@ public final class CoordinatorEventManager implements EventManager {
     private Histogram eventQueueTime;
 
     // Coordinator metrics moved from CoordinatorEventProcessor
+    private volatile int aliveCoordinatorServerCount;
     private volatile int tabletServerCount;
     private volatile int offlineBucketCount;
     private volatile int tableCount;
@@ -89,6 +91,8 @@ public final class CoordinatorEventManager implements EventManager {
         // Register coordinator metrics
         coordinatorMetricGroup.gauge(MetricNames.ACTIVE_COORDINATOR_COUNT, () -> 1);
         coordinatorMetricGroup.gauge(
+                MetricNames.ALIVE_COORDINATOR_COUNT, () -> aliveCoordinatorServerCount);
+        coordinatorMetricGroup.gauge(
                 MetricNames.ACTIVE_TABLET_SERVER_COUNT, () -> tabletServerCount);
         coordinatorMetricGroup.gauge(MetricNames.OFFLINE_BUCKET_COUNT, () -> offlineBucketCount);
         coordinatorMetricGroup.gauge(MetricNames.BUCKET_COUNT, () -> bucketCount);
@@ -105,6 +109,7 @@ public final class CoordinatorEventManager implements EventManager {
         AccessContextEvent<MetricsData> accessContextEvent =
                 new AccessContextEvent<>(
                         context -> {
+                            int coordinatorServerCount = context.getLiveCoordinatorServers().size();
                             int tabletServerCount = context.getLiveTabletServers().size();
                             int tableCount = context.allTables().size();
                             int lakeTableCount = context.getLakeTableCount();
@@ -138,6 +143,7 @@ public final class CoordinatorEventManager implements EventManager {
                             }
 
                             return new MetricsData(
+                                    coordinatorServerCount,
                                     tabletServerCount,
                                     tableCount,
                                     lakeTableCount,
@@ -152,6 +158,7 @@ public final class CoordinatorEventManager implements EventManager {
         // Wait for the result and update local metrics
         try {
             MetricsData metricsData = accessContextEvent.getResultFuture().get();
+            this.aliveCoordinatorServerCount = metricsData.coordinatorServerCount;
             this.tabletServerCount = metricsData.tabletServerCount;
             this.tableCount = metricsData.tableCount;
             this.lakeTableCount = metricsData.lakeTableCount;
@@ -216,7 +223,7 @@ public final class CoordinatorEventManager implements EventManager {
 
     private class CoordinatorEventThread extends ShutdownableThread {
 
-        private long lastMetricsUpdateTime = System.currentTimeMillis();
+        private long lastMetricsUpdateTime = 0;
 
         public CoordinatorEventThread(String name) {
             super(name, false);
@@ -231,7 +238,15 @@ public final class CoordinatorEventManager implements EventManager {
                 lastMetricsUpdateTime = currentTime;
             }
 
-            QueuedEvent queuedEvent = queue.take();
+            // Use poll with timeout instead of blocking take() so that the thread
+            // wakes up periodically to update metrics even when no events arrive
+            // (e.g., after coordinator restart with no client requests).
+            long elapsed = System.currentTimeMillis() - lastMetricsUpdateTime;
+            long pollTimeout = Math.max(METRICS_UPDATE_INTERVAL_MS - elapsed, 100);
+            QueuedEvent queuedEvent = queue.poll(pollTimeout, TimeUnit.MILLISECONDS);
+            if (queuedEvent == null) {
+                return;
+            }
             CoordinatorEvent coordinatorEvent = queuedEvent.event;
 
             long eventStartTimeMs = System.currentTimeMillis();
@@ -275,6 +290,7 @@ public final class CoordinatorEventManager implements EventManager {
     }
 
     private static class MetricsData {
+        private final int coordinatorServerCount;
         private final int tabletServerCount;
         private final int tableCount;
         private final int lakeTableCount;
@@ -284,6 +300,7 @@ public final class CoordinatorEventManager implements EventManager {
         private final int replicasToDeleteCount;
 
         public MetricsData(
+                int coordinatorServerCount,
                 int tabletServerCount,
                 int tableCount,
                 int lakeTableCount,
@@ -291,6 +308,7 @@ public final class CoordinatorEventManager implements EventManager {
                 int partitionCount,
                 int offlineBucketCount,
                 int replicasToDeleteCount) {
+            this.coordinatorServerCount = coordinatorServerCount;
             this.tabletServerCount = tabletServerCount;
             this.tableCount = tableCount;
             this.lakeTableCount = lakeTableCount;

@@ -96,13 +96,14 @@ during the Fluss cluster working.
 
 ## Netty
 
-| Option                           | Type     | Default | Description                                                                                                                                 |
-|----------------------------------|----------|---------|---------------------------------------------------------------------------------------------------------------------------------------------|
-| netty.server.num-network-threads | Integer  | 3       | The number of threads that the server uses for receiving requests from the network and sending responses to the network.                    |
-| netty.server.num-worker-threads  | Integer  | 8       | The number of threads that the server uses for processing requests, which may include disk and remote I/O.                                  |
-| netty.server.max-queued-requests | Integer  | 500     | The number of queued requests allowed for worker threads, before blocking the I/O threads.                                                  |
-| netty.connection.max-idle-time   | Duration | 10min   | Close idle connections after the given time specified by this config.                                                                       |
-| netty.client.num-network-threads | Integer  | 4       | The number of threads that the client uses for sending requests to the network and receiving responses from network. The default value is 4 |
+| Option                           | Type       | Default | Description                                                                                                                                                                                                   |
+|----------------------------------|------------|---------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| netty.server.num-network-threads | Integer    | 3       | The number of threads that the server uses for receiving requests from the network and sending responses to the network.                                                                                      |
+| netty.server.num-worker-threads  | Integer    | 8       | The number of threads that the server uses for processing requests, which may include disk and remote I/O.                                                                                                    |
+| netty.server.max-queued-requests | Integer    | 500     | The number of queued requests allowed for worker threads, before blocking the I/O threads.                                                                                                                    |
+| netty.server.max-request-size    | MemorySize | 100mb   | The maximum size of a single request that the server can receive. This limits the maximum frame length at the Netty pipeline level to protect the server from malicious clients sending oversized requests that could exhaust server memory. |
+| netty.connection.max-idle-time   | Duration   | 10min   | Close idle connections after the given time specified by this config.                                                                                                                                         |
+| netty.client.num-network-threads | Integer    | 4       | The number of threads that the client uses for sending requests to the network and receiving responses from network. The default value is 4.                                                                  |
 
 ## Log
 
@@ -188,9 +189,10 @@ More metrics example could be found in [Observability - Metric Reporters](observ
 | metrics.reporter.prometheus-push.grouping-key           | String   | (None)     | Specifies the grouping key which is the group and global labels of all metrics. The label name and value are separated by '=', and labels are separated by ';', e.g., k1=v1;k2=v2.                                                                                                                       | 
 ## Lakehouse
 
-| Option          | Type | Default | Description                                                                                                                                                                                                                 |
-|-----------------|------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| datalake.format | Enum | (None)  | The datalake format used by of Fluss to be as lakehouse storage. Currently, supported formats are Paimon, Iceberg, and Lance. In the future, more kinds of data lake format will be supported, such as DeltaLake or Hudi.   |
+| Option           | Type    | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+|------------------|---------|---------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| datalake.enabled | Boolean | (None)  | Whether the Fluss cluster is ready to create and manage lakehouse tables. If unset, Fluss keeps the legacy behavior where configuring `datalake.format` also enables lakehouse tables. If set to `false`, Fluss pre-binds the lake format for newly created tables but does not allow lakehouse tables yet. If set to `true`, Fluss fully enables lakehouse tables. When this option is explicitly configured to true, `datalake.format` must also be configured. |
+| datalake.format  | Enum    | (None)  | The datalake format used by Fluss as lakehouse storage. Currently, supported formats are Paimon, Iceberg, and Lance. In the future, more kinds of data lake format will be supported, such as DeltaLake or Hudi.                                                                                                                                                                                                                                                  |
 
 ## Kafka
 

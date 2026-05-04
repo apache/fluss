@@ -26,8 +26,12 @@ import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 /**
  * Converter for writer path: converts POJO instances to Fluss InternalRow according to a (possibly
@@ -149,14 +153,79 @@ public final class PojoToRowConverter<T> {
                                     precision, prop.name, prop.read(obj));
                 }
             case ARRAY:
-                return (obj) ->
-                        new PojoArrayToFlussArray(prop.read(obj), fieldType, prop.name)
-                                .convertArray();
+                {
+                    // Determine the element class so the nested ROW converter (if any) can be
+                    // built eagerly instead of lazily from the first element's runtime class.
+                    Class<?> componentClass = Object.class;
+                    if (prop.type.isArray()) {
+                        componentClass = prop.type.getComponentType();
+                    } else if (Collection.class.isAssignableFrom(prop.type)
+                            && prop.genericType instanceof ParameterizedType) {
+                        ParameterizedType pt = (ParameterizedType) prop.genericType;
+                        Type[] args = pt.getActualTypeArguments();
+                        if (args.length == 1 && args[0] instanceof Class) {
+                            componentClass = (Class<?>) args[0];
+                        }
+                    }
+                    final Class<?> elemClass = componentClass;
+                    // Pre-build the per-element ROW converter once so it is not rebuilt (via
+                    // reflection) on every toRow() call. For non-ROW element types
+                    // buildRowElementConverter returns null and convertArray() falls through to
+                    // the generic convertElementValue path. For Object.class the AtomicReference-
+                    // based lazy converter is also built once here and reused across all rows.
+                    final Function<Object, Object> prebuiltElemConv =
+                            PojoArrayToFlussArray.buildRowElementConverter(fieldType, elemClass);
+                    return (obj) ->
+                            new PojoArrayToFlussArray(
+                                            prop.read(obj), fieldType, prop.name, prebuiltElemConv)
+                                    .convertArray();
+                }
             case MAP:
-                return (obj) ->
-                        new PojoMapToFlussMap(
-                                        (Map<?, ?>) prop.read(obj), (MapType) fieldType, prop.name)
-                                .convertMap();
+                {
+                    // Extract key/value classes from the generic field type so ROW-typed values
+                    // can be converted with a pre-built PojoToRowConverter.
+                    Class<?> keyClass = Object.class;
+                    Class<?> valueClass = Object.class;
+                    if (prop.genericType instanceof ParameterizedType) {
+                        ParameterizedType pt = (ParameterizedType) prop.genericType;
+                        Type[] args = pt.getActualTypeArguments();
+                        if (args.length == 2) {
+                            if (args[0] instanceof Class) {
+                                keyClass = (Class<?>) args[0];
+                            }
+                            if (args[1] instanceof Class) {
+                                valueClass = (Class<?>) args[1];
+                            }
+                        }
+                    }
+                    // Pre-build row converters for ROW-typed keys/values so they are not rebuilt
+                    // (via reflection) on every toRow() call.
+                    final MapType mapType = (MapType) fieldType;
+                    final Function<Object, Object> prebuiltKeyConv =
+                            PojoMapToFlussMap.buildRowConverter(mapType.getKeyType(), keyClass);
+                    final Function<Object, Object> prebuiltValConv =
+                            PojoMapToFlussMap.buildRowConverter(mapType.getValueType(), valueClass);
+                    return (obj) ->
+                            new PojoMapToFlussMap(
+                                            (Map<?, ?>) prop.read(obj),
+                                            mapType,
+                                            prop.name,
+                                            prebuiltKeyConv,
+                                            prebuiltValConv)
+                                    .convertMap();
+                }
+            case ROW:
+                {
+                    RowType nestedRowType = (RowType) fieldType;
+                    @SuppressWarnings("unchecked")
+                    PojoToRowConverter<Object> nestedConverter =
+                            PojoToRowConverter.of(
+                                    (Class<Object>) prop.type, nestedRowType, nestedRowType);
+                    return (obj) -> {
+                        Object nested = prop.read(obj);
+                        return nested == null ? null : nestedConverter.toRow(nested);
+                    };
+                }
             default:
                 throw new UnsupportedOperationException(
                         String.format(

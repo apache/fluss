@@ -83,7 +83,7 @@ public class LogFetchCollector {
      * @throws LogOffsetOutOfRangeException If there is OffsetOutOfRange error in fetchResponse and
      *     the defaultResetPolicy is NONE
      */
-    public Map<TableBucket, List<ScanRecord>> collectFetch(final LogFetchBuffer logFetchBuffer) {
+    public ScanRecords collectFetch(final LogFetchBuffer logFetchBuffer) {
         Map<TableBucket, List<ScanRecord>> fetched = new HashMap<>();
         int recordsRemaining = maxPollRecords;
 
@@ -143,7 +143,7 @@ public class LogFetchCollector {
             }
         }
 
-        return fetched;
+        return new ScanRecords(fetched);
     }
 
     private List<ScanRecord> fetchRecords(CompletedFetch nextInLineFetch, int maxRecords) {
@@ -154,7 +154,7 @@ public class LogFetchCollector {
                     "Ignoring fetched records for {} at offset {} since the current offset is null which means the "
                             + "bucket has been unsubscribe.",
                     tb,
-                    nextInLineFetch.nextFetchOffset());
+                    nextInLineFetch.fetchOffset());
         } else {
             if (nextInLineFetch.nextFetchOffset() == offset) {
                 List<ScanRecord> records = nextInLineFetch.fetchRecords(maxRecords);
@@ -215,7 +215,7 @@ public class LogFetchCollector {
 
     private @Nullable CompletedFetch handleInitializeSuccess(CompletedFetch completedFetch) {
         TableBucket tb = completedFetch.tableBucket;
-        long fetchOffset = completedFetch.nextFetchOffset();
+        long fetchOffset = completedFetch.fetchOffset();
 
         // we are interested in this fetch only if the beginning offset matches the
         // current consumed position.
@@ -249,7 +249,7 @@ public class LogFetchCollector {
     private void handleInitializeErrors(
             CompletedFetch completedFetch, Errors error, String errorMessage) {
         TableBucket tb = completedFetch.tableBucket;
-        long fetchOffset = completedFetch.nextFetchOffset();
+        long fetchOffset = completedFetch.fetchOffset();
         if (error == Errors.NOT_LEADER_OR_FOLLOWER
                 || error == Errors.LOG_STORAGE_EXCEPTION
                 || error == Errors.KV_STORAGE_EXCEPTION

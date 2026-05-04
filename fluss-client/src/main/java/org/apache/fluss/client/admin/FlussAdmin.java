@@ -32,6 +32,7 @@ import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
+import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.DatabaseSummary;
@@ -53,6 +54,7 @@ import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.AddServerTagRequest;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
+import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
@@ -78,6 +80,7 @@ import org.apache.fluss.rpc.messages.ListAclsRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
+import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
@@ -95,7 +98,6 @@ import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
-import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import javax.annotation.Nullable;
@@ -108,7 +110,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterDatabaseRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterTableRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeCreatePartitionRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeDropPartitionRequest;
@@ -284,6 +288,15 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
+    public CompletableFuture<Void> alterDatabase(
+            String databaseName, List<DatabaseChange> databaseChanges, boolean ignoreIfNotExists) {
+        TablePath.validateDatabaseName(databaseName);
+        AlterDatabaseRequest request =
+                makeAlterDatabaseRequest(databaseName, databaseChanges, ignoreIfNotExists);
+        return gateway.alterDatabase(request).thenApply(r -> null);
+    }
+
+    @Override
     public CompletableFuture<TableInfo> getTableInfo(TablePath tablePath) {
         GetTableInfoRequest request = new GetTableInfoRequest();
         request.setTablePath()
@@ -298,6 +311,9 @@ public class FlussAdmin implements Admin {
                                         r.getTableId(),
                                         r.getSchemaId(),
                                         TableDescriptor.fromJsonBytes(r.getTableJson()),
+                                        // For backward compatibility, results returned by old
+                                        // clusters do not include the remote data dir
+                                        r.hasRemoteDataDir() ? r.getRemoteDataDir() : null,
                                         r.getCreatedTime(),
                                         r.getModifiedTime()));
     }
@@ -526,7 +542,7 @@ public class FlussAdmin implements Admin {
                         buckets,
                         offsetSpec,
                         tableInfo.getTablePath());
-        Map<Integer, CompletableFuture<Long>> bucketToOffsetMap = MapUtils.newConcurrentHashMap();
+        Map<Integer, CompletableFuture<Long>> bucketToOffsetMap = new ConcurrentHashMap<>();
         for (int bucket : buckets) {
             bucketToOffsetMap.put(bucket, new CompletableFuture<>());
         }
@@ -812,7 +828,8 @@ public class FlussAdmin implements Admin {
         return listOffsetsRequests;
     }
 
-    private static void sendListOffsetsRequest(
+    @VisibleForTesting
+    static void sendListOffsetsRequest(
             MetadataUpdater metadataUpdater,
             Map<Integer, ListOffsetsRequest> leaderToRequestMap,
             Map<Integer, CompletableFuture<Long>> bucketToOffsetMap) {
@@ -825,25 +842,32 @@ public class FlussAdmin implements Admin {
                                 "Server " + leader + " is not found in metadata cache.");
                     } else {
                         gateway.listOffsets(request)
-                                .thenAccept(
-                                        r -> {
-                                            for (PbListOffsetsRespForBucket resp :
-                                                    r.getBucketsRespsList()) {
-                                                if (resp.hasErrorCode()) {
-                                                    bucketToOffsetMap
-                                                            .get(resp.getBucketId())
-                                                            .completeExceptionally(
-                                                                    ApiError.fromErrorMessage(resp)
-                                                                            .exception());
-                                                } else {
-                                                    bucketToOffsetMap
-                                                            .get(resp.getBucketId())
-                                                            .complete(resp.getOffset());
-                                                }
-                                            }
-                                        });
+                                .whenComplete(
+                                        (response, t) ->
+                                                handleListOffsetsResponse(
+                                                        bucketToOffsetMap, response, t));
                     }
                 });
+    }
+
+    private static void handleListOffsetsResponse(
+            Map<Integer, CompletableFuture<Long>> bucketToOffsetMap,
+            ListOffsetsResponse response,
+            Throwable t) {
+        // fail all futures to fail fast
+        if (t != null) {
+            bucketToOffsetMap.values().forEach(f -> f.completeExceptionally(t));
+            return;
+        }
+        for (PbListOffsetsRespForBucket resp : response.getBucketsRespsList()) {
+            if (resp.hasErrorCode()) {
+                bucketToOffsetMap
+                        .get(resp.getBucketId())
+                        .completeExceptionally(ApiError.fromErrorMessage(resp).exception());
+            } else {
+                bucketToOffsetMap.get(resp.getBucketId()).complete(resp.getOffset());
+            }
+        }
     }
 
     @VisibleForTesting

@@ -19,8 +19,12 @@ package org.apache.fluss.spark.read
 
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.metadata.{TableInfo, TablePath}
+import org.apache.fluss.predicate.{Predicate => FlussPredicate}
 import org.apache.fluss.spark.SparkConversions
+import org.apache.fluss.spark.read.lake.{FlussLakeAppendBatch, FlussLakeUpsertBatch}
 
+import org.apache.spark.sql.connector.expressions.filter.Predicate
+import org.apache.spark.sql.connector.metric.CustomMetric
 import org.apache.spark.sql.connector.read.{Batch, Scan}
 import org.apache.spark.sql.connector.read.streaming.MicroBatchStream
 import org.apache.spark.sql.types.StructType
@@ -30,11 +34,21 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap
 trait FlussScan extends Scan {
   def tableInfo: TableInfo
 
+  def tablePath: TablePath
+
   def requiredSchema: Option[StructType]
+
+  protected def scanType: String
 
   override def readSchema(): StructType = {
     requiredSchema.getOrElse(SparkConversions.toSparkDataType(tableInfo.getRowType))
   }
+
+  override def description(): String =
+    s"FlussScan: [$tablePath], Type: [$scanType]"
+
+  override def supportedCustomMetrics(): Array[CustomMetric] =
+    Array(FlussNumRowsReadMetric())
 }
 
 /** Fluss Append Scan. */
@@ -42,12 +56,48 @@ case class FlussAppendScan(
     tablePath: TablePath,
     tableInfo: TableInfo,
     requiredSchema: Option[StructType],
+    pushedPredicate: Option[FlussPredicate],
+    pushedSparkPredicates: Seq[Predicate],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussScan {
 
+  override protected val scanType: String = "Append"
+
   override def toBatch: Batch = {
-    new FlussAppendBatch(tablePath, tableInfo, readSchema, options, flussConfig)
+    new FlussAppendBatch(tablePath, tableInfo, readSchema, pushedPredicate, options, flussConfig)
+  }
+
+  override def toMicroBatchStream(checkpointLocation: String): MicroBatchStream = {
+    new FlussAppendMicroBatchStream(
+      tablePath,
+      tableInfo,
+      readSchema,
+      options,
+      flussConfig,
+      checkpointLocation)
+  }
+
+  override def description(): String = {
+    val base = super.description()
+    if (pushedSparkPredicates.isEmpty) base
+    else s"$base [PushedPredicates: ${pushedSparkPredicates.mkString("[", ", ", "]")}]"
+  }
+}
+
+/** Fluss Lake Append Scan. */
+case class FlussLakeAppendScan(
+    tablePath: TablePath,
+    tableInfo: TableInfo,
+    requiredSchema: Option[StructType],
+    options: CaseInsensitiveStringMap,
+    flussConfig: Configuration)
+  extends FlussScan {
+
+  override protected val scanType: String = "LakeAppend"
+
+  override def toBatch: Batch = {
+    new FlussLakeAppendBatch(tablePath, tableInfo, readSchema, options, flussConfig)
   }
 
   override def toMicroBatchStream(checkpointLocation: String): MicroBatchStream = {
@@ -70,8 +120,36 @@ case class FlussUpsertScan(
     flussConfig: Configuration)
   extends FlussScan {
 
+  override protected val scanType: String = "Upsert"
+
   override def toBatch: Batch = {
     new FlussUpsertBatch(tablePath, tableInfo, readSchema, options, flussConfig)
+  }
+
+  override def toMicroBatchStream(checkpointLocation: String): MicroBatchStream = {
+    new FlussUpsertMicroBatchStream(
+      tablePath,
+      tableInfo,
+      readSchema,
+      options,
+      flussConfig,
+      checkpointLocation)
+  }
+}
+
+/** Fluss Lake Upsert Scan for lake-enabled primary key tables. */
+case class FlussLakeUpsertScan(
+    tablePath: TablePath,
+    tableInfo: TableInfo,
+    requiredSchema: Option[StructType],
+    options: CaseInsensitiveStringMap,
+    flussConfig: Configuration)
+  extends FlussScan {
+
+  override protected val scanType: String = "LakeUpsert"
+
+  override def toBatch: Batch = {
+    new FlussLakeUpsertBatch(tablePath, tableInfo, readSchema, options, flussConfig)
   }
 
   override def toMicroBatchStream(checkpointLocation: String): MicroBatchStream = {

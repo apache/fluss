@@ -61,6 +61,7 @@ import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DataTypes;
@@ -411,11 +412,11 @@ class TableManagerITCase {
         adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
 
         // wait until partition is created
-        Map<String, Long> partitions =
+        Map<String, PartitionRegistration> partitions =
                 waitValue(
                         () -> {
-                            Map<String, Long> gotPartitions =
-                                    zkClient.getPartitionNameAndIds(tablePath);
+                            Map<String, PartitionRegistration> gotPartitions =
+                                    zkClient.getPartitionRegistrations(tablePath);
                             if (!gotPartitions.isEmpty()) {
                                 return Optional.of(gotPartitions);
                             } else {
@@ -443,10 +444,12 @@ class TableManagerITCase {
                 .get();
 
         // verify the partition assignment is deleted
-        for (Long partitionId : partitions.values()) {
+        for (PartitionRegistration partition : partitions.values()) {
             retry(
                     Duration.ofMinutes(1),
-                    () -> assertThat(zkClient.getPartitionAssignment(partitionId)).isEmpty());
+                    () ->
+                            assertThat(zkClient.getPartitionAssignment(partition.getPartitionId()))
+                                    .isEmpty());
         }
 
         // make sure the auto partition manager won't create partitions for the new table
@@ -511,6 +514,7 @@ class TableManagerITCase {
                     .updateMetadata(
                             makeUpdateMetadataRequest(
                                     coordinatorServerInfo,
+                                    null,
                                     new HashSet<>(tabletServerInfos),
                                     Collections.emptyList(),
                                     Collections.emptyList()))
@@ -541,8 +545,7 @@ class TableManagerITCase {
                         configuration,
                         new ClientMetricGroup(
                                 MetricRegistry.create(configuration, null),
-                                "fluss-cluster-extension"),
-                        false)) {
+                                "fluss-cluster-extension"))) {
             ServerNode serverNode =
                     FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode(CLIENT_LISTENER);
             AdminGateway adminGatewayForClient =
@@ -650,6 +653,10 @@ class TableManagerITCase {
                     .updateMetadata(
                             makeLegacyUpdateMetadataRequest(
                                     Optional.of(coordinatorServerInfo),
+                                    FLUSS_CLUSTER_EXTENSION
+                                            .getCoordinatorServer()
+                                            .getCoordinatorEventProcessor()
+                                            .getCoordinatorEpoch(),
                                     new HashSet<>(tabletServerInfos)))
                     .get();
         }
@@ -711,6 +718,7 @@ class TableManagerITCase {
                         pbTableMetadata.getTableId(),
                         pbTableMetadata.getSchemaId(),
                         TableDescriptor.fromJsonBytes(pbTableMetadata.getTableJson()),
+                        pbTableMetadata.getRemoteDataDir(),
                         pbTableMetadata.getCreatedTime(),
                         pbTableMetadata.getModifiedTime());
         List<Schema.Column> columns = tableInfo.getSchema().getColumns();
@@ -870,7 +878,9 @@ class TableManagerITCase {
 
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     private UpdateMetadataRequest makeLegacyUpdateMetadataRequest(
-            Optional<ServerInfo> coordinatorServer, Set<ServerInfo> aliveTableServers) {
+            Optional<ServerInfo> coordinatorServer,
+            int coordinatorEpoch,
+            Set<ServerInfo> aliveTableServers) {
         UpdateMetadataRequest updateMetadataRequest = new UpdateMetadataRequest();
         Set<PbServerNode> aliveTableServerNodes = new HashSet<>();
         for (ServerInfo serverInfo : aliveTableServers) {
@@ -892,6 +902,7 @@ class TableManagerITCase {
                 node -> {
                     Endpoint endpoint = node.endpoints().get(0);
                     updateMetadataRequest
+                            .setCoordinatorEpoch(coordinatorEpoch)
                             .setCoordinatorServer()
                             .setNodeId(node.id())
                             .setHost(endpoint.getHost())

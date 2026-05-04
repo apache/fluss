@@ -36,7 +36,6 @@ import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
@@ -93,6 +92,7 @@ import org.apache.fluss.server.tablet.TabletService;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 
 import org.slf4j.Logger;
@@ -362,21 +362,21 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     }
 
     private long getPartitionId(TablePath tablePath, String partitionName) {
-        Optional<TablePartition> optTablePartition;
+        Optional<PartitionRegistration> optPartitionRegistration;
         try {
-            optTablePartition = zkClient.getPartition(tablePath, partitionName);
+            optPartitionRegistration = zkClient.getPartition(tablePath, partitionName);
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format("Failed to get latest kv snapshots for table '%s'", tablePath),
                     e);
         }
-        if (!optTablePartition.isPresent()) {
+        if (!optPartitionRegistration.isPresent()) {
             throw new PartitionNotExistException(
                     String.format(
                             "The partition '%s' of table '%s' does not exist.",
                             partitionName, tablePath));
         }
-        return optTablePartition.get().getPartitionId();
+        return optPartitionRegistration.get().getPartitionId();
     }
 
     @Override
@@ -436,19 +436,19 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         TablePath tablePath = toTablePath(request.getTablePath());
         authorizeTable(OperationType.DESCRIBE, tablePath);
 
-        Map<String, Long> partitionNameAndIds;
+        Map<String, PartitionRegistration> partitionRegistrations;
         if (request.hasPartialPartitionSpec()) {
             ResolvedPartitionSpec partitionSpecFromRequest =
                     toResolvedPartitionSpec(request.getPartialPartitionSpec());
-            partitionNameAndIds =
+            partitionRegistrations =
                     metadataManager.listPartitions(tablePath, partitionSpecFromRequest);
         } else {
-            partitionNameAndIds = metadataManager.listPartitions(tablePath);
+            partitionRegistrations = metadataManager.listPartitions(tablePath);
         }
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         List<String> partitionKeys = tableInfo.getPartitionKeys();
         return CompletableFuture.completedFuture(
-                toListPartitionInfosResponse(partitionKeys, partitionNameAndIds));
+                toListPartitionInfosResponse(partitionKeys, partitionRegistrations));
     }
 
     @Override

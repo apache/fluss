@@ -18,6 +18,7 @@
 package org.apache.fluss.client.converter;
 
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
@@ -28,9 +29,15 @@ import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
+import java.lang.reflect.Array;
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.Type;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Converter for scanner path: converts InternalRow (possibly projected) to POJO, leaving
@@ -165,9 +172,94 @@ public final class RowToPojoConverter<T> {
                                     row.getTimestampLtz(pos, precision), prop.name, prop.type);
                 }
             case ARRAY:
-                ArrayType arrayType = (ArrayType) fieldType;
-                if (Collection.class.isAssignableFrom(prop.type)) {
-                    // POJO field is a List / Collection — deserialize as ArrayList<Object>
+                {
+                    ArrayType arrayType = (ArrayType) fieldType;
+                    if (Collection.class.isAssignableFrom(prop.type)) {
+                        // POJO field is a List / Collection — extract the element class from the
+                        // generic type declaration so that ROW elements are deserialized to the
+                        // declared POJO type (e.g. List<AddressPojo>) rather than InternalRow.
+                        Class<?> elemClass = Object.class;
+                        if (prop.genericType instanceof ParameterizedType) {
+                            ParameterizedType pt = (ParameterizedType) prop.genericType;
+                            Type[] args = pt.getActualTypeArguments();
+                            if (args.length == 1 && args[0] instanceof Class) {
+                                elemClass = (Class<?>) args[0];
+                            }
+                        }
+                        // Pre-build the nested converter once for ARRAY<ROW> with a known element
+                        // class so it is not rebuilt (via reflection) on every fromRow() call.
+                        if (arrayType.getElementType() instanceof RowType
+                                && elemClass != Object.class) {
+                            final RowType nestedRowType = (RowType) arrayType.getElementType();
+                            final int nestedFieldCount = nestedRowType.getFieldCount();
+                            @SuppressWarnings("unchecked")
+                            final RowToPojoConverter<Object> elemConv =
+                                    RowToPojoConverter.of(
+                                            (Class<Object>) elemClass,
+                                            nestedRowType,
+                                            nestedRowType);
+                            return (row, pos) -> {
+                                InternalArray arr = row.getArray(pos);
+                                if (arr == null) {
+                                    return null;
+                                }
+                                int size = arr.size();
+                                List<Object> result = new ArrayList<>(size);
+                                for (int i = 0; i < size; i++) {
+                                    result.add(
+                                            arr.isNullAt(i)
+                                                    ? null
+                                                    : elemConv.fromRow(
+                                                            arr.getRow(i, nestedFieldCount)));
+                                }
+                                return result;
+                            };
+                        }
+                        final Class<?> ec = elemClass;
+                        return (row, pos) -> {
+                            InternalArray array = row.getArray(pos);
+                            return array == null
+                                    ? null
+                                    : new FlussArrayToPojoArray(
+                                                    array,
+                                                    arrayType.getElementType(),
+                                                    prop.name,
+                                                    ec)
+                                            .convertList();
+                        };
+                    }
+                    final Class<?> componentType = prop.type.getComponentType();
+                    // Pre-build the nested converter once for ARRAY<ROW> with a known component
+                    // type so it is not rebuilt (via reflection) on every fromRow() call.
+                    if (arrayType.getElementType() instanceof RowType
+                            && componentType != null
+                            && componentType != Object.class) {
+                        final RowType nestedRowType = (RowType) arrayType.getElementType();
+                        final int nestedFieldCount = nestedRowType.getFieldCount();
+                        @SuppressWarnings("unchecked")
+                        final RowToPojoConverter<Object> elemConv =
+                                RowToPojoConverter.of(
+                                        (Class<Object>) componentType,
+                                        nestedRowType,
+                                        nestedRowType);
+                        return (row, pos) -> {
+                            InternalArray arr = row.getArray(pos);
+                            if (arr == null) {
+                                return null;
+                            }
+                            int size = arr.size();
+                            Object result = Array.newInstance(componentType, size);
+                            for (int i = 0; i < size; i++) {
+                                if (!arr.isNullAt(i)) {
+                                    Array.set(
+                                            result,
+                                            i,
+                                            elemConv.fromRow(arr.getRow(i, nestedFieldCount)));
+                                }
+                            }
+                            return result;
+                        };
+                    }
                     return (row, pos) -> {
                         InternalArray array = row.getArray(pos);
                         return array == null
@@ -176,26 +268,85 @@ public final class RowToPojoConverter<T> {
                                                 array,
                                                 arrayType.getElementType(),
                                                 prop.name,
-                                                Object.class)
-                                        .convertList();
+                                                componentType)
+                                        .convertArray();
                     };
                 }
-                final Class<?> componentType = prop.type.getComponentType();
-                return (row, pos) -> {
-                    InternalArray array = row.getArray(pos);
-                    return array == null
-                            ? null
-                            : new FlussArrayToPojoArray(
-                                            array,
-                                            arrayType.getElementType(),
-                                            prop.name,
-                                            componentType)
-                                    .convertArray();
-                };
             case MAP:
-                return (row, pos) ->
-                        new FlussMapToPojoMap(row.getMap(pos), (MapType) fieldType, prop.name)
-                                .convertMap();
+                {
+                    MapType mapType = (MapType) fieldType;
+                    Class<?> keyClass = Object.class;
+                    Class<?> valueClass = Object.class;
+                    Type gt = prop.genericType;
+                    if (gt instanceof ParameterizedType) {
+                        ParameterizedType pt = (ParameterizedType) gt;
+                        Type[] typeArgs = pt.getActualTypeArguments();
+                        if (typeArgs.length == 2) {
+                            if (typeArgs[0] instanceof Class) {
+                                keyClass = (Class<?>) typeArgs[0];
+                            }
+                            if (typeArgs[1] instanceof Class) {
+                                valueClass = (Class<?>) typeArgs[1];
+                            }
+                        }
+                    }
+                    final Class<?> kc = keyClass;
+                    final Class<?> vc = valueClass;
+                    // Pre-build the nested converter once for MAP<K, ROW> with a known value
+                    // class so it is not rebuilt (via reflection) on every fromRow() call.
+                    if (mapType.getValueType() instanceof RowType && vc != Object.class) {
+                        final RowType nestedRowType = (RowType) mapType.getValueType();
+                        final int nestedFieldCount = nestedRowType.getFieldCount();
+                        @SuppressWarnings("unchecked")
+                        final RowToPojoConverter<Object> valConv =
+                                RowToPojoConverter.of(
+                                        (Class<Object>) vc, nestedRowType, nestedRowType);
+                        return (row, pos) -> {
+                            InternalMap internalMap = row.getMap(pos);
+                            if (internalMap == null) {
+                                return null;
+                            }
+                            List<Object> keys =
+                                    new FlussArrayToPojoArray(
+                                                    internalMap.keyArray(),
+                                                    mapType.getKeyType(),
+                                                    prop.name,
+                                                    kc)
+                                            .convertList();
+                            if (keys == null || keys.isEmpty()) {
+                                return new HashMap<>();
+                            }
+                            InternalArray valueArray = internalMap.valueArray();
+                            Map<Object, Object> result = new HashMap<>(keys.size() * 2);
+                            for (int i = 0; i < keys.size(); i++) {
+                                InternalRow nestedRow =
+                                        valueArray.isNullAt(i)
+                                                ? null
+                                                : valueArray.getRow(i, nestedFieldCount);
+                                result.put(
+                                        keys.get(i),
+                                        nestedRow == null ? null : valConv.fromRow(nestedRow));
+                            }
+                            return result;
+                        };
+                    }
+                    return (row, pos) ->
+                            new FlussMapToPojoMap(row.getMap(pos), mapType, prop.name, kc, vc)
+                                    .convertMap();
+                }
+            case ROW:
+                {
+                    RowType nestedRowType = (RowType) fieldType;
+                    int nestedFieldCount = nestedRowType.getFieldCount();
+                    @SuppressWarnings("unchecked")
+                    RowToPojoConverter<Object> nestedConverter =
+                            RowToPojoConverter.of(
+                                    (Class<Object>) prop.type, nestedRowType, nestedRowType);
+                    return (row, pos) -> {
+                        InternalRow nestedRow = row.getRow(pos, nestedFieldCount);
+                        return nestedRow == null ? null : nestedConverter.fromRow(nestedRow);
+                    };
+                }
             default:
                 throw new UnsupportedOperationException(
                         String.format(

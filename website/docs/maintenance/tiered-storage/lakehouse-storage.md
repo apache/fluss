@@ -28,6 +28,7 @@ You can refer to the documentation of the corresponding data lake format integra
 First, you must configure the lakehouse storage in `server.yaml`. Take Paimon as an example, you must configure the following configurations:
 ```yaml
 # Paimon configuration
+datalake.enabled: true
 datalake.format: paimon
 
 # the catalog config about Paimon, assuming using Filesystem catalog
@@ -39,6 +40,7 @@ Fluss processes Paimon configurations by removing the `datalake.paimon.` prefix 
 
 For example, if you want to configure to use Hive catalog, you can configure like following:
 ```yaml
+datalake.enabled: true
 datalake.format: paimon
 datalake.paimon.metastore: hive
 datalake.paimon.uri: thrift://<hive-metastore-host-name>:<port>

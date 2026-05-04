@@ -30,10 +30,12 @@ import org.apache.fluss.client.table.scanner.log.TypedLogScanner;
 import org.apache.fluss.client.table.scanner.log.TypedLogScannerImpl;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
@@ -51,11 +53,15 @@ public class TableScan implements Scan {
 
     /** The projected fields to do projection. No projection if is null. */
     @Nullable private final int[] projectedColumns;
+
     /** The limited row number to read. No limit if is null. */
     @Nullable private final Integer limit;
 
+    /** The record batch filter to apply. No filter if is null. */
+    @Nullable private final Predicate recordBatchFilter;
+
     public TableScan(FlussConnection conn, TableInfo tableInfo, SchemaGetter schemaGetter) {
-        this(conn, tableInfo, schemaGetter, null, null);
+        this(conn, tableInfo, schemaGetter, null, null, null);
     }
 
     private TableScan(
@@ -63,17 +69,20 @@ public class TableScan implements Scan {
             TableInfo tableInfo,
             SchemaGetter schemaGetter,
             @Nullable int[] projectedColumns,
-            @Nullable Integer limit) {
+            @Nullable Integer limit,
+            @Nullable Predicate recordBatchFilter) {
         this.conn = conn;
         this.tableInfo = tableInfo;
         this.projectedColumns = projectedColumns;
         this.limit = limit;
         this.schemaGetter = schemaGetter;
+        this.recordBatchFilter = recordBatchFilter;
     }
 
     @Override
     public Scan project(@Nullable int[] projectedColumns) {
-        return new TableScan(conn, tableInfo, schemaGetter, projectedColumns, limit);
+        return new TableScan(
+                conn, tableInfo, schemaGetter, projectedColumns, limit, recordBatchFilter);
     }
 
     @Override
@@ -92,12 +101,19 @@ public class TableScan implements Scan {
             }
             columnIndexes[i] = index;
         }
-        return new TableScan(conn, tableInfo, schemaGetter, columnIndexes, limit);
+        return new TableScan(
+                conn, tableInfo, schemaGetter, columnIndexes, limit, recordBatchFilter);
     }
 
     @Override
     public Scan limit(int rowNumber) {
-        return new TableScan(conn, tableInfo, schemaGetter, projectedColumns, rowNumber);
+        return new TableScan(
+                conn, tableInfo, schemaGetter, projectedColumns, rowNumber, recordBatchFilter);
+    }
+
+    @Override
+    public Scan filter(@Nullable Predicate predicate) {
+        return new TableScan(conn, tableInfo, schemaGetter, projectedColumns, limit, predicate);
     }
 
     @Override
@@ -109,6 +125,15 @@ public class TableScan implements Scan {
                             tableInfo.getTablePath(), limit));
         }
 
+        if (recordBatchFilter != null
+                && tableInfo.getTableConfig().getLogFormat() != LogFormat.ARROW) {
+            throw new UnsupportedOperationException(
+                    String.format(
+                            "Filter pushdown is only supported for ARROW log format. "
+                                    + "Table: %s, current log format: %s",
+                            tableInfo.getTablePath(), tableInfo.getTableConfig().getLogFormat()));
+        }
+
         return new LogScannerImpl(
                 conn.getConfiguration(),
                 tableInfo,
@@ -116,7 +141,8 @@ public class TableScan implements Scan {
                 conn.getClientMetricGroup(),
                 conn.getOrCreateRemoteFileDownloader(),
                 projectedColumns,
-                schemaGetter);
+                schemaGetter,
+                recordBatchFilter);
     }
 
     @Override
@@ -127,6 +153,12 @@ public class TableScan implements Scan {
 
     @Override
     public BatchScanner createBatchScanner(TableBucket tableBucket) {
+        if (recordBatchFilter != null) {
+            throw new UnsupportedOperationException(
+                    String.format(
+                            "BatchScanner doesn't support filter pushdown. Table: %s, bucket: %s",
+                            tableInfo.getTablePath(), tableBucket));
+        }
         if (limit == null) {
             throw new UnsupportedOperationException(
                     String.format(
@@ -144,6 +176,12 @@ public class TableScan implements Scan {
 
     @Override
     public BatchScanner createBatchScanner(TableBucket tableBucket, long snapshotId) {
+        if (recordBatchFilter != null) {
+            throw new UnsupportedOperationException(
+                    String.format(
+                            "SnapshotBatchScanner doesn't support filter pushdown. Table: %s, bucket: %s, snapshot ID: %d",
+                            tableInfo.getTablePath(), tableBucket, snapshotId));
+        }
         if (limit != null) {
             throw new UnsupportedOperationException(
                     String.format(
@@ -178,6 +216,12 @@ public class TableScan implements Scan {
 
     @Override
     public BatchScanner createBatchScanner() throws IOException {
+        if (recordBatchFilter != null) {
+            throw new UnsupportedOperationException(
+                    String.format(
+                            "BatchScanner doesn't support filter pushdown. Table: %s",
+                            tableInfo.getTablePath()));
+        }
         int bucketCount = tableInfo.getNumBuckets();
         List<TableBucket> tableBuckets;
         if (tableInfo.isPartitioned()) {

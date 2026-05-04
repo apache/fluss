@@ -64,6 +64,7 @@ import org.apache.fluss.server.zk.ZooKeeperTestUtils;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
@@ -203,21 +204,22 @@ public final class FlussClusterExtension
 
     public void start() throws Exception {
         tempDir = Files.createTempDirectory("fluss-testing-cluster").toFile();
+        Configuration conf = new Configuration();
+        setRemoteDataDir(conf);
         zooKeeperServer = ZooKeeperTestUtils.createAndStartZookeeperTestingServer();
         zooKeeperClient =
-                createZooKeeperClient(zooKeeperServer.getConnectString(), NOPErrorHandler.INSTANCE);
+                createZooKeeperClient(
+                        conf, zooKeeperServer.getConnectString(), NOPErrorHandler.INSTANCE);
         metadataManager =
                 new MetadataManager(
                         zooKeeperClient,
                         clusterConf,
                         new LakeCatalogDynamicLoader(clusterConf, null, true));
-        Configuration conf = new Configuration();
         rpcClient =
                 RpcClient.create(
                         conf,
                         new ClientMetricGroup(
-                                MetricRegistry.create(conf, null), "fluss-cluster-extension"),
-                        false);
+                                MetricRegistry.create(conf, null), "fluss-cluster-extension"));
         startCoordinatorServer();
         startTabletServers();
         // wait coordinator knows all tablet servers to make cluster
@@ -263,6 +265,7 @@ public final class FlussClusterExtension
             setRemoteDataDir(conf);
             coordinatorServer = new CoordinatorServer(conf, clock);
             coordinatorServer.start();
+            waitUntilCoordinatorServerElected();
             coordinatorServerInfo =
                     // TODO, Currently, we use 0 as coordinator server id.
                     new ServerInfo(
@@ -273,6 +276,7 @@ public final class FlussClusterExtension
         } else {
             // start the existing coordinator server
             coordinatorServer.start();
+            waitUntilCoordinatorServerElected();
             coordinatorServerInfo =
                     new ServerInfo(
                             0,
@@ -708,10 +712,12 @@ public final class FlussClusterExtension
                 tableBuckets.add(new TableBucket(tableId, null, bucketId));
             }
         } else {
-            Map<String, Long> partitions = zooKeeperClient.getPartitionNameAndIds(tablePath);
-            for (Long partitionId : partitions.values()) {
+            Map<String, PartitionRegistration> partitions =
+                    zooKeeperClient.getPartitionRegistrations(tablePath);
+            for (PartitionRegistration partition : partitions.values()) {
                 for (int bucketId = 0; bucketId < bucketCount; bucketId++) {
-                    tableBuckets.add(new TableBucket(tableId, partitionId, bucketId));
+                    tableBuckets.add(
+                            new TableBucket(tableId, partition.getPartitionId(), bucketId));
                 }
             }
         }
@@ -877,10 +883,16 @@ public final class FlussClusterExtension
     public Map<String, Long> waitUntilPartitionsCreated(TablePath tablePath, int expectCount) {
         return waitValue(
                 () -> {
-                    Map<String, Long> partitions =
-                            zooKeeperClient.getPartitionNameAndIds(tablePath);
+                    Map<String, PartitionRegistration> partitions =
+                            zooKeeperClient.getPartitionRegistrations(tablePath);
+                    Map<String, Long> partitionIdAndNames =
+                            partitions.entrySet().stream()
+                                    .collect(
+                                            Collectors.toMap(
+                                                    Map.Entry::getKey,
+                                                    e -> e.getValue().getPartitionId()));
                     if (partitions.size() == expectCount) {
-                        return Optional.of(partitions);
+                        return Optional.of(partitionIdAndNames);
                     } else {
                         return Optional.empty();
                     }
@@ -892,8 +904,8 @@ public final class FlussClusterExtension
     public void waitUntilPartitionsDropped(TablePath tablePath, List<String> droppedPartitions) {
         waitUntil(
                 () -> {
-                    Map<String, Long> partitions =
-                            zooKeeperClient.getPartitionNameAndIds(tablePath);
+                    Map<String, PartitionRegistration> partitions =
+                            zooKeeperClient.getPartitionRegistrations(tablePath);
                     for (String droppedPartition : droppedPartitions) {
                         if (partitions.containsKey(droppedPartition)) {
                             return false;
@@ -928,6 +940,18 @@ public final class FlussClusterExtension
 
     public CoordinatorServer getCoordinatorServer() {
         return coordinatorServer;
+    }
+
+    private void waitUntilCoordinatorServerElected() {
+        waitUntil(
+                () -> zooKeeperClient.getCoordinatorLeaderAddress().isPresent(),
+                Duration.ofSeconds(10),
+                "Fail to wait coordinator server elected");
+        // we need to wait some time for the coordinator leader start services after election
+        waitUntil(
+                () -> coordinatorServer.getCoordinatorService().isLeader(),
+                Duration.ofSeconds(10),
+                "Coordinator leader did not recognize itself as leader");
     }
 
     // --------------------------------------------------------------------------------------------

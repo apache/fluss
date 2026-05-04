@@ -23,6 +23,7 @@ import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.complex.FixedSizeListVector;
 import org.apache.arrow.vector.complex.ListVector;
+import org.apache.arrow.vector.complex.StructVector;
 import org.apache.arrow.vector.types.pojo.Schema;
 
 import java.nio.ByteBuffer;
@@ -91,7 +92,44 @@ public class ArrowDataConverter {
                                 shadedVector,
                         (ListVector) nonShadedVector);
                 return;
+            } else {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Shaded vector is ListVector but non-shaded vector is %s, expected ListVector or FixedSizeListVector.",
+                                nonShadedVector.getClass().getSimpleName()));
             }
+        }
+
+        if (shadedVector
+                instanceof
+                org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.StructVector) {
+            if (!(nonShadedVector instanceof StructVector)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Shaded vector is StructVector but non-shaded vector is %s, expected StructVector.",
+                                nonShadedVector.getClass().getSimpleName()));
+            }
+            copyStructVectorData(
+                    (org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.StructVector)
+                            shadedVector,
+                    (StructVector) nonShadedVector);
+            return;
+        }
+
+        if (nonShadedVector instanceof StructVector) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Non-shaded vector is StructVector but shaded vector is %s, expected shaded StructVector.",
+                            shadedVector.getClass().getSimpleName()));
+        }
+
+        if (nonShadedVector instanceof ListVector
+                || nonShadedVector instanceof FixedSizeListVector) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Non-shaded vector is %s but shaded vector is %s, expected shaded ListVector.",
+                            nonShadedVector.getClass().getSimpleName(),
+                            shadedVector.getClass().getSimpleName()));
         }
 
         List<org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf> shadedBuffers =
@@ -280,5 +318,43 @@ public class ArrowDataConverter {
                 }
             }
         }
+    }
+
+    private static void copyStructVectorData(
+            org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.StructVector
+                    shadedStructVector,
+            StructVector nonShadedStructVector) {
+
+        // First, recursively copy all child vectors
+        List<org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector> shadedChildren =
+                shadedStructVector.getChildrenFromFields();
+        List<FieldVector> nonShadedChildren = nonShadedStructVector.getChildrenFromFields();
+
+        for (int i = 0; i < Math.min(shadedChildren.size(), nonShadedChildren.size()); i++) {
+            copyVectorData(shadedChildren.get(i), nonShadedChildren.get(i));
+        }
+
+        // Copy the StructVector's own validity buffer
+        List<org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf> shadedBuffers =
+                shadedStructVector.getFieldBuffers();
+        List<ArrowBuf> nonShadedBuffers = nonShadedStructVector.getFieldBuffers();
+
+        for (int i = 0; i < Math.min(shadedBuffers.size(), nonShadedBuffers.size()); i++) {
+            org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf shadedBuf =
+                    shadedBuffers.get(i);
+            ArrowBuf nonShadedBuf = nonShadedBuffers.get(i);
+
+            long size = Math.min(shadedBuf.capacity(), nonShadedBuf.capacity());
+            if (size > 0) {
+                ByteBuffer srcBuffer = shadedBuf.nioBuffer(0, (int) size);
+                srcBuffer.position(0);
+                srcBuffer.limit((int) Math.min(size, Integer.MAX_VALUE));
+                nonShadedBuf.setBytes(0, srcBuffer);
+            }
+        }
+
+        // Set value count
+        int valueCount = shadedStructVector.getValueCount();
+        nonShadedStructVector.setValueCount(valueCount);
     }
 }

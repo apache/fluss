@@ -79,6 +79,7 @@ class TableChangeWatcherTest {
             new AllCallbackWrapper<>(new ZooKeeperExtension());
 
     private static ZooKeeperClient zookeeperClient;
+    private static String remoteDataDir;
     private TestingEventManager eventManager;
     private TableChangeWatcher tableChangeWatcher;
     private static MetadataManager metadataManager;
@@ -89,6 +90,7 @@ class TableChangeWatcherTest {
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+        remoteDataDir = zookeeperClient.getDefaultRemoteDataDir();
         metadataManager =
                 new MetadataManager(
                         zookeeperClient,
@@ -144,6 +146,7 @@ class TableChangeWatcherTest {
                                     tableId,
                                     schemaInfo.getSchemaId(),
                                     TEST_TABLE,
+                                    remoteDataDir,
                                     currentMillis,
                                     currentMillis),
                             tableAssignment));
@@ -206,6 +209,7 @@ class TableChangeWatcherTest {
                                 tableId,
                                 schemaInfo.getSchemaId(),
                                 partitionedTable,
+                                remoteDataDir,
                                 currentMillis,
                                 currentMillis),
                         TableAssignment.builder().build()));
@@ -226,9 +230,9 @@ class TableChangeWatcherTest {
                                 .getBucketAssignments());
         // register assignment and metadata
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                1L, "2011", partitionAssignment, tablePath, tableId);
+                1L, "2011", partitionAssignment, remoteDataDir, tablePath, tableId);
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                2L, "2022", partitionAssignment, tablePath, tableId);
+                2L, "2022", partitionAssignment, remoteDataDir, tablePath, tableId);
 
         // create partitions events
         expectedEvents.add(
@@ -283,6 +287,7 @@ class TableChangeWatcherTest {
                                     tableId,
                                     schemaInfo.getSchemaId(),
                                     TEST_TABLE,
+                                    remoteDataDir,
                                     currentMillis,
                                     currentMillis),
                             tableAssignment));
@@ -357,6 +362,7 @@ class TableChangeWatcherTest {
                                 tableId,
                                 schemaInfo.getSchemaId(),
                                 TEST_TABLE,
+                                remoteDataDir,
                                 currentMillis,
                                 currentMillis),
                         tableAssignment));
@@ -390,5 +396,72 @@ class TableChangeWatcherTest {
                 () ->
                         assertThat(eventManager.getEvents())
                                 .containsExactlyInAnyOrderElementsOf(expectedEvents));
+    }
+
+    /**
+     * Tests that table creation is correctly detected via NODE_CREATED events with full data. This
+     * exercises the fix for the CuratorCache async getData race condition.
+     *
+     * <p>When CuratorCache starts (or during the race), it fires NODE_CREATED for table nodes that
+     * already contain full data. Without the fix, only NODE_CHANGED triggers {@code
+     * processCreateTable}, so these events would be missed. The fix adds table path handling in the
+     * NODE_CREATED branch to cover this case.
+     */
+    @Test
+    void testTableCreationDetectedViaNodeCreatedEvent() {
+        // Stop the watcher started in @BeforeEach to prevent it from processing events
+        tableChangeWatcher.stop();
+
+        // Create tables BEFORE starting a new watcher. This ensures that when
+        // CuratorCache starts and does its initial sync, the table nodes already
+        // have full data. CuratorCache fires NODE_CREATED (not NODE_CHANGED) for
+        // existing nodes, exercising the same code path that handles the race
+        // condition where NODE_CHANGED is lost due to async getData.
+        List<CoordinatorEvent> expectedEvents = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            TablePath tablePath = TablePath.of(DEFAULT_DB, "table_nc_" + i);
+            TableAssignment tableAssignment =
+                    generateAssignment(
+                            3,
+                            3,
+                            new TabletServerInfo[] {
+                                new TabletServerInfo(0, "rack0"),
+                                new TabletServerInfo(1, "rack1"),
+                                new TabletServerInfo(2, "rack2")
+                            });
+            long tableId =
+                    metadataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
+            SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
+            long currentMillis = System.currentTimeMillis();
+            expectedEvents.add(
+                    new CreateTableEvent(
+                            TableInfo.of(
+                                    tablePath,
+                                    tableId,
+                                    schemaInfo.getSchemaId(),
+                                    TEST_TABLE,
+                                    remoteDataDir,
+                                    currentMillis,
+                                    currentMillis),
+                            tableAssignment));
+            expectedEvents.add(new SchemaChangeEvent(tablePath, schemaInfo));
+        }
+
+        // Verify that the watcher has not processed any events
+        assertThat(eventManager.getEvents()).isEmpty();
+
+        // Start a new watcher. CuratorCache initial sync fires NODE_CREATED for
+        // existing nodes with full data - the same code path as when the async
+        // getData race causes NODE_CHANGED to be lost.
+        TestingEventManager newEventManager = new TestingEventManager();
+        TableChangeWatcher newWatcher = new TableChangeWatcher(zookeeperClient, newEventManager);
+        newWatcher.start();
+
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(newEventManager.getEvents())
+                                .containsExactlyInAnyOrderElementsOf(expectedEvents));
+        newWatcher.stop();
     }
 }

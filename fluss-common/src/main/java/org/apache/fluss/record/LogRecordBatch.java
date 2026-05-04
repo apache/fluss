@@ -28,6 +28,7 @@ import org.apache.fluss.utils.CloseableIterator;
 import javax.annotation.Nullable;
 
 import java.util.Iterator;
+import java.util.Optional;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V0;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
@@ -40,12 +41,8 @@ import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 @PublicEvolving
 public interface LogRecordBatch {
     /**
-     * The current "magic" value. Even though we already support LOG_MAGIC_VALUE_V1, for
-     * compatibility reasons — specifically, a higher-version Fluss Client (which supports
-     * LOG_MAGIC_VALUE_V1) cannot write to a lower-version Fluss Server (which only supports
-     * LOG_MAGIC_VALUE_V0) — we are unable to guarantee compatibility at this time. Therefore, we
-     * will keep the current log magic value set to LOG_MAGIC_VALUE_V0 for now, and only upgrade it
-     * to LOG_MAGIC_VALUE_V1 once the compatibility issue is resolved.
+     * The base "magic" value used when no statistics are needed. When statistics collection is
+     * enabled, V1 should be used instead.
      */
     byte CURRENT_LOG_MAGIC_VALUE = LOG_MAGIC_VALUE_V0;
 
@@ -55,6 +52,17 @@ public interface LogRecordBatch {
      * @return true If so, false otherwise
      */
     boolean isValid();
+
+    /**
+     * Get the statistics of this record batch using the provided read context.
+     *
+     * <p>This method can deserialize statistics when the read context provides the necessary schema
+     * information.
+     *
+     * @param context The read context that provides schema information
+     * @return Optional containing the statistics if available and valid
+     */
+    Optional<LogRecordBatchStatistics> getStatistics(ReadContext context);
 
     /** Raise an exception if the checksum is not valid. */
     void ensureValid();
@@ -187,9 +195,13 @@ public interface LogRecordBatch {
          * <p>The schema root is used to read the Arrow records in the batch, if this is a {@link
          * LogFormat#ARROW} record batch.
          *
-         * <p>Note: DO NOT close the vector schema root because it is shared across multiple
-         * batches. Use {@link VectorSchemaRoot#slice(int)} to cache the root and close it after
-         * use.
+         * <p><b>Lifecycle:</b> DO NOT close the returned {@link VectorSchemaRoot} because it is
+         * shared across multiple batches. Each new batch load replaces the old buffers inside the
+         * same root. To avoid temporary buffer duplication (old and new buffers coexisting during
+         * the load), callers should call {@link VectorSchemaRoot#clear()} after finishing each
+         * batch to release old buffers immediately before the next batch is loaded. If you need to
+         * retain the data beyond the current batch, use {@link VectorSchemaRoot#slice(int)} to
+         * create an independent copy and close it after use.
          *
          * @param schemaId The schema id of the record batch.
          * @return The (maybe projected) schema root of the record batch.

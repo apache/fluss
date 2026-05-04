@@ -31,6 +31,7 @@ import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine;
 import org.apache.fluss.server.entity.DeleteReplicaResultForBucket;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.zk.NOPErrorHandler;
+import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.BucketAssignment;
@@ -63,6 +64,7 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionSuccessful;
@@ -77,6 +79,7 @@ class TableManagerTest {
             new AllCallbackWrapper<>(new ZooKeeperExtension());
 
     private static ZooKeeperClient zookeeperClient;
+    private static ZkEpoch zkEpoch;
     private static ExecutorService ioExecutor;
 
     private CoordinatorContext coordinatorContext;
@@ -85,11 +88,12 @@ class TableManagerTest {
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
 
     @BeforeAll
-    static void baseBeforeAll() {
+    static void baseBeforeAll() throws Exception {
         zookeeperClient =
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+        zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("1");
         ioExecutor = Executors.newFixedThreadPool(1);
     }
 
@@ -112,7 +116,7 @@ class TableManagerTest {
 
     private void initTableManager() {
         testingEventManager = new TestingEventManager();
-        coordinatorContext = new CoordinatorContext();
+        coordinatorContext = new CoordinatorContext(zkEpoch);
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
         Configuration conf = new Configuration();
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
@@ -162,6 +166,7 @@ class TableManagerTest {
                         tableId,
                         0,
                         DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, assignment);
@@ -185,6 +190,7 @@ class TableManagerTest {
                         tableId,
                         0,
                         DATA1_TABLE_DESCRIPTOR_PK,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH_PK, tableId, assignment);
@@ -224,6 +230,7 @@ class TableManagerTest {
                         tableId,
                         0,
                         DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, assignment);
@@ -271,6 +278,7 @@ class TableManagerTest {
                         tableId,
                         0,
                         DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, assignment);
@@ -280,7 +288,12 @@ class TableManagerTest {
         String partitionName = "2024";
         long partitionId = zookeeperClient.getPartitionIdAndIncrement();
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                partitionId, partitionName, partitionAssignment, DATA1_TABLE_PATH, tableId);
+                partitionId,
+                partitionName,
+                partitionAssignment,
+                DEFAULT_REMOTE_DATA_DIR,
+                DATA1_TABLE_PATH,
+                tableId);
 
         // create partition
         tableManager.onCreateNewPartition(

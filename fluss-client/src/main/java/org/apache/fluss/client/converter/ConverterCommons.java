@@ -133,6 +133,22 @@ final class ConverterCommons {
             return;
         }
 
+        if (typeRoot == DataTypeRoot.ROW) {
+            // ROW type maps to a nested POJO. The POJO class must be a valid POJO (public class
+            // with public default constructor). Detailed field-level validation is deferred to
+            // the nested PojoToRowConverter / RowToPojoConverter.
+            if (actual.isPrimitive()
+                    || actual.isArray()
+                    || Collection.class.isAssignableFrom(actual)
+                    || Map.class.isAssignableFrom(actual)) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Field '%s' must be a POJO class for ROW type, got %s",
+                                prop.name, actual.getName()));
+            }
+            return;
+        }
+
         Set<Class<?>> supported = SUPPORTED_TYPES.get(fieldType.getTypeRoot());
         if (supported == null) {
             throw new UnsupportedOperationException(

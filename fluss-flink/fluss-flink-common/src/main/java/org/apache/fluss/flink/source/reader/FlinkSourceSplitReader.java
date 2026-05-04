@@ -39,6 +39,7 @@ import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.ExceptionUtils;
@@ -91,6 +92,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     private final Map<TableBucket, String> subscribedBuckets;
 
     @Nullable private final int[] projectedFields;
+
     private final FlinkSourceReaderMetrics flinkSourceReaderMetrics;
 
     @Nullable private BoundedSplitReader currentBoundedSplitReader;
@@ -120,8 +122,9 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             TablePath tablePath,
             RowType sourceOutputType,
             @Nullable int[] projectedFields,
-            FlinkSourceReaderMetrics flinkSourceReaderMetrics,
-            @Nullable LakeSource<LakeSplit> lakeSource) {
+            @Nullable Predicate logRecordBatchFilter,
+            @Nullable LakeSource<LakeSplit> lakeSource,
+            FlinkSourceReaderMetrics flinkSourceReaderMetrics) {
         this.flinkMetricRegistry =
                 new FlinkMetricRegistry(flinkSourceReaderMetrics.getSourceReaderMetricGroup());
         this.connection = ConnectionFactory.createConnection(flussConf, flinkMetricRegistry);
@@ -134,7 +137,11 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
 
         this.flinkSourceReaderMetrics = flinkSourceReaderMetrics;
         sanityCheck(table.getTableInfo().getRowType(), projectedFields);
-        this.logScanner = table.newScan().project(projectedFields).createLogScanner();
+        this.logScanner =
+                table.newScan()
+                        .project(projectedFields)
+                        .filter(logRecordBatchFilter)
+                        .createLogScanner();
         this.stoppingOffsets = new HashMap<>();
         this.emptyLogSplits = new HashSet<>();
         this.lakeSource = lakeSource;

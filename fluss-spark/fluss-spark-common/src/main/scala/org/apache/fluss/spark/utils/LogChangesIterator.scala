@@ -48,10 +48,15 @@ case class LogChangesIterator(
     comparator: Comparator[InternalRow]
 ) extends CloseableIterator[KeyValueRow] {
 
+  private val projectRow1 = ProjectedRow.from(pkProjection)
+  private val projectRow2 = ProjectedRow.from(pkProjection)
+
   // Sort the records by primary key and then by offset
   private val sortedLogRecords = logRecords.sortWith {
     case (record1, record2) =>
-      val keyComparison = comparator.compare(record1.getRow, record2.getRow)
+      val keyComparison = comparator.compare(
+        projectRow1.replaceRow(record1.getRow),
+        projectRow2.replaceRow(record2.getRow))
       if (keyComparison == 0) {
         record1.logOffset() < record2.logOffset() // For same key, lower offset comes first
       } else {
@@ -62,9 +67,6 @@ case class LogChangesIterator(
   private var recordsIterator = SingleElementHeadIterator.addElementToHead(
     sortedLogRecords.head,
     CloseableIterator.wrap(sortedLogRecords.tail.toIterator.asJava))
-
-  private val projectRow1 = ProjectedRow.from(pkProjection)
-  private val projectRow2 = ProjectedRow.from(pkProjection)
 
   private var currentScanRecord: ScanRecord = _
 

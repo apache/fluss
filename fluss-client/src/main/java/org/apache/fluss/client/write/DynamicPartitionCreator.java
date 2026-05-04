@@ -24,6 +24,7 @@ import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.utils.AutoPartitionStrategy;
 import org.apache.fluss.utils.ExceptionUtils;
 
 import org.slf4j.Logger;
@@ -38,6 +39,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 
 import static org.apache.fluss.utils.ExceptionUtils.stripCompletionException;
+import static org.apache.fluss.utils.PartitionUtils.validateAutoPartitionTime;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** A creator to create partition when dynamic partition create enable for table. */
@@ -64,7 +66,9 @@ public class DynamicPartitionCreator {
     }
 
     public void checkAndCreatePartitionAsync(
-            PhysicalTablePath physicalTablePath, List<String> partitionKeys) {
+            PhysicalTablePath physicalTablePath,
+            List<String> partitionKeys,
+            AutoPartitionStrategy autoPartitionStrategy) {
         String partitionName = physicalTablePath.getPartitionName();
         if (partitionName == null) {
             // no need to check and create partition
@@ -83,12 +87,20 @@ public class DynamicPartitionCreator {
                 // if the partition exists, we should skip creating it.
                 LOG.debug("Partition {} already exists, skipping.", physicalTablePath);
             } else {
+                // Validate early, before touching any state.
+                ResolvedPartitionSpec resolvedPartitionSpec =
+                        ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName);
+                validateAutoPartitionTime(
+                        resolvedPartitionSpec.toPartitionSpec(),
+                        partitionKeys,
+                        autoPartitionStrategy);
+
                 // create partition if not exists.
                 // partition may not exist, we should try to create it.
                 if (inflightPartitionsToCreate.add(physicalTablePath)) {
                     // if the partition is not in inflightPartitionsToCreate, we should create it.
                     // this means that the partition is not being created by other threads.
-                    LOG.info("Dynamically creating partition partition for {}", physicalTablePath);
+                    LOG.info("Dynamically creating partition for {}", physicalTablePath);
                     createPartition(physicalTablePath, partitionKeys);
                 } else {
                     // if the partition is already in inflightPartitionsToCreate, we should skip
@@ -104,7 +116,6 @@ public class DynamicPartitionCreator {
         boolean idExist = false;
         // force an IO to check whether the partition exists
         try {
-            // force an IO to check whether the partition exists
             idExist = metadataUpdater.checkAndUpdatePartitionMetadata(physicalTablePath);
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);

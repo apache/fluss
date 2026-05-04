@@ -31,7 +31,6 @@ import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.utils.IOUtils;
-import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
@@ -48,6 +47,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -78,8 +78,8 @@ public class RemoteLogManager implements Closeable {
     private final Clock clock;
     private final ZooKeeperClient zkClient;
 
-    private final Map<TableBucket, TaskWithFuture> rlmTasks = MapUtils.newConcurrentHashMap();
-    private final Map<TableBucket, RemoteLogTablet> remoteLogs = MapUtils.newConcurrentHashMap();
+    private final Map<TableBucket, TaskWithFuture> rlmTasks = new ConcurrentHashMap<>();
+    private final Map<TableBucket, RemoteLogTablet> remoteLogs = new ConcurrentHashMap<>();
 
     public RemoteLogManager(
             Configuration conf,
@@ -133,8 +133,8 @@ public class RemoteLogManager implements Closeable {
         return remoteLogStorage.getRemoteLogDir();
     }
 
-    /** Restore the remote log manifest and start the log tiering task for the given replica. */
-    public void startLogTiering(Replica replica) throws Exception {
+    /** Register the replica to the remote log manager. */
+    public void registerReplica(Replica replica) throws Exception {
         if (remoteDisabled()) {
             return;
         }
@@ -159,6 +159,15 @@ public class RemoteLogManager implements Closeable {
         // leader needs to register the remote log metrics
         remoteLog.registerMetrics(replica.bucketMetrics());
         remoteLogs.put(tableBucket, remoteLog);
+    }
+
+    /** Start the log tiering task for the given replica. */
+    public void startLogTiering(Replica replica) {
+        TableBucket tableBucket = replica.getTableBucket();
+        RemoteLogTablet remoteLog = remoteLogs.get(tableBucket);
+        if (remoteLog == null) {
+            return;
+        }
 
         doHandleLeaderReplica(replica, remoteLog, tableBucket);
         LOG.debug("Added the remote log tiering task for replica {}", tableBucket);

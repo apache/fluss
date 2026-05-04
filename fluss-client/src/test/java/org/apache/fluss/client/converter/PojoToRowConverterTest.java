@@ -20,6 +20,7 @@ package org.apache.fluss.client.converter;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalMap;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypes;
@@ -358,5 +359,92 @@ public class PojoToRowConverterTest {
             this.timestampNtzField = timestampNtzField;
             this.timestampLtzField = timestampLtzField;
         }
+    }
+
+    // ==================== Nested ROW Write Tests ====================
+
+    @Test
+    public void testSimpleNestedRowWrite() {
+        RowType table =
+                RowType.builder()
+                        .field("id", DataTypes.INT())
+                        .field(
+                                "address",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("city", DataTypes.STRING()),
+                                        DataTypes.FIELD("zipCode", DataTypes.INT())))
+                        .build();
+
+        PojoToRowConverter<ConvertersTestFixtures.PersonPojo> writer =
+                PojoToRowConverter.of(ConvertersTestFixtures.PersonPojo.class, table, table);
+
+        ConvertersTestFixtures.PersonPojo pojo = new ConvertersTestFixtures.PersonPojo();
+        pojo.id = 1;
+        pojo.address = new ConvertersTestFixtures.AddressPojo();
+        pojo.address.city = "Beijing";
+        pojo.address.zipCode = 100000;
+
+        GenericRow row = writer.toRow(pojo);
+        assertThat(row.getInt(0)).isEqualTo(1);
+        InternalRow nestedRow = row.getRow(1, 2);
+        assertThat(nestedRow).isNotNull();
+        assertThat(nestedRow.getString(0).toString()).isEqualTo("Beijing");
+        assertThat(nestedRow.getInt(1)).isEqualTo(100000);
+    }
+
+    @Test
+    public void testNullNestedRowWrite() {
+        RowType table =
+                RowType.builder()
+                        .field("id", DataTypes.INT())
+                        .field(
+                                "address",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("city", DataTypes.STRING()),
+                                        DataTypes.FIELD("zipCode", DataTypes.INT())))
+                        .build();
+
+        PojoToRowConverter<ConvertersTestFixtures.PersonPojo> writer =
+                PojoToRowConverter.of(ConvertersTestFixtures.PersonPojo.class, table, table);
+
+        ConvertersTestFixtures.PersonPojo pojo = new ConvertersTestFixtures.PersonPojo();
+        pojo.id = 2;
+        pojo.address = null;
+
+        GenericRow row = writer.toRow(pojo);
+        assertThat(row.getInt(0)).isEqualTo(2);
+        assertThat(row.isNullAt(1)).isTrue();
+    }
+
+    @Test
+    public void testRowFieldWithIncompatibleType() {
+        RowType table =
+                RowType.builder()
+                        .field("badField", DataTypes.ROW(DataTypes.FIELD("x", DataTypes.INT())))
+                        .build();
+
+        assertThatThrownBy(
+                        () ->
+                                PojoToRowConverter.of(
+                                        ConvertersTestFixtures.PrimitiveArrayFieldPojo.class,
+                                        table,
+                                        table))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must be a POJO class for ROW type");
+    }
+
+    @Test
+    public void testRowFieldWithMapType() {
+        RowType table =
+                RowType.builder()
+                        .field("badField", DataTypes.ROW(DataTypes.FIELD("x", DataTypes.INT())))
+                        .build();
+
+        assertThatThrownBy(
+                        () ->
+                                PojoToRowConverter.of(
+                                        ConvertersTestFixtures.MapFieldPojo.class, table, table))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must be a POJO class for ROW type");
     }
 }

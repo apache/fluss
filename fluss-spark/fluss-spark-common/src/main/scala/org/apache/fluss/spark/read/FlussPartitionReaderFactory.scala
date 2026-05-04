@@ -19,6 +19,7 @@ package org.apache.fluss.spark.read
 
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.metadata.TablePath
+import org.apache.fluss.predicate.Predicate
 
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReader, PartitionReaderFactory}
@@ -28,6 +29,7 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap
 class FlussAppendPartitionReaderFactory(
     tablePath: TablePath,
     projection: Array[Int],
+    pushedPredicate: Option[Predicate],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends PartitionReaderFactory {
@@ -37,6 +39,7 @@ class FlussAppendPartitionReaderFactory(
     new FlussAppendPartitionReader(
       tablePath,
       projection,
+      pushedPredicate,
       flussPartition,
       flussConfig
     )

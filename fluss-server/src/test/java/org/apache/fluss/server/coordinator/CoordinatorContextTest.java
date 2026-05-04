@@ -22,6 +22,7 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
@@ -29,6 +30,7 @@ import org.junit.jupiter.api.Test;
 import java.time.Duration;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link CoordinatorContext}. */
@@ -36,7 +38,7 @@ class CoordinatorContextTest {
 
     @Test
     void testGetLakeTableCount() {
-        CoordinatorContext context = new CoordinatorContext();
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
 
         // Initially, there should be no tables
         assertThat(context.allTables()).isEmpty();
@@ -82,6 +84,7 @@ class CoordinatorContextTest {
                 tableId,
                 1,
                 tableDescriptor,
+                DEFAULT_REMOTE_DATA_DIR,
                 System.currentTimeMillis(),
                 System.currentTimeMillis());
     }

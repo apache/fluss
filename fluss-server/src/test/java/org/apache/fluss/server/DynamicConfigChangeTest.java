@@ -45,8 +45,10 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.apache.fluss.config.ConfigOptions.DATALAKE_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -64,6 +66,7 @@ public class DynamicConfigChangeTest {
     @BeforeAll
     static void beforeAll() {
         final Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.REMOTE_DATA_DIR, DEFAULT_REMOTE_DATA_DIR);
         configuration.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS,
                 zooKeeperExtensionWrapper.getCustomExtension().getConnectString());
@@ -181,6 +184,47 @@ public class DynamicConfigChangeTest {
 
             assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
                     .isNull();
+        }
+    }
+
+    @Test
+    void testDatalakePrefixValidationSkippedWhenFormatIsNull() throws Exception {
+        Configuration configuration = new Configuration();
+        try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
+                new LakeCatalogDynamicLoader(configuration, null, true)) {
+            DynamicConfigManager dynamicConfigManager =
+                    new DynamicConfigManager(zookeeperClient, configuration, true);
+            dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            dynamicConfigManager.startup();
+
+            // Setting `datalake.paimon.*` without setting `datalake.format` should pass because
+            // prefix validation is skipped.
+            assertThatCode(
+                            () ->
+                                    dynamicConfigManager.alterConfigs(
+                                            Collections.singletonList(
+                                                    new AlterConfig(
+                                                            "datalake.iceberg.type",
+                                                            "rest",
+                                                            AlterConfigOpType.SET))))
+                    .doesNotThrowAnyException();
+
+            assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
+                    .isNull();
+            assertThatThrownBy(
+                            () ->
+                                    dynamicConfigManager.alterConfigs(
+                                            Arrays.asList(
+                                                    new AlterConfig(
+                                                            "datalake.iceberg.type",
+                                                            "rest",
+                                                            AlterConfigOpType.SET),
+                                                    new AlterConfig(
+                                                            "datalake.format",
+                                                            "paimon",
+                                                            AlterConfigOpType.SET))))
+                    .hasMessageContaining(
+                            "Invalid configuration 'datalake.iceberg.type' for 'paimon' datalake format");
         }
     }
 
@@ -484,5 +528,28 @@ public class DynamicConfigChangeTest {
 
         // Verify the reconfigurable was notified with the new value
         assertThat(reconfiguredValue.get()).isEqualTo(2);
+    }
+
+    @Test
+    void testExplicitDataLakeEnabledRequiresDataLakeFormat() throws Exception {
+        try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
+                new LakeCatalogDynamicLoader(new Configuration(), null, true)) {
+            DynamicConfigManager dynamicConfigManager =
+                    new DynamicConfigManager(zookeeperClient, new Configuration(), true);
+            dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            dynamicConfigManager.startup();
+
+            assertThatThrownBy(
+                            () ->
+                                    dynamicConfigManager.alterConfigs(
+                                            Collections.singletonList(
+                                                    new AlterConfig(
+                                                            DATALAKE_ENABLED.key(),
+                                                            "true",
+                                                            AlterConfigOpType.SET))))
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining(
+                            "'datalake.format' must be configured when 'datalake.enabled' is explicitly set to true.");
+        }
     }
 }

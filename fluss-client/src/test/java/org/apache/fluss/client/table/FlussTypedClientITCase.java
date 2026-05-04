@@ -18,11 +18,12 @@
 package org.apache.fluss.client.table;
 
 import org.apache.fluss.client.admin.ClientToServerITCaseBase;
+import org.apache.fluss.client.converter.FlussArrayToPojoArray;
+import org.apache.fluss.client.converter.PojoArrayToFlussArray;
 import org.apache.fluss.client.converter.RowToPojoConverter;
 import org.apache.fluss.client.lookup.LookupResult;
 import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.lookup.TypedLookuper;
-import org.apache.fluss.client.table.scanner.Scan;
 import org.apache.fluss.client.table.scanner.TypedScanRecord;
 import org.apache.fluss.client.table.scanner.log.TypedLogScanner;
 import org.apache.fluss.client.table.scanner.log.TypedScanRecords;
@@ -256,27 +257,8 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
     }
 
     private static Schema allTypesPkSchema() {
-        // Same columns as log schema but with PK on 'a'
-        return Schema.newBuilder()
-                .column("a", DataTypes.INT())
-                .column("bool1", DataTypes.BOOLEAN())
-                .column("tiny", DataTypes.TINYINT())
-                .column("small", DataTypes.SMALLINT())
-                .column("intv", DataTypes.INT())
-                .column("big", DataTypes.BIGINT())
-                .column("flt", DataTypes.FLOAT())
-                .column("dbl", DataTypes.DOUBLE())
-                .column("ch", DataTypes.CHAR(1))
-                .column("str", DataTypes.STRING())
-                .column("bin", DataTypes.BINARY(3))
-                .column("bytes", DataTypes.BYTES())
-                .column("dec", DataTypes.DECIMAL(10, 2))
-                .column("dt", DataTypes.DATE())
-                .column("tm", DataTypes.TIME())
-                .column("tsNtz", DataTypes.TIMESTAMP(3))
-                .column("tsLtz", DataTypes.TIMESTAMP_LTZ(3))
-                .primaryKey("a")
-                .build();
+        // Same columns as the log schema with a primary key on 'a'
+        return Schema.newBuilder().fromSchema(allTypesLogSchema()).primaryKey("a").build();
     }
 
     private static AllTypesPojo newAllTypesPojo(int i) {
@@ -304,29 +286,9 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
 
     @Test
     void testTypedAppendWriteAndScan() throws Exception {
-        // Build all-types log table schema
-        Schema schema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("bool1", DataTypes.BOOLEAN())
-                        .column("tiny", DataTypes.TINYINT())
-                        .column("small", DataTypes.SMALLINT())
-                        .column("intv", DataTypes.INT())
-                        .column("big", DataTypes.BIGINT())
-                        .column("flt", DataTypes.FLOAT())
-                        .column("dbl", DataTypes.DOUBLE())
-                        .column("ch", DataTypes.CHAR(1))
-                        .column("str", DataTypes.STRING())
-                        .column("bin", DataTypes.BINARY(3))
-                        .column("bytes", DataTypes.BYTES())
-                        .column("dec", DataTypes.DECIMAL(10, 2))
-                        .column("dt", DataTypes.DATE())
-                        .column("tm", DataTypes.TIME())
-                        .column("tsNtz", DataTypes.TIMESTAMP(3))
-                        .column("tsLtz", DataTypes.TIMESTAMP_LTZ(3))
-                        .build();
         TablePath path = TablePath.of("pojo_db", "all_types_log");
-        TableDescriptor td = TableDescriptor.builder().schema(schema).distributedBy(2).build();
+        TableDescriptor td =
+                TableDescriptor.builder().schema(allTypesLogSchema()).distributedBy(2).build();
         createTable(path, td, true);
 
         try (Table table = conn.getTable(path)) {
@@ -342,8 +304,8 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
             writer.flush();
 
             // read
-            Scan scan = table.newScan();
-            TypedLogScanner<AllTypesPojo> scanner = scan.createTypedLogScanner(AllTypesPojo.class);
+            TypedLogScanner<AllTypesPojo> scanner =
+                    table.newScan().createTypedLogScanner(AllTypesPojo.class);
             subscribeFromBeginning(scanner, table);
 
             List<AllTypesPojo> actual = new ArrayList<>();
@@ -380,7 +342,7 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
             // update key 1: change a couple of fields
             AllTypesPojo p1Updated = newAllTypesPojo(1);
             p1Updated.str = "a1";
-            p1Updated.dec = new java.math.BigDecimal("42.42");
+            p1Updated.dec = new BigDecimal("42.42");
             writer.upsert(p1Updated).get();
             writer.flush();
 
@@ -490,15 +452,24 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
                             .project(Arrays.asList("a", "str"))
                             .createTypedLogScanner(AllTypesPojo.class);
             subscribeFromBeginning(scanner, table);
-            TypedScanRecords<AllTypesPojo> recs = scanner.poll(Duration.ofSeconds(2));
-            int i = 10;
-            for (TypedScanRecord<AllTypesPojo> r : recs) {
-                AllTypesPojo u = r.getValue();
+
+            List<AllTypesPojo> projActual = new ArrayList<>();
+            while (projActual.size() < 2) {
+                TypedScanRecords<AllTypesPojo> recs = scanner.poll(Duration.ofSeconds(2));
+                for (TypedScanRecord<AllTypesPojo> r : recs) {
+                    projActual.add(r.getValue());
+                }
+            }
+            // Sort by the projected key field so the order is deterministic
+            projActual.sort((x, y) -> Integer.compare(x.a, y.a));
+            assertThat(projActual).hasSize(2);
+            for (int i = 0; i < projActual.size(); i++) {
+                AllTypesPojo u = projActual.get(i);
+                int expected = 10 + i;
                 AllTypesPojo expectedPojo = new AllTypesPojo();
-                expectedPojo.a = i;
-                expectedPojo.str = "s" + i;
+                expectedPojo.a = expected;
+                expectedPojo.str = "s" + expected;
                 assertThat(u).isEqualTo(expectedPojo);
-                i++;
             }
         }
     }
@@ -604,6 +575,23 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
         public ComplexTypesLookupKey(Integer id) {
             this.id = id;
         }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            ComplexTypesLookupKey that = (ComplexTypesLookupKey) o;
+            return Objects.equals(id, that.id);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(id);
+        }
     }
 
     private static Schema complexTypesLogSchema() {
@@ -620,17 +608,7 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
     }
 
     private static Schema complexTypesPkSchema() {
-        return Schema.newBuilder()
-                .column("id", DataTypes.INT())
-                .column("intArray", DataTypes.ARRAY(DataTypes.INT()))
-                .column("strArray", DataTypes.ARRAY(DataTypes.STRING()))
-                .column("nestedArray", DataTypes.ARRAY(DataTypes.ARRAY(DataTypes.INT())))
-                .column("simpleMap", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()))
-                .column(
-                        "mapOfArrays",
-                        DataTypes.MAP(DataTypes.STRING(), DataTypes.ARRAY(DataTypes.INT())))
-                .primaryKey("id")
-                .build();
+        return Schema.newBuilder().fromSchema(complexTypesLogSchema()).primaryKey("id").build();
     }
 
     private static ComplexTypesPojo newComplexTypesPojo(int i) {
@@ -774,6 +752,26 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
         public List<Integer> nullableIntList;
 
         public ListTypesPojo() {}
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            ListTypesPojo that = (ListTypesPojo) o;
+            return Objects.equals(id, that.id)
+                    && Objects.equals(intList, that.intList)
+                    && Objects.equals(strList, that.strList)
+                    && Objects.equals(nullableIntList, that.nullableIntList);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(id, intList, strList, nullableIntList);
+        }
     }
 
     @Test
@@ -835,6 +833,468 @@ public class FlussTypedClientITCase extends ClientToServerITCaseBase {
             assertThat(back2.intList).isEmpty();
             assertThat(back2.strList).containsExactly("only");
             assertThat(back2.nullableIntList).isNull();
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Nested ROW POJO declarations and helpers
+    // -------------------------------------------------------------------------
+
+    /** POJO mapped to a Fluss ROW column representing an address. */
+    public static class AddressPojo {
+        public String city;
+        public Integer zipCode;
+
+        public AddressPojo() {}
+
+        public AddressPojo(String city, Integer zipCode) {
+            this.city = city;
+            this.zipCode = zipCode;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            AddressPojo that = (AddressPojo) o;
+            return Objects.equals(city, that.city) && Objects.equals(zipCode, that.zipCode);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(city, zipCode);
+        }
+    }
+
+    /** POJO with a direct nested ROW field ({@code ROW<city STRING, zipCode INT>}). */
+    public static class PersonWithAddressPojo {
+        public Integer id;
+        public String name;
+        public AddressPojo address;
+
+        public PersonWithAddressPojo() {}
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            PersonWithAddressPojo that = (PersonWithAddressPojo) o;
+            return Objects.equals(id, that.id)
+                    && Objects.equals(name, that.name)
+                    && Objects.equals(address, that.address);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(id, name, address);
+        }
+    }
+
+    /** POJO with an {@code ARRAY<ROW>} field mapped to a typed Java array. */
+    public static class PersonWithArrayOfAddressPojo {
+        public Integer id;
+        public AddressPojo[] addresses;
+
+        public PersonWithArrayOfAddressPojo() {}
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            PersonWithArrayOfAddressPojo that = (PersonWithArrayOfAddressPojo) o;
+            return Objects.equals(id, that.id) && Arrays.equals(addresses, that.addresses);
+        }
+
+        @Override
+        public int hashCode() {
+            int result = Objects.hash(id);
+            result = 31 * result + Arrays.hashCode(addresses);
+            return result;
+        }
+    }
+
+    /** POJO with a {@code MAP<STRING, ROW>} field. */
+    public static class PersonWithMapOfAddressPojo {
+        public Integer id;
+        public Map<String, AddressPojo> addressMap;
+
+        public PersonWithMapOfAddressPojo() {}
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            PersonWithMapOfAddressPojo that = (PersonWithMapOfAddressPojo) o;
+            return Objects.equals(id, that.id) && Objects.equals(addressMap, that.addressMap);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(id, addressMap);
+        }
+    }
+
+    /**
+     * POJO using a {@link List} field for an {@code ARRAY<ROW>} column — verifies that {@code
+     * Collection<NestedPojo>} fields are deserialized to the declared POJO element type.
+     */
+    public static class PersonWithListOfAddressPojo {
+        public Integer id;
+        public List<AddressPojo> addresses;
+
+        public PersonWithListOfAddressPojo() {}
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            PersonWithListOfAddressPojo that = (PersonWithListOfAddressPojo) o;
+            return Objects.equals(id, that.id) && Objects.equals(addresses, that.addresses);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(id, addresses);
+        }
+    }
+
+    /** Primary-key lookup POJO for nested-ROW PK tables. */
+    public static class NestedRowLookupKey {
+        public Integer id;
+
+        public NestedRowLookupKey() {}
+
+        public NestedRowLookupKey(Integer id) {
+            this.id = id;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            NestedRowLookupKey that = (NestedRowLookupKey) o;
+            return Objects.equals(id, that.id);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(id);
+        }
+    }
+
+    private static RowType addressRowType() {
+        return DataTypes.ROW(
+                DataTypes.FIELD("city", DataTypes.STRING()),
+                DataTypes.FIELD("zipCode", DataTypes.INT()));
+    }
+
+    private static Schema nestedRowLogSchema() {
+        return Schema.newBuilder()
+                .column("id", DataTypes.INT())
+                .column("name", DataTypes.STRING())
+                .column("address", addressRowType())
+                .build();
+    }
+
+    private static Schema nestedRowPkSchema() {
+        return Schema.newBuilder()
+                .column("id", DataTypes.INT())
+                .column("name", DataTypes.STRING())
+                .column("address", addressRowType())
+                .primaryKey("id")
+                .build();
+    }
+
+    private static Schema arrayOfRowLogSchema() {
+        return Schema.newBuilder()
+                .column("id", DataTypes.INT())
+                .column("addresses", DataTypes.ARRAY(addressRowType()))
+                .build();
+    }
+
+    private static Schema mapOfRowLogSchema() {
+        return Schema.newBuilder()
+                .column("id", DataTypes.INT())
+                .column("addressMap", DataTypes.MAP(DataTypes.STRING(), addressRowType()))
+                .build();
+    }
+
+    private static AddressPojo addr(String city, int zip) {
+        return new AddressPojo(city, zip);
+    }
+
+    // -------------------------------------------------------------------------
+    // Nested ROW IT tests
+    // -------------------------------------------------------------------------
+
+    /**
+     * Appends POJOs with a direct nested ROW field (including a null ROW) to a log table and
+     * verifies the full round-trip via the typed log scanner.
+     */
+    @Test
+    void testNestedRowAppendAndScan() throws Exception {
+        TablePath path = TablePath.of("pojo_db", "nested_row_log");
+        TableDescriptor td =
+                TableDescriptor.builder().schema(nestedRowLogSchema()).distributedBy(1).build();
+        createTable(path, td, true);
+
+        try (Table table = conn.getTable(path)) {
+            TypedAppendWriter<PersonWithAddressPojo> writer =
+                    table.newAppend().createTypedWriter(PersonWithAddressPojo.class);
+
+            PersonWithAddressPojo p1 = new PersonWithAddressPojo();
+            p1.id = 1;
+            p1.name = "Alice";
+            p1.address = addr("Beijing", 100000);
+
+            PersonWithAddressPojo p2 = new PersonWithAddressPojo();
+            p2.id = 2;
+            p2.name = "Bob";
+            p2.address = addr("Shanghai", 200000);
+
+            // null nested ROW — field defaults to null after deserialization
+            PersonWithAddressPojo p3 = new PersonWithAddressPojo();
+            p3.id = 3;
+            p3.name = "Carol";
+            p3.address = null;
+
+            List<PersonWithAddressPojo> expected = Arrays.asList(p1, p2, p3);
+            for (PersonWithAddressPojo p : expected) {
+                writer.append(p);
+            }
+            writer.flush();
+
+            TypedLogScanner<PersonWithAddressPojo> scanner =
+                    table.newScan().createTypedLogScanner(PersonWithAddressPojo.class);
+            subscribeFromBeginning(scanner, table);
+
+            List<PersonWithAddressPojo> actual = new ArrayList<>();
+            while (actual.size() < expected.size()) {
+                TypedScanRecords<PersonWithAddressPojo> recs = scanner.poll(Duration.ofSeconds(2));
+                for (TypedScanRecord<PersonWithAddressPojo> r : recs) {
+                    assertThat(r.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
+                    actual.add(r.getValue());
+                }
+            }
+
+            assertThat(actual).containsExactlyInAnyOrderElementsOf(expected);
+
+            // spot-check that the null nested-ROW row came back with a null address
+            PersonWithAddressPojo nullBack =
+                    actual.stream().filter(p -> p.id == 3).findFirst().orElse(null);
+            assertThat(nullBack).isNotNull();
+            assertThat(nullBack.address).isNull();
+        }
+    }
+
+    /**
+     * Upserts a POJO with a nested ROW column into a PK table, overwrites it with a different ROW
+     * value, and verifies the final state via a typed lookup.
+     */
+    @Test
+    void testNestedRowUpsertAndLookup() throws Exception {
+        TablePath path = TablePath.of("pojo_db", "nested_row_pk");
+        TableDescriptor td =
+                TableDescriptor.builder()
+                        .schema(nestedRowPkSchema())
+                        .distributedBy(1, "id")
+                        .build();
+        createTable(path, td, true);
+
+        try (Table table = conn.getTable(path)) {
+            TypedUpsertWriter<PersonWithAddressPojo> writer =
+                    table.newUpsert().createTypedWriter(PersonWithAddressPojo.class);
+
+            PersonWithAddressPojo original = new PersonWithAddressPojo();
+            original.id = 10;
+            original.name = "Alice";
+            original.address = addr("Beijing", 100000);
+            writer.upsert(original).get();
+
+            // overwrite with a different nested address
+            PersonWithAddressPojo updated = new PersonWithAddressPojo();
+            updated.id = 10;
+            updated.name = "Alice";
+            updated.address = addr("Shenzhen", 518000);
+            writer.upsert(updated).get();
+            writer.flush();
+
+            RowType tableSchema = table.getTableInfo().getRowType();
+            RowToPojoConverter<PersonWithAddressPojo> rowConv =
+                    RowToPojoConverter.of(PersonWithAddressPojo.class, tableSchema, tableSchema);
+            TypedLookuper<NestedRowLookupKey> lookuper =
+                    table.newLookup().createTypedLookuper(NestedRowLookupKey.class);
+
+            PersonWithAddressPojo lookedUp =
+                    rowConv.fromRow(
+                            lookuper.lookup(new NestedRowLookupKey(10)).get().getSingletonRow());
+            assertThat(lookedUp).isEqualTo(updated);
+
+            // verify non-existent key
+            assertThat(lookuper.lookup(new NestedRowLookupKey(999)).get().getSingletonRow())
+                    .isNull();
+        }
+    }
+
+    /**
+     * Appends POJOs with an {@code ARRAY<ROW>} column (backed by a typed Java array) and verifies
+     * that each element is deserialized back to the declared {@link AddressPojo} type.
+     */
+    @Test
+    void testArrayOfRowAppendAndScan() throws Exception {
+        TablePath path = TablePath.of("pojo_db", "array_of_row_log");
+        TableDescriptor td =
+                TableDescriptor.builder().schema(arrayOfRowLogSchema()).distributedBy(1).build();
+        createTable(path, td, true);
+
+        try (Table table = conn.getTable(path)) {
+            TypedAppendWriter<PersonWithArrayOfAddressPojo> writer =
+                    table.newAppend().createTypedWriter(PersonWithArrayOfAddressPojo.class);
+
+            PersonWithArrayOfAddressPojo p1 = new PersonWithArrayOfAddressPojo();
+            p1.id = 1;
+            p1.addresses = new AddressPojo[] {addr("Beijing", 100000), addr("Shanghai", 200000)};
+
+            // null array field
+            PersonWithArrayOfAddressPojo p2 = new PersonWithArrayOfAddressPojo();
+            p2.id = 2;
+            p2.addresses = null;
+
+            writer.append(p1);
+            writer.append(p2);
+            writer.flush();
+
+            TypedLogScanner<PersonWithArrayOfAddressPojo> scanner =
+                    table.newScan().createTypedLogScanner(PersonWithArrayOfAddressPojo.class);
+            subscribeFromBeginning(scanner, table);
+
+            Map<Integer, PersonWithArrayOfAddressPojo> actual = new HashMap<>();
+            while (actual.size() < 2) {
+                TypedScanRecords<PersonWithArrayOfAddressPojo> recs =
+                        scanner.poll(Duration.ofSeconds(2));
+                for (TypedScanRecord<PersonWithArrayOfAddressPojo> r : recs) {
+                    actual.put(r.getValue().id, r.getValue());
+                }
+            }
+
+            PersonWithArrayOfAddressPojo back1 = actual.get(1);
+            assertThat(back1.addresses).hasSize(2);
+            // elements must come back as AddressPojo, not InternalRow
+            assertThat(back1.addresses[0]).isEqualTo(addr("Beijing", 100000));
+            assertThat(back1.addresses[1]).isEqualTo(addr("Shanghai", 200000));
+
+            assertThat(actual.get(2).addresses).isNull();
+        }
+    }
+
+    /**
+     * Appends a POJO with a {@code MAP<STRING, ROW>} column and verifies that map values are
+     * deserialized to the declared {@link AddressPojo} type (not as raw {@code InternalRow}).
+     */
+    @Test
+    void testMapOfRowAppendAndScan() throws Exception {
+        TablePath path = TablePath.of("pojo_db", "map_of_row_log");
+        TableDescriptor td =
+                TableDescriptor.builder().schema(mapOfRowLogSchema()).distributedBy(1).build();
+        createTable(path, td, true);
+
+        try (Table table = conn.getTable(path)) {
+            TypedAppendWriter<PersonWithMapOfAddressPojo> writer =
+                    table.newAppend().createTypedWriter(PersonWithMapOfAddressPojo.class);
+
+            PersonWithMapOfAddressPojo p = new PersonWithMapOfAddressPojo();
+            p.id = 1;
+            p.addressMap = new HashMap<>();
+            p.addressMap.put("home", addr("Beijing", 100000));
+            p.addressMap.put("work", addr("Shanghai", 200000));
+
+            writer.append(p);
+            writer.flush();
+
+            TypedLogScanner<PersonWithMapOfAddressPojo> scanner =
+                    table.newScan().createTypedLogScanner(PersonWithMapOfAddressPojo.class);
+            subscribeFromBeginning(scanner, table);
+
+            PersonWithMapOfAddressPojo back = null;
+            while (back == null) {
+                TypedScanRecords<PersonWithMapOfAddressPojo> recs =
+                        scanner.poll(Duration.ofSeconds(2));
+                for (TypedScanRecord<PersonWithMapOfAddressPojo> r : recs) {
+                    back = r.getValue();
+                }
+            }
+
+            assertThat(back.id).isEqualTo(1);
+            assertThat(back.addressMap).containsEntry("home", addr("Beijing", 100000));
+            assertThat(back.addressMap).containsEntry("work", addr("Shanghai", 200000));
+        }
+    }
+
+    /**
+     * Appends a POJO with a {@link List}{@code <AddressPojo>} field (backed by an {@code
+     * ARRAY<ROW>} column) and verifies that each list element is deserialized to {@link
+     * AddressPojo}, confirming that {@code Collection<NestedPojo>} deserialization works correctly.
+     */
+    @Test
+    void testListOfRowAppendAndScan() throws Exception {
+        // Reuses the same ARRAY<ROW> schema; only the POJO field type differs (List vs array)
+        TablePath path = TablePath.of("pojo_db", "list_of_row_log");
+        TableDescriptor td =
+                TableDescriptor.builder().schema(arrayOfRowLogSchema()).distributedBy(1).build();
+        createTable(path, td, true);
+
+        try (Table table = conn.getTable(path)) {
+            TypedAppendWriter<PersonWithListOfAddressPojo> writer =
+                    table.newAppend().createTypedWriter(PersonWithListOfAddressPojo.class);
+
+            PersonWithListOfAddressPojo p = new PersonWithListOfAddressPojo();
+            p.id = 5;
+            p.addresses = Arrays.asList(addr("Guangzhou", 510000), addr("Chengdu", 610000));
+
+            writer.append(p);
+            writer.flush();
+
+            TypedLogScanner<PersonWithListOfAddressPojo> scanner =
+                    table.newScan().createTypedLogScanner(PersonWithListOfAddressPojo.class);
+            subscribeFromBeginning(scanner, table);
+
+            PersonWithListOfAddressPojo back = null;
+            while (back == null) {
+                TypedScanRecords<PersonWithListOfAddressPojo> recs =
+                        scanner.poll(Duration.ofSeconds(2));
+                for (TypedScanRecord<PersonWithListOfAddressPojo> r : recs) {
+                    back = r.getValue();
+                }
+            }
+
+            assertThat(back.id).isEqualTo(5);
+            assertThat(back.addresses).hasSize(2);
+            assertThat(back.addresses.get(0)).isEqualTo(addr("Guangzhou", 510000));
+            assertThat(back.addresses.get(1)).isEqualTo(addr("Chengdu", 610000));
         }
     }
 

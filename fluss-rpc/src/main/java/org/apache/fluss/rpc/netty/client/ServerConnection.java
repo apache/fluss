@@ -44,7 +44,6 @@ import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
 import org.apache.fluss.utils.ExponentialBackoff;
-import org.apache.fluss.utils.MapUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -59,6 +58,7 @@ import java.nio.channels.ClosedChannelException;
 import java.util.ArrayDeque;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
@@ -72,12 +72,11 @@ final class ServerConnection {
     private final ServerNode node;
 
     // TODO: add max inflight requests limit like Kafka's "max.in.flight.requests.per.connection"
-    private final Map<Integer, InflightRequest> inflightRequests = MapUtils.newConcurrentHashMap();
+    private final Map<Integer, InflightRequest> inflightRequests = new ConcurrentHashMap<>();
     private final CompletableFuture<Void> closeFuture = new CompletableFuture<>();
     private final ConnectionMetrics connectionMetrics;
     private final ClientAuthenticator authenticator;
     private final ExponentialBackoff backoff;
-
     private final Object lock = new Object();
 
     @GuardedBy("lock")
@@ -106,8 +105,7 @@ final class ServerConnection {
             ServerNode node,
             ClientMetricGroup clientMetricGroup,
             ClientAuthenticator authenticator,
-            BiConsumer<ServerConnection, Throwable> closeCallback,
-            boolean isInnerClient) {
+            BiConsumer<ServerConnection, Throwable> closeCallback) {
         this.node = node;
         this.state = ConnectionState.CONNECTING;
         this.connectionMetrics = clientMetricGroup.createConnectionMetricGroup(node.uid());
@@ -119,7 +117,7 @@ final class ServerConnection {
         // callback is not registered when connection established.
         bootstrap
                 .connect(node.host(), node.port())
-                .addListener(future -> establishConnection((ChannelFuture) future, isInnerClient));
+                .addListener(future -> establishConnection((ChannelFuture) future));
     }
 
     public ServerNode getServerNode() {
@@ -250,7 +248,7 @@ final class ServerConnection {
 
     // ------------------------------------------------------------------------------------------
 
-    private void establishConnection(ChannelFuture future, boolean isInnerClient) {
+    private void establishConnection(ChannelFuture future) {
         synchronized (lock) {
             if (future.isSuccess()) {
                 if (state.isDisconnected()) {
@@ -262,9 +260,7 @@ final class ServerConnection {
                 LOG.debug("Established connection to server {}.", node);
                 channel = future.channel();
                 channel.pipeline()
-                        .addLast(
-                                "handler",
-                                new NettyClientHandler(new ResponseCallback(), isInnerClient));
+                        .addLast("handler", new NettyClientHandler(new ResponseCallback()));
                 // start checking api versions
                 switchState(ConnectionState.CHECKING_API_VERSIONS);
                 // TODO: set correct client software name and version, used for metrics in server

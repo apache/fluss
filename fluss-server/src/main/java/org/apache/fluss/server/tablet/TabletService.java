@@ -58,6 +58,8 @@ import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.ScanKvRequest;
+import org.apache.fluss.rpc.messages.ScanKvResponse;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
@@ -75,6 +77,8 @@ import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.UserContext;
 import org.apache.fluss.server.log.FetchParams;
+import org.apache.fluss.server.log.FetchParamsBuilder;
+import org.apache.fluss.server.log.FilterInfo;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
@@ -108,6 +112,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifySnaps
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getProduceLogData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getPutKvData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getStopReplicaData;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTableFilterInfoMap;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTableStatsRequestData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTargetColumns;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
@@ -209,18 +214,24 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     private static FetchParams getFetchParams(FetchLogRequest request) {
         FetchParams fetchParams;
+        Map<Long, FilterInfo> tableFilterInfoMap = getTableFilterInfoMap(request);
         if (request.hasMinBytes()) {
             fetchParams =
-                    new FetchParams(
-                            request.getFollowerServerId(),
-                            request.getMaxBytes(),
-                            request.getMinBytes(),
-                            request.hasMaxWaitMs()
-                                    ? request.getMaxWaitMs()
-                                    : DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE);
+                    new FetchParamsBuilder(request.getFollowerServerId(), request.getMaxBytes())
+                            .withMinFetchBytes(request.getMinBytes())
+                            .withMaxWaitMs(
+                                    request.hasMaxWaitMs()
+                                            ? request.getMaxWaitMs()
+                                            : DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE)
+                            .withTableFilterInfoMap(tableFilterInfoMap)
+                            .build();
         } else {
-            fetchParams = new FetchParams(request.getFollowerServerId(), request.getMaxBytes());
+            fetchParams =
+                    new FetchParamsBuilder(request.getFollowerServerId(), request.getMaxBytes())
+                            .withTableFilterInfoMap(tableFilterInfoMap)
+                            .build();
         }
+
         return fetchParams;
     }
 
@@ -420,6 +431,11 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         CompletableFuture<NotifyLakeTableOffsetResponse> response = new CompletableFuture<>();
         replicaManager.notifyLakeTableOffset(getNotifyLakeTableOffset(request), response::complete);
         return response;
+    }
+
+    @Override
+    public CompletableFuture<ScanKvResponse> scanKv(ScanKvRequest request) {
+        return null;
     }
 
     @Override

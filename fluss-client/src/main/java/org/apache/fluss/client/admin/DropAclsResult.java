@@ -24,7 +24,6 @@ import org.apache.fluss.rpc.messages.PbDropAclsMatchingAcl;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
-import org.apache.fluss.utils.MapUtils;
 
 import javax.annotation.Nullable;
 
@@ -34,6 +33,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBinding;
 
@@ -80,7 +80,7 @@ public class DropAclsResult {
 
     DropAclsResult(Collection<AclBindingFilter> filters) {
         final Map<AclBindingFilter, CompletableFuture<DropAclsResult.FilterResults>> futures =
-                MapUtils.newConcurrentHashMap();
+                new ConcurrentHashMap<>();
         for (AclBindingFilter filter : filters) {
             if (!futures.containsKey(filter)) {
                 futures.put(filter, new CompletableFuture<>());

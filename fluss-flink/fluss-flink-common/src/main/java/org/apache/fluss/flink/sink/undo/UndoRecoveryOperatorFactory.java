@@ -36,8 +36,7 @@ import javax.annotation.Nullable;
 import java.io.Serializable;
 import java.util.Map;
 import java.util.UUID;
-
-import static org.apache.fluss.utils.MapUtils.newConcurrentHashMap;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Factory for creating {@link UndoRecoveryOperator} instances.
@@ -346,7 +345,7 @@ public class UndoRecoveryOperatorFactory<IN> extends AbstractStreamOperatorFacto
          * called, it looks up the delegate from this registry.
          */
         private static final Map<String, ProducerOffsetReporter> DELEGATE_REGISTRY =
-                newConcurrentHashMap();
+                new ConcurrentHashMap<>();
 
         /** Unique ID for this holder, used to look up the delegate in the registry. */
         private final String holderId;

@@ -126,6 +126,7 @@ public class BinlogFlinkTableSource implements ScanTableSource {
                         isPartitioned,
                         flussRowType,
                         projectedFields,
+                        null,
                         offsetsInitializer,
                         scanPartitionDiscoveryIntervalMs,
                         new BinlogDeserializationSchema(),

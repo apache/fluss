@@ -916,6 +916,16 @@ public class ConfigOptions {
                     .withDescription(
                             "The number of queued requests allowed for worker threads, before blocking the I/O threads.");
 
+    public static final ConfigOption<MemorySize> NETTY_SERVER_MAX_REQUEST_SIZE =
+            key("netty.server.max-request-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("100mb"))
+                    .withDescription(
+                            "The maximum size of a single request that the server can receive. "
+                                    + "This limits the maximum frame length at the Netty pipeline level "
+                                    + "to protect the server from malicious clients sending oversized requests "
+                                    + "that could exhaust server memory.");
+
     public static final ConfigOption<Duration> NETTY_CONNECTION_MAX_IDLE_TIME =
             key("netty.connection.max-idle-time")
                     .durationType()
@@ -930,6 +940,17 @@ public class ConfigOptions {
                     .withDescription(
                             "The number of threads that the client uses for sending requests to the "
                                     + "network and receiving responses from network. The default value is 4");
+
+    public static final ConfigOption<Boolean> NETTY_CLIENT_ALLOCATOR_HEAP_BUFFER_FIRST =
+            key("netty.client.allocator.heap-buffer-first")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription(
+                            "Whether to allocate heap buffer first for the netty client. "
+                                    + "If set to false, direct buffer will be used first, "
+                                    + "which requires sufficient off-heap memory to be available. "
+                                    + "By default, inner clients (server-to-server) use false "
+                                    + "and non-inner clients (external) use true.");
 
     // ------------------------------------------------------------------------
     //  Client Settings
@@ -1579,6 +1600,22 @@ public class ConfigOptions {
                                     + "This mode reduces storage and transmission costs but loses the ability to track previous values. "
                                     + "This option only affects primary key tables.");
 
+    public static final ConfigOption<String> TABLE_STATISTICS_COLUMNS =
+            key("table.statistics.columns")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Configures column-level statistics collection for the table. "
+                                    + "By default this option is not set and no column statistics are collected. "
+                                    + "The value '*' means collect statistics for all supported columns. "
+                                    + "A comma-separated list of column names means collect statistics only for the specified columns. "
+                                    + "Supported types include: BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, FLOAT, DOUBLE, "
+                                    + "STRING, CHAR, DECIMAL, DATE, TIME, TIMESTAMP, and TIMESTAMP_LTZ. "
+                                    + "Example: 'id,name,timestamp' to collect statistics only for specified columns. "
+                                    + "Note: enabling column statistics requires the V1 batch format. "
+                                    + "Downstream consumers must be upgraded to Fluss v1.0+ before enabling this option, "
+                                    + "as older versions cannot parse the extended batch format.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv
     // ------------------------------------------------------------------------
@@ -2037,12 +2074,24 @@ public class ConfigOptions {
     // ------------------------------------------------------------------------
     //  ConfigOptions for lakehouse storage
     // ------------------------------------------------------------------------
+    public static final ConfigOption<Boolean> DATALAKE_ENABLED =
+            key("datalake.enabled")
+                    .booleanType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Whether the Fluss cluster is ready to create and manage lakehouse tables. "
+                                    + "If unset, Fluss keeps the legacy behavior where configuring `datalake.format` "
+                                    + "also enables lakehouse tables. If set to `false`, Fluss pre-binds the lake format "
+                                    + "for newly created tables but does not allow lakehouse tables yet. If set to `true`, "
+                                    + "Fluss fully enables lakehouse tables. When this option is explicitly set to `true`, "
+                                    + "`datalake.format` must also be configured.");
+
     public static final ConfigOption<DataLakeFormat> DATALAKE_FORMAT =
             key("datalake.format")
                     .enumType(DataLakeFormat.class)
                     .noDefaultValue()
                     .withDescription(
-                            "The datalake format used by of Fluss to be as lakehouse storage. Currently, supported formats are Paimon, Iceberg, and Lance. "
+                            "The datalake format used by Fluss as lakehouse storage. Currently, supported formats are Paimon, Iceberg, and Lance. "
                                     + "In the future, more kinds of data lake format will be supported, such as DeltaLake or Hudi.");
 
     // ------------------------------------------------------------------------

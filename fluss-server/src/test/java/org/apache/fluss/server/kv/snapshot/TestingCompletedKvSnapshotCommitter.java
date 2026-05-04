@@ -18,13 +18,13 @@
 package org.apache.fluss.server.kv.snapshot;
 
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.utils.MapUtils;
 
 import java.time.Duration;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingDeque;
 
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
@@ -36,7 +36,7 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 public class TestingCompletedKvSnapshotCommitter implements CompletedKvSnapshotCommitter {
 
     protected final Map<TableBucket, Deque<CompletedSnapshot>> snapshots =
-            MapUtils.newConcurrentHashMap();
+            new ConcurrentHashMap<>();
     protected final Map<TableBucket, Map<Long, Integer>> bucketSnapshotLeaderEpoch =
             new HashMap<>();
 

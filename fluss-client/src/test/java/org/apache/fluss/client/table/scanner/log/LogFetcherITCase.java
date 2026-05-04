@@ -103,6 +103,7 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                 new LogFetcher(
                         DATA1_TABLE_INFO,
                         null,
+                        null,
                         logScannerStatus,
                         clientConf,
                         metadataUpdater,
@@ -147,9 +148,9 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                     assertThat(logFetcher.hasAvailableFetches()).isTrue();
                     assertThat(logFetcher.getCompletedFetchesSize()).isEqualTo(2);
                 });
-        Map<TableBucket, List<ScanRecord>> records = logFetcher.collectFetch();
-        assertThat(records.size()).isEqualTo(1);
-        List<ScanRecord> scanRecords = records.get(tb0);
+        ScanRecords records = logFetcher.collectFetch();
+        assertThat(records.buckets().size()).isEqualTo(1);
+        List<ScanRecord> scanRecords = records.records(tb0);
         assertThat(scanRecords.stream().map(ScanRecord::getRow).collect(Collectors.toList()))
                 .isEqualTo(expectedRows);
 
@@ -172,9 +173,11 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                                 DATA1_TABLE_INFO.getNumBuckets(),
                                 DATA1_TABLE_INFO.getProperties(),
                                 DATA1_TABLE_INFO.getCustomProperties(),
+                                DATA1_TABLE_INFO.getRemoteDataDir(),
                                 DATA1_TABLE_INFO.getComment().orElse(null),
                                 DATA1_TABLE_INFO.getCreatedTime(),
                                 DATA1_TABLE_INFO.getModifiedTime()),
+                        null,
                         null,
                         logScannerStatus,
                         clientConf,
@@ -192,9 +195,9 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                     assertThat(newSchemaLogFetcher.getCompletedFetchesSize()).isEqualTo(2);
                 });
         records = newSchemaLogFetcher.collectFetch();
-        assertThat(records.size()).isEqualTo(1);
-        assertThat(records.get(tb0)).hasSize(20);
-        scanRecords = records.get(tb0);
+        assertThat(records.buckets().size()).isEqualTo(1);
+        assertThat(records.records(tb0)).hasSize(20);
+        scanRecords = records.records(tb0);
         assertThat(scanRecords.stream().map(ScanRecord::getRow).collect(Collectors.toList()))
                 .isEqualTo(expectedRows);
         newSchemaLogFetcher.close();
@@ -225,10 +228,10 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                     assertThat(logFetcher.getCompletedFetchesSize()).isEqualTo(2);
                 });
 
-        Map<TableBucket, List<ScanRecord>> records = logFetcher.collectFetch();
-        assertThat(records.size()).isEqualTo(2);
-        assertThat(records.get(tb0).size()).isEqualTo(10);
-        assertThat(records.get(tb1).size()).isEqualTo(10);
+        ScanRecords records = logFetcher.collectFetch();
+        assertThat(records.buckets().size()).isEqualTo(2);
+        assertThat(records.records(tb0).size()).isEqualTo(10);
+        assertThat(records.records(tb1).size()).isEqualTo(10);
 
         // after collect fetch, the fetcher is empty.
         assertThat(logFetcher.hasAvailableFetches()).isFalse();
@@ -274,6 +277,7 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                 new LogFetcher(
                         DATA1_TABLE_INFO,
                         null,
+                        null,
                         logScannerStatus,
                         clientConf,
                         metadataUpdater,
@@ -296,9 +300,9 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                     assertThat(logFetcher.hasAvailableFetches()).isTrue();
                     assertThat(logFetcher.getCompletedFetchesSize()).isEqualTo(1);
                 });
-        Map<TableBucket, List<ScanRecord>> records = logFetcher.collectFetch();
-        assertThat(records.size()).isEqualTo(1);
-        assertThat(records.get(tb0).size()).isEqualTo(10);
+        ScanRecords records = logFetcher.collectFetch();
+        assertThat(records.buckets().size()).isEqualTo(1);
+        assertThat(records.records(tb0).size()).isEqualTo(10);
     }
 
     @Test
@@ -313,6 +317,7 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
         logFetcher =
                 new LogFetcher(
                         DATA1_TABLE_INFO,
+                        null,
                         null,
                         logScannerStatus,
                         clientConf,

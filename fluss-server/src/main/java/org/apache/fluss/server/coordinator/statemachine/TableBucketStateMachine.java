@@ -311,7 +311,8 @@ public class TableBucketStateMachine {
             ElectionResult electionResult = optionalElectionResult.get();
             LeaderAndIsr leaderAndIsr = electionResult.leaderAndIsr;
             try {
-                zooKeeperClient.registerLeaderAndIsr(tableBucket, leaderAndIsr);
+                zooKeeperClient.registerLeaderAndIsr(
+                        tableBucket, leaderAndIsr, coordinatorContext.getCoordinatorZkVersion());
             } catch (Exception e) {
                 LOG.error(
                         "Fail to create state node for table bucket {} in zookeeper.",
@@ -379,7 +380,7 @@ public class TableBucketStateMachine {
         if (!tableBucketLeadAndIsrInfos.isEmpty()) {
             try {
                 zooKeeperClient.batchRegisterLeaderAndIsrForTablePartition(
-                        tableBucketLeadAndIsrInfos);
+                        tableBucketLeadAndIsrInfos, coordinatorContext.getCoordinatorZkVersion());
                 registerSuccessList.addAll(tableBucketLeadAndIsrInfos);
             } catch (Exception e) {
                 LOG.error(
@@ -454,7 +455,10 @@ public class TableBucketStateMachine {
         List<RegisterTableBucketLeadAndIsrInfo> registerSuccessList = new ArrayList<>();
         for (RegisterTableBucketLeadAndIsrInfo info : registerList) {
             try {
-                zooKeeperClient.registerLeaderAndIsr(info.getTableBucket(), info.getLeaderAndIsr());
+                zooKeeperClient.registerLeaderAndIsr(
+                        info.getTableBucket(),
+                        info.getLeaderAndIsr(),
+                        coordinatorContext.getCoordinatorZkVersion());
                 registerSuccessList.add(info);
             } catch (Exception e) {
                 LOG.error(
@@ -496,7 +500,10 @@ public class TableBucketStateMachine {
         }
         ElectionResult electionResult = optionalElectionResult.get();
         try {
-            zooKeeperClient.updateLeaderAndIsr(tableBucket, electionResult.leaderAndIsr);
+            zooKeeperClient.updateLeaderAndIsr(
+                    tableBucket,
+                    electionResult.leaderAndIsr,
+                    coordinatorContext.getCoordinatorZkVersion());
         } catch (Exception e) {
             LOG.error(
                     "Fail to update bucket LeaderAndIsr for table bucket {}.",

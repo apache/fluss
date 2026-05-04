@@ -141,6 +141,9 @@ public class LakeTableTieringManager implements AutoCloseable {
     // table_id -> start time (ms) of the currently in-progress tiering round
     private final Map<Long, Long> currentTieringStartTime;
 
+    // table_id -> time (ms) when the table entered pending queue
+    private final Map<Long, Long> pendingEnterTime;
+
     // the live tables that are tiering,
     // from table_id -> last heartbeat time by the tiering service
     private final Map<Long, Long> liveTieringTableIds;
@@ -184,6 +187,7 @@ public class LakeTableTieringManager implements AutoCloseable {
         this.delayedTieringByTableId = new HashMap<>();
         this.tableFailureCounters = new HashMap<>();
         this.currentTieringStartTime = new HashMap<>();
+        this.pendingEnterTime = new HashMap<>();
         this.tieringMetricGroup = lakeTieringMetricGroup;
         registerMetrics();
     }
@@ -279,6 +283,10 @@ public class LakeTableTieringManager implements AutoCloseable {
                 MetricNames.LAKE_TIERING_TABLE_TIER_DURATION,
                 () -> inReadLock(lock, () -> getLastResultField(tableId, r -> r.tierDuration)));
 
+        // pendingTime: how long the table has been waiting in the pending queue
+        tableMetricGroup.gauge(
+                MetricNames.LAKE_TIERING_TABLE_PENDING_TIME, () -> getTablePendingTime(tableId));
+
         // failuresTotal: total failure count for this table
         Counter failuresCounter =
                 tableMetricGroup.counter(MetricNames.LAKE_TIERING_TABLE_FAILURES_TOTAL);
@@ -293,6 +301,11 @@ public class LakeTableTieringManager implements AutoCloseable {
         tableMetricGroup.gauge(
                 MetricNames.LAKE_TIERING_TABLE_RECORD_COUNT,
                 () -> inReadLock(lock, () -> getLastResultField(tableId, r -> r.recordCount)));
+
+        // freshness: the user-configured table data freshness interval in milliseconds
+        tableMetricGroup.gauge(
+                MetricNames.LAKE_TIERING_TABLE_FRESHNESS,
+                () -> inReadLock(lock, () -> tableLakeFreshness.getOrDefault(tableId, -1L)));
     }
 
     /**
@@ -316,6 +329,7 @@ public class LakeTableTieringManager implements AutoCloseable {
                     tableLakeFreshness.remove(tableId);
                     lastTieringResult.remove(tableId);
                     currentTieringStartTime.remove(tableId);
+                    pendingEnterTime.remove(tableId);
                     tableFailureCounters.remove(tableId);
                     // close and remove the metric group to unregister metrics
                     tieringMetricGroup.removeTableLakeTieringMetricGroup(tableId);
@@ -579,10 +593,12 @@ public class LakeTableTieringManager implements AutoCloseable {
                 // increase tiering epoch and initialize the heartbeat of the tiering table
                 tableTierEpoch.computeIfPresent(tableId, (t, v) -> v + 1);
                 pendingTieringTables.add(tableId);
+                pendingEnterTime.put(tableId, clock.milliseconds());
                 break;
             case Tiering:
                 liveTieringTableIds.put(tableId, clock.milliseconds());
                 currentTieringStartTime.put(tableId, clock.milliseconds());
+                pendingEnterTime.remove(tableId);
                 break;
             case Tiered:
                 liveTieringTableIds.remove(tableId);
@@ -824,5 +840,15 @@ public class LakeTableTieringManager implements AutoCloseable {
     @VisibleForTesting
     long getLastTieringResultField(long tableId, ToLongFunction<LastTieringResult> fieldExtractor) {
         return inReadLock(lock, () -> getLastResultField(tableId, fieldExtractor));
+    }
+
+    @VisibleForTesting
+    long getTablePendingTime(long tableId) {
+        return inReadLock(
+                lock,
+                () -> {
+                    Long enterTime = pendingEnterTime.get(tableId);
+                    return enterTime != null ? clock.milliseconds() - enterTime : 0L;
+                });
     }
 }

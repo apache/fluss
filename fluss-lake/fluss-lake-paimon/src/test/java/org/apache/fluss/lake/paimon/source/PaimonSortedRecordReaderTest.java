@@ -26,6 +26,7 @@ import org.apache.fluss.lake.source.SortedRecordReader;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.TimestampLtz;
@@ -38,6 +39,7 @@ import org.apache.paimon.schema.Schema;
 import org.apache.paimon.table.Table;
 import org.apache.paimon.types.DataTypes;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -94,6 +96,54 @@ class PaimonSortedRecordReaderTest extends PaimonSourceTestBase {
                     .isTrue();
             iterator.close();
         }
+    }
+
+    @Test
+    void testComparatorUsesPrimaryKeyRowType() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "pkTable_composite_timestamp_key");
+
+        createTable(
+                tablePath,
+                Schema.newBuilder()
+                        .column("member_id", DataTypes.BIGINT())
+                        .column("product_id", DataTypes.STRING())
+                        .column("channel_key", DataTypes.STRING())
+                        .column("product_name", DataTypes.STRING())
+                        .column("seq_time", DataTypes.TIMESTAMP(0))
+                        .column("order_id", DataTypes.STRING())
+                        .primaryKey("member_id", "channel_key", "seq_time", "order_id")
+                        .option(CoreOptions.BUCKET.key(), "1")
+                        .option(CoreOptions.BUCKET_KEY.key(), "member_id,channel_key,seq_time")
+                        .build());
+
+        LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        RecordReader recordReader = lakeSource.createRecordReader(() -> null);
+        assertThat(recordReader).isInstanceOf(PaimonSortedRecordReader.class);
+
+        Comparator<InternalRow> comparator = ((SortedRecordReader) recordReader).order();
+        Table table = getTable(tablePath);
+        int[] pkIndex = table.rowType().getFieldIndices(table.primaryKeys());
+
+        GenericRow row1 = new GenericRow(6);
+        row1.setField(0, 1L);
+        row1.setField(1, org.apache.fluss.row.BinaryString.fromString("product-1"));
+        row1.setField(2, org.apache.fluss.row.BinaryString.fromString("channel-a"));
+        row1.setField(3, org.apache.fluss.row.BinaryString.fromString("name-1"));
+        row1.setField(4, TimestampNtz.fromMillis(1_700_000_000_000L));
+        row1.setField(5, org.apache.fluss.row.BinaryString.fromString("order-1"));
+
+        GenericRow row2 = new GenericRow(6);
+        row2.setField(0, 1L);
+        row2.setField(1, org.apache.fluss.row.BinaryString.fromString("product-2"));
+        row2.setField(2, org.apache.fluss.row.BinaryString.fromString("channel-a"));
+        row2.setField(3, org.apache.fluss.row.BinaryString.fromString("name-2"));
+        row2.setField(4, TimestampNtz.fromMillis(1_700_000_000_001L));
+        row2.setField(5, org.apache.fluss.row.BinaryString.fromString("order-2"));
+
+        InternalRow pkRow1 = ProjectedRow.from(pkIndex).replaceRow(row1);
+        InternalRow pkRow2 = ProjectedRow.from(pkIndex).replaceRow(row2);
+
+        assertThat(comparator.compare(pkRow1, pkRow2)).isLessThan(0);
     }
 
     private static <T> boolean isSorted(Iterator<T> iterator, Comparator<? super T> comparator) {

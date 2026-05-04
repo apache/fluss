@@ -64,6 +64,17 @@ message CreateDatabaseRequest {
 message CreateDatabaseResponse {
 }
 
+// alter database request and response
+message AlterDatabaseRequest {
+  required string database_name = 1;
+  required bool ignore_if_not_exists = 2;
+  repeated PbAlterConfig config_changes = 3;
+  optional string comment = 4;
+}
+
+message AlterDatabaseResponse {
+}
+
 // get table request and response
 message GetDatabaseInfoRequest {
   required string database_name = 1;
@@ -139,6 +150,7 @@ message GetTableInfoResponse {
   required bytes table_json = 3;
   required int64 created_time = 4;
   required int64 modified_time = 5;
+  optional string remote_data_dir = 6;
 }
 
 // list tables request and response
@@ -285,6 +297,43 @@ message LimitScanResponse{
   optional bool is_log_table = 3;
   // LogRecordBatch if is_log_table is true, otherwise KvRecordBatch
   optional bytes records = 4;
+}
+
+
+// Full KV scan request and response.
+// A new scan is initiated with bucket_scan_req; subsequent batches use scanner_id.
+message PbScanReqForBucket {
+  required int64 table_id = 1;
+  optional int64 partition_id = 2;
+  required int32 bucket_id = 3;
+  // If set, stops returning rows after this many records.
+  optional int64 limit = 4;
+}
+
+message ScanKvRequest {
+  // Mutually exclusive: either scanner_id (continuation) or bucket_scan_req (new scan).
+  optional bytes scanner_id = 1;
+  optional PbScanReqForBucket bucket_scan_req = 2;
+  // Monotonically increasing sequence number for in-order delivery validation.
+  optional int32 call_seq_id = 3;
+  // Maximum number of bytes of record data to return in this batch.
+  optional int32 batch_size_bytes = 4;
+  // If true, the server closes the scanner session immediately.
+  optional bool close_scanner = 5;
+}
+
+message ScanKvResponse {
+  optional int32 error_code = 1;
+  optional string error_message = 2;
+  // Opaque server-assigned session identifier; echoed on every response.
+  optional bytes scanner_id = 3;
+  // False when the scan is complete and the scanner session has been closed.
+  optional bool has_more_results = 4;
+  // Serialised DefaultValueRecordBatch; absent when the batch is empty.
+  optional bytes records = 5;
+  // Log high-watermark at the time the RocksDB snapshot was opened.
+  // Only set on the first response (new scan initiation).
+  optional int64 log_offset = 6;
 }
 
 
@@ -762,6 +811,7 @@ message PbTableMetadata {
   repeated PbBucketMetadata bucket_metadata = 5;
   required int64 created_time = 6;
   required int64 modified_time = 7;
+  optional string remote_data_dir = 8;
 
   // TODO add a new filed 'deleted_table' to indicate this table is deleted in UpdateMetadataRequest.
   // trace by: https://github.com/apache/fluss/issues/981
@@ -803,6 +853,11 @@ message PbFetchLogReqForTable {
   required bool projection_pushdown_enabled = 2;
   repeated int32 projected_fields = 3 [packed = true];
   repeated PbFetchLogReqForBucket buckets_req = 4;
+  // filter_predicate and filter_schema_id MUST be set together.
+  // filter_predicate is the serialized predicate; filter_schema_id identifies
+  // the schema against which the predicate was compiled.
+  optional PbPredicate filter_predicate = 5;
+  optional int32 filter_schema_id = 6;
 }
 
 message PbFetchLogReqForBucket {
@@ -826,6 +881,10 @@ message PbFetchLogRespForBucket {
   optional int64 log_start_offset = 6; // TODO now we don't introduce log start offset, but remain it in protobuf
   optional PbRemoteLogFetchInfo remote_log_fetch_info = 7;
   optional bytes records = 8;
+  // The next fetch offset when all batches in this bucket are filtered out by server-side
+  // filter. When set (>= 0), the records field MUST be empty — the two fields are mutually
+  // exclusive. The client should use this offset as the starting offset for the next fetch.
+  optional int64 filtered_end_offset = 9;
 }
 
 message PbPutKvReqForBucket {
@@ -1006,6 +1065,7 @@ message PbRemoteLogSegment {
 message PbPartitionInfo {
   required int64 partition_id = 1;
   required PbPartitionSpec partition_spec = 2;
+  optional string remote_data_dir = 3;
 }
 
 message PbPartitionSpec {

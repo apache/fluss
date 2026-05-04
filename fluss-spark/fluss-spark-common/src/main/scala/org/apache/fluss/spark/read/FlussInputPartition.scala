@@ -67,6 +67,6 @@ case class FlussUpsertInputPartition(
   override def toString: String = {
     s"FlussUpsertInputPartition{tableId=${tableBucket.getTableId}, bucketId=${tableBucket.getBucket}," +
       s" partitionId=${tableBucket.getPartitionId}, snapshotId=$snapshotId," +
-      s" logStartOffset=$logStartingOffset, logStopOffset=$logStoppingOffset"
+      s" logStartOffset=$logStartingOffset, logStopOffset=$logStoppingOffset}"
   }
 }

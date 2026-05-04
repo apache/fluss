@@ -21,6 +21,7 @@ import org.apache.fluss.client.{Connection, ConnectionFactory}
 import org.apache.fluss.client.admin.Admin
 import org.apache.fluss.client.initializer.{BucketOffsetsRetrieverImpl, OffsetsInitializer}
 import org.apache.fluss.config.Configuration
+import org.apache.fluss.exception.FlussRuntimeException
 import org.apache.fluss.metadata.{PartitionInfo, TableBucket, TableInfo, TablePath}
 import org.apache.fluss.utils.json.TableBucketOffsets
 
@@ -120,25 +121,35 @@ abstract class FlussMicroBatchStream(
   }
 
   private def fetchLatestOffsets(): Option[TableBucketOffsets] = {
-    val buckets = (0 until tableInfo.getNumBuckets).toSeq
-    val offsetsInitializer = OffsetsInitializer.latest()
-    if (tableInfo.isPartitioned) {
-      val partitionOffsets = partitionInfos.asScala.map(
-        partitionInfo =>
-          FlussMicroBatchStream.getLatestOffsets(
-            tableInfo,
-            offsetsInitializer,
-            bucketOffsetsRetriever,
-            buckets,
-            Some(partitionInfo)))
-      val mergedOffsets = partitionOffsets
-        .map(_.getOffsets)
-        .reduce((l, r) => (l.asScala ++ r.asScala).asJava)
-      Some(new TableBucketOffsets(tableInfo.getTableId, mergedOffsets))
-    } else {
-      Some(
-        FlussMicroBatchStream
-          .getLatestOffsets(tableInfo, offsetsInitializer, bucketOffsetsRetriever, buckets, None))
+    try {
+      val buckets = (0 until tableInfo.getNumBuckets).toSeq
+      val offsetsInitializer = OffsetsInitializer.latest()
+      if (tableInfo.isPartitioned) {
+        val partitionOffsets = partitionInfos.asScala.map(
+          partitionInfo =>
+            FlussMicroBatchStream.getLatestOffsets(
+              tableInfo,
+              offsetsInitializer,
+              bucketOffsetsRetriever,
+              buckets,
+              Some(partitionInfo)))
+        val mergedOffsets = partitionOffsets
+          .map(_.getOffsets)
+          .reduce((l, r) => (l.asScala ++ r.asScala).asJava)
+        Some(new TableBucketOffsets(tableInfo.getTableId, mergedOffsets))
+      } else {
+        Some(
+          FlussMicroBatchStream
+            .getLatestOffsets(tableInfo, offsetsInitializer, bucketOffsetsRetriever, buckets, None))
+      }
+    } catch {
+      case e: FlussRuntimeException =>
+        if (e.getCause != null && e.getCause.isInstanceOf[InterruptedException]) {
+          logWarning(s"Streaming execution thread was interrupted.")
+          throw e.getCause
+        } else {
+          throw e
+        }
     }
   }
 
@@ -260,7 +271,7 @@ class FlussAppendMicroBatchStream(
     checkpointLocation) {
 
   override def createReaderFactory(): PartitionReaderFactory = {
-    new FlussAppendPartitionReaderFactory(tablePath, projection, options, flussConfig)
+    new FlussAppendPartitionReaderFactory(tablePath, projection, None, options, flussConfig)
   }
 
   override def planInputPartitions(start: Offset, end: Offset): Array[InputPartition] = {

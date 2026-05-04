@@ -17,11 +17,12 @@
 
 package org.apache.fluss.fs.azure.token;
 
-import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.fs.azure.AzureFileSystemOptions;
 import org.apache.fluss.fs.token.CredentialsJsonSerde;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.azurebfs.oauth2.AzureADAuthenticator;
 import org.apache.hadoop.fs.azurebfs.oauth2.AzureADToken;
 import org.slf4j.Logger;
@@ -29,10 +30,6 @@ import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
 import java.util.Map;
-
-import static org.apache.fluss.fs.azure.AzureFileSystemOptions.CLIENT_ID;
-import static org.apache.fluss.fs.azure.AzureFileSystemOptions.CLIENT_SECRET;
-import static org.apache.fluss.fs.azure.AzureFileSystemOptions.ENDPOINT_KEY;
 
 /** Token provider for abfs Hadoop filesystems. */
 public class AzureDelegationTokenProvider {
@@ -49,15 +46,19 @@ public class AzureDelegationTokenProvider {
     public AzureDelegationTokenProvider(String scheme, Configuration conf) {
         this.scheme = scheme;
 
-        this.clientId = conf.get(CLIENT_ID);
-        this.clientSecret = conf.get(CLIENT_SECRET);
-        this.authEndpoint = conf.get(ENDPOINT_KEY);
+        String clientIdKey = AzureFileSystemOptions.CLIENT_ID.key();
+        String clientSecretKey = AzureFileSystemOptions.CLIENT_SECRET.key();
+        String endpointKey = AzureFileSystemOptions.ENDPOINT_KEY.key();
+
+        this.clientId = conf.get(clientIdKey);
+        this.clientSecret = conf.get(clientSecretKey);
+        this.authEndpoint = conf.get(endpointKey);
         this.additionInfos = new HashMap<>();
 
-        LOG.info("Setting the endpoint key " + ENDPOINT_KEY.key());
+        LOG.info("Setting the endpoint key " + endpointKey);
 
-        if (conf.get(ENDPOINT_KEY) != null) {
-            additionInfos.put(ENDPOINT_KEY.key(), conf.get(ENDPOINT_KEY));
+        if (authEndpoint != null) {
+            additionInfos.put(endpointKey, authEndpoint);
         }
     }
 

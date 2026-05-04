@@ -21,10 +21,17 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.predicate.PredicateBuilder;
+import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.record.LogRecordBatch;
+import org.apache.fluss.record.LogRecordBatchStatisticsTestUtils;
+import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogTestBase;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.server.log.LocalLog.SegmentDeletionReason;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
+import org.apache.fluss.utils.CloseableIterator;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,6 +47,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
+import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
+import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.testutils.DataTestUtils.assertLogRecordsEquals;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithBaseOffset;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -392,9 +402,455 @@ final class LocalLogTest extends LogTestBase {
                 .collect(Collectors.toList());
     }
 
+    @Test
+    void testReadWithFilterAcrossMultipleSegments() throws Exception {
+        // Segment 1 (offsets 0-2): values 1,2,3 — should be filtered out by "a > 5"
+        MemoryLogRecords seg1Records =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        Arrays.asList(
+                                new Object[] {1, "a"},
+                                new Object[] {2, "b"},
+                                new Object[] {3, "c"}),
+                        DATA1_ROW_TYPE,
+                        0L,
+                        DEFAULT_SCHEMA_ID);
+        localLog.append(2, -1L, 0L, seg1Records);
+        localLog.roll(Optional.empty());
+
+        // Segment 2 (offsets 3-5): values 4,5,3 — should be filtered out by "a > 5"
+        MemoryLogRecords seg2Records =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        Arrays.asList(
+                                new Object[] {4, "d"},
+                                new Object[] {5, "e"},
+                                new Object[] {3, "f"}),
+                        DATA1_ROW_TYPE,
+                        3L,
+                        DEFAULT_SCHEMA_ID);
+        localLog.append(5, -1L, 0L, seg2Records);
+        localLog.roll(Optional.empty());
+
+        // Segment 3 (offsets 6-8): values 7,8,9 — should PASS filter "a > 5"
+        MemoryLogRecords seg3Records =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        Arrays.asList(
+                                new Object[] {7, "g"},
+                                new Object[] {8, "h"},
+                                new Object[] {9, "i"}),
+                        DATA1_ROW_TYPE,
+                        6L,
+                        DEFAULT_SCHEMA_ID);
+        localLog.append(8, -1L, 0L, seg3Records);
+
+        assertThat(localLog.getSegments().numberOfSegments()).isEqualTo(3);
+
+        // Create filter: a > 5
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate filter = builder.greaterThan(0, 5);
+
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            FetchDataInfo result =
+                    localLog.read(
+                            0,
+                            Integer.MAX_VALUE,
+                            false,
+                            localLog.getLocalLogEndOffsetMetadata(),
+                            null,
+                            new FilterContext(
+                                    filter, readContext, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER));
+
+            assertThat(result).isNotNull();
+            // Should have found data from segment 3, skipping segments 1 and 2
+            assertThat(result.getRecords().sizeInBytes()).isGreaterThan(0);
+
+            // Verify the returned records are from segment 3 (values > 5)
+            int recordCount = 0;
+            for (LogRecordBatch batch : result.getRecords().batches()) {
+                try (CloseableIterator<LogRecord> iter = batch.records(readContext)) {
+                    while (iter.hasNext()) {
+                        LogRecord record = iter.next();
+                        assertThat(record.getRow().getInt(0)).isGreaterThan(5);
+                        recordCount++;
+                    }
+                }
+            }
+            assertThat(recordCount).isEqualTo(3);
+        }
+    }
+
+    @Test
+    void testReadWithFilterAllSegmentsFilteredOut() throws Exception {
+        // Segment 1 (offsets 0-2): values 1,2,3
+        MemoryLogRecords seg1Records =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        Arrays.asList(
+                                new Object[] {1, "a"},
+                                new Object[] {2, "b"},
+                                new Object[] {3, "c"}),
+                        DATA1_ROW_TYPE,
+                        0L,
+                        DEFAULT_SCHEMA_ID);
+        localLog.append(2, -1L, 0L, seg1Records);
+        localLog.roll(Optional.empty());
+
+        // Segment 2 (offsets 3-5): values 4,5,3
+        MemoryLogRecords seg2Records =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        Arrays.asList(
+                                new Object[] {4, "d"},
+                                new Object[] {5, "e"},
+                                new Object[] {3, "f"}),
+                        DATA1_ROW_TYPE,
+                        3L,
+                        DEFAULT_SCHEMA_ID);
+        localLog.append(5, -1L, 0L, seg2Records);
+
+        assertThat(localLog.getSegments().numberOfSegments()).isEqualTo(2);
+
+        // Create filter: a > 100 — nothing matches
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate filter = builder.greaterThan(0, 100);
+
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            FetchDataInfo result =
+                    localLog.read(
+                            0,
+                            Integer.MAX_VALUE,
+                            false,
+                            localLog.getLocalLogEndOffsetMetadata(),
+                            null,
+                            new FilterContext(
+                                    filter, readContext, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER));
+
+            assertThat(result).isNotNull();
+            // All segments filtered out — should return empty records with filteredEndOffset
+            assertThat(result.getRecords().sizeInBytes()).isEqualTo(0);
+            assertThat(result.getFilteredEndOffset()).isEqualTo(6);
+        }
+    }
+
+    @Test
+    void testReadWithFilterSingleBatchSegmentFilteredNextHasData() throws Exception {
+        // Segment 1: single batch with values [1,2,3] — will be filtered by a > 5
+        List<Object[]> seg1Data =
+                Arrays.asList(new Object[] {1, "a"}, new Object[] {2, "b"}, new Object[] {3, "c"});
+        MemoryLogRecords seg1Records =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        seg1Data, DATA1_ROW_TYPE, 0L, DEFAULT_SCHEMA_ID);
+        localLog.append(2L, -1L, 0L, seg1Records);
+        localLog.roll(Optional.empty());
+
+        // Segment 2: single batch with values [6,7,8] — should pass filter
+        List<Object[]> seg2Data =
+                Arrays.asList(new Object[] {6, "d"}, new Object[] {7, "e"}, new Object[] {8, "f"});
+        MemoryLogRecords seg2Records =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        seg2Data, DATA1_ROW_TYPE, 3L, DEFAULT_SCHEMA_ID);
+        localLog.append(5L, -1L, 0L, seg2Records);
+
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate filter = builder.greaterThan(0, 5);
+
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            FetchDataInfo result =
+                    localLog.read(
+                            0,
+                            Integer.MAX_VALUE,
+                            false,
+                            localLog.getLocalLogEndOffsetMetadata(),
+                            null,
+                            new FilterContext(
+                                    filter, readContext, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER));
+
+            assertThat(result).isNotNull();
+            assertThat(result.getRecords().sizeInBytes()).isGreaterThan(0);
+            assertThat(result.getFilteredEndOffset()).isEqualTo(-1L);
+
+            int recordCount = 0;
+            for (LogRecordBatch batch : result.getRecords().batches()) {
+                try (CloseableIterator<LogRecord> iter = batch.records(readContext)) {
+                    while (iter.hasNext()) {
+                        LogRecord record = iter.next();
+                        assertThat(record.getRow().getInt(0)).isGreaterThan(5);
+                        recordCount++;
+                    }
+                }
+            }
+            assertThat(recordCount).isEqualTo(3);
+        }
+    }
+
+    @Test
+    void testReadWithFilteredEndOffsetAtSegmentBoundary() throws Exception {
+        // Segment 1: offsets 0-4, values [1,2,3,4,5] — all filtered by a > 10
+        List<Object[]> seg1Data =
+                Arrays.asList(
+                        new Object[] {1, "a"},
+                        new Object[] {2, "b"},
+                        new Object[] {3, "c"},
+                        new Object[] {4, "d"},
+                        new Object[] {5, "e"});
+        MemoryLogRecords seg1Records =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        seg1Data, DATA1_ROW_TYPE, 0L, DEFAULT_SCHEMA_ID);
+        localLog.append(4L, -1L, 0L, seg1Records);
+        localLog.roll(Optional.empty());
+
+        // Segment 2: offsets 5-9, values [6,7,8,9,10] — also filtered by a > 10
+        List<Object[]> seg2Data =
+                Arrays.asList(
+                        new Object[] {6, "f"},
+                        new Object[] {7, "g"},
+                        new Object[] {8, "h"},
+                        new Object[] {9, "i"},
+                        new Object[] {10, "j"});
+        MemoryLogRecords seg2Records =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        seg2Data, DATA1_ROW_TYPE, 5L, DEFAULT_SCHEMA_ID);
+        localLog.append(9L, -1L, 0L, seg2Records);
+        localLog.roll(Optional.empty());
+
+        // Segment 3: offsets 10-12, values [11,12,13] — passes filter
+        List<Object[]> seg3Data =
+                Arrays.asList(
+                        new Object[] {11, "k"}, new Object[] {12, "l"}, new Object[] {13, "m"});
+        MemoryLogRecords seg3Records =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        seg3Data, DATA1_ROW_TYPE, 10L, DEFAULT_SCHEMA_ID);
+        localLog.append(12L, -1L, 0L, seg3Records);
+
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate filter = builder.greaterThan(0, 10);
+
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            FetchDataInfo result =
+                    localLog.read(
+                            0,
+                            Integer.MAX_VALUE,
+                            false,
+                            localLog.getLocalLogEndOffsetMetadata(),
+                            null,
+                            new FilterContext(
+                                    filter, readContext, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER));
+
+            assertThat(result).isNotNull();
+            assertThat(result.getRecords().sizeInBytes()).isGreaterThan(0);
+
+            // Verify returned records are from segment 3 only
+            int recordCount = 0;
+            for (LogRecordBatch batch : result.getRecords().batches()) {
+                try (CloseableIterator<LogRecord> iter = batch.records(readContext)) {
+                    while (iter.hasNext()) {
+                        LogRecord record = iter.next();
+                        assertThat(record.getRow().getInt(0)).isGreaterThan(10);
+                        recordCount++;
+                    }
+                }
+            }
+            assertThat(recordCount).isEqualTo(3);
+        }
+    }
+
+    @Test
+    void testReadWithFilterLastSegmentLastBatchFiltered() throws Exception {
+        // Segment 1: offsets 0-4, values [6,7,8,9,10] — passes filter a > 5
+        List<Object[]> seg1Data =
+                Arrays.asList(
+                        new Object[] {6, "a"},
+                        new Object[] {7, "b"},
+                        new Object[] {8, "c"},
+                        new Object[] {9, "d"},
+                        new Object[] {10, "e"});
+        MemoryLogRecords seg1Records =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        seg1Data, DATA1_ROW_TYPE, 0L, DEFAULT_SCHEMA_ID);
+        localLog.append(4L, -1L, 0L, seg1Records);
+        localLog.roll(Optional.empty());
+
+        // Segment 2: offsets 5-9, values [1,2,3,4,5] — filtered by a > 5
+        List<Object[]> seg2Data =
+                Arrays.asList(
+                        new Object[] {1, "f"},
+                        new Object[] {2, "g"},
+                        new Object[] {3, "h"},
+                        new Object[] {4, "i"},
+                        new Object[] {5, "j"});
+        MemoryLogRecords seg2Records =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        seg2Data, DATA1_ROW_TYPE, 5L, DEFAULT_SCHEMA_ID);
+        localLog.append(9L, -1L, 0L, seg2Records);
+
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate filter = builder.greaterThan(0, 5);
+
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            // Read starting from offset 0 — should return segment 1 data
+            FetchDataInfo result1 =
+                    localLog.read(
+                            0,
+                            Integer.MAX_VALUE,
+                            false,
+                            localLog.getLocalLogEndOffsetMetadata(),
+                            null,
+                            new FilterContext(
+                                    filter, readContext, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER));
+            assertThat(result1).isNotNull();
+            assertThat(result1.getRecords().sizeInBytes()).isGreaterThan(0);
+
+            // Read starting from offset 5 (segment 2) — all filtered
+            FetchDataInfo result2 =
+                    localLog.read(
+                            5,
+                            Integer.MAX_VALUE,
+                            false,
+                            localLog.getLocalLogEndOffsetMetadata(),
+                            null,
+                            new FilterContext(
+                                    filter, readContext, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER));
+            assertThat(result2).isNotNull();
+            assertThat(result2.getRecords().sizeInBytes()).isEqualTo(0);
+            // filteredEndOffset should be set to advance past the filtered data
+            assertThat(result2.getFilteredEndOffset()).isEqualTo(10);
+        }
+    }
+
+    @Test
+    void testReadWithFilterPropagatesFilteredEndOffsetWithData() throws Exception {
+        // Test the scenario from review #11: a segment has matching + trailing filtered batches.
+        // The filteredEndOffset should propagate through LocalLog even when records are returned.
+        // Segment 1: two batches — batch1 passes filter, batch2 filtered out
+        List<Object[]> batch1Data =
+                Arrays.asList(new Object[] {7, "a"}, new Object[] {8, "b"}, new Object[] {9, "c"});
+        List<Object[]> batch2Data =
+                Arrays.asList(new Object[] {1, "d"}, new Object[] {2, "e"}, new Object[] {3, "f"});
+        MemoryLogRecords batch1 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        batch1Data, DATA1_ROW_TYPE, 0L, DEFAULT_SCHEMA_ID);
+        MemoryLogRecords batch2 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        batch2Data, DATA1_ROW_TYPE, 3L, DEFAULT_SCHEMA_ID);
+        localLog.append(2L, -1L, 0L, batch1);
+        localLog.append(5L, -1L, 0L, batch2);
+
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate filter = builder.greaterThan(0, 5);
+
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            FetchDataInfo result =
+                    localLog.read(
+                            0,
+                            Integer.MAX_VALUE,
+                            false,
+                            localLog.getLocalLogEndOffsetMetadata(),
+                            null,
+                            new FilterContext(
+                                    filter, readContext, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER));
+
+            assertThat(result).isNotNull();
+            // Should return batch 1 data
+            assertThat(result.getRecords().sizeInBytes()).isGreaterThan(0);
+
+            // Verify only batch 1 records returned
+            int recordCount = 0;
+            for (LogRecordBatch batch : result.getRecords().batches()) {
+                try (CloseableIterator<LogRecord> iter = batch.records(readContext)) {
+                    while (iter.hasNext()) {
+                        LogRecord record = iter.next();
+                        assertThat(record.getRow().getInt(0)).isGreaterThan(5);
+                        recordCount++;
+                    }
+                }
+            }
+            assertThat(recordCount).isEqualTo(3);
+
+            // filteredEndOffset should be set — batch 2 was scanned and filtered
+            assertThat(result.hasFilteredEndOffset()).isTrue();
+            assertThat(result.getFilteredEndOffset()).isEqualTo(6);
+        }
+    }
+
+    @Test
+    void testReadWithFilterFilteredEndOffsetAcrossSegments() throws Exception {
+        // Segment 1: batch1 passes, batch2 filtered — filteredEndOffset set within segment
+        // Segment 2: all filtered — LocalLog should continue scanning
+        // Segment 3: has matching data
+        // The final result should return segment 1 data with filteredEndOffset from segment 1.
+        // (LocalLog returns the first segment's result when it has data.)
+        List<Object[]> seg1Batch1Data =
+                Arrays.asList(new Object[] {7, "a"}, new Object[] {8, "b"}, new Object[] {9, "c"});
+        List<Object[]> seg1Batch2Data =
+                Arrays.asList(new Object[] {1, "d"}, new Object[] {2, "e"}, new Object[] {3, "f"});
+        MemoryLogRecords seg1Batch1 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        seg1Batch1Data, DATA1_ROW_TYPE, 0L, DEFAULT_SCHEMA_ID);
+        MemoryLogRecords seg1Batch2 =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        seg1Batch2Data, DATA1_ROW_TYPE, 3L, DEFAULT_SCHEMA_ID);
+        localLog.append(2L, -1L, 0L, seg1Batch1);
+        localLog.append(5L, -1L, 0L, seg1Batch2);
+        localLog.roll(Optional.empty());
+
+        // Segment 2: all filtered
+        List<Object[]> seg2Data =
+                Arrays.asList(new Object[] {1, "g"}, new Object[] {2, "h"}, new Object[] {3, "i"});
+        MemoryLogRecords seg2Records =
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        seg2Data, DATA1_ROW_TYPE, 6L, DEFAULT_SCHEMA_ID);
+        localLog.append(8L, -1L, 0L, seg2Records);
+
+        PredicateBuilder builder = new PredicateBuilder(DATA1_ROW_TYPE);
+        Predicate filter = builder.greaterThan(0, 5);
+
+        try (LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(
+                        DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER)) {
+            FetchDataInfo result =
+                    localLog.read(
+                            0,
+                            Integer.MAX_VALUE,
+                            false,
+                            localLog.getLocalLogEndOffsetMetadata(),
+                            null,
+                            new FilterContext(
+                                    filter, readContext, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER));
+
+            assertThat(result).isNotNull();
+            // Should return segment 1 batch 1 data (first non-empty result)
+            assertThat(result.getRecords().sizeInBytes()).isGreaterThan(0);
+
+            int recordCount = 0;
+            for (LogRecordBatch batch : result.getRecords().batches()) {
+                try (CloseableIterator<LogRecord> iter = batch.records(readContext)) {
+                    while (iter.hasNext()) {
+                        LogRecord record = iter.next();
+                        assertThat(record.getRow().getInt(0)).isGreaterThan(5);
+                        recordCount++;
+                    }
+                }
+            }
+            assertThat(recordCount).isEqualTo(3);
+
+            // filteredEndOffset should be set from segment 1's trailing filtered batch
+            assertThat(result.hasFilteredEndOffset()).isTrue();
+            assertThat(result.getFilteredEndOffset()).isEqualTo(6);
+        }
+    }
+
     private FetchDataInfo readLog(LocalLog log, long startOffset, int maxLength) throws Exception {
         return log.read(
-                startOffset, maxLength, false, localLog.getLocalLogEndOffsetMetadata(), null);
+                startOffset, maxLength, false, localLog.getLocalLogEndOffsetMetadata(), null, null);
     }
 
     private LocalLog createLocalLogWithActiveSegment(

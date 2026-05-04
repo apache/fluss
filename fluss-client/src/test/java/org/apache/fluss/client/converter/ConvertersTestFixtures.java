@@ -29,6 +29,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -277,5 +278,202 @@ public final class ConvertersTestFixtures {
         public CharacterFieldPojo(Character c) {
             this.charField = c;
         }
+    }
+
+    // ----------------------- Nested ROW POJOs -----------------------
+
+    /** Address POJO used as nested ROW type in tests. */
+    public static class AddressPojo {
+        public String city;
+        public Integer zipCode;
+
+        public AddressPojo() {}
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            AddressPojo that = (AddressPojo) o;
+            return Objects.equals(city, that.city) && Objects.equals(zipCode, that.zipCode);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(city, zipCode);
+        }
+    }
+
+    /** Person POJO with nested Address. */
+    public static class PersonPojo {
+        public Integer id;
+        public AddressPojo address;
+
+        public PersonPojo() {}
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            PersonPojo that = (PersonPojo) o;
+            return Objects.equals(id, that.id) && Objects.equals(address, that.address);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(id, address);
+        }
+    }
+
+    /** Inner POJO for deeply nested row tests. */
+    public static class InnerPojo {
+        public Double val;
+        public Boolean flag;
+
+        public InnerPojo() {}
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            InnerPojo that = (InnerPojo) o;
+            return Objects.equals(val, that.val) && Objects.equals(flag, that.flag);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(val, flag);
+        }
+    }
+
+    /** Middle POJO containing inner nested POJO. */
+    public static class MiddlePojo {
+        public Integer id;
+        public InnerPojo inner;
+
+        public MiddlePojo() {}
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            MiddlePojo that = (MiddlePojo) o;
+            return Objects.equals(id, that.id) && Objects.equals(inner, that.inner);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(id, inner);
+        }
+    }
+
+    /** Outer POJO for deeply nested row tests. */
+    public static class DeepNestOuterPojo {
+        public String name;
+        public MiddlePojo nested;
+
+        public DeepNestOuterPojo() {}
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            DeepNestOuterPojo that = (DeepNestOuterPojo) o;
+            return Objects.equals(name, that.name) && Objects.equals(nested, that.nested);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(name, nested);
+        }
+    }
+
+    /** Nested POJO with array field. */
+    public static class RowWithArrayPojo {
+        public String label;
+        public Integer[] values;
+
+        public RowWithArrayPojo() {}
+    }
+
+    /** Outer POJO with nested row containing array. */
+    public static class RowWithArrayOuterPojo {
+        public Integer id;
+        public RowWithArrayPojo data;
+
+        public RowWithArrayOuterPojo() {}
+    }
+
+    /** Nested POJO with map field. */
+    public static class RowWithMapPojo {
+        public String name;
+        public Map<String, Integer> attrs;
+
+        public RowWithMapPojo() {}
+    }
+
+    /** Outer POJO with nested row containing map. */
+    public static class RowWithMapOuterPojo {
+        public Integer id;
+        public RowWithMapPojo info;
+
+        public RowWithMapOuterPojo() {}
+    }
+
+    /** POJO with array of nested row type. */
+    public static class ArrayOfRowPojo {
+        public Integer id;
+        public AddressPojo[] addresses;
+
+        public ArrayOfRowPojo() {}
+    }
+
+    /** POJO with map having nested row values. */
+    public static class MapOfRowPojo {
+        public Integer id;
+        public Map<String, AddressPojo> addressMap;
+
+        public MapOfRowPojo() {}
+    }
+
+    /** Negative test: array cannot be used as ROW type POJO field. */
+    public static class PrimitiveArrayFieldPojo {
+        public Integer[] badField;
+
+        public PrimitiveArrayFieldPojo() {}
+    }
+
+    /** Negative test: Map cannot be used as ROW type POJO field. */
+    public static class MapFieldPojo {
+        public Map<String, Integer> badField;
+
+        public MapFieldPojo() {}
+    }
+
+    /** POJO with a List of nested row type (tests {@code Collection<ROW>} deserialization). */
+    public static class ListOfRowPojo {
+        public Integer id;
+        public List<AddressPojo> addresses;
+
+        public ListOfRowPojo() {}
     }
 }

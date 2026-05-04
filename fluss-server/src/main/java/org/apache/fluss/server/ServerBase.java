@@ -18,6 +18,7 @@
 package org.apache.fluss.server;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussException;
@@ -89,6 +90,17 @@ public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandle
             LOG.error("Could not load the configuration.", fpe);
             System.exit(FAILURE_EXIT_CODE);
             return null;
+        }
+    }
+
+    /**
+     * Applies server-side default values for configuration options that are not explicitly set by
+     * the user. This ensures server components use optimal defaults that may differ from the global
+     * defaults defined in {@link ConfigOption}.
+     */
+    protected static void applyServerDefaultConfigurations(Configuration configuration) {
+        if (!configuration.contains(ConfigOptions.NETTY_CLIENT_ALLOCATOR_HEAP_BUFFER_FIRST)) {
+            configuration.set(ConfigOptions.NETTY_CLIENT_ALLOCATOR_HEAP_BUFFER_FIRST, false);
         }
     }
 

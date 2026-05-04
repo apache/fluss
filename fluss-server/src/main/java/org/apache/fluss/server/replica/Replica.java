@@ -23,6 +23,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.InvalidTimestampException;
 import org.apache.fluss.exception.InvalidUpdateVersionException;
 import org.apache.fluss.exception.KvStorageException;
@@ -34,6 +35,7 @@ import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -41,18 +43,22 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.KvRecordBatch;
+import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
+import org.apache.fluss.rpc.util.PredicateMessageUtils;
 import org.apache.fluss.server.SequenceIDCounter;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvRecoverHelper;
 import org.apache.fluss.server.kv.KvTablet;
+import org.apache.fluss.server.kv.RemoteLogFetcher;
 import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import org.apache.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
@@ -67,6 +73,8 @@ import org.apache.fluss.server.kv.snapshot.SnapshotContext;
 import org.apache.fluss.server.log.FetchDataInfo;
 import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.log.FetchParams;
+import org.apache.fluss.server.log.FilterContext;
+import org.apache.fluss.server.log.FilterInfo;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogManager;
@@ -90,10 +98,10 @@ import org.apache.fluss.server.zk.ZkSequenceIDCounter;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.ZkData;
+import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
-import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -119,6 +127,7 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReadWriteLock;
@@ -179,6 +188,7 @@ public final class Replica {
     private final AtomicReference<Integer> leaderReplicaIdOpt = new AtomicReference<>();
     private final ReadWriteLock leaderIsrUpdateLock = new ReentrantReadWriteLock();
     private final Clock clock;
+    private final RemoteLogManager remoteLogManager;
 
     private static final int INIT_KV_TABLET_MAX_RETRY_TIMES = 5;
     /**
@@ -187,8 +197,7 @@ public final class Replica {
      *
      * <p>followerId -> {@link FollowerReplica}.
      */
-    private final Map<Integer, FollowerReplica> followerReplicasMap =
-            MapUtils.newConcurrentHashMap();
+    private final Map<Integer, FollowerReplica> followerReplicasMap = new ConcurrentHashMap<>();
 
     private volatile IsrState isrState = new IsrState.CommittedIsrState(Collections.emptyList());
     private volatile int leaderEpoch = LeaderAndIsr.INITIAL_LEADER_EPOCH - 1;
@@ -224,7 +233,8 @@ public final class Replica {
             FatalErrorHandler fatalErrorHandler,
             BucketMetricGroup bucketMetricGroup,
             TableInfo tableInfo,
-            Clock clock)
+            Clock clock,
+            RemoteLogManager remoteLogManager)
             throws Exception {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
@@ -256,6 +266,7 @@ public final class Replica {
         this.logTablet = createLog(lazyHighWatermarkCheckpoint);
         this.logTablet.updateIsDataLakeEnabled(tableConfig.isDataLakeEnabled());
         this.clock = clock;
+        this.remoteLogManager = remoteLogManager;
         registerMetrics();
     }
 
@@ -542,11 +553,20 @@ public final class Replica {
     private void registerLakeTieringMetrics() {
         lakeTieringMetricGroup = bucketMetricGroup.addGroup("lakeTiering");
         lakeTieringMetricGroup.gauge(
-                MetricNames.LOG_LAKE_PENDING_RECORDS,
-                () ->
-                        getLakeLogEndOffset() < 0L
-                                ? getLogHighWatermark() - getLogStartOffset()
-                                : getLogHighWatermark() - getLakeLogEndOffset());
+                MetricNames.LAKE_PENDING_RECORDS,
+                () -> {
+                    long lakeLogEndOffset = getLakeLogEndOffset();
+                    if (lakeLogEndOffset < 0L) {
+                        try {
+                            return getRowCount();
+                        } catch (InvalidTableException e) {
+                            // WAL mode or v0.9 old table with no completed tiering:
+                            // row count disabled, return -1 to indicate unavailable
+                            return -1L;
+                        }
+                    }
+                    return getLogHighWatermark() - lakeLogEndOffset;
+                });
         lakeTieringMetricGroup.gauge(
                 MetricNames.LOG_LAKE_TIMESTAMP_LAG,
                 () ->
@@ -829,18 +849,29 @@ public final class Replica {
                             getTablePath(),
                             snapshotContext.getZooKeeperClient(),
                             snapshotContext.maxFetchLogSizeInRecoverKv());
-            KvRecoverHelper kvRecoverHelper =
-                    new KvRecoverHelper(
-                            kvTablet,
-                            logTablet,
-                            startRecoverLogOffset,
-                            rowCount,
-                            autoIncIDRange,
-                            recoverContext,
-                            tableConfig.getKvFormat(),
-                            tableConfig.getLogFormat(),
-                            schemaGetter);
-            kvRecoverHelper.recover();
+
+            // Always create RemoteLogFetcher; the temp directory is lazily created only
+            // when fetch() is actually called, so this is lightweight.
+            RemoteLogFetcher remoteLogFetcher =
+                    new RemoteLogFetcher(remoteLogManager, tableBucket, logTablet.getLogDir());
+
+            try {
+                KvRecoverHelper kvRecoverHelper =
+                        new KvRecoverHelper(
+                                kvTablet,
+                                logTablet,
+                                startRecoverLogOffset,
+                                rowCount,
+                                autoIncIDRange,
+                                recoverContext,
+                                tableConfig.getKvFormat(),
+                                tableConfig.getLogFormat(),
+                                schemaGetter,
+                                remoteLogFetcher);
+                kvRecoverHelper.recover();
+            } finally {
+                remoteLogFetcher.close();
+            }
         } catch (Exception e) {
             throw new KvStorageException(
                     String.format(
@@ -1335,6 +1366,7 @@ public final class Replica {
                                         Integer.MAX_VALUE,
                                         FetchIsolation.HIGH_WATERMARK,
                                         true,
+                                        null,
                                         null);
                         return dataInfo.getRecords();
                     } catch (IOException e) {
@@ -1494,14 +1526,77 @@ public final class Replica {
 
         // todo validate fetched epoch.
 
-        FetchDataInfo fetchDataInfo =
-                logTablet.read(
-                        readOffset,
-                        fetchParams.maxFetchBytes(),
-                        fetchParams.isolation(),
-                        fetchParams.minOneMessage(),
-                        fetchParams.projection());
+        FilterContext filterContext = createFilterContext(fetchParams);
+
+        FetchDataInfo fetchDataInfo;
+        try {
+            fetchDataInfo =
+                    logTablet.read(
+                            readOffset,
+                            fetchParams.maxFetchBytes(),
+                            fetchParams.isolation(),
+                            fetchParams.minOneMessage(),
+                            fetchParams.projection(),
+                            filterContext);
+        } finally {
+            // Close readContext eagerly — it is only used for statistics extraction during
+            // batch filtering and is NOT referenced by the returned FetchDataInfo records.
+            if (filterContext != null) {
+                IOUtils.closeQuietly(filterContext.getReadContext());
+            }
+        }
         return new LogReadInfo(fetchDataInfo, initialHighWatermark, initialLogEndOffset);
+    }
+
+    /**
+     * Creates a {@link FilterContext} for batch filtering if a filter is configured for this table
+     * and the log format supports it. Returns null if no filter is applicable.
+     */
+    @Nullable
+    private FilterContext createFilterContext(FetchParams fetchParams) {
+        FilterInfo filterInfo = fetchParams.getFilterInfo(tableBucket.getTableId());
+        if (filterInfo == null || logFormat != LogFormat.ARROW) {
+            return null;
+        }
+
+        LogRecordReadContext readContext = null;
+        try {
+            int filterSchemaId = filterInfo.getSchemaId();
+            if (filterSchemaId < 0) {
+                LOG.warn(
+                        "Invalid filter schema ID ({}) for {}, falling back to unfiltered read.",
+                        filterSchemaId,
+                        tableBucket);
+                return null;
+            }
+            Schema filterSchema = schemaGetter.getSchema(filterSchemaId);
+            if (filterSchema == null) {
+                LOG.warn(
+                        "Filter schema not found (schemaId={}) for {}, falling back to unfiltered read.",
+                        filterSchemaId,
+                        tableBucket);
+                return null;
+            }
+            RowType rowType = filterSchema.getRowType();
+            Predicate resolvedFilter =
+                    PredicateMessageUtils.toPredicate(filterInfo.getPbPredicate(), rowType);
+            if (resolvedFilter != null) {
+                readContext =
+                        LogRecordReadContext.createArrowReadContext(
+                                rowType, filterSchemaId, schemaGetter);
+                return new FilterContext(resolvedFilter, readContext, filterSchemaId, schemaGetter);
+            }
+            return null;
+        } catch (Exception e) {
+            LOG.warn(
+                    "Failed to initialize filter context for {} ({}), "
+                            + "falling back to unfiltered read.",
+                    tableBucket,
+                    e.getClass().getSimpleName(),
+                    e);
+            IOUtils.closeQuietly(readContext);
+            return null;
+        }
     }
 
     private void tryCompleteDelayedOperations() {

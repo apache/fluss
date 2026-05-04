@@ -38,7 +38,7 @@ abstract class AbstractSparkTable(val admin: Admin, val tableInfo: TableInfo) ex
   protected lazy val _partitionSchema = new StructType(
     _schema.fields.filter(e => tableInfo.getPartitionKeys.contains(e.name)))
 
-  override def name(): String = tableInfo.toString
+  override def name(): String = tableInfo.getTablePath.toString
 
   override def schema(): StructType = _schema
 

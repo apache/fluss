@@ -22,6 +22,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.flink.adapter.SingleThreadMultiplexSourceReaderBaseAdapter;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
+import org.apache.fluss.flink.tiering.source.metrics.TieringMetrics;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.state.TieringSplitState;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
@@ -73,15 +74,29 @@ public final class TieringSourceReader<WriteResult>
             Duration pollTimeout) {
         super(
                 elementsQueue,
-                new TieringSourceFetcherManager<>(
-                        elementsQueue,
-                        () -> new TieringSplitReader<>(connection, lakeTieringFactory, pollTimeout),
-                        context.getConfiguration(),
-                        (ignore) -> {}),
+                createFetcherManager(
+                        elementsQueue, context, connection, lakeTieringFactory, pollTimeout),
                 new TableBucketWriteResultEmitter<>(),
                 context.getConfiguration(),
                 context);
         this.connection = connection;
+    }
+
+    private static <WriteResult> TieringSourceFetcherManager<WriteResult> createFetcherManager(
+            FutureCompletingBlockingQueue<RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>>
+                    elementsQueue,
+            SourceReaderContext context,
+            Connection connection,
+            LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
+            Duration pollTimeout) {
+        TieringMetrics tieringMetrics = new TieringMetrics(context.metricGroup());
+        return new TieringSourceFetcherManager<>(
+                elementsQueue,
+                () ->
+                        new TieringSplitReader<>(
+                                connection, lakeTieringFactory, pollTimeout, tieringMetrics),
+                context.getConfiguration(),
+                (ignore) -> {});
     }
 
     @Override

@@ -25,6 +25,8 @@ import org.apache.fluss.fs.token.ObtainedSecurityToken;
 
 import org.junit.jupiter.api.Test;
 
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.net.URI;
 import java.util.HashMap;
 import java.util.Map;
@@ -41,12 +43,14 @@ public class AzureFileSystemPluginTest {
         AzureFileSystemPlugin plugin = new AbfsFileSystemPlugin();
         Configuration flussConfig = new Configuration();
         flussConfig.setString("fs.azure.some.prop", "some-value");
+        flussConfig.setString("azure.another.prop", "another-value");
         flussConfig.setString("other.prop", "other-value");
 
         org.apache.hadoop.conf.Configuration hadoopConfig =
                 plugin.getHadoopConfiguration(flussConfig);
 
         assertThat(hadoopConfig.get("fs.azure.some.prop")).isEqualTo("some-value");
+        assertThat(hadoopConfig.get("fs.azure.another.prop")).isEqualTo("another-value");
         assertThat(hadoopConfig.get("other.prop")).isNull();
     }
 
@@ -97,7 +101,10 @@ public class AzureFileSystemPluginTest {
         try {
             plugin.create(uri, flussConfig);
         } catch (Exception e) {
-            // expected or ignored
+            // If the plugin creation fails, it must NOT fail with an "init configuration" error.
+            StringWriter sw = new StringWriter();
+            e.printStackTrace(new PrintWriter(sw));
+            assertThat(sw.toString()).doesNotContain("Failure to initialize configuration");
         }
     }
 

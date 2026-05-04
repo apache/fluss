@@ -89,8 +89,9 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                                                         "id", DataTypes.BIGINT().copy(false)),
                                                 DataTypes.FIELD("name", DataTypes.STRING())),
                                         new int[] {1, 0},
-                                        createMockSourceReaderMetrics(),
-                                        null))
+                                        null,
+                                        null,
+                                        createMockSourceReaderMetrics()))
                 .isInstanceOf(ValidationException.class)
                 .hasMessage(
                         "The Flink query schema is not matched to Fluss table schema. \n"
@@ -106,8 +107,9 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                                                 DataTypes.FIELD("name2", DataTypes.STRING()),
                                                 DataTypes.FIELD("id", DataTypes.BIGINT())),
                                         null,
-                                        createMockSourceReaderMetrics(),
-                                        null))
+                                        null,
+                                        null,
+                                        createMockSourceReaderMetrics()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Field name2 does not exist in the row type.");
 
@@ -119,8 +121,9 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                                 DataTypes.FIELD("name", DataTypes.STRING()),
                                 DataTypes.FIELD("id", DataTypes.BIGINT().copy(false))),
                         null,
-                        createMockSourceReaderMetrics(),
-                        null);
+                        null,
+                        null,
+                        createMockSourceReaderMetrics());
         assertThat(flinkSourceSplitReader.getProjectedFields()).isNull();
     }
 
@@ -427,7 +430,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
 
     private FlinkSourceSplitReader createSplitReader(TablePath tablePath, RowType rowType) {
         return new FlinkSourceSplitReader(
-                clientConf, tablePath, rowType, null, createMockSourceReaderMetrics(), null);
+                clientConf, tablePath, rowType, null, null, null, createMockSourceReaderMetrics());
     }
 
     private FlinkSourceReaderMetrics createMockSourceReaderMetrics() {

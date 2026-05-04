@@ -83,6 +83,7 @@ public class CoordinatorRequestBatch {
     private static final Schema EMPTY_SCHEMA = Schema.newBuilder().build();
     private static final TableDescriptor EMPTY_TABLE_DESCRIPTOR =
             TableDescriptor.builder().schema(EMPTY_SCHEMA).distributedBy(0).build();
+    private static final String EMPTY_REMOTE_DATA_DIR = "";
 
     // a map from tablet server to notify the leader and isr for each bucket.
     private final Map<Integer, Map<TableBucket, PbNotifyLeaderAndIsrReqForBucket>>
@@ -682,6 +683,7 @@ public class CoordinatorRequestBatch {
         // tablet servers.
         return makeUpdateMetadataRequest(
                 coordinatorContext.getCoordinatorServerInfo(),
+                coordinatorContext.getCoordinatorEpoch(),
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
                 tableMetadataList,
                 partitionMetadataList);
@@ -694,7 +696,13 @@ public class CoordinatorRequestBatch {
         if (tableInfo == null) {
             if (tableQueuedForDeletion) {
                 return TableInfo.of(
-                        DELETED_TABLE_PATH, tableId, 0, EMPTY_TABLE_DESCRIPTOR, -1L, -1L);
+                        DELETED_TABLE_PATH,
+                        tableId,
+                        0,
+                        EMPTY_TABLE_DESCRIPTOR,
+                        EMPTY_REMOTE_DATA_DIR,
+                        -1L,
+                        -1L);
             } else {
                 // it may happen that the table is dropped, but the partition still exists
                 // when coordinator restarts, it won't consider it as deleted table,
@@ -710,6 +718,7 @@ public class CoordinatorRequestBatch {
                             DELETED_TABLE_ID,
                             0,
                             EMPTY_TABLE_DESCRIPTOR,
+                            EMPTY_REMOTE_DATA_DIR,
                             -1L,
                             -1L)
                     : tableInfo;

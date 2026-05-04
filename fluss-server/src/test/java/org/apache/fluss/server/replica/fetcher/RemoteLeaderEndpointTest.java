@@ -145,6 +145,8 @@ public class RemoteLeaderEndpointTest {
     private static Configuration initConfig() {
         Configuration conf = new Configuration();
         conf.setInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 3);
+        // Server uses off-heap memory by default
+        conf.setBoolean(ConfigOptions.NETTY_CLIENT_ALLOCATOR_HEAP_BUFFER_FIRST, false);
         return conf;
     }
 }

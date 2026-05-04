@@ -165,14 +165,13 @@ public class PeriodicSnapshotManager implements Closeable {
     }
 
     public void start() {
-        // disable periodic snapshot when periodicMaterializeDelay is not positive
-        if (!started && initialDelay > 0) {
+        if (!started && snapshotIntervalSupplier.getAsLong() > 0) {
 
             started = true;
 
             LOG.info("TableBucket {} starts periodic snapshot", tableBucket);
 
-            scheduleNextSnapshot(initialDelay);
+            scheduleNextSnapshot(Math.max(initialDelay, 1));
         }
     }
 

@@ -354,6 +354,10 @@ public class FlinkSourceEnumerator
 
     private void startInBatchMode() {
         if (lakeEnabled) {
+            if (lakeSource == null) {
+                throw new IllegalStateException(
+                        "The 'lakeSource' is null in batch mode. It should be set if lake is enabled.");
+            }
             context.callAsync(
                     () -> {
                         List<SourceSplitBase> splits = generateHybridLakeFlussSplits();
