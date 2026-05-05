@@ -111,6 +111,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.metadata.TablePath.DEFAULT_DATABASE_NAME;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclFilter;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toResolvedPartitionSpec;
 import static org.apache.fluss.security.acl.Resource.TABLE_SPLITTER;
@@ -249,7 +250,10 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         DatabaseExistsResponse response = new DatabaseExistsResponse();
 
         // Check authorization first for efficiency - avoids unnecessary metadata lookup
-        if (authorizer != null
+        // We skip authorization for the default database for backward compatibilities, as
+        // FlinkCatalog checks existence for the default database when open().
+        if (!DEFAULT_DATABASE_NAME.equals(databaseName)
+                && authorizer != null
                 && !authorizer.isAuthorized(
                         currentSession(),
                         OperationType.DESCRIBE,
