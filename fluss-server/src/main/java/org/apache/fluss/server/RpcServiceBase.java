@@ -247,24 +247,22 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     public CompletableFuture<DatabaseExistsResponse> databaseExists(DatabaseExistsRequest request) {
         String databaseName = request.getDatabaseName();
         DatabaseExistsResponse response = new DatabaseExistsResponse();
-        boolean exists = metadataManager.databaseExists(databaseName);
 
-        // For security, return false for both non-existent and unauthorized databases
-        if (exists) {
-            try {
-                authorizeDatabase(OperationType.DESCRIBE, databaseName);
-                // If we get here, user is authorized
-            } catch (Exception e) {
-                // Not authorized - hide database existence
-                LOG.debug(
-                        "User {} not authorized to access database '{}', returning false",
-                        currentSession().getPrincipal(),
-                        databaseName);
-                exists = false;
-            }
+        // Check authorization first for efficiency - avoids unnecessary metadata lookup
+        if (authorizer != null
+                && !authorizer.isAuthorized(
+                        currentSession(),
+                        OperationType.DESCRIBE,
+                        Resource.database(databaseName))) {
+            LOG.debug(
+                    "User {} not authorized to access database '{}', returning false",
+                    currentSession().getPrincipal(),
+                    databaseName);
+            response.setExists(false);
+            return CompletableFuture.completedFuture(response);
         }
 
-        response.setExists(exists);
+        response.setExists(metadataManager.databaseExists(databaseName));
         return CompletableFuture.completedFuture(response);
     }
 
@@ -326,24 +324,20 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     public CompletableFuture<TableExistsResponse> tableExists(TableExistsRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
         TableExistsResponse response = new TableExistsResponse();
-        boolean exists = metadataManager.tableExists(tablePath);
 
-        // For security, return false for both non-existent and unauthorized tables
-        if (exists) {
-            try {
-                authorizeTable(OperationType.DESCRIBE, tablePath);
-                // If we get here, user is authorized
-            } catch (Exception e) {
-                // Not authorized - hide table existence
-                LOG.debug(
-                        "User {} not authorized to access table '{}', returning false",
-                        currentSession().getPrincipal(),
-                        tablePath);
-                exists = false;
-            }
+        // Check authorization first for efficiency - avoids unnecessary metadata lookup
+        if (authorizer != null
+                && !authorizer.isAuthorized(
+                        currentSession(), OperationType.DESCRIBE, Resource.table(tablePath))) {
+            LOG.debug(
+                    "User {} not authorized to access table '{}', returning false",
+                    currentSession().getPrincipal(),
+                    tablePath);
+            response.setExists(false);
+            return CompletableFuture.completedFuture(response);
         }
 
-        response.setExists(exists);
+        response.setExists(metadataManager.tableExists(tablePath));
         return CompletableFuture.completedFuture(response);
     }
 
