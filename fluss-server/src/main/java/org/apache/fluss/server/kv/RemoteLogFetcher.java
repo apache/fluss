@@ -91,7 +91,7 @@ public class RemoteLogFetcher implements Closeable {
     private static final int DOWNLOAD_RETRY_BACKOFF_MULTIPLIER = 2;
     private static final long DOWNLOAD_RETRY_BACKOFF_MAX_MS = 5_000L;
     private static final double DOWNLOAD_RETRY_BACKOFF_JITTER = 0.25D;
-    private static final int DOWNLOAD_MAX_RETRIES = 5;
+    @VisibleForTesting static final int DOWNLOAD_MAX_RETRIES = 5;
 
     private final RemoteLogManager remoteLogManager;
     private final TableBucket tableBucket;
@@ -256,29 +256,6 @@ public class RemoteLogFetcher implements Closeable {
     }
 
     /**
-     * Replace the current prefetch window of the active iterator with a single entry carrying the
-     * supplied future. Intended for tests that need to simulate a specific prefetch state (e.g. a
-     * failing future, a pending future) without racing against the real downloader.
-     *
-     * <p>Any entries still in the prefetch window are drained (in-flight futures cancelled,
-     * completed ones cleaned up) before the new entry is installed. The caller is responsible for
-     * making sure the active iterator exists (i.e. {@link #fetch(long, long)} has been called).
-     *
-     * <p><b>Thread-safety:</b> must be called on the consumer thread (the one that drives {@link
-     * #fetch}) while that thread is not actively advancing the iterator, consistent with the
-     * class-level {@link NotThreadSafe} contract.
-     */
-    @VisibleForTesting
-    void injectPrefetchEntryForTest(RemoteLogSegment segment, Future<File> future) {
-        RemoteLogBatchIterator iterator = this.activeIterator;
-        if (iterator == null) {
-            throw new IllegalStateException(
-                    "injectPrefetchEntryForTest called without an active iterator");
-        }
-        iterator.injectPrefetchEntryForTest(segment, future);
-    }
-
-    /**
      * Returns a snapshot of the prefetch futures currently in the window, in submission order
      * (oldest first).
      *
@@ -326,12 +303,17 @@ public class RemoteLogFetcher implements Closeable {
             throw new IOException(
                     "Failed to download remote log segment: " + segment.remoteLogSegmentId(), e);
         } finally {
-            if (!success) {
+            // Most remote/file InputStreams don't honor Thread.interrupt() mid-read: the
+            // call simply returns a normally-completed copy and we'd fall through with
+            // success=true while the worker has been interrupted by close()/cancel(true).
+            // Treat "interrupt observed during the copy" as a failure for cleanup purposes
+            // so we don't leave a stale segment file behind in tempDir.
+            if (!success || Thread.currentThread().isInterrupted()) {
                 try {
                     Files.deleteIfExists(localFile.toPath());
                 } catch (IOException cleanupException) {
                     LOG.warn(
-                            "Failed to cleanup partial local segment file {} for segment {}.",
+                            "Failed to cleanup partial/interrupted local segment file {} for segment {}.",
                             localFile,
                             segment.remoteLogSegmentId(),
                             cleanupException);
@@ -579,67 +561,48 @@ public class RemoteLogFetcher implements Closeable {
          * long as more segments remain.
          */
         private File fetchSegmentFile(RemoteLogSegment segment) throws IOException {
-            RemoteLogSegment headSegment =
-                    prefetchWindowSize() > 0
-                            ? prefetchSegments[nextConsumeIndex % prefetchNum]
-                            : null;
-            if (headSegment != null && isSameSegmentId(segment, headSegment)) {
-                int headSlot = nextConsumeIndex % prefetchNum;
-                Future<File> headFuture = prefetchSlots[headSlot];
-                // Eagerly null the slot refs so the ring never keeps stale references even if the
-                // consumer throws below — also releases the RemoteLogSegment for GC early.
-                prefetchSlots[headSlot] = null;
-                prefetchSegments[headSlot] = null;
-                nextConsumeIndex++;
-                try {
-                    return headFuture.get();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new IOException(
-                            "Interrupted while waiting for remote log segment download: "
-                                    + segment.remoteLogSegmentId(),
-                            e);
-                } catch (CancellationException e) {
-                    LOG.warn(
-                            "Prefetched segment {} was cancelled, fallback to sync download.",
-                            segment.remoteLogSegmentId(),
-                            e);
-                    return downloadSegmentWithRetry(segment);
-                } catch (ExecutionException e) {
-                    LOG.warn(
-                            "Prefetched segment {} failed even after async retries, "
-                                    + "fallback to one more synchronous retry round.",
-                            segment.remoteLogSegmentId(),
-                            e.getCause());
-                    return downloadSegmentWithRetry(segment);
-                } finally {
-                    // Window slot released — try to submit the next prefetch right away.
-                    fillPrefetchWindow();
-                }
+            // Invariant: fillPrefetchWindow() and advance() walk the same pre-filtered
+            // `segments` list in strict order with identical skip rules; consumption is
+            // single-threaded FIFO; prefetchNum >= 1 (Math.max(1, ...) in the ctor). So
+            // the ring head is *always* the segment advance() is asking for.
+            int headSlot = nextConsumeIndex % prefetchNum;
+            RemoteLogSegment headSegment = prefetchSegments[headSlot];
+            assert isSameSegmentId(segment, headSegment)
+                    : "prefetch ring head "
+                            + (headSegment == null ? "null" : headSegment.remoteLogSegmentId())
+                            + " does not match requested "
+                            + segment.remoteLogSegmentId();
+            Future<File> headFuture = prefetchSlots[headSlot];
+            // Eagerly null the slot refs so the ring never keeps stale references even if the
+            // consumer throws below — also releases the RemoteLogSegment for GC early.
+            prefetchSlots[headSlot] = null;
+            prefetchSegments[headSlot] = null;
+            nextConsumeIndex++;
+            try {
+                return headFuture.get();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException(
+                        "Interrupted while waiting for remote log segment download: "
+                                + segment.remoteLogSegmentId(),
+                        e);
+            } catch (CancellationException e) {
+                LOG.warn(
+                        "Prefetched segment {} was cancelled, fallback to sync download.",
+                        segment.remoteLogSegmentId(),
+                        e);
+                return downloadSegmentWithRetry(segment);
+            } catch (ExecutionException e) {
+                LOG.warn(
+                        "Prefetched segment {} failed even after async retries, "
+                                + "fallback to one more synchronous retry round.",
+                        segment.remoteLogSegmentId(),
+                        e.getCause());
+                return downloadSegmentWithRetry(segment);
+            } finally {
+                // Window slot released — try to submit the next prefetch right away.
+                fillPrefetchWindow();
             }
-
-            // Defensive fallback: this branch is logically unreachable in production.
-            // Both fillPrefetchWindow() and advance() iterate the same pre-filtered `segments`
-            // list (returned by RemoteLogManager#relevantRemoteLogSegments) in strict index
-            // order with identical skip rules, and consumption is single-threaded FIFO. So the
-            // ring head is always the next segment advance() will request.
-            //
-            // We still keep the branch as a safety net for two cases:
-            //  1) tests that inject a mismatched entry via injectPrefetchEntryForTest;
-            //  2) future refactors that accidentally break the FIFO/ordering invariant —
-            //     instead of returning wrong data we drop the stale window and re-download
-            //     the requested segment synchronously, at the cost of wasting the already
-            //     prefetched files.
-            if (headSegment != null) {
-                LOG.debug(
-                        "Prefetch ring head segment {} does not match requested segment {}; "
-                                + "dropping stale window and falling back to sync download.",
-                        headSegment.remoteLogSegmentId(),
-                        segment.remoteLogSegmentId());
-            }
-            drainPrefetchWindow();
-            fillPrefetchWindow();
-            return downloadSegmentWithRetry(segment);
         }
 
         private boolean isSameSegmentId(RemoteLogSegment left, RemoteLogSegment right) {
@@ -721,24 +684,41 @@ public class RemoteLogFetcher implements Closeable {
                 prefetchSegments[slot] = null;
                 nextConsumeIndex++;
                 if (future.isDone()) {
-                    try {
-                        // isDone() is true so get() will not block; it returns either the
-                        // successfully downloaded file, or throws Cancellation/Execution.
-                        cleanupUnusedPrefetchedFile(future.get());
-                    } catch (CancellationException | ExecutionException ignored) {
-                        // no local file to clean up
-                    } catch (InterruptedException e) {
-                        // A completed future never actually blocks here, so an interrupt on this
-                        // thread came from elsewhere. Restore the flag and bail out — close()'s
-                        // follow-up shutdownNow()/awaitTermination path will reclaim whatever's
-                        // left in the ring.
-                        Thread.currentThread().interrupt();
+                    if (!cleanupCompletedFuture(future)) {
                         return;
                     }
                 } else {
-                    future.cancel(true);
+                    if (!future.cancel(true) && !cleanupCompletedFuture(future)) {
+                        return;
+                    }
                 }
             }
+        }
+
+        /**
+         * Drain a future that is (now) known to be completed: pull its file out via {@link
+         * Future#get()} and delete it. {@code isDone()} guarantees {@code get()} does not block.
+         *
+         * @return {@code true} on a clean drain, {@code false} if this thread was interrupted while
+         *     calling {@code get()} (caller should bail out and let close()'s shutdownNow path
+         *     reclaim the remaining slots).
+         */
+        private boolean cleanupCompletedFuture(Future<File> future) {
+            try {
+                // isDone() is true so get() will not block; it returns either the
+                // successfully downloaded file, or throws Cancellation/Execution.
+                cleanupUnusedPrefetchedFile(future.get());
+            } catch (CancellationException | ExecutionException ignored) {
+                // no local file to clean up
+            } catch (InterruptedException e) {
+                // A completed future never actually blocks here, so an interrupt on this
+                // thread came from elsewhere. Restore the flag and bail out — close()'s
+                // follow-up shutdownNow()/awaitTermination path will reclaim whatever's
+                // left in the ring.
+                Thread.currentThread().interrupt();
+                return false;
+            }
+            return true;
         }
 
         private void cleanupUnusedPrefetchedFile(File prefetchedFile) {
@@ -763,21 +743,6 @@ public class RemoteLogFetcher implements Closeable {
                 currentFileLogRecords = null;
                 currentBatchIterator = null;
             }
-        }
-
-        void injectPrefetchEntryForTest(RemoteLogSegment segment, Future<File> future) {
-            drainPrefetchWindow();
-            // After drain, the window is empty (prefetchWindowSize() == 0), so there must be room
-            // for exactly one injection. Anything else means a concurrent call — which would
-            // violate the @NotThreadSafe contract.
-            if (prefetchWindowSize() != 0) {
-                throw new IllegalStateException(
-                        "prefetch window non-empty after drain; size=" + prefetchWindowSize());
-            }
-            int slot = nextPrefetchIndex % prefetchNum;
-            prefetchSlots[slot] = future;
-            prefetchSegments[slot] = segment;
-            nextPrefetchIndex++;
         }
 
         List<Future<File>> snapshotPrefetchFuturesForTest() {

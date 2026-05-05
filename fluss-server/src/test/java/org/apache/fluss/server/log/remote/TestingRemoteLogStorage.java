@@ -21,9 +21,12 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.RemoteStorageException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.utils.MapUtils;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -67,6 +70,17 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
      * correctly propagated.
      */
     public final AtomicBoolean fetchLogDataAlwaysFail = new AtomicBoolean(false);
+
+    /**
+     * Per-segment failure budget. For each entry {@code (segmentId, N)}, the next N {@link
+     * #fetchLogData} calls that target that segment throw a {@link RemoteStorageException};
+     * subsequent calls for the same segment behave normally. Useful for tests that need a specific
+     * segment's prefetch to exhaust its retries (i.e. {@code DOWNLOAD_MAX_RETRIES + 1} attempts) so
+     * the prefetch path raises {@code ExecutionException} and the sync fallback inside {@code
+     * RemoteLogFetcher#fetchSegmentFile} then succeeds — without poisoning unrelated segments.
+     */
+    public final Map<UUID, AtomicInteger> fetchLogDataFailureBudget =
+            MapUtils.newConcurrentHashMap();
 
     private final AtomicInteger fetchLogDataCount = new AtomicInteger(0);
 
@@ -134,6 +148,15 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
                             + (idx + 1)
                             + "/"
                             + failFirstN);
+        }
+        AtomicInteger budget = fetchLogDataFailureBudget.get(remoteLogSegment.remoteLogSegmentId());
+        if (budget != null && budget.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
+            throw new RemoteStorageException(
+                    "Simulated per-segment fetchLogData failure for segment "
+                            + remoteLogSegment.remoteLogSegmentId()
+                            + " (budget remaining: "
+                            + budget.get()
+                            + ")");
         }
         FetchLogDataBarrier barrier = fetchLogDataBarrier;
         if (barrier != null) {

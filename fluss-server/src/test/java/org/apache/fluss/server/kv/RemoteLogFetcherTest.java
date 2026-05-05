@@ -34,12 +34,13 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CancellationException;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -364,24 +365,32 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         assertThat(segments).hasSizeGreaterThanOrEqualTo(2);
         long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
 
+        // Fail every prefetch attempt for segment #1 on the real download path so
+        // Future.get() raises ExecutionException and the iterator falls back to a
+        // synchronous downloadSegmentWithRetry, which then sees an empty budget and succeeds.
+        int prefetchAttempts = RemoteLogFetcher.DOWNLOAD_MAX_RETRIES + 1;
+        UUID failingSegmentId = segments.get(1).remoteLogSegmentId();
+        remoteLogStorage.fetchLogDataFailureBudget.put(
+                failingSegmentId, new AtomicInteger(prefetchAttempts));
+
         File logTabletDir = logTablet.getLogDir();
         try (RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir)) {
             Iterator<LogRecordBatch> iterator = fetcher.fetch(0, remoteEndOffset).iterator();
-            assertThat(iterator.hasNext()).isTrue();
-            iterator.next();
 
-            // Inject a failed prefetch for the very next segment to prove the iterator
-            // transparently falls back to a synchronous download.
-            CompletableFuture<File> failedFuture = new CompletableFuture<>();
-            failedFuture.completeExceptionally(new RuntimeException("injected prefetch failure"));
-            fetcher.injectPrefetchEntryForTest(segments.get(1), failedFuture);
-
-            int count = 1;
+            int count = 0;
             while (iterator.hasNext()) {
                 iterator.next();
                 count++;
             }
             assertThat(count).isGreaterThan(1);
+
+            // Budget must be fully drained — proves prefetch really exhausted retries
+            // before sync fallback took over (also catches retry-constant drift).
+            assertThat(remoteLogStorage.fetchLogDataFailureBudget.get(failingSegmentId).get())
+                    .as("prefetch retries should be fully exhausted before sync fallback")
+                    .isZero();
+        } finally {
+            remoteLogStorage.fetchLogDataFailureBudget.clear();
         }
     }
 
@@ -399,19 +408,51 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         assertThat(segments).isNotEmpty();
         long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
 
-        File logTabletDir = logTablet.getLogDir();
-        RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir);
-        try {
-            Iterator<LogRecordBatch> iterator = fetcher.fetch(0, remoteEndOffset).iterator();
-            assertThat(iterator.hasNext()).isTrue();
-            iterator.next();
+        // Block real prefetch workers inside fetchLogData so their futures are genuinely
+        // pending when close() is called. `release` is never counted down — the only way
+        // out is Thread.interrupt() reaching release.await(), which is what close() must do.
+        int expectedInFlight = 2;
+        CountDownLatch entered = new CountDownLatch(expectedInFlight);
+        CountDownLatch release = new CountDownLatch(1);
+        remoteLogStorage.fetchLogDataBarrier =
+                () -> {
+                    entered.countDown();
+                    release.await();
+                };
 
-            CompletableFuture<File> pendingFuture = new CompletableFuture<>();
-            fetcher.injectPrefetchEntryForTest(segments.get(0), pendingFuture);
+        File logTabletDir = logTablet.getLogDir();
+        RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir, 2, 2);
+        try {
+            // fetch() is lazy — kicks off prefetch workers that will block on `release`.
+            fetcher.fetch(0, remoteEndOffset);
+
+            assertThat(entered.await(30, TimeUnit.SECONDS))
+                    .as("prefetch workers should have entered fetchLogData")
+                    .isTrue();
+
+            // Snapshot pending futures BEFORE close so we can assert on them afterwards.
+            List<Future<File>> inflight = fetcher.snapshotPrefetchFuturesForTest();
+            assertThat(inflight).isNotEmpty();
 
             fetcher.close();
-            assertThat(pendingFuture.isCancelled()).isTrue();
+
+            // Every captured pending future must end up done and cancelled or exceptional
+            // (an interrupted worker surfaces as RemoteStorageException → ExecutionException).
+            for (Future<File> f : inflight) {
+                assertThat(f.isDone()).isTrue();
+                boolean exceptional = false;
+                try {
+                    f.get();
+                } catch (CancellationException | ExecutionException expected) {
+                    exceptional = true;
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+                assertThat(f.isCancelled() || exceptional).isTrue();
+            }
         } finally {
+            remoteLogStorage.fetchLogDataBarrier = null;
+            release.countDown();
             fetcher.close();
         }
     }
@@ -590,23 +631,51 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         assertThat(segments).isNotEmpty();
         long remoteEndOffset = segments.get(segments.size() - 1).remoteLogEndOffset();
 
+        // Block real prefetch workers so multiple futures are pending in parallel. Focus
+        // here (vs testCloseCancelsPendingPrefetchFuture) is the *count* contract:
+        // snapshot() returns all in-flight futures and close() cancels every single one.
+        int expectedInFlight = 2;
+        CountDownLatch entered = new CountDownLatch(expectedInFlight);
+        CountDownLatch release = new CountDownLatch(1);
+        remoteLogStorage.fetchLogDataBarrier =
+                () -> {
+                    entered.countDown();
+                    release.await();
+                };
+
         File logTabletDir = logTablet.getLogDir();
         RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir, 2, 2);
         try {
-            Iterator<LogRecordBatch> iterator = fetcher.fetch(0, remoteEndOffset).iterator();
-            assertThat(iterator.hasNext()).isTrue();
-            iterator.next();
+            // fetch() is lazy — kicks off prefetch workers that will all block on `release`.
+            fetcher.fetch(0, remoteEndOffset);
 
-            CompletableFuture<File> pendingFuture = new CompletableFuture<>();
-            fetcher.injectPrefetchEntryForTest(segments.get(0), pendingFuture);
+            assertThat(entered.await(30, TimeUnit.SECONDS))
+                    .as("prefetch workers should have entered fetchLogData")
+                    .isTrue();
 
             List<Future<File>> futures = fetcher.snapshotPrefetchFuturesForTest();
-            assertThat(futures).containsExactly(pendingFuture);
+            // Multiple in-flight futures — that's the "All" we want to cover.
+            assertThat(futures).hasSizeGreaterThanOrEqualTo(2);
 
             fetcher.close();
 
-            assertThat(pendingFuture.isCancelled()).isTrue();
+            // Every single captured future must be done and cancelled-or-exceptional —
+            // no future is allowed to remain pending after close().
+            for (Future<File> f : futures) {
+                assertThat(f.isDone()).isTrue();
+                boolean exceptional = false;
+                try {
+                    f.get();
+                } catch (CancellationException | ExecutionException expected) {
+                    exceptional = true;
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+                assertThat(f.isCancelled() || exceptional).isTrue();
+            }
         } finally {
+            remoteLogStorage.fetchLogDataBarrier = null;
+            release.countDown();
             fetcher.close();
         }
     }
@@ -695,18 +764,18 @@ class RemoteLogFetcherTest extends RemoteLogTestBase {
         try (RemoteLogFetcher fetcher = newFetcher(tb, logTabletDir, 1, 1)) {
             int countBefore = remoteLogStorage.fetchLogDataInvocationCount();
 
-            // The very first hasNext() will trigger downloadSegmentWithRetry on the head
-            // segment, which exhausts MAX_RETRIES (5) + initial attempt = 6 calls, then
-            // surfaces an IOException wrapped as RuntimeException by advance().
+            // The very first hasNext() triggers downloadSegmentWithRetry on the head
+            // segment, which exhausts DOWNLOAD_MAX_RETRIES + initial attempt calls,
+            // then surfaces an IOException wrapped as RuntimeException by advance().
             assertThatThrownBy(() -> fetcher.fetch(0, remoteEndOffset).iterator().hasNext())
                     .isInstanceOf(RuntimeException.class)
                     .hasMessageContaining("Failed to fetch remote log segment");
 
             int countAfter = remoteLogStorage.fetchLogDataInvocationCount();
-            // 1 initial attempt + 5 retries = 6 invocations expected. We assert >= 6 to also
-            // tolerate the eager prefetch path performing one extra invocation before the
-            // sync fallback begins.
-            assertThat(countAfter - countBefore).isGreaterThanOrEqualTo(6);
+            // >= DOWNLOAD_MAX_RETRIES + 1 tolerates the eager prefetch path
+            // performing one extra invocation before the sync fallback begins.
+            assertThat(countAfter - countBefore)
+                    .isGreaterThanOrEqualTo(RemoteLogFetcher.DOWNLOAD_MAX_RETRIES + 1);
         } finally {
             remoteLogStorage.fetchLogDataAlwaysFail.set(false);
         }
