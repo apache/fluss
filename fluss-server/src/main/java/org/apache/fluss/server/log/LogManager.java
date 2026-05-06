@@ -139,7 +139,7 @@ public final class LogManager extends TabletManagerBase {
     }
 
     public void startup() {
-        loadLogs();
+        loadAllLogs();
 
         // TODO add more scheduler, like log-flusher etc.
     }
@@ -154,48 +154,23 @@ public final class LogManager extends TabletManagerBase {
     }
 
     /** Recover and load all logs in the given data directories. */
-    private void loadLogs() {
+    private void loadAllLogs() {
         try {
             Map<File, List<File>> tabletsToLoadByDataDir = listTabletsToLoad();
             LOG.info("Loading logs from {} dirs", tabletsToLoadByDataDir.size());
-            Map<File, ExecutorService> poolsByDataDir = new LinkedHashMap<>();
-            List<Future<?>> jobsForDataDir = new ArrayList<>();
+            List<LogRecoveryTask> recoveryTasks = new ArrayList<>();
             for (Map.Entry<File, List<File>> entry : tabletsToLoadByDataDir.entrySet()) {
-                File dataDir = entry.getKey();
-                List<File> tabletsToLoad = entry.getValue();
-                Runnable runnable =
-                        () -> {
-                            try {
-                                loadLogs(dataDir, tabletsToLoad);
-                            } catch (Throwable t) {
-                                throw new FlussRuntimeException(
-                                        "Failed to recover logs from " + dataDir.getAbsolutePath(),
-                                        t);
-                            }
-                        };
-                ExecutorService pool = createThreadPoolByDir("log-recovery-data-dir", dataDir);
-                poolsByDataDir.put(dataDir, pool);
-                jobsForDataDir.add(pool.submit(runnable));
+                recoveryTasks.add(loadLogsInDir(entry.getKey(), entry.getValue()));
             }
             try {
-                for (Future<?> future : jobsForDataDir) {
-                    try {
-                        future.get();
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        throw new FlussRuntimeException(
-                                "Interrupted while waiting for log recovery tasks to finish.", e);
-                    } catch (ExecutionException e) {
-                        throw new FlussException(
-                                "Failed while waiting for log recovery tasks to finish.",
-                                ExceptionUtils.stripExecutionException(e));
-                    }
+                for (LogRecoveryTask recoveryTask : recoveryTasks) {
+                    waitForLoadLogsInDir(recoveryTask);
                 }
                 loadLogsCompletedFlag = true;
                 LOG.info("Log loader complete.");
             } finally {
-                for (ExecutorService pool : poolsByDataDir.values()) {
-                    pool.shutdown();
+                for (LogRecoveryTask recoveryTask : recoveryTasks) {
+                    recoveryTask.pool.shutdown();
                 }
             }
         } catch (Throwable e) {
@@ -203,7 +178,7 @@ public final class LogManager extends TabletManagerBase {
         }
     }
 
-    private void loadLogs(File dataDir, List<File> tabletsToLoad) throws Throwable {
+    private LogRecoveryTask loadLogsInDir(File dataDir, List<File> tabletsToLoad) throws Exception {
         LOG.info("Loading logs from dir {}", dataDir);
 
         String dataDirAbsolutePath = dataDir.getAbsolutePath();
@@ -243,13 +218,37 @@ public final class LogManager extends TabletManagerBase {
                 createLogLoadingJobs(
                         dataDir, tabletsToLoad, cleanShutdown, finalRecoveryPoints, conf, clock);
 
-        long startTime = System.currentTimeMillis();
-        int successLoadCount = runInThreadPool(jobsForDir, "log-recovery-" + dataDirAbsolutePath);
+        long startTimeMillis = System.currentTimeMillis();
+        List<Future<?>> jobsForDataDir = new ArrayList<>();
+        ExecutorService pool = createThreadPool("log-recovery-" + dataDirAbsolutePath);
+        for (Runnable job : jobsForDir) {
+            jobsForDataDir.add(pool.submit(job));
+        }
+        return new LogRecoveryTask(dataDir, pool, jobsForDataDir, startTimeMillis);
+    }
+
+    private void waitForLoadLogsInDir(LogRecoveryTask recoveryTask) throws Throwable {
+        int successCount = 0;
+        for (Future<?> future : recoveryTask.jobs) {
+            try {
+                future.get();
+                successCount++;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new FlussRuntimeException(
+                        "Interrupted while waiting for log recovery tasks to finish.", e);
+            } catch (ExecutionException e) {
+                throw new FlussException(
+                        "Failed while waiting for log recovery tasks to finish.",
+                        ExceptionUtils.stripExecutionException(e));
+            }
+        }
+
         LOG.info(
                 "Log loader complete for {}. Total success loaded log count is {}, Take {} ms",
-                dataDirAbsolutePath,
-                successLoadCount,
-                System.currentTimeMillis() - startTime);
+                recoveryTask.dataDir.getAbsolutePath(),
+                successCount,
+                System.currentTimeMillis() - recoveryTask.startTimeMillis);
     }
 
     /**
@@ -432,47 +431,33 @@ public final class LogManager extends TabletManagerBase {
             logsByDataDir.computeIfAbsent(dataDir, ignored -> new ArrayList<>()).add(logTablet);
         }
 
-        Map<File, ExecutorService> poolsByDataDir = new LinkedHashMap<>();
-        List<Future<?>> jobsForDataDir = new ArrayList<>();
+        List<LogShutdownTask> shutdownTasks = new ArrayList<>();
         for (Map.Entry<File, List<LogTablet>> entry : logsByDataDir.entrySet()) {
-            File dataDir = entry.getKey();
-            List<LogTablet> logs = entry.getValue();
-            Runnable runnable = () -> shutdown(dataDir, logs);
-            ExecutorService pool = createThreadPoolByDir("log-tablet-closing-data-dir", dataDir);
-            poolsByDataDir.put(dataDir, pool);
-            jobsForDataDir.add(pool.submit(runnable));
+            shutdownTasks.add(shutdownLogsInDir(entry.getKey(), entry.getValue()));
         }
 
         try {
             if (loadLogsCompletedFlag) {
                 LOG.debug("Writing clean shutdown marker.");
             }
-            for (Future<?> future : jobsForDataDir) {
-                try {
-                    future.get();
-                } catch (InterruptedException e) {
-                    LOG.warn("Interrupted while shutting down LogManager.");
-                } catch (ExecutionException e) {
-                    LOG.warn(
-                            "There was an error in one of the threads during LogManager shutdown",
-                            e);
-                }
+            for (LogShutdownTask shutdownTask : shutdownTasks) {
+                waitForShutdownLogsInDir(shutdownTask);
             }
         } finally {
-            for (ExecutorService pool : poolsByDataDir.values()) {
-                pool.shutdown();
+            for (LogShutdownTask shutdownTask : shutdownTasks) {
+                shutdownTask.pool.shutdown();
             }
         }
 
         LOG.info("Shut down LogManager complete.");
     }
 
-    private void shutdown(File dataDir, List<LogTablet> logs) {
+    private LogShutdownTask shutdownLogsInDir(File dataDir, List<LogTablet> logs) {
         String dataDirAbsolutePath = dataDir.getAbsolutePath();
         LOG.info("Shutting down {} logs in dir {}", logs.size(), dataDirAbsolutePath);
-        ExecutorService pool = createThreadPool("log-tablet-closing-" + dataDirAbsolutePath);
 
         List<Future<?>> jobsForTabletDir = new ArrayList<>();
+        ExecutorService pool = createThreadPool("log-tablet-closing-" + dataDirAbsolutePath);
         for (LogTablet logTablet : logs) {
             Runnable runnable =
                     () -> {
@@ -485,34 +470,34 @@ public final class LogManager extends TabletManagerBase {
                     };
             jobsForTabletDir.add(pool.submit(runnable));
         }
+        return new LogShutdownTask(dataDir, logs, pool, jobsForTabletDir);
+    }
 
-        try {
-            for (Future<?> future : jobsForTabletDir) {
-                try {
-                    future.get();
-                } catch (InterruptedException e) {
-                    LOG.warn("Interrupted while shutting down LogManager.");
-                } catch (ExecutionException e) {
-                    LOG.warn(
-                            "There was an error in one of the threads during LogManager shutdown",
-                            e);
-                }
+    private void waitForShutdownLogsInDir(LogShutdownTask shutdownTask) {
+        for (Future<?> future : shutdownTask.jobs) {
+            try {
+                future.get();
+            } catch (InterruptedException e) {
+                LOG.warn("Interrupted while shutting down LogManager.");
+            } catch (ExecutionException e) {
+                LOG.warn("There was an error in one of the threads during LogManager shutdown", e);
             }
+        }
 
-            checkpointRecoveryOffsets(dataDir, logs);
+        checkpointRecoveryOffsets(shutdownTask.dataDir, shutdownTask.logs);
 
-            // mark that the shutdown was clean by creating marker file for log dirs that all logs
-            // have been recovered at startup time.
-            if (loadLogsCompletedFlag) {
-                try {
-                    LOG.debug("Writing clean shutdown marker for directory {}.", dataDir);
-                    Files.createFile(new File(dataDir, CLEAN_SHUTDOWN_FILE).toPath());
-                } catch (IOException e) {
-                    LOG.warn("Failed to write clean shutdown marker for directory {}.", dataDir, e);
-                }
+        // mark that the shutdown was clean by creating marker file for log dirs that all logs have
+        // been recovered at startup time.
+        if (loadLogsCompletedFlag) {
+            try {
+                LOG.debug("Writing clean shutdown marker for directory {}.", shutdownTask.dataDir);
+                Files.createFile(new File(shutdownTask.dataDir, CLEAN_SHUTDOWN_FILE).toPath());
+            } catch (IOException e) {
+                LOG.warn(
+                        "Failed to write clean shutdown marker for directory {}.",
+                        shutdownTask.dataDir,
+                        e);
             }
-        } finally {
-            pool.shutdown();
         }
     }
 
@@ -611,6 +596,36 @@ public final class LogManager extends TabletManagerBase {
         } catch (Exception e) {
             throw new LogStorageException(
                     "Disk error while writing recovery offsets checkpoint", e);
+        }
+    }
+
+    private static final class LogRecoveryTask {
+        private final File dataDir;
+        private final ExecutorService pool;
+        private final List<Future<?>> jobs;
+        private final long startTimeMillis;
+
+        private LogRecoveryTask(
+                File dataDir, ExecutorService pool, List<Future<?>> jobs, long startTimeMillis) {
+            this.dataDir = dataDir;
+            this.pool = pool;
+            this.jobs = jobs;
+            this.startTimeMillis = startTimeMillis;
+        }
+    }
+
+    private static final class LogShutdownTask {
+        private final File dataDir;
+        private final List<LogTablet> logs;
+        private final ExecutorService pool;
+        private final List<Future<?>> jobs;
+
+        private LogShutdownTask(
+                File dataDir, List<LogTablet> logs, ExecutorService pool, List<Future<?>> jobs) {
+            this.dataDir = dataDir;
+            this.logs = logs;
+            this.pool = pool;
+            this.jobs = jobs;
         }
     }
 }

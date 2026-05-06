@@ -18,8 +18,6 @@
 package org.apache.fluss.server;
 
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.FlussException;
-import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.exception.SchemaNotExistException;
@@ -32,7 +30,6 @@ import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.TableRegistration;
-import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
@@ -50,10 +47,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
@@ -152,40 +147,6 @@ public abstract class TabletManagerBase {
 
     protected ExecutorService createThreadPool(String poolName) {
         return Executors.newFixedThreadPool(recoveryThreads, new ExecutorThreadFactory(poolName));
-    }
-
-    protected ExecutorService createThreadPoolByDir(String poolName, File dataDir) {
-        return Executors.newSingleThreadExecutor(
-                new ExecutorThreadFactory(poolName + "-" + dataDir.getAbsolutePath()));
-    }
-
-    /** Running a series of jobs in a thread pool, and return the count of the successful job. */
-    protected int runInThreadPool(Runnable[] runnableJobs, String poolName) throws Throwable {
-        List<Future<?>> jobsForTabletDir = new ArrayList<>();
-        ExecutorService pool = createThreadPool(poolName);
-        for (Runnable runnable : runnableJobs) {
-            jobsForTabletDir.add(pool.submit(runnable));
-        }
-        int successCount = 0;
-        try {
-            for (Future<?> future : jobsForTabletDir) {
-                try {
-                    future.get();
-                    successCount++;
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    throw new FlussRuntimeException(
-                            "Interrupted while waiting for tablet manager tasks to finish.", e);
-                } catch (ExecutionException e) {
-                    throw new FlussException(
-                            "Failed while waiting for tablet manager tasks to finish.",
-                            ExceptionUtils.stripExecutionException(e));
-                }
-            }
-        } finally {
-            pool.shutdown();
-        }
-        return successCount;
     }
 
     /**
