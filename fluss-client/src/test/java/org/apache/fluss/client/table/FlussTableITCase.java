@@ -109,6 +109,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         .withDataLakeFormat(DataLakeFormat.PAIMON);
         Map<String, String> options = new HashMap<>(expected.getProperties());
         options.put(ConfigOptions.TABLE_KV_FORMAT_VERSION.key(), "2");
+        options.put(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
         expected = expected.withProperties(options);
         assertThat(tableInfo.toTableDescriptor()).isEqualTo(expected);
     }

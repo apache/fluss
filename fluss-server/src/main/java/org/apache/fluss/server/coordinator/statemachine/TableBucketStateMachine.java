@@ -20,6 +20,7 @@ package org.apache.fluss.server.coordinator.statemachine;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.CoordinatorRequestBatch;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ControlledShutdownLeaderElection;
@@ -438,14 +439,15 @@ public class TableBucketStateMachine {
         }
         // For the case that the table bucket has been initialized, we use all the live assigned
         // servers as inSyncReplica set.
+        TableInfo tableInfo = coordinatorContext.getTableInfoById(tableBucket.getTableId());
+        boolean standbyEnabled =
+                tableInfo.hasPrimaryKey() && tableInfo.getTableConfig().isStandbyReplicaEnabled();
         Optional<ElectionResult> resultOpt =
                 initReplicaLeaderElection(
                         assignedServers,
                         liveServers,
                         coordinatorContext.getCoordinatorEpoch(),
-                        coordinatorContext
-                                .getTableInfoById(tableBucket.getTableId())
-                                .hasPrimaryKey());
+                        standbyEnabled);
         if (!resultOpt.isPresent()) {
             LOG.error(
                     "The leader election for table bucket {} is empty.",
@@ -625,12 +627,14 @@ public class TableBucketStateMachine {
         }
 
         Optional<ElectionResult> resultOpt = Optional.empty();
-        boolean isPkTable =
-                coordinatorContext.getTableInfoById(tableBucket.getTableId()).hasPrimaryKey();
+        TableInfo tableInfo = coordinatorContext.getTableInfoById(tableBucket.getTableId());
+        boolean standbyReplicaEnabled =
+                tableInfo.hasPrimaryKey() && tableInfo.getTableConfig().isStandbyReplicaEnabled();
         if (electionStrategy instanceof DefaultLeaderElection) {
             resultOpt =
                     ((DefaultLeaderElection) electionStrategy)
-                            .leaderElection(assignment, liveReplicas, leaderAndIsr, isPkTable);
+                            .leaderElection(
+                                    assignment, liveReplicas, leaderAndIsr, standbyReplicaEnabled);
         } else if (electionStrategy instanceof ControlledShutdownLeaderElection) {
             Set<Integer> shuttingDownTabletServers = coordinatorContext.shuttingDownTabletServers();
             resultOpt =
@@ -640,11 +644,11 @@ public class TableBucketStateMachine {
                                     liveReplicas,
                                     leaderAndIsr,
                                     shuttingDownTabletServers,
-                                    isPkTable);
+                                    standbyReplicaEnabled);
         } else if (electionStrategy instanceof ReassignmentLeaderElection) {
             resultOpt =
                     ((ReassignmentLeaderElection) electionStrategy)
-                            .leaderElection(liveReplicas, leaderAndIsr, isPkTable);
+                            .leaderElection(liveReplicas, leaderAndIsr, standbyReplicaEnabled);
         }
 
         if (!resultOpt.isPresent()) {
@@ -685,7 +689,7 @@ public class TableBucketStateMachine {
      * @param assignments the assignments
      * @param aliveReplicas the alive replicas
      * @param coordinatorEpoch the coordinator epoch
-     * @param isPrimaryKeyTable whether this table bucket is primary key table
+     * @param standbyReplicaEnabled whether standby replica is enabled for this table bucket
      * @return the election result
      */
     @VisibleForTesting
@@ -693,7 +697,7 @@ public class TableBucketStateMachine {
             List<Integer> assignments,
             List<Integer> aliveReplicas,
             int coordinatorEpoch,
-            boolean isPrimaryKeyTable) {
+            boolean standbyReplicaEnabled) {
         // First we will filter out the assignment list to only contain the alive replicas.
         List<Integer> availableReplicas =
                 assignments.stream().filter(aliveReplicas::contains).collect(Collectors.toList());
@@ -706,10 +710,10 @@ public class TableBucketStateMachine {
         //  Then we will use the first replica in assignment as the leader replica.
         int leader = availableReplicas.get(0);
 
-        // If this table is primaryKey table, we will use the second replica in assignment as the
+        // If standby replica is enabled, we will use the second replica in assignment as the
         // standby if exists.
         List<Integer> standbyReplicas = new ArrayList<>();
-        if (isPrimaryKeyTable) {
+        if (standbyReplicaEnabled) {
             if (availableReplicas.size() > 1) {
                 standbyReplicas.add(availableReplicas.get(1));
             }

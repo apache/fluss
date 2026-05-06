@@ -1503,6 +1503,17 @@ public class ConfigOptions {
                                     + "for optimization (encoded bytes can be reused for bucket calculation). "
                                     + "Bucket key encoding always uses datalake's encoder to align with datalake bucket calculation.");
 
+    public static final ConfigOption<Boolean> TABLE_KV_STANDBY_REPLICA_ENABLED =
+            key("table.kv.standby-replica.enabled")
+                    .booleanType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Whether to enable standby replicas for primary key tables. "
+                                    + "Standby replicas maintain recent KV snapshots for fast leader promotion. "
+                                    + "Automatically set to true by the coordinator during table creation for new PK tables. "
+                                    + "Tables created before this option was introduced are treated as disabled. "
+                                    + "Can be dynamically enabled via ALTER TABLE.");
+
     public static final ConfigOption<Boolean> TABLE_AUTO_PARTITION_ENABLED =
             key("table.auto-partition.enabled")
                     .booleanType()

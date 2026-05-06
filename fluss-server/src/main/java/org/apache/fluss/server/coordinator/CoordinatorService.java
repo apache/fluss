@@ -655,7 +655,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 newProperties.put(
                         ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                         String.valueOf(CURRENT_KV_FORMAT_VERSION));
-                newDescriptor = newDescriptor.withProperties(newProperties);
             } else {
                 if (formatVersion > CURRENT_KV_FORMAT_VERSION) {
                     throw new InvalidConfigException(
@@ -665,6 +664,13 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                     formatVersion, CURRENT_KV_FORMAT_VERSION));
                 }
             }
+
+            // Enable standby replica for new PK tables if not explicitly configured
+            if (!newProperties.containsKey(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key())) {
+                newProperties.put(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
+            }
+
+            newDescriptor = newDescriptor.withProperties(newProperties);
         }
 
         return newDescriptor;

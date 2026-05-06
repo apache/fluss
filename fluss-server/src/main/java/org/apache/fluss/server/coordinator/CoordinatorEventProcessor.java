@@ -814,7 +814,31 @@ public class CoordinatorEventProcessor implements EventProcessor {
             autoPartitionManager.updateAutoPartitionTables(newTableInfo);
         }
 
-        // more post-alter actions can be added here
+        // If standby replica config changed, trigger re-election for all online buckets
+        // of this table to apply new standby replica assignment
+        boolean oldStandbyEnabled = oldTableInfo.getTableConfig().isStandbyReplicaEnabled();
+        boolean newStandbyEnabled = newTableInfo.getTableConfig().isStandbyReplicaEnabled();
+        if (oldStandbyEnabled != newStandbyEnabled) {
+            triggerReElectionForTable(newTableInfo.getTableId());
+        }
+    }
+
+    private void triggerReElectionForTable(long tableId) {
+        Set<TableBucket> onlineBuckets =
+                coordinatorContext.getAllBuckets().stream()
+                        .filter(
+                                tb ->
+                                        tb.getTableId() == tableId
+                                                && coordinatorContext.getBucketState(tb)
+                                                        == OnlineBucket)
+                        .collect(Collectors.toSet());
+        if (!onlineBuckets.isEmpty()) {
+            LOG.info(
+                    "Triggering re-election for {} buckets of table {} due to standby replica config change.",
+                    onlineBuckets.size(),
+                    tableId);
+            tableBucketStateMachine.handleStateChange(onlineBuckets, OnlineBucket);
+        }
     }
 
     private void processCreatePartition(CreatePartitionEvent createPartitionEvent) {

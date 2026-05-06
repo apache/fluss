@@ -24,6 +24,7 @@ import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FencedLeaderEpochException;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.DatabaseDescriptor;
@@ -144,6 +145,7 @@ class CoordinatorEventProcessorTest {
                                     .primaryKey("a")
                                     .build())
                     .distributedBy(3, "a")
+                    .property(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true")
                     .build()
                     .withReplicationFactor(REPLICATION_FACTOR);
 
@@ -1007,6 +1009,191 @@ class CoordinatorEventProcessorTest {
                     assertThat(tableInfoInCtx.getCustomProperties().toMap())
                             .containsEntry("custom.key", "custom.value");
                 });
+    }
+
+    @Test
+    void testAlterStandbyReplicaEnabled() throws Exception {
+        // make sure all request to gateway should be successful
+        initCoordinatorChannel();
+
+        // create a PK table with standby replica enabled (TEST_TABLE has it enabled)
+        TablePath t1 = TablePath.of(defaultDatabase, "test_alter_standby_replica");
+        int nBuckets = 1;
+        int replicationFactor = 3;
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        nBuckets,
+                        replicationFactor,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long tableId =
+                metadataManager.createTable(t1, remoteDataDir, TEST_TABLE, tableAssignment, false);
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+
+        // wait for the bucket to become online with standby replica assigned
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getBucketState(tableBucket)).isEqualTo(OnlineBucket);
+                    LeaderAndIsr leaderAndIsr = ctx.getBucketLeaderAndIsr(tableBucket).get();
+                    // Standby should be assigned since the table is PK with standby enabled
+                    assertThat(leaderAndIsr.standbyReplicas()).hasSize(1);
+                });
+
+        // ALTER: disable standby replica
+        TablePropertyChanges.Builder disableBuilder = TablePropertyChanges.builder();
+        disableBuilder.setTableProperty(
+                ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "false");
+        metadataManager.alterTableProperties(
+                t1, Collections.emptyList(), disableBuilder.build(), false, null);
+
+        // verify standby replicas are removed after re-election
+        retryVerifyContext(
+                ctx -> {
+                    TableInfo tableInfoInCtx = ctx.getTableInfoById(tableId);
+                    assertThat(tableInfoInCtx.getTableConfig().isStandbyReplicaEnabled()).isFalse();
+                    LeaderAndIsr leaderAndIsr = ctx.getBucketLeaderAndIsr(tableBucket).get();
+                    assertThat(leaderAndIsr.standbyReplicas()).isEmpty();
+                });
+
+        // Also verify from ZooKeeper that standby replicas are cleared
+        LeaderAndIsr zkLeaderAndIsr = zookeeperClient.getLeaderAndIsr(tableBucket).get();
+        assertThat(zkLeaderAndIsr.standbyReplicas()).isEmpty();
+    }
+
+    @Test
+    void testAlterEnableStandbyReplicaForExistingTable() throws Exception {
+        // Simulate a legacy PK table created without standby replica config.
+        // After ALTER to enable standby replica, re-election should be triggered
+        // and standby replicas should be assigned.
+        initCoordinatorChannel();
+
+        // Create PK table WITHOUT standby replica enabled (simulating legacy table)
+        TablePath t1 = TablePath.of(defaultDatabase, "test_enable_standby_existing");
+        TableDescriptor pkTableNoStandby =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .primaryKey("a")
+                                        .build())
+                        .distributedBy(1, "a")
+                        .build()
+                        .withReplicationFactor(3);
+
+        int nBuckets = 1;
+        int replicationFactor = 3;
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        nBuckets,
+                        replicationFactor,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long tableId =
+                metadataManager.createTable(
+                        t1, remoteDataDir, pkTableNoStandby, tableAssignment, false);
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+
+        // Wait for the bucket to become online with NO standby (legacy behavior)
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getBucketState(tableBucket)).isEqualTo(OnlineBucket);
+                    LeaderAndIsr leaderAndIsr = ctx.getBucketLeaderAndIsr(tableBucket).get();
+                    assertThat(leaderAndIsr.standbyReplicas()).isEmpty();
+                });
+
+        // Record the leader epoch before ALTER
+        int leaderEpochBefore = zookeeperClient.getLeaderAndIsr(tableBucket).get().leaderEpoch();
+
+        // ALTER: enable standby replica
+        TablePropertyChanges.Builder enableBuilder = TablePropertyChanges.builder();
+        enableBuilder.setTableProperty(
+                ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
+        metadataManager.alterTableProperties(
+                t1, Collections.emptyList(), enableBuilder.build(), false, null);
+
+        // Verify re-election happened: standby assigned and leaderEpoch incremented
+        retryVerifyContext(
+                ctx -> {
+                    TableInfo tableInfoInCtx = ctx.getTableInfoById(tableId);
+                    assertThat(tableInfoInCtx.getTableConfig().isStandbyReplicaEnabled()).isTrue();
+                    LeaderAndIsr leaderAndIsr = ctx.getBucketLeaderAndIsr(tableBucket).get();
+                    // Standby should now be assigned
+                    assertThat(leaderAndIsr.standbyReplicas()).hasSize(1);
+                    // Leader epoch should have incremented (proves re-election)
+                    assertThat(leaderAndIsr.leaderEpoch()).isGreaterThan(leaderEpochBefore);
+                });
+
+        // Also verify from ZooKeeper
+        LeaderAndIsr zkLeaderAndIsr = zookeeperClient.getLeaderAndIsr(tableBucket).get();
+        assertThat(zkLeaderAndIsr.standbyReplicas()).hasSize(1);
+        assertThat(zkLeaderAndIsr.leaderEpoch()).isGreaterThan(leaderEpochBefore);
+    }
+
+    @Test
+    void testAlterStandbyReplicaEnabledForLogTable() throws Exception {
+        // Altering standby replica config on a log table (no PK) should throw an error
+        initCoordinatorChannel();
+
+        TablePath t1 = TablePath.of(defaultDatabase, "test_alter_standby_log_table");
+        TableDescriptor logTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .column("b", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(1)
+                        .build()
+                        .withReplicationFactor(3);
+
+        int nBuckets = 1;
+        int replicationFactor = 3;
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        nBuckets,
+                        replicationFactor,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        metadataManager.createTable(t1, remoteDataDir, logTable, tableAssignment, false);
+
+        // ALTER: try to enable standby replica on a log table should fail
+        TablePropertyChanges.Builder enableBuilder = TablePropertyChanges.builder();
+        enableBuilder.setTableProperty(
+                ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
+        assertThatThrownBy(
+                        () ->
+                                metadataManager.alterTableProperties(
+                                        t1,
+                                        Collections.emptyList(),
+                                        enableBuilder.build(),
+                                        false,
+                                        null))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("can only be altered on primary key tables");
+
+        // ALTER: try to set to false on a log table should also fail
+        TablePropertyChanges.Builder disableBuilder = TablePropertyChanges.builder();
+        disableBuilder.setTableProperty(
+                ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "false");
+        assertThatThrownBy(
+                        () ->
+                                metadataManager.alterTableProperties(
+                                        t1,
+                                        Collections.emptyList(),
+                                        disableBuilder.build(),
+                                        false,
+                                        null))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("can only be altered on primary key tables");
     }
 
     @Test

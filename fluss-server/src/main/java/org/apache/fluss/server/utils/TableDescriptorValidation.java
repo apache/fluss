@@ -170,6 +170,15 @@ public class TableDescriptorValidation {
                                     .collect(Collectors.joining(", "))));
         }
 
+        // Standby replica is only applicable to primary key tables
+        if (tableKeysToChange.contains(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key())
+                && !currentTable.hasPrimaryKey()) {
+            throw new InvalidAlterTableException(
+                    String.format(
+                            "'%s' can only be altered on primary key tables.",
+                            ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key()));
+        }
+
         if (!currentConfig.getDataLakeFormat().isPresent()) {
             List<String> datalakeKeys =
                     tableKeysToChange.stream()
