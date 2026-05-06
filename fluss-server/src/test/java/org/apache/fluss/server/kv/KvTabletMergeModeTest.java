@@ -121,6 +121,7 @@ class KvTabletMergeModeTest {
                         physicalTablePath.getTableName());
         logTablet =
                 LogTablet.create(
+                        tempLogDir,
                         physicalTablePath,
                         logTabletDir,
                         conf,

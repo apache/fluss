@@ -2433,8 +2433,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 replicaManager.getReplicaOrException(new TableBucket(DATA1_TABLE_ID, 0));
         Replica logReplica2 =
                 replicaManager.getReplicaOrException(new TableBucket(DATA1_TABLE_ID, 1));
-        assertThat(logReplica1.getDataDir()).isEqualTo(dataDir1.getAbsoluteFile());
-        assertThat(logReplica2.getDataDir()).isEqualTo(dataDir2.getAbsoluteFile());
+        assertThat(logReplica1.getLogTablet().getDataDir()).isEqualTo(dataDir1.getAbsoluteFile());
+        assertThat(logReplica2.getLogTablet().getDataDir()).isEqualTo(dataDir2.getAbsoluteFile());
     }
 
     @Test

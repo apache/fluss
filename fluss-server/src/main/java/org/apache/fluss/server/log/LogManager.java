@@ -282,6 +282,7 @@ public final class LogManager extends TabletManagerBase {
 
                     LogTablet logTablet =
                             LogTablet.create(
+                                    dataDir,
                                     tablePath,
                                     tabletDir,
                                     conf,
@@ -356,7 +357,7 @@ public final class LogManager extends TabletManagerBase {
         LogTablet logTablet = currentLogs.get(tableBucket);
         // If the log tablet does not exist, skip it.
         if (logTablet != null && logTablet.truncateTo(offset)) {
-            checkpointRecoveryOffsets(localDiskManager.resolveDataDir(logTablet.getLogDir()));
+            checkpointRecoveryOffsets(logTablet.getDataDir());
         }
     }
 
@@ -365,7 +366,7 @@ public final class LogManager extends TabletManagerBase {
         // If the log tablet does not exist, skip it.
         if (logTablet != null) {
             logTablet.truncateFullyAndStartAt(newOffset);
-            checkpointRecoveryOffsets(localDiskManager.resolveDataDir(logTablet.getLogDir()));
+            checkpointRecoveryOffsets(logTablet.getDataDir());
         }
     }
 
@@ -386,6 +387,7 @@ public final class LogManager extends TabletManagerBase {
         TableInfo tableInfo = getTableInfo(zkClient, tablePath);
         LogTablet logTablet =
                 LogTablet.create(
+                        dataDir,
                         physicalTablePath,
                         tabletDir,
                         conf,
@@ -427,7 +429,7 @@ public final class LogManager extends TabletManagerBase {
             logsByDataDir.put(dataDir, new ArrayList<>());
         }
         for (LogTablet logTablet : currentLogs.values()) {
-            File dataDir = localDiskManager.resolveDataDir(logTablet.getLogDir());
+            File dataDir = logTablet.getDataDir();
             logsByDataDir.computeIfAbsent(dataDir, ignored -> new ArrayList<>()).add(logTablet);
         }
 
@@ -571,7 +573,7 @@ public final class LogManager extends TabletManagerBase {
         try {
             Map<TableBucket, Long> recoveryOffsets = new HashMap<>();
             for (Map.Entry<TableBucket, LogTablet> entry : currentLogs.entrySet()) {
-                if (localDiskManager.resolveDataDir(entry.getValue().getLogDir()).equals(dataDir)) {
+                if (entry.getValue().getDataDir().equals(dataDir)) {
                     recoveryOffsets.put(entry.getKey(), entry.getValue().getRecoveryPoint());
                 }
             }

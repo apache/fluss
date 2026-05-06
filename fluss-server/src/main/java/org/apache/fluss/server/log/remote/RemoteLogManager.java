@@ -208,7 +208,7 @@ public class RemoteLogManager implements Closeable {
                             .map(RemoteLogSegment::remoteLogSegmentId)
                             .collect(Collectors.toList());
             // remove cache.
-            remoteLogIndexCache(replica.getDataDir()).removeAll(remoteLogSegmentIdList);
+            remoteLogIndexCache(replica.getLogTablet().getDataDir()).removeAll(remoteLogSegmentIdList);
             // unregister the remote log metrics, only leader needs to report
             remoteLog.unregisterMetrics();
         }
@@ -437,7 +437,7 @@ public class RemoteLogManager implements Closeable {
                             "Can't resolve remote log index cache for bucket %s because no local log exists.",
                             tableBucket));
         }
-        return remoteLogIndexCache(localDiskManager.resolveDataDir(logTabletOpt.get().getLogDir()));
+        return remoteLogIndexCache(logTabletOpt.get().getDataDir());
     }
 
     private RemoteLogIndexCache remoteLogIndexCache(File dataDir) {

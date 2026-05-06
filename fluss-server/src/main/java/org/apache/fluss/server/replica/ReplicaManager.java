@@ -1602,7 +1602,7 @@ public class ReplicaManager implements ServerReconfigurable {
         for (Replica replica : onlineReplicasList) {
             LogTablet logTablet = replica.getLogTablet();
             highWatermarksByDir
-                    .computeIfAbsent(replica.getDataDir(), ignored -> new HashMap<>())
+                    .computeIfAbsent(logTablet.getDataDir(), ignored -> new HashMap<>())
                     .put(logTablet.getTableBucket(), logTablet.getHighWatermark());
         }
 
@@ -1878,7 +1878,8 @@ public class ReplicaManager implements ServerReconfigurable {
                             replicaToDelete.getPhysicalTablePath().getTablePath(), tb);
                     replicaToDelete.delete();
                     localDiskManager.recordReplicaDelete(
-                            replicaToDelete.getDataDir(), replicaToDelete.isKvTable());
+                            replicaToDelete.getLogTablet().getDataDir(),
+                            replicaToDelete.isKvTable());
                     Path tabletParentDir = replicaToDelete.getTabletParentDir();
                     if (tb.getPartitionId() != null) {
                         deletedPartitionIds.put(tb.getPartitionId(), tabletParentDir);
@@ -1960,22 +1961,20 @@ public class ReplicaManager implements ServerReconfigurable {
                 TableInfo tableInfo = getTableInfo(zkClient, tablePath);
 
                 boolean isKvTable = tableInfo.hasPrimaryKey();
-                Optional<File> dataDirOpt =
-                        logManager
-                                .getLog(tb)
-                                .map(
-                                        logTablet ->
-                                                localDiskManager.resolveDataDir(
-                                                        logTablet.getLogDir()));
-                File localDataDir =
-                        dataDirOpt.orElseGet(
-                                () -> localDiskManager.selectDataDirForNewBucket(isKvTable));
+                Optional<LogTablet> existingLogTabletOpt = logManager.getLog(tb);
+                File dataDir =
+                        existingLogTabletOpt
+                                .map(LogTablet::getDataDir)
+                                .orElseGet(
+                                        () ->
+                                                localDiskManager.selectDataDirForNewBucket(
+                                                        isKvTable));
                 BucketMetricGroup bucketMetricGroup =
                         serverMetricGroup.addTableBucketMetricGroup(
                                 physicalTablePath, tb, isKvTable);
                 Replica replica =
                         new Replica(
-                                localDataDir,
+                                dataDir,
                                 physicalTablePath,
                                 tb,
                                 logManager,
@@ -1984,7 +1983,7 @@ public class ReplicaManager implements ServerReconfigurable {
                                 this::getMinInSyncReplicas,
                                 serverId,
                                 new OffsetCheckpointFile.LazyOffsetCheckpoints(
-                                        highWatermarkCheckpoints.get(localDataDir)),
+                                        highWatermarkCheckpoints.get(dataDir)),
                                 delayedWriteManager,
                                 delayedFetchLogManager,
                                 adjustIsrManager,
@@ -1996,8 +1995,8 @@ public class ReplicaManager implements ServerReconfigurable {
                                 clock,
                                 remoteLogManager,
                                 scannerManager);
-                if (!dataDirOpt.isPresent()) {
-                    localDiskManager.recordReplicaLoad(localDataDir, isKvTable);
+                if (!existingLogTabletOpt.isPresent()) {
+                    localDiskManager.recordReplicaLoad(dataDir, isKvTable);
                 }
                 allReplicas.put(tb, new OnlineReplica(replica));
                 replicaOpt = Optional.of(replica);

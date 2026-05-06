@@ -170,6 +170,7 @@ class KvTabletTest {
                 LogTestUtils.makeRandomLogTabletDir(
                         tempLogDir, tablePath.getDatabaseName(), tableId, tablePath.getTableName());
         return LogTablet.create(
+                tempLogDir,
                 tablePath,
                 logTabletDir,
                 conf,

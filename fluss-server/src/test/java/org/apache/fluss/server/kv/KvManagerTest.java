@@ -373,7 +373,6 @@ final class KvManagerTest {
                 logManager.getOrCreateLog(
                         tempDir, physicalTablePath, tableBucket, LogFormat.ARROW, 1, true);
         return kvManager.getOrCreateKv(
-                tempDir,
                 physicalTablePath,
                 tableBucket,
                 logTablet,

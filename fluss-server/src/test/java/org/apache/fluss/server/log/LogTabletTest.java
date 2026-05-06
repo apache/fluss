@@ -88,6 +88,7 @@ final class LogTabletTest extends LogTestBase {
         scheduler.startup();
         logTablet =
                 LogTablet.create(
+                        tempDir,
                         PhysicalTablePath.of(DATA1_TABLE_PATH),
                         logDir,
                         conf,
@@ -491,6 +492,7 @@ final class LogTabletTest extends LogTestBase {
         Scheduler scheduler = new FlussScheduler(1);
         scheduler.startup();
         return LogTablet.create(
+                tempDir,
                 PhysicalTablePath.of(DATA1_TABLE_PATH),
                 logDir,
                 config,

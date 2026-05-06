@@ -159,7 +159,6 @@ public final class Replica {
 
     private static final Logger LOG = LoggerFactory.getLogger(Replica.class);
 
-    private final File dataDir;
     private final PhysicalTablePath physicalPath;
     private final TableBucket tableBucket;
 
@@ -252,7 +251,6 @@ public final class Replica {
             RemoteLogManager remoteLogManager,
             ScannerManager scannerManager)
             throws Exception {
-        this.dataDir = dataDir;
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
         this.logManager = logManager;
@@ -280,7 +278,7 @@ public final class Replica {
         // create a closeable registry for the replica
         this.closeableRegistry = new CloseableRegistry();
 
-        this.logTablet = createLog(lazyHighWatermarkCheckpoint);
+        this.logTablet = createLog(dataDir, lazyHighWatermarkCheckpoint);
         this.logTablet.updateIsDataLakeEnabled(tableConfig.isDataLakeEnabled());
         this.clock = clock;
         this.remoteLogManager = remoteLogManager;
@@ -387,11 +385,7 @@ public final class Replica {
     }
 
     public Path getTabletParentDir() {
-        return logManager.getTabletParentDir(dataDir, physicalPath, tableBucket);
-    }
-
-    public File getDataDir() {
-        return dataDir;
+        return logManager.getTabletParentDir(logTablet.getDataDir(), physicalPath, tableBucket);
     }
 
     public @Nullable KvTablet getKvTablet() {
@@ -783,7 +777,9 @@ public final class Replica {
                         physicalPath);
                 CompletedSnapshot completedSnapshot = optCompletedSnapshot.get();
                 // always create a new dir for the kv tablet
-                File tabletDir = kvManager.createTabletDir(dataDir, physicalPath, tableBucket);
+                File tabletDir =
+                        kvManager.createTabletDir(
+                                logTablet.getDataDir(), physicalPath, tableBucket);
                 // down the snapshot to target tablet dir
                 downloadKvSnapshots(completedSnapshot, tabletDir.toPath());
 
@@ -805,7 +801,6 @@ public final class Replica {
                 // if it exists before init kv tablet
                 kvTablet =
                         kvManager.getOrCreateKv(
-                                dataDir,
                                 physicalPath,
                                 tableBucket,
                                 logTablet,
@@ -2155,7 +2150,7 @@ public final class Replica {
     }
 
     private LogTablet createLog(
-            OffsetCheckpointFile.LazyOffsetCheckpoints lazyHighWatermarkCheckpoint)
+            File dataDir, OffsetCheckpointFile.LazyOffsetCheckpoints lazyHighWatermarkCheckpoint)
             throws Exception {
         LogTablet log =
                 logManager.getOrCreateLog(

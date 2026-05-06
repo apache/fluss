@@ -386,14 +386,10 @@ final class LogManagerTest extends LogTestBase {
         assertThat(new File(dataDir1, LogManager.CLEAN_SHUTDOWN_FILE)).doesNotExist();
         assertThat(new File(dataDir2, LogManager.CLEAN_SHUTDOWN_FILE)).doesNotExist();
         assertThat(logManager.getLog(tableBucket1)).isPresent();
-        assertThat(
-                        localDiskManager.resolveDataDir(
-                                logManager.getLog(tableBucket1).get().getLogDir()))
+        assertThat(logManager.getLog(tableBucket1).get().getDataDir())
                 .isEqualTo(dataDir1.getAbsoluteFile());
         assertThat(logManager.getLog(tableBucket2)).isPresent();
-        assertThat(
-                        localDiskManager.resolveDataDir(
-                                logManager.getLog(tableBucket2).get().getLogDir()))
+        assertThat(logManager.getLog(tableBucket2).get().getDataDir())
                 .isEqualTo(dataDir2.getAbsoluteFile());
     }
 

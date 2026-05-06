@@ -235,7 +235,6 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
      * @param kvFormat the kv format
      */
     public KvTablet getOrCreateKv(
-            File dataDir,
             PhysicalTablePath tablePath,
             TableBucket tableBucket,
             LogTablet logTablet,
@@ -251,7 +250,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                         return currentKvs.get(tableBucket);
                     }
 
-                    File tabletDir = getOrCreateTabletDir(dataDir, tablePath, tableBucket);
+                    File tabletDir =
+                            getOrCreateTabletDir(logTablet.getDataDir(), tablePath, tableBucket);
                     RowMerger merger = RowMerger.create(tableConfig, kvFormat, schemaGetter);
                     AutoIncrementManager autoIncrementManager =
                             new AutoIncrementManager(

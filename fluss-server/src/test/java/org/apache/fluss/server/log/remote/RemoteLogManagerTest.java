@@ -754,8 +754,8 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         TableBucket tableBucket2 = new TableBucket(DATA1_TABLE_ID, 1);
         Replica replica1 = replicaManager.getReplicaOrException(tableBucket1);
         Replica replica2 = replicaManager.getReplicaOrException(tableBucket2);
-        assertThat(replica1.getDataDir()).isEqualTo(dataDir1.getAbsoluteFile());
-        assertThat(replica2.getDataDir()).isEqualTo(dataDir2.getAbsoluteFile());
+        assertThat(replica1.getLogTablet().getDataDir()).isEqualTo(dataDir1.getAbsoluteFile());
+        assertThat(replica2.getLogTablet().getDataDir()).isEqualTo(dataDir2.getAbsoluteFile());
 
         addMultiSegmentsToLogTablet(replica1.getLogTablet(), 5);
         addMultiSegmentsToLogTablet(replica2.getLogTablet(), 5);

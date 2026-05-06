@@ -634,6 +634,7 @@ final class LogLoaderTest extends LogTestBase {
     private LogTablet createLogTablet(boolean isCleanShutdown, long recoveryPoint)
             throws Exception {
         return LogTablet.create(
+                tempDir,
                 PhysicalTablePath.of(DATA1_TABLE_PATH),
                 logDir,
                 conf,

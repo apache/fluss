@@ -280,7 +280,6 @@ final class DroppedTableRecoveryTest extends LogTestBase {
                 new TableConfig(Configuration.fromMap(DATA1_TABLE_DESCRIPTOR.getProperties()));
         KvTablet kvTablet1 =
                 kvManager.getOrCreateKv(
-                        tempDir,
                         PhysicalTablePath.of(tablePath),
                         tableBucket1,
                         log1,
@@ -290,7 +289,6 @@ final class DroppedTableRecoveryTest extends LogTestBase {
                         DEFAULT_COMPRESSION);
         KvTablet kvTablet2 =
                 kvManager.getOrCreateKv(
-                        tempDir,
                         PhysicalTablePath.of(tablePath),
                         tableBucket2,
                         log2,
@@ -372,7 +370,6 @@ final class DroppedTableRecoveryTest extends LogTestBase {
                 new TableConfig(Configuration.fromMap(DATA1_TABLE_DESCRIPTOR.getProperties()));
         KvTablet kvTablet =
                 kvManager.getOrCreateKv(
-                        tempDir,
                         partitionedTablePath,
                         partitionedTableBucket,
                         log,

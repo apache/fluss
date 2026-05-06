@@ -109,6 +109,7 @@ class KvTabletSchemaEvolutionTest {
                         physicalTablePath.getTableName());
         logTablet =
                 LogTablet.create(
+                        tempLogDir,
                         physicalTablePath,
                         logTabletDir,
                         conf,

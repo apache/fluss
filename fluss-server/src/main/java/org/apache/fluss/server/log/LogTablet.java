@@ -84,8 +84,12 @@ public final class LogTablet {
 
     private static final Logger LOG = LoggerFactory.getLogger(LogTablet.class);
 
+    // Configured local storage root that owns this tablet, for example /data-0.
+    private final File dataDir;
+    // Logical table/partition identity of this tablet.
     private final PhysicalTablePath physicalPath;
 
+    // Concrete log tablet directory under dataDir, for example /data-0/db/table/log-0.
     @GuardedBy("lock")
     private final LocalLog localLog;
 
@@ -130,6 +134,7 @@ public final class LogTablet {
     private volatile long lakeMaxTimestamp = -1;
 
     private LogTablet(
+            File dataDir,
             PhysicalTablePath physicalPath,
             LocalLog localLog,
             Configuration conf,
@@ -139,6 +144,7 @@ public final class LogTablet {
             int tieredLogLocalSegments,
             boolean isChangelog,
             Clock clock) {
+        this.dataDir = dataDir;
         this.physicalPath = physicalPath;
         this.localLog = localLog;
         this.maxSegmentFileSize = (int) conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes();
@@ -221,6 +227,12 @@ public final class LogTablet {
         }
     }
 
+    /** Returns the configured local data directory that owns this tablet. */
+    public File getDataDir() {
+        return dataDir;
+    }
+
+    /** Returns the concrete log tablet directory under the owning local data directory. */
     public File getLogDir() {
         return localLog.getLogTabletDir();
     }
@@ -291,6 +303,7 @@ public final class LogTablet {
     }
 
     public static LogTablet create(
+            File dataDir,
             PhysicalTablePath tablePath,
             File tabletDir,
             Configuration conf,
@@ -339,6 +352,7 @@ public final class LogTablet {
                         logFormat);
 
         return new LogTablet(
+                dataDir,
                 tablePath,
                 log,
                 conf,
