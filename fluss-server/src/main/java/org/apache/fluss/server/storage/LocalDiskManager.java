@@ -308,6 +308,9 @@ public final class LocalDiskManager implements Closeable {
                 DirectoryLock directoryLock = new DirectoryLock(new File(dataDir, LOCK_FILE_NAME));
                 if (!directoryLock.tryLock()) {
                     closeDirectoryLock(directoryLock);
+                    // Only real disk/I/O failures should be downgraded to offline data dirs.
+                    // A lock conflict means another Fluss process/thread already owns this
+                    // directory, so startup should fail fast instead of silently skipping it.
                     throw new IllegalConfigurationException(
                             "Failed to acquire lock on file "
                                     + LOCK_FILE_NAME
