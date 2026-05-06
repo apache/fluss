@@ -25,6 +25,7 @@ import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.IntType;
 import org.apache.fluss.types.RowType;
@@ -89,7 +90,8 @@ class IcebergLakeSourceTest extends IcebergSourceTestBase {
                             "name" + i,
                             0,
                             (long) i,
-                            OffsetDateTime.now(ZoneOffset.UTC)));
+                            OffsetDateTime.ofInstant(
+                                    java.time.Instant.ofEpochMilli(i * 1000L), ZoneOffset.UTC)));
         }
         writeRecord(table, rows, null, 0);
 
@@ -104,7 +106,8 @@ class IcebergLakeSourceTest extends IcebergSourceTestBase {
                             "name" + i,
                             0,
                             (long) i,
-                            OffsetDateTime.now(ZoneOffset.UTC)));
+                            OffsetDateTime.ofInstant(
+                                    java.time.Instant.ofEpochMilli(i * 1000L), ZoneOffset.UTC)));
         }
         writeRecord(table, rows, null, 0);
         table.refresh();
@@ -139,6 +142,36 @@ class IcebergLakeSourceTest extends IcebergSourceTestBase {
                             TransformingCloseableIterator.transform(iterator, LogRecord::getRow)));
         }
         assertThat(actual.toString()).isEqualTo("[+I[2, name2], +I[3, name3]]");
+
+        // test __timestamp filter
+        Predicate timestampFilter =
+                new PredicateBuilder(
+                                RowType.of(
+                                        DataTypes.INT(),
+                                        DataTypes.STRING(),
+                                        DataTypes.INT(),
+                                        DataTypes.BIGINT(),
+                                        DataTypes.TIMESTAMP_LTZ(3)))
+                        .greaterOrEqual(4, TimestampLtz.fromEpochMillis(14_000L));
+        lakeSource = lakeStorage.createLakeSource(tablePath);
+        filterPushDownResult = lakeSource.withFilters(Collections.singletonList(timestampFilter));
+        assertThat(filterPushDownResult.acceptedPredicates())
+                .isEqualTo(Collections.singletonList(timestampFilter));
+        assertThat(filterPushDownResult.remainingPredicates()).isEmpty();
+
+        icebergSplits = lakeSource.createPlanner(() -> table.currentSnapshot().snapshotId()).plan();
+        actual = new ArrayList<>();
+        for (IcebergSplit split : icebergSplits) {
+            recordReader = lakeSource.createRecordReader(() -> split);
+            try (CloseableIterator<LogRecord> iterator = recordReader.read()) {
+                actual.addAll(
+                        convertToFlinkRow(
+                                fieldGetters,
+                                TransformingCloseableIterator.transform(
+                                        iterator, LogRecord::getRow)));
+            }
+        }
+        assertThat(actual.toString()).isEqualTo("[+I[14, name14], +I[15, name15], +I[16, name16]]");
 
         // test mix one unaccepted filter
         Predicate nonConvertibleFilter = FLUSS_BUILDER.endsWith(1, BinaryString.fromString("name"));

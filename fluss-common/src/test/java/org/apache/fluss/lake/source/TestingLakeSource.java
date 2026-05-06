@@ -57,7 +57,7 @@ public class TestingLakeSource implements LakeSource<LakeSplit> {
 
     @Override
     public FilterPushDownResult withFilters(List<Predicate> predicates) {
-        return null;
+        return FilterPushDownResult.of(predicates, new ArrayList<>());
     }
 
     @Override

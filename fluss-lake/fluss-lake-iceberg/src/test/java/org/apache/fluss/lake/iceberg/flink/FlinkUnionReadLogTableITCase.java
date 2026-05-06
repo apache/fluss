@@ -147,6 +147,56 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
+    void testReadLogTableStartupTimestampFilter(boolean isPartitioned) throws Exception {
+        // first of all, start tiering
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        String tableName =
+                "logTable_timestampFilter_" + (isPartitioned ? "partitioned" : "non_partitioned");
+
+        TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
+        List<Row> writtenRows = new ArrayList<>();
+        // insert with 30 rows
+        long tableId = prepareLogTable(t1, DEFAULT_BUCKET_NUM, isPartitioned, writtenRows);
+        // wait until records has been synced
+        waitUntilBucketSynced(t1, tableId, DEFAULT_BUCKET_NUM, isPartitioned);
+
+        // now, start to read the log table, which will read iceberg
+        // may read fluss or not, depends on the log offset of iceberg snapshot
+        List<Row> actual =
+                CollectionUtil.iteratorToList(
+                        batchTEnv.executeSql("select * from " + tableName).collect());
+        assertThat(actual).containsExactlyInAnyOrderElementsOf(writtenRows);
+
+        long startupTimestampMillis = System.currentTimeMillis();
+        List<Row> afterTimestampRows = new ArrayList<>();
+
+        // write some log data again, that will be tiered into the lake
+        afterTimestampRows.addAll(writeRows(t1, 3, isPartitioned));
+
+        // cancel the tiering job
+        jobClient.cancel().get();
+
+        // write some logs again, but will only be reserved in the fluss log tablet
+        afterTimestampRows.addAll(writeRows(t1, 3, isPartitioned));
+
+        String timestampStartupOptions =
+                String.format(
+                        "/*+ OPTIONS('scan.startup.mode' = 'timestamp', 'scan.startup.timestamp' = '%d') */",
+                        startupTimestampMillis);
+        actual =
+                CollectionUtil.iteratorToList(
+                        batchTEnv
+                                .executeSql(
+                                        String.format(
+                                                "select * from %s %s",
+                                                tableName, timestampStartupOptions))
+                                .collect());
+        assertThat(actual).containsExactlyInAnyOrderElementsOf(afterTimestampRows);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
     void testReadLogTableInStreamMode(boolean isPartitioned) throws Exception {
         // first of all, start tiering
         JobClient jobClient = buildTieringJob(execEnv);

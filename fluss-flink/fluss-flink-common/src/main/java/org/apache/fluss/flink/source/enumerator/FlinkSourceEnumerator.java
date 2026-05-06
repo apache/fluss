@@ -750,6 +750,7 @@ public class FlinkSourceEnumerator
                             flussAdmin,
                             lakeSource,
                             bucketOffsetsRetriever,
+                            startingOffsetsInitializer,
                             stoppingOffsetsInitializer,
                             tableInfo.getNumBuckets(),
                             this::listPartitions);
