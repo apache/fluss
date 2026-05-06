@@ -21,9 +21,10 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.registry.NOPMetricRegistry;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.metadata.ServerInfo;
-import org.apache.fluss.server.metrics.group.TestingMetricGroups;
+import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.zk.ZkEpoch;
 
 import org.junit.jupiter.api.Test;
@@ -76,8 +77,15 @@ class CoordinatorEventManagerTest {
                     }
                 };
 
-        CoordinatorEventManager manager =
-                new CoordinatorEventManager(testProcessor, TestingMetricGroups.COORDINATOR_METRICS);
+        // Create a fresh metric group per test to avoid gauge name collisions with other
+        // tests that share the static TestingMetricGroups.COORDINATOR_METRICS instance.
+        // AbstractMetricGroup.addMetric() rejects new gauges when a same-name gauge already
+        // exists (keeps the old one), which causes this test to read a stale gauge bound to
+        // a different CoordinatorEventManager instance.
+        CoordinatorMetricGroup metricGroup =
+                new CoordinatorMetricGroup(NOPMetricRegistry.INSTANCE, "cluster1", "host", "0");
+
+        CoordinatorEventManager manager = new CoordinatorEventManager(testProcessor, metricGroup);
         manager.start();
 
         try {
@@ -88,10 +96,7 @@ class CoordinatorEventManagerTest {
                     () -> assertThat(metricsUpdateCount.get()).isGreaterThan(0));
 
             Gauge activeTabletServerCount =
-                    (Gauge)
-                            TestingMetricGroups.COORDINATOR_METRICS
-                                    .getMetrics()
-                                    .get(MetricNames.ACTIVE_TABLET_SERVER_COUNT);
+                    (Gauge) metricGroup.getMetrics().get(MetricNames.ACTIVE_TABLET_SERVER_COUNT);
             // The gauge reads the volatile tabletServerCount field which is updated
             // after the AccessContextEvent future completes. Use retry to handle
             // the brief window between metricsUpdateCount increment (inside the
@@ -102,7 +107,7 @@ class CoordinatorEventManagerTest {
                     () -> assertThat(activeTabletServerCount.getValue()).isEqualTo(2));
         } finally {
             manager.close();
-            TestingMetricGroups.COORDINATOR_METRICS.close();
+            metricGroup.close();
         }
     }
 
