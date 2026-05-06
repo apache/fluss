@@ -437,9 +437,6 @@ public final class LogManager extends TabletManagerBase {
         }
 
         try {
-            if (loadLogsCompletedFlag) {
-                LOG.debug("Writing clean shutdown marker.");
-            }
             for (LogShutdownTask shutdownTask : shutdownTasks) {
                 waitForShutdownLogsInDir(shutdownTask);
             }
