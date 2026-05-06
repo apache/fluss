@@ -41,6 +41,8 @@ trait FlussScan extends Scan {
   /** Spark predicates that the scan reports as pushed down (used in [[description]]). */
   def pushedSparkPredicates: Seq[Predicate] = Seq.empty
 
+  def partitionPredicate: Option[FlussPredicate] = None
+
   protected def scanType: String
 
   override def readSchema(): StructType = {
@@ -49,8 +51,13 @@ trait FlussScan extends Scan {
 
   override def description(): String = {
     val base = s"FlussScan: [$tablePath], Type: [$scanType]"
-    if (pushedSparkPredicates.isEmpty) base
-    else s"$base [PushedPredicates: ${pushedSparkPredicates.mkString("[", ", ", "]")}]"
+    val withPushed =
+      if (pushedSparkPredicates.isEmpty) base
+      else s"$base [PushedPredicates: ${pushedSparkPredicates.mkString("[", ", ", "]")}]"
+    partitionPredicate match {
+      case Some(p) => s"$withPushed [PartitionFilter: $p]"
+      case None => withPushed
+    }
   }
 
   override def supportedCustomMetrics(): Array[CustomMetric] =
@@ -63,7 +70,7 @@ case class FlussAppendScan(
     tableInfo: TableInfo,
     requiredSchema: Option[StructType],
     pushedPredicate: Option[FlussPredicate],
-    partitionPredicate: Option[FlussPredicate],
+    override val partitionPredicate: Option[FlussPredicate],
     override val pushedSparkPredicates: Seq[Predicate],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
@@ -132,7 +139,7 @@ case class FlussUpsertScan(
     tablePath: TablePath,
     tableInfo: TableInfo,
     requiredSchema: Option[StructType],
-    partitionPredicate: Option[FlussPredicate],
+    override val partitionPredicate: Option[FlussPredicate],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussScan {

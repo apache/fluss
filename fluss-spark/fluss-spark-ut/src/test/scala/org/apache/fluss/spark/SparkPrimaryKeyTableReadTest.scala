@@ -420,6 +420,18 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
     }
   }
 
+  test("Spark Read: scan description surfaces partition filter when pushed (PK table)") {
+    withPkPartitionedTable {
+      val withPart = sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01'")
+      val noPart = sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE amount = 603")
+      val withDesc = flussUpsertScan(withPart).get.description()
+      val noDesc = flussUpsertScan(noPart).get.description()
+      assert(withDesc.contains("[PartitionFilter:"))
+      assert(withDesc.contains("dt"))
+      assert(!noDesc.contains("PartitionFilter"))
+    }
+  }
+
   private def withPkPartitionedTable(body: => Unit): Unit = withTable("t") {
     sql(s"""
            |CREATE TABLE $DEFAULT_DATABASE.t (
@@ -437,6 +449,10 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
   }
 
   private def partitionPredicate(df: DataFrame): Option[org.apache.fluss.predicate.Predicate] = {
+    flussUpsertScan(df).flatMap(_.partitionPredicate)
+  }
+
+  private def flussUpsertScan(df: DataFrame): Option[FlussUpsertScan] = {
     // AQE hides the scan under an adaptive wrapper in executedPlan, so check optimizedPlan too.
     val scans =
       df.queryExecution.executedPlan.collect {
@@ -444,6 +460,6 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
       } ++ df.queryExecution.optimizedPlan.collect {
         case DataSourceV2ScanRelation(_, scan, _, _, _) => scan
       }
-    scans.collectFirst { case f: FlussUpsertScan => f }.flatMap(_.partitionPredicate)
+    scans.collectFirst { case f: FlussUpsertScan => f }
   }
 }

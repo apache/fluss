@@ -498,6 +498,18 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
     }
   }
 
+  test("Spark Read: scan description surfaces partition filter when pushed") {
+    withPartitionedTable {
+      val withPart = sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01'")
+      val noPart = sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE amount = 603")
+      val withDesc = flussAppendScans(withPart).head.description()
+      val noDesc = flussAppendScans(noPart).head.description()
+      assert(withDesc.contains("[PartitionFilter:"))
+      assert(withDesc.contains("dt"))
+      assert(!noDesc.contains("PartitionFilter"))
+    }
+  }
+
   private def withPartitionedTable(body: => Unit): Unit = withTable("t") {
     sql(s"""
            |CREATE TABLE $DEFAULT_DATABASE.t (
