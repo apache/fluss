@@ -20,6 +20,7 @@ package org.apache.fluss.server.log;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FlussException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.exception.SchemaNotExistException;
@@ -33,6 +34,7 @@ import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.Clock;
@@ -179,8 +181,14 @@ public final class LogManager extends TabletManagerBase {
                 for (Future<?> future : jobsForDataDir) {
                     try {
                         future.get();
-                    } catch (InterruptedException | ExecutionException e) {
-                        throw e.getCause();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new FlussRuntimeException(
+                                "Interrupted while waiting for log recovery tasks to finish.", e);
+                    } catch (ExecutionException e) {
+                        throw new FlussException(
+                                "Failed while waiting for log recovery tasks to finish.",
+                                ExceptionUtils.stripExecutionException(e));
                     }
                 }
                 loadLogsCompletedFlag = true;
