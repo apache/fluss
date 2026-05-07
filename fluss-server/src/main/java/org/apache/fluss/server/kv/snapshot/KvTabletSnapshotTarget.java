@@ -270,18 +270,28 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
     }
 
     /**
-     * Update local state after successful snapshot completion. This includes notifying RocksDB
-     * about completion, updating latest snapshot offset/size, and notifying LogTablet about the
-     * minimum offset to retain.
+     * Update local state after successful snapshot completion. This includes updating latest
+     * snapshot offset/size, notifying LogTablet about the minimum offset to retain, and finally
+     * notifying RocksDB about completion.
+     *
+     * <p>Order matters: outward-visible state (offset/size + {@code updateMinRetainOffset}
+     * callback) MUST be updated before {@link RocksIncrementalSnapshot#notifySnapshotComplete},
+     * otherwise observers waiting on {@code lastCompletedSnapshotId} may see the completion signal
+     * before the outward state catches up — see FLUSS-2624. The {@code finally} block also
+     * guarantees the internal SST bookkeeping cleanup runs even if any outward update throws.
      */
     private void updateStateOnCommitSuccess(long snapshotId, SnapshotResult snapshotResult) {
         long flushedLogOffset = snapshotResult.getTabletState().getFlushedLogOffset();
-        // notify the snapshot complete
-        rocksIncrementalSnapshot.notifySnapshotComplete(snapshotId);
-        logOffsetOfLatestSnapshot = flushedLogOffset;
-        snapshotSize = snapshotResult.getSnapshotSize();
-        // update LogTablet to notify the lowest offset that should be retained
-        updateMinRetainOffset.accept(flushedLogOffset);
+        try {
+            logOffsetOfLatestSnapshot = flushedLogOffset;
+            snapshotSize = snapshotResult.getSnapshotSize();
+            // update LogTablet to notify the lowest offset that should be retained
+            updateMinRetainOffset.accept(flushedLogOffset);
+        } finally {
+            // notify the snapshot complete (must run last to preserve the ordering contract above,
+            // and run in finally to guarantee internal SST bookkeeping is always cleaned up).
+            rocksIncrementalSnapshot.notifySnapshotComplete(snapshotId);
+        }
     }
 
     /**
