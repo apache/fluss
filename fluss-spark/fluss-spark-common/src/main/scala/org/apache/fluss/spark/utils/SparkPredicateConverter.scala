@@ -50,14 +50,21 @@ object SparkPredicateConverter {
   def convertPredicates(
       rowType: RowType,
       predicates: Seq[Predicate]): (Option[FlussPredicate], Seq[Predicate]) = {
-    val (accepted, converted) =
-      predicates.flatMap(p => convert(rowType, p).map((p, _))).unzip
-    val combined = converted match {
-      case Seq() => None
-      case Seq(single) => Some(single)
-      case many => Some(PredicateBuilder.and(many.asJava))
-    }
-    (combined, accepted)
+    val pairs = convertPerPredicate(rowType, predicates)
+    (combineAnd(pairs.map(_._2)), pairs.map(_._1))
+  }
+
+  /** Returns the convertible (Spark, Fluss) predicate pairs in input order. */
+  def convertPerPredicate(
+      rowType: RowType,
+      predicates: Seq[Predicate]): Seq[(Predicate, FlussPredicate)] =
+    predicates.flatMap(p => convert(rowType, p).map((p, _)))
+
+  /** AND-combine a list of Fluss predicates; empty -> None, single -> as-is. */
+  def combineAnd(predicates: Seq[FlussPredicate]): Option[FlussPredicate] = predicates match {
+    case Seq() => None
+    case Seq(single) => Some(single)
+    case many => Some(PredicateBuilder.and(many.asJava))
   }
 
   private def toFluss(

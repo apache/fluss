@@ -24,10 +24,10 @@ import org.apache.fluss.metadata.{TableInfo, TablePath}
 import org.apache.fluss.predicate.{Predicate => FlussPredicate}
 import org.apache.fluss.spark.read._
 
+import org.apache.spark.internal.Logging
 import org.apache.spark.sql.connector.read.InputPartition
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
-import org.slf4j.LoggerFactory
 
 import java.util.Collections
 
@@ -68,16 +68,22 @@ abstract class FlussLakeBatch(
   }
 }
 
-object FlussLakeBatch {
+object FlussLakeBatch extends Logging {
 
-  private val LOG = LoggerFactory.getLogger(classOf[FlussLakeBatch])
-
-  def applyLakeFilters(lakeSource: LakeSource[LakeSplit], predicate: FlussPredicate): Unit = {
-    val result = lakeSource.withFilters(Collections.singletonList(predicate))
-    if (LOG.isDebugEnabled) {
+  def applyLakeFilters(
+      lakeSource: LakeSource[LakeSplit],
+      predicates: java.util.List[FlussPredicate]): LakeSource.FilterPushDownResult = {
+    val result = lakeSource.withFilters(predicates)
+    logDebug {
       val accepted = result.acceptedPredicates().size()
       val remaining = result.remainingPredicates().size()
-      LOG.debug(s"Lake source accepted $accepted of ${accepted + remaining} pushed predicates")
+      s"Lake source accepted $accepted of ${accepted + remaining} pushed predicates"
     }
+    result
   }
+
+  def applyLakeFilters(
+      lakeSource: LakeSource[LakeSplit],
+      predicate: FlussPredicate): LakeSource.FilterPushDownResult =
+    applyLakeFilters(lakeSource, Collections.singletonList(predicate))
 }

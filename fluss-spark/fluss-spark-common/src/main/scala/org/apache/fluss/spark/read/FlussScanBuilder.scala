@@ -20,12 +20,17 @@ package org.apache.fluss.spark.read
 import org.apache.fluss.config.{Configuration => FlussConfiguration}
 import org.apache.fluss.metadata.{LogFormat, TableInfo, TablePath}
 import org.apache.fluss.predicate.{Predicate => FlussPredicate}
+import org.apache.fluss.spark.read.lake.{FlussLakeBatch, FlussLakeUtils}
 import org.apache.fluss.spark.utils.SparkPredicateConverter
 
 import org.apache.spark.sql.connector.expressions.filter.Predicate
 import org.apache.spark.sql.connector.read.{Scan, ScanBuilder, SupportsPushDownRequiredColumns, SupportsPushDownV2Filters}
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
+
+import java.util.{Collections, IdentityHashMap, Set => JSet}
+
+import scala.collection.JavaConverters._
 
 /** An interface that extends from Spark [[ScanBuilder]]. */
 trait FlussScanBuilder extends ScanBuilder with SupportsPushDownRequiredColumns {
@@ -63,11 +68,32 @@ trait FlussSupportsPushDownV2Filters extends FlussScanBuilder with SupportsPushD
   override def pushedPredicates(): Array[Predicate] = acceptedPredicates
 }
 
-/** Lake reads push to the lake source regardless of log format. */
+/**
+ * Lake reads push to the lake source regardless of log format. Each convertible predicate is
+ * offered to the lake source individually; only the lake-accepted subset is reported back to Spark
+ * and combined into the predicate handed to the scan.
+ */
 trait FlussLakeSupportsPushDownV2Filters extends FlussSupportsPushDownV2Filters {
 
+  def tablePath: TablePath
+
   override def pushPredicates(predicates: Array[Predicate]): Array[Predicate] = {
-    convertAndStorePredicates(predicates)
+    val pairs =
+      SparkPredicateConverter.convertPerPredicate(tableInfo.getRowType, predicates.toSeq)
+    if (pairs.nonEmpty) {
+      val lakeSource =
+        FlussLakeUtils.createLakeSource(tableInfo.getProperties.toMap, tablePath)
+      val result = FlussLakeBatch.applyLakeFilters(lakeSource, pairs.map(_._2).asJava)
+      // Identity-match: lake sources are expected to return the same instances they received.
+      val acceptedSet: JSet[FlussPredicate] =
+        Collections.newSetFromMap(new IdentityHashMap())
+      acceptedSet.addAll(result.acceptedPredicates())
+      val (acceptedSpark, acceptedFluss) = pairs.collect {
+        case (sp, fp) if acceptedSet.contains(fp) => (sp, fp)
+      }.unzip
+      pushedPredicate = SparkPredicateConverter.combineAnd(acceptedFluss)
+      acceptedPredicates = acceptedSpark.toArray
+    }
     predicates
   }
 }
@@ -94,7 +120,7 @@ class FlussAppendScanBuilder(
 
 /** Fluss Lake Append Scan Builder. */
 class FlussLakeAppendScanBuilder(
-    tablePath: TablePath,
+    val tablePath: TablePath,
     val tableInfo: TableInfo,
     options: CaseInsensitiveStringMap,
     flussConfig: FlussConfiguration)
@@ -127,7 +153,7 @@ class FlussUpsertScanBuilder(
 
 /** Fluss Lake Upsert Scan Builder for lake-enabled primary key tables. */
 class FlussLakeUpsertScanBuilder(
-    tablePath: TablePath,
+    val tablePath: TablePath,
     val tableInfo: TableInfo,
     options: CaseInsensitiveStringMap,
     flussConfig: FlussConfiguration)
