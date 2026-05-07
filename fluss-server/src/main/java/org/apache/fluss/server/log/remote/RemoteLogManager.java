@@ -125,15 +125,10 @@ public class RemoteLogManager implements Closeable {
         this.logManager = logManager;
         this.localDiskManager = localDiskManager;
         this.remoteLogIndexCachesByDir = new ConcurrentHashMap<>();
+        int cacheSize = (int) conf.get(ConfigOptions.REMOTE_LOG_INDEX_FILE_CACHE_SIZE).getBytes();
         for (File dataDir : localDiskManager.dataDirs()) {
             remoteLogIndexCachesByDir.put(
-                    dataDir,
-                    new RemoteLogIndexCache(
-                            (int)
-                                    conf.get(ConfigOptions.REMOTE_LOG_INDEX_FILE_CACHE_SIZE)
-                                            .getBytes(),
-                            remoteLogStorage,
-                            dataDir));
+                    dataDir, new RemoteLogIndexCache(cacheSize, remoteLogStorage, dataDir));
         }
         this.taskInterval = conf.get(ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION).toMillis();
         this.maxUploadSegmentsPerTask =
