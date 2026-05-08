@@ -519,9 +519,9 @@ public class FlinkCatalog extends AbstractCatalog {
             } else if (CatalogExceptionUtils.isTableAlreadyExist(t)) {
                 throw new TableAlreadyExistException(getName(), objectPath);
             } else if (CatalogExceptionUtils.isLakeTableAlreadyExist(t)) {
-                throw new CatalogException(t.getMessage());
+                throw new CatalogException(t.getMessage(), t);
             } else if (isTableInvalid(t)) {
-                throw new InvalidTableException(t.getMessage());
+                throw new InvalidTableException(t.getMessage(), t);
             } else {
                 throw new CatalogException(
                         String.format("Failed to create table %s in %s", objectPath, getName()), t);
@@ -565,7 +565,7 @@ public class FlinkCatalog extends AbstractCatalog {
             if (CatalogExceptionUtils.isTableNotExist(t)) {
                 throw new TableNotExistException(getName(), objectPath);
             } else if (isTableInvalid(t)) {
-                throw new InvalidTableException(t.getMessage());
+                throw new InvalidTableException(t.getMessage(), t);
             } else {
                 throw new CatalogException(
                         String.format("Failed to alter table %s in %s", objectPath, getName()), t);

@@ -442,10 +442,10 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         } catch (Exception e) {
             if (e instanceof UncheckedIOException) {
                 throw new InvalidTableException(
-                        "Failed to parse table descriptor: " + e.getMessage());
+                        "Failed to parse table descriptor: " + e.getMessage(), e);
             } else {
                 // wrap the validate message to InvalidTableException
-                throw new InvalidTableException(e.getMessage());
+                throw new InvalidTableException(e.getMessage(), e);
             }
         }
 
