@@ -282,7 +282,7 @@ public class LogFetchCollectorTest {
         assertThat(records.buckets()).isEmpty();
         assertThat(completedFetch.isConsumed()).isTrue();
     }
-  
+
     @Test
     void testUpdateBeforeAndAfterNeverSplitAcrossPolls() throws Exception {
         // Create records: INSERT, UPDATE_BEFORE, UPDATE_AFTER, INSERT
