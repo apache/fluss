@@ -88,6 +88,7 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -176,6 +177,9 @@ public class FlinkTableSource
     /** Watermark strategy that is pushed down by the Flink optimizer. */
     @Nullable private WatermarkStrategy<RowData> watermarkStrategy;
 
+    /** Watermark context from SQL hints and Flink execution config. */
+    private final WatermarkContext watermarkContext;
+
     public FlinkTableSource(
             TablePath tablePath,
             Configuration flussConfig,
@@ -193,7 +197,8 @@ public class FlinkTableSource
             boolean isDataLakeEnabled,
             @Nullable MergeEngineType mergeEngineType,
             Map<String, String> tableOptions,
-            LeaseContext leaseContext) {
+            LeaseContext leaseContext,
+            WatermarkContext watermarkContext) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableOutputType = tableOutputType;
@@ -220,6 +225,7 @@ public class FlinkTableSource
                             "LakeSource must not be null if enable datalake");
         }
         this.tableConfig = checkNotNull(tableConfig, "tableConfig must not be null");
+        this.watermarkContext = checkNotNull(watermarkContext, "watermarkContext must not be null");
 
         // Pre-compute available statistics columns to avoid repeated calculation
         RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
@@ -405,10 +411,7 @@ public class FlinkTableSource
                 @Override
                 public DataStream<RowData> produceDataStream(
                         ProviderContext providerContext, StreamExecutionEnvironment execEnv) {
-                    WatermarkStrategy<RowData> strategy =
-                            watermarkStrategy != null
-                                    ? watermarkStrategy
-                                    : WatermarkStrategy.noWatermarks();
+                    WatermarkStrategy<RowData> strategy = resolveWatermarkStrategy();
                     return execEnv.fromSource(source, strategy, "FlussSource-" + tablePath);
                 }
 
@@ -481,7 +484,8 @@ public class FlinkTableSource
                         isDataLakeEnabled,
                         mergeEngineType,
                         tableOptions,
-                        leaseContext);
+                        leaseContext,
+                        watermarkContext);
         source.producedDataType = producedDataType;
         source.projectedFields = projectedFields;
         source.singleRowFilter = singleRowFilter;
@@ -516,6 +520,117 @@ public class FlinkTableSource
     @Override
     public void applyWatermark(WatermarkStrategy<RowData> watermarkStrategy) {
         this.watermarkStrategy = watermarkStrategy;
+    }
+
+    /**
+     * Resolves the effective watermark strategy. Hint-based watermark takes priority over
+     * table-level watermark pushed down by the Flink optimizer.
+     */
+    private WatermarkStrategy<RowData> resolveWatermarkStrategy() {
+        // Watermark disabled via hint takes highest priority
+        if (!watermarkContext.isEnabled()) {
+            return WatermarkStrategy.noWatermarks();
+        }
+        // Hint-based watermark column overrides table-level
+        if (watermarkContext.getColumn() != null) {
+            return buildHintWatermarkStrategy();
+        }
+        // Fall back to pushed-down watermark from table schema
+        if (watermarkStrategy != null) {
+            return watermarkStrategy;
+        }
+        return WatermarkStrategy.noWatermarks();
+    }
+
+    /**
+     * Builds a WatermarkStrategy from hint-based configuration. Supports TIMESTAMP, TIMESTAMP_LTZ,
+     * and BIGINT column types.
+     */
+    private WatermarkStrategy<RowData> buildHintWatermarkStrategy() {
+        String columnName = watermarkContext.getColumn();
+        // Find the column index in the produced (projected) data type
+        org.apache.flink.table.types.logical.RowType outputRowType;
+        if (producedDataType instanceof org.apache.flink.table.types.logical.RowType) {
+            outputRowType = (org.apache.flink.table.types.logical.RowType) producedDataType;
+        } else {
+            throw new IllegalStateException(
+                    "Cannot apply hint watermark: produced data type is not a RowType.");
+        }
+
+        int columnIndex = -1;
+        for (int i = 0; i < outputRowType.getFieldCount(); i++) {
+            if (outputRowType.getFieldNames().get(i).equals(columnName)) {
+                columnIndex = i;
+                break;
+            }
+        }
+        if (columnIndex < 0) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Watermark column '%s' specified in hint is not found in the output schema. "
+                                    + "Available columns: %s. "
+                                    + "Make sure the column is included in your SELECT clause.",
+                            columnName, outputRowType.getFieldNames()));
+        }
+
+        LogicalType columnType = outputRowType.getTypeAt(columnIndex);
+
+        final int idx = columnIndex;
+        final int precision;
+
+        switch (columnType.getTypeRoot()) {
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+                precision =
+                        ((org.apache.flink.table.types.logical.TimestampType) columnType)
+                                .getPrecision();
+                break;
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                precision =
+                        ((org.apache.flink.table.types.logical.LocalZonedTimestampType) columnType)
+                                .getPrecision();
+                break;
+            case BIGINT:
+                precision = -1; // not used for BIGINT
+                break;
+            default:
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Watermark column '%s' has unsupported type '%s'. "
+                                        + "Only TIMESTAMP, TIMESTAMP_LTZ, and BIGINT are supported.",
+                                columnName, columnType));
+        }
+
+        Duration delay =
+                watermarkContext.getDelay() != null ? watermarkContext.getDelay() : Duration.ZERO;
+        WatermarkStrategy<RowData> strategy =
+                WatermarkStrategy.<RowData>forBoundedOutOfOrderness(delay)
+                        .withTimestampAssigner(
+                                (rowData, ts) -> {
+                                    if (rowData.isNullAt(idx)) {
+                                        return Long.MIN_VALUE;
+                                    }
+                                    switch (columnType.getTypeRoot()) {
+                                        case TIMESTAMP_WITHOUT_TIME_ZONE:
+                                        case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                                            return rowData.getTimestamp(idx, precision)
+                                                    .getMillisecond();
+                                        case BIGINT:
+                                            return rowData.getLong(idx);
+                                        default:
+                                            throw new IllegalStateException(
+                                                    "Unsupported watermark column type: "
+                                                            + columnType);
+                                    }
+                                });
+
+        // Apply idle timeout to handle idle splits/buckets that would otherwise block watermark
+        // advancement. Skip if the timeout is not positive (0 or negative means disabled).
+        Duration sourceIdleTimeout = watermarkContext.getSourceIdleTimeout();
+        if (sourceIdleTimeout != null && sourceIdleTimeout.toMillis() > 0) {
+            strategy = strategy.withIdleness(sourceIdleTimeout);
+        }
+
+        return strategy;
     }
 
     @Override

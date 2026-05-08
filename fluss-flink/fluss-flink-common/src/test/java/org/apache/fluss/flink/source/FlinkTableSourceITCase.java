@@ -2111,6 +2111,267 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         assertResultsIgnoreOrder(rowIter, expected, true);
     }
 
+    /**
+     * Tests that table-level WATERMARK works correctly without hint (control test). This verifies
+     * the fallback path in resolveWatermarkStrategy() where pushed-down watermark from table schema
+     * is used when no hint is present.
+     */
+    @Test
+    void testTableLevelWatermarkWorksWithoutHint() throws Exception {
+        // 1. Set idle source timeout so idle buckets don't block watermark
+        tEnv.getConfig()
+                .set(ExecutionConfigOptions.TABLE_EXEC_SOURCE_IDLE_TIMEOUT, Duration.ofMillis(100));
+
+        // 2. Create table WITH WATERMARK clause (0 delay - windows should fire)
+        tEnv.executeSql(
+                "CREATE TABLE wm_table_level_test ("
+                        + "  `bucket_id` INT,"
+                        + "  `value` INT,"
+                        + "  `ts` TIMESTAMP(3),"
+                        + "  WATERMARK FOR `ts` AS `ts`"
+                        + ") WITH ("
+                        + "  'bucket.num' = '4',"
+                        + "  'bucket.key' = 'bucket_id'"
+                        + ")");
+
+        // 3. Insert data across different time windows
+        tEnv.executeSql(
+                        "INSERT INTO wm_table_level_test VALUES "
+                                + "(0, 0, TIMESTAMP '2020-03-08 13:12:11.123'),"
+                                + "(0, 1, TIMESTAMP '2020-03-08 13:15:12.223'),"
+                                + "(0, 2, TIMESTAMP '2020-03-08 16:12:13.323'),"
+                                + "(1, 3, TIMESTAMP '2020-03-08 13:13:11.123'),"
+                                + "(1, 4, TIMESTAMP '2020-03-08 13:19:11.133'),"
+                                + "(1, 5, TIMESTAMP '2020-03-08 16:13:11.143')")
+                .await();
+
+        // 4. Query WITHOUT hint - table-level watermark should take effect
+        execEnv.setParallelism(1);
+        final List<String> expected = Arrays.asList("+I[0, 2]", "+I[1, 2]");
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql(
+                                "SELECT `bucket_id`, COUNT(`value`) FROM wm_table_level_test"
+                                        + " GROUP BY `bucket_id`,"
+                                        + " TUMBLE(`ts`, INTERVAL '1' HOUR)")
+                        .collect();
+        assertResultsIgnoreOrder(rowIter, expected, true);
+    }
+
+    /**
+     * Tests that watermark can be specified via SQL hints without WATERMARK clause in CREATE TABLE.
+     * Verifies TUMBLE window fires correctly using hint-based watermark.
+     */
+    @Test
+    void testWatermarkViaHintWithoutTableWatermark() throws Exception {
+        // 1. Set idle source timeout so idle buckets don't block watermark
+        tEnv.getConfig()
+                .set(ExecutionConfigOptions.TABLE_EXEC_SOURCE_IDLE_TIMEOUT, Duration.ofMillis(100));
+
+        // 2. Create Fluss source table WITH a large-delay WATERMARK clause.
+        //    The large delay (10 hours) would prevent windows from firing if used.
+        //    This test verifies that hint watermark overrides the delay even when
+        //    hint specifies the same column as the table-level watermark.
+        tEnv.executeSql(
+                "CREATE TABLE wm_hint_test ("
+                        + "  `bucket_id` INT,"
+                        + "  `value` INT,"
+                        + "  `ts` TIMESTAMP(3),"
+                        + "  WATERMARK FOR `ts` AS `ts` - INTERVAL '10' HOUR"
+                        + ") WITH ("
+                        + "  'bucket.num' = '4',"
+                        + "  'bucket.key' = 'bucket_id'"
+                        + ")");
+
+        // 3. Insert data across different time windows
+        tEnv.executeSql(
+                        "INSERT INTO wm_hint_test VALUES "
+                                + "(0, 0, TIMESTAMP '2020-03-08 13:12:11.123'),"
+                                + "(0, 1, TIMESTAMP '2020-03-08 13:15:12.223'),"
+                                + "(0, 2, TIMESTAMP '2020-03-08 16:12:13.323'),"
+                                + "(1, 3, TIMESTAMP '2020-03-08 13:13:11.123'),"
+                                + "(1, 4, TIMESTAMP '2020-03-08 13:19:11.133'),"
+                                + "(1, 5, TIMESTAMP '2020-03-08 16:13:11.143')")
+                .await();
+
+        // 4. Execute TUMBLE window aggregation with watermark defined via hint.
+        //    The hint specifies 'ts' as the watermark column with 0 delay (overriding 10h).
+        //    If hint takes effect, windows fire; if table-level 10h delay is used, they won't.
+        execEnv.setParallelism(1);
+        final List<String> expected = Arrays.asList("+I[0, 2]", "+I[1, 2]");
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql(
+                                "SELECT `bucket_id`, COUNT(`value`) FROM wm_hint_test"
+                                        + " /*+ OPTIONS('scan.watermark.column' = 'ts') */"
+                                        + " GROUP BY `bucket_id`,"
+                                        + " TUMBLE(`ts`, INTERVAL '1' HOUR)")
+                        .collect();
+        assertResultsIgnoreOrder(rowIter, expected, true);
+    }
+
+    /**
+     * Tests that hint-based watermark overrides the table-level WATERMARK definition. Verifies that
+     * a different delay specified in hint takes effect.
+     */
+    @Test
+    void testWatermarkHintOverridesTableWatermark() throws Exception {
+        // 1. Set idle source timeout
+        tEnv.getConfig()
+                .set(ExecutionConfigOptions.TABLE_EXEC_SOURCE_IDLE_TIMEOUT, Duration.ofMillis(100));
+
+        // 2. Create table WITH WATERMARK clause (delay = ts - INTERVAL '10' HOUR, very large delay)
+        //    This large delay would prevent windows from firing if it were used.
+        tEnv.executeSql(
+                "CREATE TABLE wm_hint_override_test ("
+                        + "  `bucket_id` INT,"
+                        + "  `value` INT,"
+                        + "  `ts` TIMESTAMP(3),"
+                        + "  WATERMARK FOR `ts` AS `ts` - INTERVAL '10' HOUR"
+                        + ") WITH ("
+                        + "  'bucket.num' = '4',"
+                        + "  'bucket.key' = 'bucket_id'"
+                        + ")");
+
+        // 3. Insert data - all in the same 1-hour window (13:xx)
+        tEnv.executeSql(
+                        "INSERT INTO wm_hint_override_test VALUES "
+                                + "(0, 0, TIMESTAMP '2020-03-08 13:12:11.123'),"
+                                + "(0, 1, TIMESTAMP '2020-03-08 13:15:12.223'),"
+                                + "(0, 2, TIMESTAMP '2020-03-08 16:12:13.323'),"
+                                + "(1, 3, TIMESTAMP '2020-03-08 13:13:11.123'),"
+                                + "(1, 4, TIMESTAMP '2020-03-08 13:19:11.133'),"
+                                + "(1, 5, TIMESTAMP '2020-03-08 16:13:11.143')")
+                .await();
+
+        // 4. Use hint with 0 delay to override the 10-hour delay from table definition.
+        //    If the hint overrides correctly, the TUMBLE window should fire.
+        //    If the table-level 10-hour delay is used, the window would NOT fire
+        //    because the watermark would be 10 hours behind the event time.
+        execEnv.setParallelism(1);
+        final List<String> expected = Arrays.asList("+I[0, 2]", "+I[1, 2]");
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql(
+                                "SELECT `bucket_id`, COUNT(`value`) FROM wm_hint_override_test"
+                                        + " /*+ OPTIONS('scan.watermark.column' = 'ts',"
+                                        + " 'scan.watermark.delay' = '0s') */"
+                                        + " GROUP BY `bucket_id`,"
+                                        + " TUMBLE(`ts`, INTERVAL '1' HOUR)")
+                        .collect();
+        assertResultsIgnoreOrder(rowIter, expected, true);
+    }
+
+    /**
+     * Tests that BIGINT column can be used as watermark column via hint. The BIGINT value is
+     * interpreted as epoch milliseconds.
+     */
+    @Test
+    void testWatermarkHintWithBigintColumn() throws Exception {
+        // 1. Set idle source timeout
+        tEnv.getConfig()
+                .set(ExecutionConfigOptions.TABLE_EXEC_SOURCE_IDLE_TIMEOUT, Duration.ofMillis(100));
+
+        // 2. Create table with BOTH a TIMESTAMP and a BIGINT timestamp column.
+        //    The WATERMARK clause on `ts` declares it as a time attribute (needed for TUMBLE),
+        //    but uses a large delay (10 hours) to prevent windows from firing.
+        //    The hint will specify the BIGINT column as the watermark source with 0 delay.
+        tEnv.executeSql(
+                "CREATE TABLE wm_hint_bigint_test ("
+                        + "  `bucket_id` INT,"
+                        + "  `value` INT,"
+                        + "  `ts` TIMESTAMP(3),"
+                        + "  `ts_millis` BIGINT,"
+                        + "  WATERMARK FOR `ts` AS `ts` - INTERVAL '10' HOUR"
+                        + ") WITH ("
+                        + "  'bucket.num' = '4',"
+                        + "  'bucket.key' = 'bucket_id'"
+                        + ")");
+
+        // 3. Insert data - timestamps in both TIMESTAMP and BIGINT (epoch millis)
+        //    2020-03-08 13:12:11.123 = 1583669531123
+        //    2020-03-08 13:15:12.223 = 1583669712223
+        //    2020-03-08 16:12:13.323 = 1583680333323
+        //    2020-03-08 13:13:11.123 = 1583669591123
+        //    2020-03-08 13:19:11.133 = 1583669951133
+        //    2020-03-08 16:13:11.143 = 1583680391143
+        tEnv.executeSql(
+                        "INSERT INTO wm_hint_bigint_test VALUES "
+                                + "(0, 0, TIMESTAMP '2020-03-08 13:12:11.123', 1583669531123),"
+                                + "(0, 1, TIMESTAMP '2020-03-08 13:15:12.223', 1583669712223),"
+                                + "(0, 2, TIMESTAMP '2020-03-08 16:12:13.323', 1583680333323),"
+                                + "(1, 3, TIMESTAMP '2020-03-08 13:13:11.123', 1583669591123),"
+                                + "(1, 4, TIMESTAMP '2020-03-08 13:19:11.133', 1583669951133),"
+                                + "(1, 5, TIMESTAMP '2020-03-08 16:13:11.143', 1583680391143)")
+                .await();
+
+        // 4. Use hint with BIGINT watermark column.
+        //    The hint uses ts_millis (BIGINT) for watermark generation with 0 delay.
+        //    TUMBLE uses ts (TIMESTAMP time attribute) for window assignment.
+        //    ts_millis is included in SELECT (via MIN) to prevent projection pushdown removal.
+        //    If BIGINT hint watermark works, watermark advances and windows fire.
+        //    If table-level 10h delay is used, windows won't fire.
+        execEnv.setParallelism(1);
+        final List<String> expected =
+                Arrays.asList("+I[0, 2, 1583669531123]", "+I[1, 2, 1583669591123]");
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql(
+                                "SELECT `bucket_id`, COUNT(`value`), MIN(`ts_millis`) FROM wm_hint_bigint_test"
+                                        + " /*+ OPTIONS('scan.watermark.column' = 'ts_millis') */"
+                                        + " GROUP BY `bucket_id`,"
+                                        + " TUMBLE(`ts`, INTERVAL '1' HOUR)")
+                        .collect();
+        assertResultsIgnoreOrder(rowIter, expected, true);
+    }
+
+    /** Tests that specifying a non-existent watermark column in hint throws an error. */
+    @Test
+    void testWatermarkHintWithNonExistentColumn() {
+        tEnv.executeSql(
+                "CREATE TABLE wm_hint_invalid_col_test ("
+                        + "  `id` INT,"
+                        + "  `value` INT,"
+                        + "  `ts` TIMESTAMP(3)"
+                        + ") WITH ("
+                        + "  'bucket.num' = '4',"
+                        + "  'bucket.key' = 'id'"
+                        + ")");
+
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "SELECT * FROM wm_hint_invalid_col_test"
+                                                + " /*+ OPTIONS('scan.watermark.column' = 'non_existent') */"))
+                .cause()
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "Watermark column 'non_existent' specified in hint does not exist "
+                                + "in the table. Available columns: [id, value, ts]");
+    }
+
+    /** Tests that specifying a watermark column with unsupported type throws an error. */
+    @Test
+    void testWatermarkHintWithUnsupportedColumnType() {
+        tEnv.executeSql(
+                "CREATE TABLE wm_hint_invalid_type_test ("
+                        + "  `id` INT,"
+                        + "  `name` STRING,"
+                        + "  `ts` TIMESTAMP(3)"
+                        + ") WITH ("
+                        + "  'bucket.num' = '4',"
+                        + "  'bucket.key' = 'id'"
+                        + ")");
+
+        // STRING column is not a valid watermark column type
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        "SELECT * FROM wm_hint_invalid_type_test"
+                                                + " /*+ OPTIONS('scan.watermark.column' = 'name') */"))
+                .cause()
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(
+                        "Watermark column 'name' has unsupported type 'STRING'. "
+                                + "Only TIMESTAMP, TIMESTAMP_LTZ, and BIGINT (epoch millis) are supported.");
+    }
+
     private GenericRow rowWithPartition(Object[] values, @Nullable String partition) {
         if (partition == null) {
             return row(values);
