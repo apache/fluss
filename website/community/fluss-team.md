@@ -23,10 +23,11 @@ We'd like to thank the following members and committers to the Apache Fluss proj
 | Nicholas Jiang       | [@SteNicholas](https://github.com/SteNicholas)     | [nicholasjiang](https://people.apache.org/committer-index.html#nicholasjiang) | PPMC Member         |
 | Feng Wang            | [@wangfengpro](https://github.com/wangfengpro)     | [fengwang](https://people.apache.org/committer-index.html#fengwang)           | PPMC Member         |
 | Benchao Li           | [@libenchao](https://github.com/libenchao)         | [libenchao](https://people.apache.org/committer-index.html#libenchao)         | PPMC Member         |
+| Mehul Batra          | [@MehulBatra](https://github.com/MehulBatra)       | [mehulbatra](https://people.apache.org/committer-index.html#mehulbatra)       | PPMC Member         |
 | Hongshun Wang        | [@loserwang1024](https://github.com/loserwang1024) | [hongshun](https://people.apache.org/committer-index.html#hongshun)           | Committer           |
-| Mehul Batra          | [@MehulBatra](https://github.com/MehulBatra)       | [mehulbatra](https://people.apache.org/committer-index.html#mehulbatra)       | PPMC Member            |
-| Cheng Wang           | [@xx789633](https://github.com/xx789633) | [chengwang](https://people.apache.org/committer-index.html#chengwang)           | Committer           |
-| Leonard Xu           | [@leonardBang](https://github.com/leonardBang) | [leonard](https://people.apache.org/committer-index.html#leonard)           | Committer           |
+| Cheng Wang           | [@xx789633](https://github.com/xx789633)           | [chengwang](https://people.apache.org/committer-index.html#chengwang)         | Committer           |
+| Leonard Xu           | [@leonardBang](https://github.com/leonardBang)     | [leonard](https://people.apache.org/committer-index.html#leonard)             | Committer           |
+| Anton Borisov        | [@fresh-borzoni](https://github.com/fresh-borzoni) | [aborisov](https://people.apache.org/committer-index.html#aborisov)           | Committer           |
 
 
 The Apache Fluss project recognizes the following roles, each representing a distinct type of contribution to the project’s development:
