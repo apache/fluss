@@ -80,7 +80,9 @@ trait FlussLakeSupportsPushDownV2Filters extends FlussSupportsPushDownV2Filters 
   override def pushPredicates(predicates: Array[Predicate]): Array[Predicate] = {
     val pairs =
       SparkPredicateConverter.convertPerPredicate(tableInfo.getRowType, predicates.toSeq)
-    if (pairs.nonEmpty) {
+    val (acceptedSpark, acceptedFluss) = if (pairs.isEmpty) {
+      (Seq.empty[Predicate], Seq.empty[FlussPredicate])
+    } else {
       val lakeSource =
         FlussLakeUtils.createLakeSource(tableInfo.getProperties.toMap, tablePath)
       val result = FlussLakeBatch.applyLakeFilters(lakeSource, pairs.map(_._2).asJava)
@@ -88,12 +90,10 @@ trait FlussLakeSupportsPushDownV2Filters extends FlussSupportsPushDownV2Filters 
       val acceptedSet: JSet[FlussPredicate] =
         Collections.newSetFromMap(new IdentityHashMap())
       acceptedSet.addAll(result.acceptedPredicates())
-      val (acceptedSpark, acceptedFluss) = pairs.collect {
-        case (sp, fp) if acceptedSet.contains(fp) => (sp, fp)
-      }.unzip
-      pushedPredicate = SparkPredicateConverter.combineAnd(acceptedFluss)
-      acceptedPredicates = acceptedSpark.toArray
+      pairs.collect { case (sp, fp) if acceptedSet.contains(fp) => (sp, fp) }.unzip
     }
+    pushedPredicate = SparkPredicateConverter.combineAnd(acceptedFluss)
+    acceptedPredicates = acceptedSpark.toArray
     predicates
   }
 }

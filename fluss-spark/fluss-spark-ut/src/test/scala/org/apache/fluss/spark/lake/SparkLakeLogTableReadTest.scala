@@ -518,9 +518,8 @@ abstract class SparkLakeLogTableReadTest extends SparkLakeTableReadTestBase {
       val query =
         sql(s"SELECT id FROM $DEFAULT_DATABASE.t_pd_nonpushable WHERE amount % 200 = 0 ORDER BY id")
       checkAnswer(query, Row(2) :: Row(4) :: Nil)
-      // The modulo expression is not convertible; nothing should be pushed.
-      val pushed = pushedPredicates(query).map(_.name())
-      assert(pushed.forall(_ != "%"))
+      // The modulo expression is not convertible; only the implicit IS_NOT_NULL Spark adds is pushed.
+      assertResult(Set("IS_NOT_NULL"))(pushedPredicates(query).map(_.name()).toSet)
     }
   }
 
