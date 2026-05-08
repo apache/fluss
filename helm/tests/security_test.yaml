@@ -18,11 +18,11 @@
 
 suite: plain-sasl-config
 templates:
-  - templates/secret-jaas-config.yaml
+  - templates/configmap-jaas-template.yaml
   - templates/configmap.yaml
 tests:
   - it: renders JAAS secret and protocol map for plain mechanisms
-    template: templates/secret-jaas-config.yaml
+    template: templates/configmap-jaas-template.yaml
     set:
       security.client.sasl.mechanism: plain
       security.client.sasl.plain.users:
@@ -35,10 +35,10 @@ tests:
       - hasDocuments:
           count: 1
       - matchRegex:
-          path: stringData["jaas.conf"]
+          path: data["jaas.conf"]
           pattern: 'internal\.FlussServer\s*\{'
       - matchRegex:
-          path: stringData["jaas.conf"]
+          path: data["jaas.conf"]
           pattern: 'client\.FlussServer\s*\{'
   - it: writes SASL protocol map and enabled mechanisms in configmap
     template: templates/configmap.yaml
@@ -76,34 +76,31 @@ tests:
 
 suite: plain-internal-defaults
 templates:
-  - templates/secret-jaas-config.yaml
+  - templates/sts-coordinator.yaml
 tests:
   - it: uses auto-generated internal credentials when user does not override them
     set:
       security.internal.sasl.mechanism: plain
     asserts:
-      - hasDocuments:
-          count: 1
+      - contains:
+          path: spec.template.spec.initContainers[0].env
+          content:
+            name: FLUSS_JAAS_INTERNAL_USERNAME
+            value: fluss-internal-user-RELEASE-NAME
       - matchRegex:
-          path: stringData["jaas.conf"]
-          pattern: 'user_fluss-internal-user-RELEASE-NAME="[a-f0-9]{64}"'
-      - matchRegex:
-          path: stringData["jaas.conf"]
-          pattern: 'username="fluss-internal-user-RELEASE-NAME"'
-      - matchRegex:
-          path: stringData["jaas.conf"]
-          pattern: 'password="[a-f0-9]{64}"'
+          path: spec.template.spec.initContainers[0].env[?(@.name=="FLUSS_JAAS_INTERNAL_PASSWORD")].value
+          pattern: '^[a-f0-9]{64}$'
 
 ---
 
 suite: security-disabled-defaults
 templates:
-  - templates/secret-jaas-config.yaml
+  - templates/configmap-jaas-template.yaml
   - templates/sts-coordinator.yaml
   - templates/configmap.yaml
 tests:
   - it: does not render JAAS secret by default
-    template: templates/secret-jaas-config.yaml
+    template: templates/configmap-jaas-template.yaml
     asserts:
       - hasDocuments:
           count: 0
@@ -128,12 +125,12 @@ tests:
 
 suite: plain-internal-only
 templates:
-  - templates/secret-jaas-config.yaml
+  - templates/configmap-jaas-template.yaml
   - templates/sts-coordinator.yaml
   - templates/configmap.yaml
 tests:
   - it: renders internal server and client JAAS blocks only
-    template: templates/secret-jaas-config.yaml
+    template: templates/configmap-jaas-template.yaml
     set:
       security.internal.sasl.mechanism: plain
       security.internal.sasl.plain.username: internal-user
@@ -142,13 +139,13 @@ tests:
       - hasDocuments:
           count: 1
       - matchRegex:
-          path: stringData["jaas.conf"]
+          path: data["jaas.conf"]
           pattern: 'internal\.FlussServer\s*\{'
       - matchRegex:
-          path: stringData["jaas.conf"]
+          path: data["jaas.conf"]
           pattern: 'FlussClient\s*\{'
       - notMatchRegex:
-          path: stringData["jaas.conf"]
+          path: data["jaas.conf"]
           pattern: 'client\.FlussServer\s*\{'
   - it: renders security config in configmap for internal SASL
     template: templates/configmap.yaml
@@ -184,20 +181,27 @@ tests:
       - contains:
           path: spec.template.spec.volumes
           content:
+            name: sasl-template
+            configMap:
+              name: RELEASE-NAME-fluss-sasl-jaas-config
+      - contains:
+          path: spec.template.spec.volumes
+          content:
             name: sasl-config
-            secret:
-              secretName: RELEASE-NAME-fluss-sasl-jaas-config
+            emptyDir:
+              medium: Memory
+              sizeLimit: 1Mi
 
 ---
 
 suite: plain-client-only
 templates:
-  - templates/secret-jaas-config.yaml
+  - templates/configmap-jaas-template.yaml
   - templates/sts-coordinator.yaml
   - templates/configmap.yaml
 tests:
   - it: renders client JAAS block only
-    template: templates/secret-jaas-config.yaml
+    template: templates/configmap-jaas-template.yaml
     set:
       security.client.sasl.mechanism: plain
       security.client.sasl.plain.users:
@@ -207,13 +211,13 @@ tests:
       - hasDocuments:
           count: 1
       - matchRegex:
-          path: stringData["jaas.conf"]
+          path: data["jaas.conf"]
           pattern: 'client\.FlussServer\s*\{'
       - notMatchRegex:
-          path: stringData["jaas.conf"]
+          path: data["jaas.conf"]
           pattern: 'internal\.FlussServer\s*\{'
       - notMatchRegex:
-          path: stringData["jaas.conf"]
+          path: data["jaas.conf"]
           pattern: 'FlussClient\s*\{'
   - it: does not render internal client sasl config for coordinator when internal listener is plaintext
     template: templates/configmap.yaml
@@ -287,7 +291,7 @@ tests:
 
 suite: zookeeper-sasl-enabled-secret
 templates:
-  - templates/secret-jaas-config.yaml
+  - templates/configmap-jaas-template.yaml
 tests:
   - it: renders ZookeeperClient JAAS block when ZK SASL is enabled
     set:
@@ -298,19 +302,19 @@ tests:
       - hasDocuments:
           count: 1
       - matchRegex:
-          path: stringData["jaas.conf"]
+          path: data["jaas.conf"]
           pattern: 'ZookeeperClient\s*\{'
       - matchRegex:
-          path: stringData["jaas.conf"]
-          pattern: 'username="zk-user"'
+          path: data["jaas.conf"]
+          pattern: 'username="\$\{FLUSS_JAAS_ZOOKEEPER_USERNAME\}"'
       - matchRegex:
-          path: stringData["jaas.conf"]
-          pattern: 'password="zk-pass"'
+          path: data["jaas.conf"]
+          pattern: 'password="\$\{FLUSS_JAAS_ZOOKEEPER_PASSWORD\}"'
       - matchRegex:
-          path: stringData["jaas.conf"]
+          path: data["jaas.conf"]
           pattern: 'DigestLoginModule required'
       - matchRegex:
-          path: stringData["zookeeper-client.properties"]
+          path: data["zookeeper-client.properties"]
           pattern: 'zookeeper\.sasl\.clientconfig=ZookeeperClient'
   - it: renders both SASL and ZK JAAS blocks when both are enabled
     set:
@@ -322,10 +326,10 @@ tests:
       security.zookeeper.sasl.plain.password: zk-pass
     asserts:
       - matchRegex:
-          path: stringData["jaas.conf"]
+          path: data["jaas.conf"]
           pattern: 'internal\.FlussServer\s*\{'
       - matchRegex:
-          path: stringData["jaas.conf"]
+          path: data["jaas.conf"]
           pattern: 'ZookeeperClient\s*\{'
   - it: does not render SASL listener blocks when only ZK SASL is enabled
     set:
@@ -334,10 +338,10 @@ tests:
       security.zookeeper.sasl.plain.password: zk-pass
     asserts:
       - notMatchRegex:
-          path: stringData["jaas.conf"]
+          path: data["jaas.conf"]
           pattern: 'internal\.FlussServer\s*\{'
       - notMatchRegex:
-          path: stringData["jaas.conf"]
+          path: data["jaas.conf"]
           pattern: 'FlussClient\s*\{'
 
 ---
@@ -363,9 +367,16 @@ tests:
       - contains:
           path: spec.template.spec.volumes
           content:
+            name: sasl-template
+            configMap:
+              name: RELEASE-NAME-fluss-sasl-jaas-config
+      - contains:
+          path: spec.template.spec.volumes
+          content:
             name: sasl-config
-            secret:
-              secretName: RELEASE-NAME-fluss-sasl-jaas-config
+            emptyDir:
+              medium: Memory
+              sizeLimit: 1Mi
   - it: renders JAAS env var and mounts secret volume for tablet when ZK SASL is enabled
     template: templates/sts-tablet.yaml
     set:
@@ -381,9 +392,16 @@ tests:
       - contains:
           path: spec.template.spec.volumes
           content:
+            name: sasl-template
+            configMap:
+              name: RELEASE-NAME-fluss-sasl-jaas-config
+      - contains:
+          path: spec.template.spec.volumes
+          content:
             name: sasl-config
-            secret:
-              secretName: RELEASE-NAME-fluss-sasl-jaas-config
+            emptyDir:
+              medium: Memory
+              sizeLimit: 1Mi
   - it: renders zookeeper client config path in configmap when ZK SASL is enabled
     template: templates/configmap.yaml
     set:
@@ -399,7 +417,7 @@ tests:
 
 suite: zookeeper-sasl-custom-login-module
 templates:
-  - templates/secret-jaas-config.yaml
+  - templates/configmap-jaas-template.yaml
 tests:
   - it: renders custom login module class in ZookeeperClient JAAS block
     set:
@@ -409,23 +427,23 @@ tests:
       security.zookeeper.sasl.plain.loginModuleClass: "com.example.CustomLoginModule"
     asserts:
       - matchRegex:
-          path: stringData["jaas.conf"]
+          path: data["jaas.conf"]
           pattern: 'com\.example\.CustomLoginModule required'
       - notMatchRegex:
-          path: stringData["jaas.conf"]
+          path: data["jaas.conf"]
           pattern: 'DigestLoginModule'
 
 ---
 
 suite: zookeeper-sasl-disabled
 templates:
-  - templates/secret-jaas-config.yaml
+  - templates/configmap-jaas-template.yaml
   - templates/sts-coordinator.yaml
   - templates/sts-tablet.yaml
   - templates/configmap.yaml
 tests:
   - it: does not render ZookeeperClient JAAS block when ZK SASL is disabled
-    template: templates/secret-jaas-config.yaml
+    template: templates/configmap-jaas-template.yaml
     set:
       security.internal.sasl.mechanism: plain
       security.internal.sasl.plain.username: internal-user
@@ -434,12 +452,12 @@ tests:
       - hasDocuments:
           count: 1
       - notMatchRegex:
-          path: stringData["jaas.conf"]
+          path: data["jaas.conf"]
           pattern: 'ZookeeperClient\s*\{'
       - isNull:
-          path: stringData["zookeeper-client.properties"]
+          path: data["zookeeper-client.properties"]
   - it: does not render JAAS secret when neither SASL nor ZK SASL is enabled
-    template: templates/secret-jaas-config.yaml
+    template: templates/configmap-jaas-template.yaml
     asserts:
       - hasDocuments:
           count: 0
@@ -497,14 +515,14 @@ tests:
       security.zookeeper.sasl.plain.password: zk-pass
     asserts:
       - failedTemplate:
-          errorMessage: "VALUES VALIDATION:\nsecurity.zookeeper.sasl.plain.username must not be empty when security.zookeeper.sasl.mechanism is plain"
+          errorMessage: "VALUES VALIDATION:\nsecurity.zookeeper.sasl.plain.username must not be empty when security.zookeeper.sasl.mechanism is plain (or set security.zookeeper.sasl.plain.existingSecret)"
   - it: fails when ZK SASL is enabled but password is empty
     set:
       security.zookeeper.sasl.mechanism: plain
       security.zookeeper.sasl.plain.username: zk-user
     asserts:
       - failedTemplate:
-          errorMessage: "VALUES VALIDATION:\nsecurity.zookeeper.sasl.plain.password must not be empty when security.zookeeper.sasl.mechanism is plain"
+          errorMessage: "VALUES VALIDATION:\nsecurity.zookeeper.sasl.plain.password must not be empty when security.zookeeper.sasl.mechanism is plain (or set security.zookeeper.sasl.plain.existingSecret)"
   - it: fails for invalid zookeeper mechanism value
     set:
       security.zookeeper.sasl.mechanism: bogus

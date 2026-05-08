@@ -31,6 +31,7 @@ import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine;
 import org.apache.fluss.server.entity.DeleteReplicaResultForBucket;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.zk.NOPErrorHandler;
+import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.BucketAssignment;
@@ -78,6 +79,7 @@ class TableManagerTest {
             new AllCallbackWrapper<>(new ZooKeeperExtension());
 
     private static ZooKeeperClient zookeeperClient;
+    private static ZkEpoch zkEpoch;
     private static ExecutorService ioExecutor;
 
     private CoordinatorContext coordinatorContext;
@@ -86,11 +88,12 @@ class TableManagerTest {
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
 
     @BeforeAll
-    static void baseBeforeAll() {
+    static void baseBeforeAll() throws Exception {
         zookeeperClient =
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+        zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("1");
         ioExecutor = Executors.newFixedThreadPool(1);
     }
 
@@ -113,7 +116,7 @@ class TableManagerTest {
 
     private void initTableManager() {
         testingEventManager = new TestingEventManager();
-        coordinatorContext = new CoordinatorContext();
+        coordinatorContext = new CoordinatorContext(zkEpoch);
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
         Configuration conf = new Configuration();
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");

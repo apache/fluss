@@ -362,7 +362,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             ArrowReader reader =
                     ArrowUtils.createArrowReader(
                             segment, arrowOffset, arrowLength, root, allocator, rowType);
-            return new ArrowLogRecordIterator(reader, timestamp, outputProjection) {
+            return new ArrowLogRecordIterator(root, reader, timestamp, outputProjection) {
                 @Override
                 protected ChangeType getChangeType(int rowId) {
                     return ChangeType.APPEND_ONLY;
@@ -379,7 +379,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             ArrowReader reader =
                     ArrowUtils.createArrowReader(
                             segment, arrowOffset, arrowLength, root, allocator, rowType);
-            return new ArrowLogRecordIterator(reader, timestamp, outputProjection) {
+            return new ArrowLogRecordIterator(root, reader, timestamp, outputProjection) {
                 @Override
                 protected ChangeType getChangeType(int rowId) {
                     return changeTypeVector.getChangeType(rowId);
@@ -390,13 +390,18 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
     /** The basic implementation for Arrow log record iterator. */
     private abstract class ArrowLogRecordIterator extends LogRecordIterator {
+        private final VectorSchemaRoot root;
         private final ArrowReader reader;
         private final long timestamp;
         private int rowId = 0;
         @Nullable private final ProjectedRow outputProjection;
 
         private ArrowLogRecordIterator(
-                ArrowReader reader, long timestamp, @Nullable ProjectedRow outputProjection) {
+                VectorSchemaRoot root,
+                ArrowReader reader,
+                long timestamp,
+                @Nullable ProjectedRow outputProjection) {
+            this.root = root;
             this.reader = reader;
             this.timestamp = timestamp;
             this.outputProjection = outputProjection;
@@ -431,7 +436,9 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
         @Override
         public void close() {
-            // reader has no resources to release
+            // Clear old buffers before the next batch load to avoid temporary
+            // duplication of buffers (old + new) during loadFieldBuffers.
+            root.clear();
         }
     }
 

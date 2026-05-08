@@ -21,7 +21,7 @@ import org.apache.fluss.client.admin.Admin
 import org.apache.fluss.config.{Configuration => FlussConfiguration}
 import org.apache.fluss.metadata.{TableInfo, TablePath}
 import org.apache.fluss.spark.catalog.{AbstractSparkTable, SupportsFlussPartitionManagement}
-import org.apache.fluss.spark.read.{FlussAppendScanBuilder, FlussLakeAppendScanBuilder, FlussUpsertScanBuilder}
+import org.apache.fluss.spark.read.{FlussAppendScanBuilder, FlussLakeAppendScanBuilder, FlussLakeUpsertScanBuilder, FlussUpsertScanBuilder}
 import org.apache.fluss.spark.write.{FlussAppendWriteBuilder, FlussUpsertWriteBuilder}
 
 import org.apache.spark.sql.catalyst.SQLConfHelper
@@ -75,7 +75,11 @@ class SparkTable(
         new FlussAppendScanBuilder(tablePath, tableInfo, options, flussConfig)
       }
     } else {
-      new FlussUpsertScanBuilder(tablePath, tableInfo, options, flussConfig)
+      if (isDataLakeEnabled) {
+        new FlussLakeUpsertScanBuilder(tablePath, tableInfo, options, flussConfig)
+      } else {
+        new FlussUpsertScanBuilder(tablePath, tableInfo, options, flussConfig)
+      }
     }
   }
 }

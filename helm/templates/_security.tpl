@@ -118,7 +118,9 @@ Usage:
 {{- end -}}
 
 {{/*
-Validates that the client PLAIN mechanism block contains the required users.
+Validates security.client.sasl.plain.users. Each entry is either a literal
+{username, password} pair OR {existingSecret: {name, usernameKey?, passwordKey?}}.
+Mixing the two shapes within one entry is not allowed.
 Returns an error message if invalid, empty string otherwise.
 Usage:
   include "fluss.security.sasl.validateClientPlainUsers" .
@@ -130,11 +132,22 @@ Usage:
   {{- if eq (len $users) 0 -}}
     {{- print "security.client.sasl.plain.users must contain at least one user when security.client.sasl.mechanism is plain" -}}
   {{- else -}}
+    {{- $errs := list -}}
     {{- range $idx, $user := $users -}}
-      {{- if or (empty $user.username) (empty $user.password) -}}
-        {{- printf "security.client.sasl.plain.users[%d] must set both username and password" $idx -}}
+      {{- $ref := $user.existingSecret | default (dict) -}}
+      {{- $hasLiteral := or (not (empty $user.username)) (not (empty $user.password)) -}}
+      {{- $hasRef := not (empty $ref.name) -}}
+      {{- if and $hasLiteral $hasRef -}}
+        {{- $errs = append $errs (printf "security.client.sasl.plain.users[%d] cannot set username/password and existingSecret" $idx) -}}
+      {{- else if $hasRef -}}
+        {{/* existingSecret path — name is the only required field */}}
+      {{- else -}}
+        {{- if or (empty $user.username) (empty $user.password) -}}
+          {{- $errs = append $errs (printf "security.client.sasl.plain.users[%d] must set both username and password (or existingSecret)" $idx) -}}
+        {{- end -}}
       {{- end -}}
     {{- end -}}
+    {{- join "\n" $errs -}}
   {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -166,26 +179,36 @@ Usage:
 {{- end -}}
 
 {{/*
-Validates that ZooKeeper SASL username is not empty when ZK SASL is enabled.
+Validates that ZooKeeper SASL username is provided when ZK SASL is enabled,
+either as a literal or via existingSecret.
 Returns an error message if invalid, empty string otherwise.
 Usage:
   include "fluss.security.zookeeper.sasl.validateUsername" .
 */}}
 {{- define "fluss.security.zookeeper.sasl.validateUsername" -}}
-{{- if and (include "fluss.security.zookeeper.sasl.enabled" .) (not .Values.security.zookeeper.sasl.plain.username) -}}
-  {{- print "security.zookeeper.sasl.plain.username must not be empty when security.zookeeper.sasl.mechanism is plain" -}}
+{{- if include "fluss.security.zookeeper.sasl.enabled" . -}}
+  {{- if not (include "fluss.security.sasl.plain.zookeeper.fromSecret" .) -}}
+    {{- if not .Values.security.zookeeper.sasl.plain.username -}}
+      {{- print "security.zookeeper.sasl.plain.username must not be empty when security.zookeeper.sasl.mechanism is plain (or set security.zookeeper.sasl.plain.existingSecret)" -}}
+    {{- end -}}
+  {{- end -}}
 {{- end -}}
 {{- end -}}
 
 {{/*
-Validates that ZooKeeper SASL password is not empty when ZK SASL is enabled.
+Validates that ZooKeeper SASL password is provided when ZK SASL is enabled,
+either as a literal or via existingSecret.
 Returns an error message if invalid, empty string otherwise.
 Usage:
   include "fluss.security.zookeeper.sasl.validatePassword" .
 */}}
 {{- define "fluss.security.zookeeper.sasl.validatePassword" -}}
-{{- if and (include "fluss.security.zookeeper.sasl.enabled" .) (not .Values.security.zookeeper.sasl.plain.password) -}}
-  {{- print "security.zookeeper.sasl.plain.password must not be empty when security.zookeeper.sasl.mechanism is plain" -}}
+{{- if include "fluss.security.zookeeper.sasl.enabled" . -}}
+  {{- if not (include "fluss.security.sasl.plain.zookeeper.fromSecret" .) -}}
+    {{- if not .Values.security.zookeeper.sasl.plain.password -}}
+      {{- print "security.zookeeper.sasl.plain.password must not be empty when security.zookeeper.sasl.mechanism is plain (or set security.zookeeper.sasl.plain.existingSecret)" -}}
+    {{- end -}}
+  {{- end -}}
 {{- end -}}
 {{- end -}}
 
@@ -245,8 +268,10 @@ Usage:
 {{- if (include "fluss.security.sasl.enabled" .) -}}
   {{- $internalMechanism := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "internal") -}}
   {{- if eq $internalMechanism "plain" -}}
-    {{- if and (not .Values.security.internal.sasl.plain.username) (not .Values.security.internal.sasl.plain.password) -}}
-      {{- print "You are using AUTO-GENERATED SASL credentials for internal communication.\n  It is strongly recommended to set the following values in production:\n    - security.internal.sasl.plain.username\n    - security.internal.sasl.plain.password" -}}
+    {{- if not (include "fluss.security.sasl.plain.internal.fromSecret" .) -}}
+      {{- if and (not .Values.security.internal.sasl.plain.username) (not .Values.security.internal.sasl.plain.password) -}}
+        {{- print "You are using AUTO-GENERATED SASL credentials for internal communication.\n  It is strongly recommended to set the following values in production:\n    - security.internal.sasl.plain.username\n    - security.internal.sasl.plain.password\n  Or source from an existing Secret via security.internal.sasl.plain.existingSecret" -}}
+      {{- end -}}
     {{- end -}}
   {{- end -}}
 {{- end -}}
@@ -294,3 +319,54 @@ Usage:
 {{- define "fluss.security.jaas.configName" -}}
 {{ include "fluss.fullname" . }}-sasl-jaas-config
 {{- end -}}
+
+{{/*
+Returns "true" if internal SASL credentials come from an existingSecret.
+Usage:
+  include "fluss.security.sasl.plain.internal.fromSecret" .
+*/}}
+{{- define "fluss.security.sasl.plain.internal.fromSecret" -}}
+{{- $ref := .Values.security.internal.sasl.plain.existingSecret | default (dict) -}}
+{{- if $ref.name -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+Returns "true" if ZooKeeper SASL credentials come from an existingSecret.
+Usage:
+  include "fluss.security.sasl.plain.zookeeper.fromSecret" .
+*/}}
+{{- define "fluss.security.sasl.plain.zookeeper.fromSecret" -}}
+{{- $ref := .Values.security.zookeeper.sasl.plain.existingSecret | default (dict) -}}
+{{- if $ref.name -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+Returns the env-var name for an internal SASL credential field.
+Usage:
+  include "fluss.security.sasl.plain.internal.envVarName" "username"
+  include "fluss.security.sasl.plain.internal.envVarName" "password"
+*/}}
+{{- define "fluss.security.sasl.plain.internal.envVarName" -}}
+{{- printf "FLUSS_JAAS_INTERNAL_%s" (upper .) -}}
+{{- end -}}
+
+{{/*
+Returns the env-var name for a ZooKeeper SASL credential field.
+Usage:
+  include "fluss.security.sasl.plain.zookeeper.envVarName" "username"
+  include "fluss.security.sasl.plain.zookeeper.envVarName" "password"
+*/}}
+{{- define "fluss.security.sasl.plain.zookeeper.envVarName" -}}
+{{- printf "FLUSS_JAAS_ZOOKEEPER_%s" (upper .) -}}
+{{- end -}}
+
+{{/*
+Returns the env-var name for a client user credential field at a given index.
+Usage:
+  include "fluss.security.sasl.plain.client.envVarName" (dict "field" "username" "idx" 2)
+  =>  FLUSS_JAAS_CLIENT_USERNAME_2
+*/}}
+{{- define "fluss.security.sasl.plain.client.envVarName" -}}
+{{- printf "FLUSS_JAAS_CLIENT_%s_%d" (upper .field) (int .idx) -}}
+{{- end -}}
+

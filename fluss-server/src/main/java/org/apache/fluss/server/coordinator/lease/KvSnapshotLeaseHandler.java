@@ -19,13 +19,13 @@ package org.apache.fluss.server.coordinator.lease;
 
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotTableLease;
-import org.apache.fluss.utils.MapUtils;
 
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.util.Arrays;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** handler of kv snapshot lease. */
 @NotThreadSafe
@@ -36,7 +36,7 @@ public class KvSnapshotLeaseHandler {
     private final Map<Long, KvSnapshotTableLease> tableIdToTableLease;
 
     public KvSnapshotLeaseHandler(long expirationTime) {
-        this(expirationTime, MapUtils.newConcurrentHashMap());
+        this(expirationTime, new ConcurrentHashMap<>());
     }
 
     public KvSnapshotLeaseHandler(

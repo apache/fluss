@@ -43,6 +43,7 @@ import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
 import org.apache.fluss.utils.clock.SystemClock;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -99,6 +100,11 @@ final class SenderTest {
         metadataUpdater = initializeMetadataUpdater();
         writerMetricGroup = TestingWriterMetricGroup.newInstance();
         sender = setupWithIdempotenceState();
+    }
+
+    @AfterEach
+    public void teardown() throws Exception {
+        sender.destroyResources();
     }
 
     @Test
@@ -169,6 +175,39 @@ final class SenderTest {
         assertThat(idempotenceManager.isWriterIdValid()).isTrue();
         assertThat(idempotenceManager.hasWriterId(0L)).isTrue();
         assertThat(idempotenceManager.writerId()).isEqualTo(0L);
+    }
+
+    /**
+     * Verifies the two-phase close prevents the shutdown race condition. Previously,
+     * initiateClose() destroyed the Arrow BufferAllocator while the sender's drain loop was still
+     * running, causing "Accounted size went negative". With the fix, initiateClose() only rejects
+     * new appends; resource destruction is deferred to destroyResources().
+     */
+    @Test
+    void testCloseSenderBeforeAccumulatorDrain() throws Exception {
+        // Append a record so there is an undrained batch.
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> {});
+
+        // Sender begins to prepare write data.
+        Cluster clusterSnapshot = metadataUpdater.getCluster();
+        RecordAccumulator.ReadyCheckResult readyCheckResult = accumulator.ready(clusterSnapshot);
+        assertThat(readyCheckResult.readyNodes).isNotEmpty();
+
+        // Close the accumulator before it drains — this is the race window.
+        sender.initiateClose();
+
+        // Drain after the sender is closed. Before the fix this threw "Accounted size went
+        // negative" because the Arrow
+        // allocator was closed while the drain was still running.
+        Map<Integer, List<ReadyWriteBatch>> drained =
+                accumulator.drain(clusterSnapshot, readyCheckResult.readyNodes, MAX_REQUEST_SIZE);
+        assertThat(drained).isNotEmpty();
+        sender.runOnce();
+        assertThat(accumulator.hasUnDrained()).isFalse();
+
+        // even double destroy is still safe.
+        sender.destroyResources();
+        sender.destroyResources();
     }
 
     @Test

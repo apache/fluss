@@ -113,9 +113,9 @@ public class LogRecordBatchStatisticsParser {
 
             // Read null counts at fixed offset
             int nullCountsStart = position + nullCountsOffset(statisticsColumnCount);
-            Long[] nullCounts = new Long[statisticsColumnCount];
+            int[] nullCounts = new int[statisticsColumnCount];
             for (int i = 0; i < statisticsColumnCount; i++) {
-                nullCounts[i] = (long) segment.getInt(nullCountsStart + 4 * i);
+                nullCounts[i] = segment.getInt(nullCountsStart + 4 * i);
             }
 
             // Read min values size at fixed offset

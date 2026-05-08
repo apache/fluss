@@ -66,6 +66,7 @@ public class KvRecoverHelper {
     private final KvRecoverContext recoverContext;
     private final KvFormat kvFormat;
     private final LogFormat logFormat;
+    private final RemoteLogFetcher remoteLogFetcher;
 
     // will be initialized when first encounter a log record during recovering from log
     private Integer currentSchemaId;
@@ -86,7 +87,8 @@ public class KvRecoverHelper {
             KvRecoverContext recoverContext,
             KvFormat kvFormat,
             LogFormat logFormat,
-            SchemaGetter schemaGetter) {
+            SchemaGetter schemaGetter,
+            RemoteLogFetcher remoteLogFetcher) {
         this.kvTablet = kvTablet;
         this.logTablet = logTablet;
         this.recoverPointOffset = recoverPointOffset;
@@ -96,18 +98,17 @@ public class KvRecoverHelper {
         this.kvFormat = kvFormat;
         this.logFormat = logFormat;
         this.schemaGetter = schemaGetter;
+        this.remoteLogFetcher = remoteLogFetcher;
     }
 
     public void recover() throws Exception {
-        // first step: read to high watermark and apply them to kv directly; that
-        // 's for the data acked
+        // first step: read to high watermark and apply them to kv directly; that's for the data
+        // acked
 
         // second step: read from high watermark to log end offset which is not acked, and write
         // them into pre-write buffer to make the data in kv(underlying kv + pre-write buffer)
-        // align with the local log;
-        // the data in pre-write will be flush
-        // after the corresponding log offset is acked(when high watermark is advanced to the
-        // offset)
+        // align with the local log; the data in pre-write will be flush after the corresponding log
+        // offset is acked(when high watermark is advanced to the offset)
 
         initSchema(schemaGetter.getLatestSchemaInfo().getSchemaId());
 
@@ -123,7 +124,12 @@ public class KvRecoverHelper {
                         ? new AutoIncIDRangeUpdaterImpl(
                                 schema, autoIncRange, kvTablet.getAutoIncrementCacheSize())
                         : new NoOpAutoIncIDRangeUpdater();
-        // read to high watermark
+
+        long localLogStartOffset = logTablet.localLogStartOffset();
+
+        // Read to high watermark. If the recover point offset is before localLogStartOffset,
+        // remote log records are fetched first, then local log records are read — both share
+        // the same KvBatchWriter and LogRecordReadContext.
         try (KvBatchWriter kvBatchWriter = kvTablet.createKvBatchWriter()) {
             ThrowingConsumer<KeyValueAndLogOffset, Exception> resumeRecordApplier =
                     (resumeRecord) -> {
@@ -137,6 +143,7 @@ public class KvRecoverHelper {
             nextLogOffset =
                     readLogRecordsAndApply(
                             nextLogOffset,
+                            localLogStartOffset,
                             rowCountUpdater,
                             autoIncIdRangeUpdater,
                             FetchIsolation.HIGH_WATERMARK,
@@ -169,6 +176,7 @@ public class KvRecoverHelper {
                                 resumeRecord.logOffset);
         readLogRecordsAndApply(
                 nextLogOffset,
+                localLogStartOffset,
                 // records in pre-write-buffer shouldn't affect the row count, the high-watermark
                 // of pre-write-buffer records will update the row-count async
                 new NoOpRowCountUpdater(),
@@ -190,6 +198,7 @@ public class KvRecoverHelper {
 
     private long readLogRecordsAndApply(
             long startFetchOffset,
+            long localLogStartOffset,
             RowCountUpdater rowCountUpdater,
             AutoIncIDRangeUpdater autoIncIdRangeUpdater,
             FetchIsolation fetchIsolation,
@@ -198,55 +207,80 @@ public class KvRecoverHelper {
         try (LogRecordReadContext readContext = createLogRecordReadContext()) {
             long nextFetchOffset = startFetchOffset;
             while (true) {
-                LogRecords logRecords =
-                        logTablet
-                                .read(
-                                        nextFetchOffset,
-                                        recoverContext.maxFetchLogSizeInRecoverKv,
-                                        fetchIsolation,
-                                        true,
-                                        null,
-                                        null)
-                                .getRecords();
-                if (logRecords == MemoryLogRecords.EMPTY) {
-                    break;
+                final Iterable<LogRecordBatch> batches;
+                if (nextFetchOffset < localLogStartOffset) {
+                    batches = remoteLogFetcher.fetch(nextFetchOffset, localLogStartOffset);
+                } else {
+                    LogRecords logRecords =
+                            logTablet
+                                    .read(
+                                            nextFetchOffset,
+                                            recoverContext.maxFetchLogSizeInRecoverKv,
+                                            fetchIsolation,
+                                            true,
+                                            null,
+                                            null)
+                                    .getRecords();
+                    if (logRecords == MemoryLogRecords.EMPTY) {
+                        break;
+                    }
+                    batches = logRecords.batches();
                 }
 
-                for (LogRecordBatch logRecordBatch : logRecords.batches()) {
-                    try (CloseableIterator<LogRecord> logRecordIter =
-                            logRecordBatch.records(readContext)) {
-                        while (logRecordIter.hasNext()) {
-                            LogRecord logRecord = logRecordIter.next();
-                            ChangeType changeType = logRecord.getChangeType();
-                            rowCountUpdater.applyChange(changeType);
-
-                            if (changeType != ChangeType.UPDATE_BEFORE) {
-                                InternalRow logRow = logRecord.getRow();
-                                byte[] key = keyEncoder.encodeKey(logRow);
-                                byte[] value = null;
-                                if (changeType != ChangeType.DELETE) {
-                                    // the log row format may not compatible with kv row format,
-                                    // e.g, arrow vs. compacted, thus needs a conversion here.
-                                    BinaryRow row = toKvRow(logRow);
-                                    value =
-                                            ValueEncoder.encodeValue(
-                                                    currentSchemaId.shortValue(), row);
-                                }
-                                resumeRecordConsumer.accept(
-                                        new KeyValueAndLogOffset(
-                                                changeType, key, value, logRecord.logOffset()));
-
-                                // reuse the logRow instance which is usually a CompactedRow which
-                                // has been deserialized during toKvRow(..)
-                                autoIncIdRangeUpdater.applyRecord(changeType, logRow);
-                            }
-                        }
-                    }
-                    nextFetchOffset = logRecordBatch.nextLogOffset();
+                for (LogRecordBatch logRecordBatch : batches) {
+                    nextFetchOffset =
+                            applyLogRecordBatch(
+                                    logRecordBatch,
+                                    readContext,
+                                    rowCountUpdater,
+                                    autoIncIdRangeUpdater,
+                                    resumeRecordConsumer);
                 }
             }
             return nextFetchOffset;
         }
+    }
+
+    /**
+     * Apply a single log record batch: iterate through each record, update row count and auto-inc
+     * id, encode key/value, and call the consumer.
+     *
+     * @return the next log offset after this batch
+     */
+    private long applyLogRecordBatch(
+            LogRecordBatch logRecordBatch,
+            LogRecordReadContext readContext,
+            RowCountUpdater rowCountUpdater,
+            AutoIncIDRangeUpdater autoIncIdRangeUpdater,
+            ThrowingConsumer<KeyValueAndLogOffset, Exception> resumeRecordConsumer)
+            throws Exception {
+        try (CloseableIterator<LogRecord> logRecordIter = logRecordBatch.records(readContext)) {
+            while (logRecordIter.hasNext()) {
+                LogRecord logRecord = logRecordIter.next();
+                ChangeType changeType = logRecord.getChangeType();
+                rowCountUpdater.applyChange(changeType);
+
+                if (changeType != ChangeType.UPDATE_BEFORE) {
+                    InternalRow logRow = logRecord.getRow();
+                    byte[] key = keyEncoder.encodeKey(logRow);
+                    byte[] value = null;
+                    if (changeType != ChangeType.DELETE) {
+                        // the log row format may not compatible with kv row format,
+                        // e.g, arrow vs. compacted, thus needs a conversion here.
+                        BinaryRow row = toKvRow(logRow);
+                        value = ValueEncoder.encodeValue(currentSchemaId.shortValue(), row);
+                    }
+                    resumeRecordConsumer.accept(
+                            new KeyValueAndLogOffset(
+                                    changeType, key, value, logRecord.logOffset()));
+
+                    // reuse the logRow instance which is usually a CompactedRow which
+                    // has been deserialized during toKvRow(..)
+                    autoIncIdRangeUpdater.applyRecord(changeType, logRow);
+                }
+            }
+        }
+        return logRecordBatch.nextLogOffset();
     }
 
     private LogRecordReadContext createLogRecordReadContext() {

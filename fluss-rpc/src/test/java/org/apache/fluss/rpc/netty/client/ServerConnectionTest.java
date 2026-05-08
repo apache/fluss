@@ -102,7 +102,7 @@ public class ServerConnectionTest {
                 new Bootstrap()
                         .group(eventLoopGroup)
                         .channel(getClientSocketChannelClass(eventLoopGroup))
-                        .handler(new ClientChannelInitializer(5000));
+                        .handler(new ClientChannelInitializer(5000, false));
         clientAuthenticator =
                 AuthenticationFactory.loadClientAuthenticatorSupplier(new Configuration()).get();
     }

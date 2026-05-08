@@ -47,7 +47,7 @@ public class LogRecordBatchStatisticsCollector {
     // Statistics arrays (only for columns that need statistics)
     private final Object[] minValues;
     private final Object[] maxValues;
-    private final Long[] nullCounts;
+    private final int[] nullCounts;
 
     private final LogRecordBatchStatisticsWriter statisticsWriter;
 
@@ -58,11 +58,11 @@ public class LogRecordBatchStatisticsCollector {
         // Initialize statistics arrays
         this.minValues = new Object[statsIndexMapping.length];
         this.maxValues = new Object[statsIndexMapping.length];
-        this.nullCounts = new Long[statsIndexMapping.length];
+        this.nullCounts = new int[statsIndexMapping.length];
 
         this.statisticsWriter = new LogRecordBatchStatisticsWriter(rowType, statsIndexMapping);
 
-        Arrays.fill(nullCounts, 0L);
+        Arrays.fill(nullCounts, 0);
     }
 
     /**
@@ -116,7 +116,7 @@ public class LogRecordBatchStatisticsCollector {
 
     /** Reset the collector to collect new statistics. */
     public void reset() {
-        Arrays.fill(nullCounts, 0L);
+        Arrays.fill(nullCounts, 0);
         Arrays.fill(minValues, null);
         Arrays.fill(maxValues, null);
     }

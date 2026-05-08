@@ -692,7 +692,7 @@ final class LogSegmentTest extends LogTestBase {
                             long rowCount,
                             org.apache.fluss.row.InternalRow minValues,
                             org.apache.fluss.row.InternalRow maxValues,
-                            Long[] nullCounts) {
+                            int[] nullCounts) {
                         throw new RuntimeException("Simulated filter failure");
                     }
 

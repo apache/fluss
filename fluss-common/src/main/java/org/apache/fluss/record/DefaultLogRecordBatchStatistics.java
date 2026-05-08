@@ -70,7 +70,7 @@ public class DefaultLogRecordBatchStatistics implements LogRecordBatchStatistics
 
     private final int[] statsIndexMapping;
 
-    private final Long[] statsNullCounts;
+    private final int[] statsNullCounts;
 
     // Offsets for min/max values in the byte array
     private final int minValuesOffset;
@@ -80,7 +80,7 @@ public class DefaultLogRecordBatchStatistics implements LogRecordBatchStatistics
 
     private InternalRow cachedMinRow;
     private InternalRow cachedMaxRow;
-    private Long[] cachedNullCounts;
+    private int[] cachedNullCounts;
 
     private final int[] reversedStatsIndexMapping;
 
@@ -91,7 +91,7 @@ public class DefaultLogRecordBatchStatistics implements LogRecordBatchStatistics
             int size,
             RowType rowType,
             int schemaId,
-            Long[] nullCounts,
+            int[] nullCounts,
             int minValuesOffset,
             int maxValuesOffset,
             int minValuesSize,
@@ -146,16 +146,15 @@ public class DefaultLogRecordBatchStatistics implements LogRecordBatchStatistics
     }
 
     @Override
-    public Long[] getNullCounts() {
+    public int[] getNullCounts() {
         if (cachedNullCounts != null) {
             return cachedNullCounts;
         }
-        cachedNullCounts = new Long[rowType.getFieldCount()];
+        cachedNullCounts = new int[rowType.getFieldCount()];
+        Arrays.fill(cachedNullCounts, LogRecordBatchStatistics.NULL_COUNT_UNAVAILABLE);
         for (int i = 0; i < rowType.getFieldCount(); i++) {
             if (this.reversedStatsIndexMapping[i] >= 0) {
                 cachedNullCounts[i] = statsNullCounts[reversedStatsIndexMapping[i]];
-            } else {
-                cachedNullCounts[i] = -1L;
             }
         }
         return cachedNullCounts;

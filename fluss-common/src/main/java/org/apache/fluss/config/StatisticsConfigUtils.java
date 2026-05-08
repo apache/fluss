@@ -54,6 +54,15 @@ public class StatisticsConfigUtils {
             return;
         }
 
+        // Statistics columns are only supported for log tables (non-PK tables)
+        if (tableDescriptor.hasPrimaryKey()) {
+            throw new InvalidConfigException(
+                    "Statistics columns are not supported for primary key tables. "
+                            + "Please remove the '"
+                            + ConfigOptions.TABLE_STATISTICS_COLUMNS.key()
+                            + "' property.");
+        }
+
         RowType rowType = tableDescriptor.getSchema().getRowType();
 
         // Wildcard means all supported columns - no validation needed

@@ -866,6 +866,7 @@ public class TabletServiceITCase {
                                                 leader,
                                                 1,
                                                 originLeaderAndIsr.isr(),
+                                                originLeaderAndIsr.standbyReplicas(),
                                                 originLeaderAndIsr.coordinatorEpoch(),
                                                 originLeaderAndIsr.bucketEpoch())))
                         .get();
@@ -890,6 +891,7 @@ public class TabletServiceITCase {
                 .updateMetadata(
                         makeUpdateMetadataRequest(
                                 coordinatorServerInfo,
+                                null,
                                 newTabletServerInfos,
                                 Collections.emptyList(),
                                 Collections.emptyList()))
@@ -908,6 +910,7 @@ public class TabletServiceITCase {
                                                 leader,
                                                 2,
                                                 originLeaderAndIsr.isr(),
+                                                originLeaderAndIsr.standbyReplicas(),
                                                 originLeaderAndIsr.coordinatorEpoch(),
                                                 originLeaderAndIsr.bucketEpoch())))
                         .get();

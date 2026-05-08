@@ -22,6 +22,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.FlussConfigUtils;
+import org.apache.fluss.exception.CoordinatorEpochFencedException;
 import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -34,6 +35,7 @@ import org.apache.fluss.security.acl.AccessControlEntry;
 import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.security.acl.ResourceType;
 import org.apache.fluss.server.authorizer.DefaultAuthorizer.VersionedAcls;
+import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
 import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.zk.ZkAsyncRequest.ZkCheckExistsRequest;
@@ -86,6 +88,7 @@ import org.apache.fluss.server.zk.data.ZkData.TableSequenceIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableZNode;
 import org.apache.fluss.server.zk.data.ZkData.TablesZNode;
 import org.apache.fluss.server.zk.data.ZkData.WriterIdZNode;
+import org.apache.fluss.server.zk.data.ZkVersion;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotLeaseMetadata;
@@ -127,11 +130,48 @@ import java.util.stream.Collectors;
 
 import static java.util.stream.Collectors.toMap;
 import static org.apache.fluss.metadata.ResolvedPartitionSpec.fromPartitionName;
+import static org.apache.fluss.server.zk.ZooKeeperOp.multiRequest;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * This class includes methods for write/read various metadata (leader address, tablet server
  * registration, table assignment, table, schema) in Zookeeper.
+ *
+ * <p>In some method, 'expectedZkVersion' is used to execute an epoch Zookeeper version check.
+ * Conditions requiring epoch checks (all must be met):
+ *
+ * <pre>
+ * ┌─────────────────────────────────────────────────────────┐
+ * │ 1. Invoked by the Coordinator (not the TabletServer)    │
+ * │ 2. Operates on persistent nodes (not ephemeral)         │
+ * │ 3. Constitutes a "control plane" operation:             │
+ * │    partition assignment or LeaderAndIsr election        │
+ * │ 4. Concurrent access to the same path by old and new    │
+ * │    leaders during leader failover                       │
+ * │ 5. No other mechanisms (optimistic locking,             │
+ * │    idempotency, or reloading) provide fallback          │
+ * └─────────────────────────────────────────────────────────┘
+ * </pre>
+ *
+ * <p>In practice, only two types of operations truly require this:
+ *
+ * <ul>
+ *   <li>CRUD for Table/Partition Assignment (assignment decisions).
+ *   <li>CRUD for LeaderAndIsr (leader election results).
+ * </ul>
+ *
+ * <p>These operations are inevitably executed concurrently by the old and new coordinators during
+ * failover (as the new leader immediately reassigns partitions), and overwrites cannot be
+ * automatically recovered.
+ *
+ * <p>All other operations do not require epoch checks because:
+ *
+ * <ul>
+ *   <li>DDL operations are protected against concurrency by client reconnection mechanisms.
+ *   <li>TabletServer operations are unaffected by coordinator failovers.
+ *   <li>ACLs and Configs have their own version control or idempotency guarantees.
+ *   <li>Ephemeral nodes are managed via session lifecycle.
+ * </ul>
  */
 @Internal
 public class ZooKeeperClient implements AutoCloseable {
@@ -144,6 +184,7 @@ public class ZooKeeperClient implements AutoCloseable {
     private final CuratorFrameworkWithUnhandledErrorListener curatorFrameworkWrapper;
 
     private final CuratorFramework zkClient;
+    private final ZooKeeperOp zkOp;
     private final ZkSequenceIDCounter tableIdCounter;
     private final ZkSequenceIDCounter partitionIdCounter;
     private final ZkSequenceIDCounter writerIdCounter;
@@ -158,6 +199,7 @@ public class ZooKeeperClient implements AutoCloseable {
             Configuration configuration) {
         this.curatorFrameworkWrapper = curatorFrameworkWrapper;
         this.zkClient = curatorFrameworkWrapper.asCuratorFramework();
+        this.zkOp = new ZooKeeperOp(zkClient);
         this.tableIdCounter = new ZkSequenceIDCounter(zkClient, TableSequenceIdZNode.path());
         this.partitionIdCounter =
                 new ZkSequenceIDCounter(zkClient, PartitionSequenceIdZNode.path());
@@ -197,6 +239,49 @@ public class ZooKeeperClient implements AutoCloseable {
         LOG.info("Registered Coordinator server {} at path {}.", coordinatorAddress, path);
     }
 
+    /**
+     * Become coordinator leader. This method is a step after electCoordinatorLeader() and before
+     * registerCoordinatorLeader(). This is to ensure the coordinator get and update the coordinator
+     * epoch and coordinator epoch zk version.
+     */
+    public ZkEpoch fenceBecomeCoordinatorLeader(String coordinatorId) throws Exception {
+        ensureEpochZnodeExists();
+
+        try {
+            ZkEpoch getEpoch = getCurrentEpoch();
+            int currentCoordinatorEpoch = getEpoch.getCoordinatorEpoch();
+            int currentCoordinatorEpochZkVersion = getEpoch.getCoordinatorEpochZkVersion();
+            int newCoordinatorEpoch = currentCoordinatorEpoch + 1;
+            LOG.info(
+                    "Coordinator leader {} tries to update epoch. Current epoch={}, Zookeeper version={}, new epoch={}",
+                    coordinatorId,
+                    currentCoordinatorEpoch,
+                    currentCoordinatorEpochZkVersion,
+                    newCoordinatorEpoch);
+
+            // atomically update epoch
+            Stat stat =
+                    zkClient.setData()
+                            .withVersion(currentCoordinatorEpochZkVersion)
+                            .forPath(
+                                    ZkData.CoordinatorEpochZNode.path(),
+                                    ZkData.CoordinatorEpochZNode.encode(newCoordinatorEpoch));
+
+            LOG.info(
+                    "Coordinator leader has updated epoch. Current epoch={}, Zookeeper version={}",
+                    newCoordinatorEpoch,
+                    stat.getVersion());
+
+            return new ZkEpoch(newCoordinatorEpoch, stat.getVersion());
+        } catch (KeeperException.BadVersionException e) {
+            // Other coordinator leader has updated epoch.
+            // If this happens, it means our fence is in effect.
+            LOG.info("Coordinator leader {} failed to update epoch.", coordinatorId);
+            throw new CoordinatorEpochFencedException(
+                    "Coordinator leader election has been fenced.");
+        }
+    }
+
     /** Register a coordinator leader to ZK. */
     public void registerCoordinatorLeader(CoordinatorAddress coordinatorAddress) throws Exception {
         String path = ZkData.CoordinatorLeaderZNode.path();
@@ -205,6 +290,23 @@ public class ZooKeeperClient implements AutoCloseable {
                 .withMode(CreateMode.EPHEMERAL)
                 .forPath(path, ZkData.CoordinatorLeaderZNode.encode(coordinatorAddress));
         LOG.info("Registered Coordinator leader {} at path {}.", coordinatorAddress, path);
+    }
+
+    /** Manually unregister a coordinator leader from ZK. */
+    public void unregisterCoordinatorLeader(CoordinatorAddress coordinatorAddress)
+            throws Exception {
+        String path = ZkData.CoordinatorLeaderZNode.path();
+        Stat stat = new Stat();
+        byte[] bytes = zkClient.getData().storingStatIn(stat).forPath(path);
+        if (bytes == null || bytes.length == 0) {
+            // not exists, not need to unregister
+            return;
+        }
+        CoordinatorAddress storedAddress = ZkData.CoordinatorLeaderZNode.decode(bytes);
+        if (storedAddress.getId().equals(coordinatorAddress.getId())) {
+            zkClient.delete().withVersion(stat.getVersion()).forPath(path);
+            LOG.info("Unregistered Coordinator leader {} at path {}.", coordinatorAddress, path);
+        }
     }
 
     /** Get the leader address registered in ZK. */
@@ -221,6 +323,35 @@ public class ZooKeeperClient implements AutoCloseable {
         return getChildren(ZkData.CoordinatorIdsZNode.path());
     }
 
+    /** Ensure epoch znode exists. */
+    public void ensureEpochZnodeExists() throws Exception {
+        String path = ZkData.CoordinatorEpochZNode.path();
+        if (zkClient.checkExists().forPath(path) == null) {
+            try {
+                zkClient.create()
+                        .creatingParentsIfNeeded()
+                        .withMode(CreateMode.PERSISTENT)
+                        .forPath(
+                                path,
+                                ZkData.CoordinatorEpochZNode.encode(
+                                        CoordinatorContext.INITIAL_COORDINATOR_EPOCH - 1));
+            } catch (KeeperException.NodeExistsException e) {
+                // can be ignored when two coordinator almost simultaneously create the epoch znode
+            }
+        }
+    }
+
+    /** Get epoch now in ZK. */
+    public ZkEpoch getCurrentEpoch() throws Exception {
+        Stat currentStat = new Stat();
+        byte[] bytes =
+                zkClient.getData()
+                        .storingStatIn(currentStat)
+                        .forPath(ZkData.CoordinatorEpochZNode.path());
+        int currentEpoch = ZkData.CoordinatorEpochZNode.decode(bytes);
+        int currentVersion = currentStat.getVersion();
+        return new ZkEpoch(currentEpoch, currentVersion);
+    }
     // --------------------------------------------------------------------------------------------
     // Tablet server
     // --------------------------------------------------------------------------------------------
@@ -329,17 +460,26 @@ public class ZooKeeperClient implements AutoCloseable {
                 "partition assignment");
     }
 
-    public void updateTableAssignment(long tableId, TableAssignment tableAssignment)
-            throws Exception {
+    public void updateTableAssignment(
+            long tableId, TableAssignment tableAssignment, int expectedZkVersion) throws Exception {
         String path = TableIdZNode.path(tableId);
-        zkClient.setData().forPath(path, TableIdZNode.encode(tableAssignment));
+        byte[] data = TableIdZNode.encode(tableAssignment);
+        CuratorOp updateOp = zkOp.updateOp(path, data);
+        List<CuratorOp> ops = wrapRequestWithEpochCheck(updateOp, expectedZkVersion);
+
+        zkClient.transaction().forOperations(ops);
         LOG.debug("Updated table assignment {} for table id {}.", tableAssignment, tableId);
     }
 
-    public void updatePartitionAssignment(long partitionId, PartitionAssignment partitionAssignment)
+    public void updatePartitionAssignment(
+            long partitionId, PartitionAssignment partitionAssignment, int expectedZkVersion)
             throws Exception {
         String path = PartitionIdZNode.path(partitionId);
-        zkClient.setData().forPath(path, PartitionIdZNode.encode(partitionAssignment));
+        byte[] data = PartitionIdZNode.encode(partitionAssignment);
+        CuratorOp updateOp = zkOp.updateOp(path, data);
+        List<CuratorOp> ops = wrapRequestWithEpochCheck(updateOp, expectedZkVersion);
+
+        zkClient.transaction().forOperations(ops);
         LOG.debug(
                 "Updated partition assignment {} for partition id {}.",
                 partitionAssignment,
@@ -363,18 +503,20 @@ public class ZooKeeperClient implements AutoCloseable {
     // --------------------------------------------------------------------------------------------
 
     /** Register bucket LeaderAndIsr to ZK. */
-    public void registerLeaderAndIsr(TableBucket tableBucket, LeaderAndIsr leaderAndIsr)
+    public void registerLeaderAndIsr(
+            TableBucket tableBucket, LeaderAndIsr leaderAndIsr, int expectedZkVersion)
             throws Exception {
+
         String path = LeaderAndIsrZNode.path(tableBucket);
-        zkClient.create()
-                .creatingParentsIfNeeded()
-                .withMode(CreateMode.PERSISTENT)
-                .forPath(path, LeaderAndIsrZNode.encode(leaderAndIsr));
+        byte[] data = LeaderAndIsrZNode.encode(leaderAndIsr);
+
+        createRecursiveWithEpochCheck(path, data, expectedZkVersion, false);
         LOG.info("Registered {} for bucket {} in Zookeeper.", leaderAndIsr, tableBucket);
     }
 
     public void batchRegisterLeaderAndIsrForTablePartition(
-            List<RegisterTableBucketLeadAndIsrInfo> registerList) throws Exception {
+            List<RegisterTableBucketLeadAndIsrInfo> registerList, int expectedZkVersion)
+            throws Exception {
         if (registerList.isEmpty()) {
             return;
         }
@@ -410,12 +552,14 @@ public class ZooKeeperClient implements AutoCloseable {
             ops.add(parentNodeCreate);
             ops.add(currentNodeCreate);
             if (ops.size() == MAX_BATCH_SIZE) {
-                zkClient.transaction().forOperations(ops);
+                List<CuratorOp> wrapOps = wrapRequestsWithEpochCheck(ops, expectedZkVersion);
+                zkClient.transaction().forOperations(wrapOps);
                 ops.clear();
             }
         }
         if (!ops.isEmpty()) {
-            zkClient.transaction().forOperations(ops);
+            List<CuratorOp> wrapOps = wrapRequestsWithEpochCheck(ops, expectedZkVersion);
+            zkClient.transaction().forOperations(wrapOps);
         }
         LOG.info(
                 "Batch registered leadAndIsr for tableId: {}, partitionId: {}, partitionName: {}  in Zookeeper.",
@@ -447,14 +591,21 @@ public class ZooKeeperClient implements AutoCloseable {
                 "leader and isr");
     }
 
-    public void updateLeaderAndIsr(TableBucket tableBucket, LeaderAndIsr leaderAndIsr)
+    public void updateLeaderAndIsr(
+            TableBucket tableBucket, LeaderAndIsr leaderAndIsr, int expectedZkVersion)
             throws Exception {
         String path = LeaderAndIsrZNode.path(tableBucket);
-        zkClient.setData().forPath(path, LeaderAndIsrZNode.encode(leaderAndIsr));
+        byte[] data = LeaderAndIsrZNode.encode(leaderAndIsr);
+
+        CuratorOp updateOp = zkOp.updateOp(path, data);
+        List<CuratorOp> ops = wrapRequestWithEpochCheck(updateOp, expectedZkVersion);
+
+        zkClient.transaction().forOperations(ops);
         LOG.info("Updated {} for bucket {} in Zookeeper.", leaderAndIsr, tableBucket);
     }
 
-    public void batchUpdateLeaderAndIsr(Map<TableBucket, LeaderAndIsr> leaderAndIsrList)
+    public void batchUpdateLeaderAndIsr(
+            Map<TableBucket, LeaderAndIsr> leaderAndIsrList, int expectedZkVersion)
             throws Exception {
         if (leaderAndIsrList.isEmpty()) {
             return;
@@ -471,16 +622,18 @@ public class ZooKeeperClient implements AutoCloseable {
             CuratorOp updateOp = zkClient.transactionOp().setData().forPath(path, data);
             ops.add(updateOp);
             if (ops.size() == MAX_BATCH_SIZE) {
-                zkClient.transaction().forOperations(ops);
+                List<CuratorOp> wrapOps = wrapRequestsWithEpochCheck(ops, expectedZkVersion);
+                zkClient.transaction().forOperations(wrapOps);
                 ops.clear();
             }
         }
         if (!ops.isEmpty()) {
-            zkClient.transaction().forOperations(ops);
+            List<CuratorOp> wrapOps = wrapRequestsWithEpochCheck(ops, expectedZkVersion);
+            zkClient.transaction().forOperations(wrapOps);
         }
     }
 
-    public void deleteLeaderAndIsr(TableBucket tableBucket) throws Exception {
+    protected void deleteLeaderAndIsr(TableBucket tableBucket) throws Exception {
         String path = LeaderAndIsrZNode.path(tableBucket);
         zkClient.delete().forPath(path);
         LOG.info("Deleted LeaderAndIsr for bucket {} in Zookeeper.", tableBucket);
@@ -1779,6 +1932,79 @@ public class ZooKeeperClient implements AutoCloseable {
             }
         }
         return result;
+    }
+
+    /**
+     * create a node (recursively if parent path not exists) with Zk epoch version check.
+     *
+     * @param path the path to create
+     * @param data the data to write
+     * @param throwIfPathExists whether to throw exception if path exist
+     * @throws Exception if any error occurs
+     */
+    public void createRecursiveWithEpochCheck(
+            String path, byte[] data, int expectedZkVersion, boolean throwIfPathExists)
+            throws Exception {
+        CuratorOp createOp = zkOp.createOp(path, data, CreateMode.PERSISTENT);
+        List<CuratorOp> ops = wrapRequestWithEpochCheck(createOp, expectedZkVersion);
+
+        try {
+            // try to directly create
+            zkClient.transaction().forOperations(ops);
+        } catch (KeeperException.NodeExistsException e) {
+            // should not exist
+            if (throwIfPathExists) {
+                throw e;
+            }
+        } catch (KeeperException.NoNodeException e) {
+            // if parent does not exist, create parent first
+            int indexOfLastSlash = path.lastIndexOf("/");
+            if (indexOfLastSlash == -1) {
+                throw new IllegalArgumentException("Invalid path: " + path);
+            } else if (indexOfLastSlash == 0) {
+                // root path can be directly create without fence
+                try {
+                    zkClient.create()
+                            .creatingParentsIfNeeded()
+                            .withMode(CreateMode.PERSISTENT)
+                            .forPath(path);
+                } catch (KeeperException.NodeExistsException ignored) {
+                    // ignore
+                }
+            } else {
+                // indexOfLastSlash > 0
+                String parentPath = path.substring(0, indexOfLastSlash);
+                createRecursiveWithEpochCheck(
+                        parentPath, null, expectedZkVersion, throwIfPathExists);
+                // After creating parent (or if parent is root), retry creating the original path
+                zkClient.transaction().forOperations(ops);
+            }
+        } catch (KeeperException.BadVersionException e) {
+            LOG.error("Bad version for path {}, expected version {} ", path, expectedZkVersion);
+            throw e;
+        }
+    }
+
+    public List<CuratorOp> wrapRequestWithEpochCheck(CuratorOp request, int expectedZkVersion)
+            throws Exception {
+        return wrapRequestsWithEpochCheck(Collections.singletonList(request), expectedZkVersion);
+    }
+
+    public List<CuratorOp> wrapRequestsWithEpochCheck(
+            List<CuratorOp> requestList, int expectedZkVersion) throws Exception {
+        if (ZkVersion.MATCH_ANY_VERSION.getVersion() == expectedZkVersion) {
+            return requestList;
+        } else if (expectedZkVersion >= 0) {
+            CuratorOp checkOp =
+                    zkOp.checkOp(ZkData.CoordinatorEpochZNode.path(), expectedZkVersion);
+            return multiRequest(checkOp, requestList);
+        } else {
+            throw new IllegalArgumentException(
+                    "Expected coordinator epoch zkVersion "
+                            + expectedZkVersion
+                            + " should be non-negative or equal to "
+                            + ZkVersion.MATCH_ANY_VERSION.getVersion());
+        }
     }
 
     // --------------------------------------------------------------------------------------------

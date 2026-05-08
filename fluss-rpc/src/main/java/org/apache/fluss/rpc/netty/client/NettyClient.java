@@ -33,7 +33,6 @@ import org.apache.fluss.shaded.netty4.io.netty.bootstrap.Bootstrap;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelOption;
 import org.apache.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
-import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
@@ -45,6 +44,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
@@ -79,7 +79,7 @@ public final class NettyClient implements RpcClient {
     private volatile boolean isClosed = false;
 
     public NettyClient(Configuration conf, ClientMetricGroup clientMetricGroup) {
-        this.connections = MapUtils.newConcurrentHashMap();
+        this.connections = new ConcurrentHashMap<>();
 
         // build bootstrap
         this.eventGroup =
@@ -89,19 +89,21 @@ public final class NettyClient implements RpcClient {
         int connectTimeoutMs = (int) conf.get(ConfigOptions.CLIENT_CONNECT_TIMEOUT).toMillis();
         int connectionMaxIdle =
                 (int) conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds();
-        PooledByteBufAllocator pooledAllocator = PooledByteBufAllocator.DEFAULT;
+        boolean preferHeap =
+                conf.getBoolean(ConfigOptions.NETTY_CLIENT_ALLOCATOR_HEAP_BUFFER_FIRST);
+        PooledByteBufAllocator allocator = PooledByteBufAllocator.DEFAULT;
         this.bootstrap =
                 new Bootstrap()
                         .group(eventGroup)
                         .channel(NettyUtils.getClientSocketChannelClass(eventGroup))
-                        .option(ChannelOption.ALLOCATOR, pooledAllocator)
+                        .option(ChannelOption.ALLOCATOR, allocator)
                         .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectTimeoutMs)
                         .option(ChannelOption.TCP_NODELAY, true)
                         .option(ChannelOption.SO_KEEPALIVE, true)
-                        .handler(new ClientChannelInitializer(connectionMaxIdle));
+                        .handler(new ClientChannelInitializer(connectionMaxIdle, preferHeap));
         this.clientMetricGroup = clientMetricGroup;
         this.authenticatorSupplier = AuthenticationFactory.loadClientAuthenticatorSupplier(conf);
-        NettyMetrics.registerNettyMetrics(clientMetricGroup, pooledAllocator);
+        NettyMetrics.registerNettyMetrics(clientMetricGroup, allocator);
     }
 
     /**

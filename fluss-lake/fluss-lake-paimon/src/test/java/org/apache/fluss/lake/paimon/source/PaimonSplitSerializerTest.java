@@ -32,7 +32,11 @@ import org.apache.paimon.table.Table;
 import org.apache.paimon.types.DataTypes;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.util.Collections;
 import java.util.List;
 
@@ -73,6 +77,50 @@ class PaimonSplitSerializerTest extends PaimonSourceTestBase {
 
         assertThat(deserialized.dataSplit()).isEqualTo(originalPaimonSplit.dataSplit());
         assertThat(deserialized.isBucketUnAware()).isEqualTo(originalPaimonSplit.isBucketUnAware());
+    }
+
+    @Test
+    void testJavaSerializationRoundTrip() throws Exception {
+        // prepare paimon table
+        int bucketNum = 1;
+        TablePath tablePath = TablePath.of(DEFAULT_DB, DEFAULT_TABLE);
+        Schema.Builder builder =
+                Schema.newBuilder()
+                        .column("c1", DataTypes.INT())
+                        .column("c2", DataTypes.STRING())
+                        .column("c3", DataTypes.STRING());
+        builder.partitionKeys("c3");
+        builder.primaryKey("c1", "c3");
+        builder.option(CoreOptions.BUCKET.key(), String.valueOf(bucketNum));
+        createTable(tablePath, builder.build());
+        Table table = getTable(tablePath);
+
+        GenericRow record1 =
+                GenericRow.of(12, BinaryString.fromString("a"), BinaryString.fromString("A"));
+        writeRecord(tablePath, Collections.singletonList(record1));
+        Snapshot snapshot = table.latestSnapshot().get();
+
+        LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        List<PaimonSplit> plan = lakeSource.createPlanner(snapshot::id).plan();
+
+        PaimonSplit original = plan.get(0);
+
+        // Serialize via Java serialization
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try (ObjectOutputStream oos = new ObjectOutputStream(baos)) {
+            oos.writeObject(original);
+        }
+        byte[] bytes = baos.toByteArray();
+
+        // Deserialize
+        ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
+        try (ObjectInputStream ois = new ObjectInputStream(bais)) {
+            PaimonSplit deserialized = (PaimonSplit) ois.readObject();
+
+            assertThat(deserialized.bucket()).isEqualTo(original.bucket());
+            assertThat(deserialized.partition()).isEqualTo(original.partition());
+            assertThat(deserialized.dataSplit()).isEqualTo(original.dataSplit());
+        }
     }
 
     @Test

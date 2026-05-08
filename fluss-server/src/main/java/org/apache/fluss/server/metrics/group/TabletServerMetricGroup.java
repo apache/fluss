@@ -31,9 +31,9 @@ import org.apache.fluss.metrics.ThreadSafeSimpleCounter;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
-import org.apache.fluss.utils.MapUtils;
 
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** The metric group for tablet server. */
 public class TabletServerMetricGroup extends AbstractMetricGroup {
@@ -41,8 +41,7 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     private static final String NAME = "tabletserver";
     private static final int WINDOW_SIZE = 1024;
 
-    private final Map<TablePath, TableMetricGroup> metricGroupByTable =
-            MapUtils.newConcurrentHashMap();
+    private final Map<TablePath, TableMetricGroup> metricGroupByTable = new ConcurrentHashMap<>();
 
     protected final String clusterId;
     protected final String rack;

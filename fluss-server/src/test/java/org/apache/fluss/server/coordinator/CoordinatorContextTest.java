@@ -22,6 +22,7 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
@@ -37,7 +38,7 @@ class CoordinatorContextTest {
 
     @Test
     void testGetLakeTableCount() {
-        CoordinatorContext context = new CoordinatorContext();
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
 
         // Initially, there should be no tables
         assertThat(context.allTables()).isEmpty();

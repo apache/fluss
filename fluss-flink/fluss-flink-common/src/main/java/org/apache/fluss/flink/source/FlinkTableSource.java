@@ -20,6 +20,8 @@ package org.apache.fluss.flink.source;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.StatisticsColumnsConfig;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import org.apache.fluss.flink.source.lookup.FlinkAsyncLookupFunction;
@@ -28,6 +30,7 @@ import org.apache.fluss.flink.source.lookup.LookupNormalizer;
 import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
+import org.apache.fluss.flink.utils.PredicateConverter;
 import org.apache.fluss.flink.utils.PushdownUtils;
 import org.apache.fluss.flink.utils.PushdownUtils.FieldEqual;
 import org.apache.fluss.lake.source.LakeSource;
@@ -36,14 +39,18 @@ import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.CompoundPredicate;
 import org.apache.fluss.predicate.PartitionPredicateVisitor;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.predicate.PredicateVisitor;
+import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.RowType;
 
 import org.apache.flink.annotation.VisibleForTesting;
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.connector.source.Boundedness;
 import org.apache.flink.api.connector.source.Source;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -60,6 +67,7 @@ import org.apache.flink.table.connector.source.abilities.SupportsFilterPushDown;
 import org.apache.flink.table.connector.source.abilities.SupportsLimitPushDown;
 import org.apache.flink.table.connector.source.abilities.SupportsProjectionPushDown;
 import org.apache.flink.table.connector.source.abilities.SupportsRowLevelModificationScan;
+import org.apache.flink.table.connector.source.abilities.SupportsWatermarkPushDown;
 import org.apache.flink.table.connector.source.lookup.AsyncLookupFunctionProvider;
 import org.apache.flink.table.connector.source.lookup.LookupFunctionProvider;
 import org.apache.flink.table.connector.source.lookup.PartialCachingAsyncLookupProvider;
@@ -86,9 +94,11 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.apache.fluss.flink.utils.LakeSourceUtils.createLakeSource;
 import static org.apache.fluss.flink.utils.PredicateConverter.convertToFlussPredicate;
@@ -105,7 +115,8 @@ public class FlinkTableSource
                 LookupTableSource,
                 SupportsRowLevelModificationScan,
                 SupportsLimitPushDown,
-                SupportsAggregatePushDown {
+                SupportsAggregatePushDown,
+                SupportsWatermarkPushDown {
 
     public static final Logger LOG = LoggerFactory.getLogger(FlinkTableSource.class);
 
@@ -133,6 +144,12 @@ public class FlinkTableSource
 
     @Nullable private final MergeEngineType mergeEngineType;
 
+    // table-level configuration
+    private final TableConfig tableConfig;
+
+    // pre-computed available statistics columns
+    private final Set<String> availableStatsColumns;
+
     // output type after projection pushdown
     private LogicalType producedDataType;
 
@@ -154,10 +171,15 @@ public class FlinkTableSource
     private final Map<String, String> tableOptions;
 
     @Nullable private LakeSource<LakeSplit> lakeSource;
+    @Nullable private Predicate logRecordBatchFilter;
+
+    /** Watermark strategy that is pushed down by the Flink optimizer. */
+    @Nullable private WatermarkStrategy<RowData> watermarkStrategy;
 
     public FlinkTableSource(
             TablePath tablePath,
             Configuration flussConfig,
+            TableConfig tableConfig,
             org.apache.flink.table.types.logical.RowType tableOutputType,
             int[] primaryKeyIndexes,
             int[] bucketKeyIndexes,
@@ -197,6 +219,11 @@ public class FlinkTableSource
                             createLakeSource(tablePath, tableOptions),
                             "LakeSource must not be null if enable datalake");
         }
+        this.tableConfig = checkNotNull(tableConfig, "tableConfig must not be null");
+
+        // Pre-compute available statistics columns to avoid repeated calculation
+        RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
+        this.availableStatsColumns = computeAvailableStatsColumns(flussRowType);
     }
 
     @Override
@@ -340,6 +367,7 @@ public class FlinkTableSource
                         isPartitioned(),
                         flussRowType,
                         projectedFields,
+                        logRecordBatchFilter,
                         offsetsInitializer,
                         scanPartitionDiscoveryIntervalMs,
                         new RowDataDeserializationSchema(),
@@ -373,7 +401,22 @@ public class FlinkTableSource
                 }
             };
         } else {
-            return SourceProvider.of(source);
+            return new DataStreamScanProvider() {
+                @Override
+                public DataStream<RowData> produceDataStream(
+                        ProviderContext providerContext, StreamExecutionEnvironment execEnv) {
+                    WatermarkStrategy<RowData> strategy =
+                            watermarkStrategy != null
+                                    ? watermarkStrategy
+                                    : WatermarkStrategy.noWatermarks();
+                    return execEnv.fromSource(source, strategy, "FlussSource-" + tablePath);
+                }
+
+                @Override
+                public boolean isBounded() {
+                    return source.getBoundedness() == Boundedness.BOUNDED;
+                }
+            };
         }
     }
 
@@ -424,6 +467,7 @@ public class FlinkTableSource
                 new FlinkTableSource(
                         tablePath,
                         flussConfig,
+                        tableConfig,
                         tableOutputType,
                         primaryKeyIndexes,
                         bucketKeyIndexes,
@@ -444,6 +488,9 @@ public class FlinkTableSource
         source.modificationScanType = modificationScanType;
         source.partitionFilters = partitionFilters;
         source.lakeSource = lakeSource;
+        source.logRecordBatchFilter = logRecordBatchFilter;
+        source.watermarkStrategy = watermarkStrategy;
+        // Note: availableStatsColumns is already computed in the constructor
         return source;
     }
 
@@ -464,6 +511,11 @@ public class FlinkTableSource
         if (lakeSource != null) {
             lakeSource.withProject(projectedFields);
         }
+    }
+
+    @Override
+    public void applyWatermark(WatermarkStrategy<RowData> watermarkStrategy) {
+        this.watermarkStrategy = watermarkStrategy;
     }
 
     @Override
@@ -497,16 +549,12 @@ public class FlinkTableSource
                 lookupRow.setField(keyRowProjection[fieldEqual.fieldIndex], fieldEqual.equalValue);
                 visitedPkFields.add(fieldEqual.fieldIndex);
             }
-            // if not all primary key fields are in condition, meaning can not push down single row
-            // filter, determine whether to push down partition filter later
 
+            // if not all primary key fields are in condition, fall through to
+            // try partition filter pushdown for partitioned PK tables
             if (visitedPkFields.equals(primaryKeyTypes.keySet())) {
                 singleRowFilter = lookupRow;
-                // FLINK-38635 We cannot determine whether this source will ultimately be used as a
-                // scan
-                // source or a lookup source. Since fluss lookup sources cannot accept filters yet,
-                // to
-                // be safe, we return all filters to the Flink planner.
+                // FLINK-38635: return all filters as remaining for scan vs lookup safety net
                 return Result.of(acceptedFilters, filters);
             }
         }
@@ -542,34 +590,183 @@ public class FlinkTableSource
                 }
             }
             partitionFilters = converted.isEmpty() ? null : PredicateBuilder.and(converted);
-            // lake source is not null
-            if (lakeSource != null) {
-                List<Predicate> lakePredicates = new ArrayList<>();
-                for (ResolvedExpression filter : filters) {
-                    Optional<Predicate> predicateOptional =
-                            convertToFlussPredicate(tableOutputType, filter);
-                    predicateOptional.ifPresent(lakePredicates::add);
-                }
-
-                if (!lakePredicates.isEmpty()) {
-                    final LakeSource.FilterPushDownResult filterPushDownResult =
-                            lakeSource.withFilters(lakePredicates);
-                    if (filterPushDownResult.acceptedPredicates().size() != lakePredicates.size()) {
-                        LOG.info(
-                                "LakeSource rejected some partition filters. Falling back to Flink-side filtering.");
-                        // Flink will apply all filters to preserve correctness
-                        return Result.of(Collections.emptyList(), filters);
-                    }
-                }
-            }
-
-            // FLINK-38635 We cannot determine whether this source will ultimately be used as a scan
-            // source or a lookup source. Since fluss lookup sources cannot accept filters yet, to
-            // be safe, we return all filters to the Flink planner.
-            return Result.of(acceptedFilters, filters);
         }
 
-        return Result.of(Collections.emptyList(), filters);
+        if (acceptedFilters.isEmpty() && remainingFilters.isEmpty()) {
+            remainingFilters.addAll(filters);
+        }
+
+        if (!hasPrimaryKey()) {
+            Result recordBatchResult = pushdownRecordBatchFilter(remainingFilters);
+            acceptedFilters.addAll(recordBatchResult.getAcceptedFilters());
+        }
+
+        if (lakeSource != null) {
+            // Lake pushdown only contributes extra accepted filters; see
+            // pushdownLakeFilters(...) for why remainingFilters must stay unchanged.
+            pushdownLakeFilters(filters, acceptedFilters);
+        }
+
+        // FLINK-38635 We cannot determine whether this source will ultimately be used as a
+        // scan source or a lookup source. If used as a lookup source, the accepted filters
+        // (partition filters, record batch filters) are not enforced in the lookup path.
+        // Always return all original filters as remaining so Flink applies them as a safety net.
+        return Result.of(acceptedFilters, filters);
+    }
+
+    private Result pushdownRecordBatchFilter(List<ResolvedExpression> filters) {
+        // Use pre-computed available statistics columns
+        LOG.trace("Statistics available columns: {}", availableStatsColumns);
+
+        // Convert to fluss row type for predicate operations
+        RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
+
+        List<Predicate> pushdownPredicates = new ArrayList<>();
+        List<ResolvedExpression> acceptedFilters = new ArrayList<>();
+        List<ResolvedExpression> remainingFilters = new ArrayList<>();
+
+        for (ResolvedExpression filter : filters) {
+            Optional<Predicate> predicateOpt =
+                    PredicateConverter.convertToFlussPredicate(tableOutputType, filter);
+
+            if (predicateOpt.isPresent()) {
+                Predicate predicate = predicateOpt.get();
+                LOG.trace("Converted filter to predicate: {}", predicate);
+                // Check if predicate can benefit from statistics
+                if (canPredicateUseStatistics(predicate, flussRowType, availableStatsColumns)) {
+                    pushdownPredicates.add(predicate);
+                    acceptedFilters.add(filter);
+                }
+            }
+            // All filters are kept as remaining so that Flink can still verify the results
+            // after server-side filtering (safety net).
+            remainingFilters.add(filter);
+        }
+
+        if (!pushdownPredicates.isEmpty()) {
+            Predicate merged =
+                    pushdownPredicates.size() == 1
+                            ? pushdownPredicates.get(0)
+                            : PredicateBuilder.and(pushdownPredicates);
+            LOG.info("Accept merged predicate for record batch filter: {}", merged);
+            this.logRecordBatchFilter = merged;
+        } else {
+            this.logRecordBatchFilter = null;
+        }
+        return Result.of(acceptedFilters, remainingFilters);
+    }
+
+    private void pushdownLakeFilters(
+            List<ResolvedExpression> filters, List<ResolvedExpression> acceptedFilters) {
+        List<Predicate> lakePredicates = new ArrayList<>();
+        List<ResolvedExpression> convertedFilters = new ArrayList<>();
+        for (ResolvedExpression filter : filters) {
+            Optional<Predicate> predicateOptional =
+                    convertToFlussPredicate(tableOutputType, filter);
+            if (predicateOptional.isPresent()) {
+                lakePredicates.add(predicateOptional.get());
+                convertedFilters.add(filter);
+            }
+        }
+
+        if (lakePredicates.isEmpty()) {
+            return;
+        }
+
+        LakeSource.FilterPushDownResult filterPushDownResult =
+                checkNotNull(lakeSource).withFilters(lakePredicates);
+        Set<Predicate> acceptedLakePredicates =
+                Collections.newSetFromMap(new IdentityHashMap<Predicate, Boolean>());
+        acceptedLakePredicates.addAll(filterPushDownResult.acceptedPredicates());
+        for (int i = 0; i < lakePredicates.size(); i++) {
+            if (acceptedLakePredicates.contains(lakePredicates.get(i))
+                    && !acceptedFilters.contains(convertedFilters.get(i))) {
+                acceptedFilters.add(convertedFilters.get(i));
+            }
+        }
+    }
+
+    /**
+     * Checks if a predicate can benefit from statistics based on the available statistics columns.
+     *
+     * @param predicate the predicate to check
+     * @param rowType the row type
+     * @param availableStatsColumns the columns that have statistics available
+     * @return true if the predicate can use statistics
+     */
+    private boolean canPredicateUseStatistics(
+            Predicate predicate, RowType rowType, Set<String> availableStatsColumns) {
+
+        class StatisticsUsageVisitor implements PredicateVisitor<Boolean> {
+            @Override
+            public Boolean visit(org.apache.fluss.predicate.LeafPredicate leaf) {
+                // Check if the field referenced by this predicate has statistics available
+                String fieldName = rowType.getFieldNames().get(leaf.index());
+                // Check if statistics are available for this column
+                return availableStatsColumns.contains(fieldName);
+            }
+
+            @Override
+            public Boolean visit(CompoundPredicate compound) {
+                // For compound predicates, all children must be able to use statistics
+                for (Predicate child : compound.children()) {
+                    if (!child.visit(this)) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+        }
+
+        return predicate.visit(new StatisticsUsageVisitor());
+    }
+
+    /**
+     * Computes the available statistics columns based on table configuration. This method is called
+     * once during construction to pre-compute the result.
+     *
+     * @param flussRowType the row type
+     * @return set of column names that have statistics available
+     */
+    private Set<String> computeAvailableStatsColumns(RowType flussRowType) {
+        StatisticsColumnsConfig statsConfig = tableConfig.getStatisticsColumns();
+
+        if (!statsConfig.isEnabled()) {
+            LOG.debug("Statistics collection is disabled for the table");
+            return Collections.emptySet();
+        }
+
+        Set<String> columns = new HashSet<>();
+        if (statsConfig.getMode() == StatisticsColumnsConfig.Mode.ALL) {
+            // Collect all columns with supported statistics types
+            for (int i = 0; i < flussRowType.getFieldCount(); i++) {
+                org.apache.fluss.types.DataType fieldType = flussRowType.getTypeAt(i);
+                if (DataTypeChecks.isSupportedStatisticsType(fieldType)) {
+                    columns.add(flussRowType.getFieldNames().get(i));
+                }
+            }
+        } else {
+            // Use user-specified columns (validate they exist and have supported types)
+            for (String columnName : statsConfig.getColumns()) {
+                int columnIndex = flussRowType.getFieldNames().indexOf(columnName);
+                if (columnIndex >= 0) {
+                    org.apache.fluss.types.DataType fieldType = flussRowType.getTypeAt(columnIndex);
+                    if (DataTypeChecks.isSupportedStatisticsType(fieldType)) {
+                        columns.add(columnName);
+                    } else {
+                        LOG.trace(
+                                "Configured statistics column '{}' has unsupported type and will be ignored",
+                                columnName);
+                    }
+                } else {
+                    LOG.trace(
+                            "Configured statistics column '{}' does not exist in table schema",
+                            columnName);
+                }
+            }
+        }
+
+        return columns;
     }
 
     @Override
@@ -651,5 +848,28 @@ public class FlinkTableSource
     @VisibleForTesting
     public int[] getBucketKeyIndexes() {
         return bucketKeyIndexes;
+    }
+
+    @VisibleForTesting
+    public int[] getPartitionKeyIndexes() {
+        return partitionKeyIndexes;
+    }
+
+    @VisibleForTesting
+    @Nullable
+    public Predicate getLogRecordBatchFilter() {
+        return logRecordBatchFilter;
+    }
+
+    @VisibleForTesting
+    @Nullable
+    public GenericRowData getSingleRowFilter() {
+        return singleRowFilter;
+    }
+
+    @VisibleForTesting
+    @Nullable
+    public Predicate getPartitionFilters() {
+        return partitionFilters;
     }
 }

@@ -22,6 +22,9 @@ import org.apache.fluss.row.InternalRow;
 /** Statistics information of {@link LogRecordBatch LogRecordBatch}. */
 public interface LogRecordBatchStatistics {
 
+    /** Sentinel value indicating that null count statistics are not available for a field. */
+    int NULL_COUNT_UNAVAILABLE = -1;
+
     /**
      * Get the minimum values as an InternalRow.
      *
@@ -37,11 +40,12 @@ public interface LogRecordBatchStatistics {
     InternalRow getMaxValues();
 
     /**
-     * Get the null counts for each field.
+     * Get the null counts for each field. Uses {@code -1} to indicate that null count statistics
+     * are not available for a particular field.
      *
-     * @return Array of null counts
+     * @return Array of null counts, where -1 means not available
      */
-    Long[] getNullCounts();
+    int[] getNullCounts();
 
     /**
      * Whether the statistics information for a specific field is available.

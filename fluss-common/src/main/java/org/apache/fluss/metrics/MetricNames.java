@@ -70,6 +70,8 @@ public class MetricNames {
     public static final String LAKE_TIERING_TABLE_FAILURES_TOTAL = "failuresTotal";
     public static final String LAKE_TIERING_TABLE_FILE_SIZE = "fileSize";
     public static final String LAKE_TIERING_TABLE_RECORD_COUNT = "recordCount";
+    public static final String LAKE_TIERING_TABLE_PENDING_TIME = "pendingTime";
+    public static final String LAKE_TIERING_TABLE_FRESHNESS = "freshness";
 
     // --------------------------------------------------------------------------------------------
     // metrics for tablet server
@@ -222,11 +224,13 @@ public class MetricNames {
     // metrics for table bucket
     // --------------------------------------------------------------------------------------------
 
+    // for tablet
+    public static final String LAKE_PENDING_RECORDS = "pendingRecords";
+
     // for log tablet
     public static final String LOG_NUM_SEGMENTS = "numSegments";
     public static final String LOG_END_OFFSET = "endOffset";
     public static final String REMOTE_LOG_SIZE = "size";
-    public static final String LOG_LAKE_PENDING_RECORDS = "pendingRecords";
     public static final String LOG_LAKE_TIMESTAMP_LAG = "timestampLag";
 
     // for logic storage

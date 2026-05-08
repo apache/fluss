@@ -36,7 +36,7 @@ import org.apache.fluss.record.LogRecordBatchStatisticsCollector;
 import org.apache.fluss.row.arrow.ArrowWriter;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ChunkedAllocationManager;
 import org.apache.fluss.utils.CopyOnWriteMap;
 import org.apache.fluss.utils.MathUtils;
 import org.apache.fluss.utils.clock.Clock;
@@ -59,10 +59,12 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
+import static org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocatorUtil.createBufferAllocator;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
@@ -99,6 +101,12 @@ public final class RecordAccumulator {
     /** The arrow buffer allocator to allocate memory for arrow log write batch. */
     private final BufferAllocator bufferAllocator;
 
+    /** The chunked allocation manager factory, stored for explicit native memory release. */
+    private final ChunkedAllocationManager.ChunkedFactory chunkedFactory;
+
+    /** Guard to make {@link #destroyResources()} idempotent. */
+    private final AtomicBoolean resourcesDestroyed = new AtomicBoolean(false);
+
     /** The pool of lazily created arrow {@link ArrowWriter}s for arrow log write batch. */
     private final ArrowWriterPool arrowWriterPool;
 
@@ -134,7 +142,8 @@ public final class RecordAccumulator {
                 Math.max(1, (int) conf.get(ConfigOptions.CLIENT_WRITER_BATCH_SIZE).getBytes());
 
         this.writerBufferPool = LazyMemorySegmentPool.createWriterBufferPool(conf);
-        this.bufferAllocator = new RootAllocator(Long.MAX_VALUE);
+        this.chunkedFactory = new ChunkedAllocationManager.ChunkedFactory();
+        this.bufferAllocator = createBufferAllocator(chunkedFactory);
         this.arrowWriterPool = new ArrowWriterPool(bufferAllocator);
         this.incomplete = new IncompleteBatches();
         this.nodesDrainIndex = new HashMap<>();
@@ -955,15 +964,30 @@ public final class RecordAccumulator {
         }
     }
 
-    /** Close this accumulator and force all the record buffers to be drained. */
+    /** Close this accumulator to reject new appends. */
     public void close() {
         closed = true;
+    }
 
+    /**
+     * Destroy all resources held by this accumulator including the Arrow writer pool and buffer
+     * allocator.
+     *
+     * <p>This must only be called after the sender thread has fully exited and no more drain
+     * operations will occur. Otherwise, draining batches may attempt to recycle Arrow writers using
+     * an already-closed allocator, causing "Accounted size went negative" errors.
+     *
+     * <p>This method is idempotent: subsequent calls after the first are no-ops.
+     */
+    @VisibleForTesting
+    public void destroyResources() {
+        if (!resourcesDestroyed.compareAndSet(false, true)) {
+            return;
+        }
         writerBufferPool.close();
         arrowWriterPool.close();
-        // Release all the memory segments.
-        bufferAllocator.releaseBytes(bufferAllocator.getAllocatedMemory());
         bufferAllocator.close();
+        chunkedFactory.close();
     }
 
     /** Per table bucket and write batches. */

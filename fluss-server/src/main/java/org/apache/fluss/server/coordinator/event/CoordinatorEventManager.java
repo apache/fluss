@@ -33,6 +33,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -222,7 +223,7 @@ public final class CoordinatorEventManager implements EventManager {
 
     private class CoordinatorEventThread extends ShutdownableThread {
 
-        private long lastMetricsUpdateTime = System.currentTimeMillis();
+        private long lastMetricsUpdateTime = 0;
 
         public CoordinatorEventThread(String name) {
             super(name, false);
@@ -237,7 +238,15 @@ public final class CoordinatorEventManager implements EventManager {
                 lastMetricsUpdateTime = currentTime;
             }
 
-            QueuedEvent queuedEvent = queue.take();
+            // Use poll with timeout instead of blocking take() so that the thread
+            // wakes up periodically to update metrics even when no events arrive
+            // (e.g., after coordinator restart with no client requests).
+            long elapsed = System.currentTimeMillis() - lastMetricsUpdateTime;
+            long pollTimeout = Math.max(METRICS_UPDATE_INTERVAL_MS - elapsed, 100);
+            QueuedEvent queuedEvent = queue.poll(pollTimeout, TimeUnit.MILLISECONDS);
+            if (queuedEvent == null) {
+                return;
+            }
             CoordinatorEvent coordinatorEvent = queuedEvent.event;
 
             long eventStartTimeMs = System.currentTimeMillis();

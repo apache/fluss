@@ -44,10 +44,9 @@ import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocatorUtil;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
-import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.rocksdb.RateLimiter;
@@ -64,6 +63,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
@@ -115,7 +115,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
 
     private final ZooKeeperClient zkClient;
 
-    private final Map<TableBucket, KvTablet> currentKvs = MapUtils.newConcurrentHashMap();
+    private final Map<TableBucket, KvTablet> currentKvs = new ConcurrentHashMap<>();
 
     /**
      * For arrow log format. The buffer allocator to allocate memory for arrow write batch of
@@ -150,7 +150,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             throws IOException {
         super(TabletType.KV, dataDir, conf, recoveryThreadsPerDataDir);
         this.logManager = logManager;
-        this.arrowBufferAllocator = new RootAllocator(Long.MAX_VALUE);
+        this.arrowBufferAllocator = BufferAllocatorUtil.createBufferAllocator(null);
         this.memorySegmentPool = LazyMemorySegmentPool.createServerBufferPool(conf);
         this.zkClient = zkClient;
         this.remoteKvDir = FlussPaths.remoteKvDir(conf);

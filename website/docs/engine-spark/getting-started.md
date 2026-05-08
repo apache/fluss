@@ -28,7 +28,7 @@ Fluss supports Apache Spark's SQL API and Spark Structured Streaming.
 | [SQL Show Partitions](ddl.md#show-partitions)        | ✔️    |                                             |
 | [SQL Add Partition](ddl.md#add-partition)             | ✔️    |                                             |
 | [SQL Drop Partition](ddl.md#drop-partition)          | ✔️    |                                             |
-| [SQL Select (Batch)](reads.md)                       | ✔️    | Log table and primary-key table             |
+| [SQL Select (Batch)](reads.md)                       | ✔️    | Log table and primary-key table; both support union read when lake-enabled |
 | [SQL Insert Into](writes.md)                         | ✔️    | Log table and primary-key table             |
 | [Structured Streaming Read](structured-streaming.md#streaming-read) | ✔️ | Log table and primary-key table             |
 | [Structured Streaming Write](structured-streaming.md#streaming-write) | ✔️ | Log table and primary-key table           |

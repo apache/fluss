@@ -39,6 +39,7 @@ import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metrics.ServerMetricUtils;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.metrics.group.LakeTieringMetricGroup;
+import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperUtils;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
@@ -141,9 +142,6 @@ public class CoordinatorServer extends ServerBase {
     private Authorizer authorizer;
 
     @GuardedBy("lock")
-    private CoordinatorContext coordinatorContext;
-
-    @GuardedBy("lock")
     private DynamicConfigManager dynamicConfigManager;
 
     @GuardedBy("lock")
@@ -170,6 +168,7 @@ public class CoordinatorServer extends ServerBase {
     public static void main(String[] args) {
         Configuration configuration =
                 loadConfiguration(args, CoordinatorServer.class.getSimpleName());
+        applyServerDefaultConfigurations(configuration);
         CoordinatorServer coordinatorServer = new CoordinatorServer(configuration);
         startServer(coordinatorServer);
     }
@@ -232,7 +231,6 @@ public class CoordinatorServer extends ServerBase {
 
             dynamicConfigManager.startup();
 
-            this.coordinatorContext = new CoordinatorContext();
             this.metadataCache = new CoordinatorMetadataCache();
 
             this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);
@@ -294,6 +292,9 @@ public class CoordinatorServer extends ServerBase {
     }
 
     protected void initCoordinatorLeader() throws Exception {
+        // to avoid split-brain
+        ZkEpoch zkEpoch = zkClient.fenceBecomeCoordinatorLeader(serverId);
+        registerCoordinatorLeader();
 
         synchronized (lock) {
             this.clientMetricGroup = new ClientMetricGroup(metricRegistry, SERVER_NAME);
@@ -305,12 +306,11 @@ public class CoordinatorServer extends ServerBase {
                     new AutoPartitionManager(metadataCache, metadataManager, conf);
             autoPartitionManager.start();
 
-            registerCoordinatorLeader();
             // start coordinator event processor after we register coordinator leader to zk
-            // so that the event processor can get the coordinator leader node from zk during start
-            // up.
-            // in HA for coordinator server, the processor also need to know the leader node during
-            // start up
+            // so that the event processor can get the coordinator leader node from zk during
+            // start up. In HA for coordinator server, the processor also need to know the leader
+            // node during start up
+            CoordinatorContext coordinatorContext = new CoordinatorContext(zkEpoch);
             this.coordinatorEventProcessor =
                     new CoordinatorEventProcessor(
                             zkClient,
@@ -337,9 +337,19 @@ public class CoordinatorServer extends ServerBase {
      * from leader to standby. It cleans up leader-only resources while keeping the server running
      * as a standby, ready to participate in future elections.
      */
-    protected void cleanupCoordinatorLeader() throws Exception {
+    protected void cleanupCoordinatorLeader() {
         synchronized (lock) {
             LOG.info("Cleaning up coordinator leader services.");
+
+            try {
+                // make sure the current coordinator leader node is unregistered.
+                // Different from ZK disconnection,
+                // when we actively release the Leader's election,
+                // we need to manually delete the node
+                unregisterCoordinatorLeader();
+            } catch (Throwable t) {
+                LOG.warn("Failed to unregister coordinator leader from Zookeeper", t);
+            }
 
             // Clean up leader-specific resources in reverse order of initialization
             try {
@@ -387,11 +397,6 @@ public class CoordinatorServer extends ServerBase {
                 LOG.warn("Failed to close client metric group", t);
             }
 
-            // Reset coordinator context for next election
-            if (coordinatorContext != null) {
-                coordinatorContext.resetContext();
-            }
-
             LOG.info("Coordinator leader services cleaned up successfully.");
         }
     }
@@ -425,6 +430,11 @@ public class CoordinatorServer extends ServerBase {
         CoordinatorAddress coordinatorAddress = buildCoordinatorAddress();
         registerToZookeeperWithRetry(
                 "coordinator leader", () -> zkClient.registerCoordinatorLeader(coordinatorAddress));
+    }
+
+    private void unregisterCoordinatorLeader() throws Exception {
+        CoordinatorAddress coordinatorAddress = buildCoordinatorAddress();
+        zkClient.unregisterCoordinatorLeader(coordinatorAddress);
     }
 
     private CoordinatorAddress buildCoordinatorAddress() {
@@ -576,15 +586,6 @@ public class CoordinatorServer extends ServerBase {
                 if (ioExecutor != null) {
                     // shutdown io executor
                     ExecutorUtils.gracefulShutdown(5, TimeUnit.SECONDS, ioExecutor);
-                }
-            } catch (Throwable t) {
-                exception = ExceptionUtils.firstOrSuppressed(t, exception);
-            }
-
-            try {
-                if (coordinatorContext != null) {
-                    // then reset coordinatorContext
-                    coordinatorContext.resetContext();
                 }
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);

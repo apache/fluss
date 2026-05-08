@@ -309,6 +309,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorEventManager.close();
         rebalanceManager.close();
         onShutdown();
+        coordinatorContext.resetContext();
     }
 
     private ServerInfo getCoordinatorServerInfo() {
@@ -979,6 +980,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
             // trigger replicas to offline
             onReplicaBecomeOffline(offlineReplicas);
         }
+
+        // Try to complete rebalance tasks for the buckets in the response.
+        // This is essential for leader-only migrations to ensure they wait for the tablet
+        // server to acknowledge the leader change before proceeding to the next migration.
+        for (NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket :
+                notifyLeaderAndIsrResultForBuckets) {
+            tryToCompleteRebalanceTask(notifyLeaderAndIsrResultForBucket.getTableBucket());
+        }
     }
 
     private void onReplicaBecomeOffline(Set<TableBucketReplica> offlineReplicas) {
@@ -1364,12 +1373,15 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         if (planForBucket.isLeaderChanged() && !reassignment.isBeingReassigned()) {
             // buckets only need to change leader like leader replica rebalance.
+            // Don't finish the task immediately; wait for the NotifyLeaderAndIsr response
+            // from the tablet server to confirm the leader change has been applied.
+            // This ensures leader migrations are executed sequentially, avoiding excessive
+            // pressure on tablet servers (especially for KV tables).
             LOG.info("trigger leader election for tableBucket {}.", tableBucket);
             tableBucketStateMachine.handleStateChange(
                     Collections.singleton(tableBucket),
                     OnlineBucket,
                     new ReassignmentLeaderElection(newReplicas));
-            rebalanceManager.finishRebalanceTask(tableBucket, RebalanceStatus.COMPLETED);
         } else {
             try {
                 LOG.info(
@@ -1618,7 +1630,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
             tableAssignment.forEach(
                     (bucket, replicas) ->
                             newTableAssignment.put(bucket, new BucketAssignment(replicas)));
-            zooKeeperClient.updateTableAssignment(tableId, new TableAssignment(newTableAssignment));
+            zooKeeperClient.updateTableAssignment(
+                    tableId,
+                    new TableAssignment(newTableAssignment),
+                    coordinatorContext.getCoordinatorZkVersion());
         } else {
             Map<Integer, List<Integer>> partitionAssignment =
                     coordinatorContext.getPartitionAssignment(
@@ -1629,7 +1644,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     (bucket, replicas) ->
                             newPartitionAssignment.put(bucket, new BucketAssignment(replicas)));
             zooKeeperClient.updatePartitionAssignment(
-                    partitionId, new PartitionAssignment(tableId, newPartitionAssignment));
+                    partitionId,
+                    new PartitionAssignment(tableId, newPartitionAssignment),
+                    coordinatorContext.getCoordinatorZkVersion());
         }
     }
 
@@ -1669,13 +1686,15 @@ public class CoordinatorEventProcessor implements EventProcessor {
                             // TODO: reject the request if there is a replica in ISR is not online,
                             //  see KIP-841.
                             tryAdjustLeaderAndIsr.isr(),
+                            tryAdjustLeaderAndIsr.standbyReplicas(),
                             coordinatorContext.getCoordinatorEpoch(),
                             currentLeaderAndIsr.bucketEpoch() + 1);
             newLeaderAndIsrList.put(tableBucket, newLeaderAndIsr);
         }
 
         try {
-            zooKeeperClient.batchUpdateLeaderAndIsr(newLeaderAndIsrList);
+            zooKeeperClient.batchUpdateLeaderAndIsr(
+                    newLeaderAndIsrList, coordinatorContext.getCoordinatorZkVersion());
             newLeaderAndIsrList.forEach(
                     (tableBucket, newLeaderAndIsr) ->
                             result.add(new AdjustIsrResultForBucket(tableBucket, newLeaderAndIsr)));
@@ -1686,7 +1705,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 TableBucket tableBucket = entry.getKey();
                 LeaderAndIsr newLeaderAndIsr = entry.getValue();
                 try {
-                    zooKeeperClient.updateLeaderAndIsr(tableBucket, newLeaderAndIsr);
+                    zooKeeperClient.updateLeaderAndIsr(
+                            tableBucket,
+                            newLeaderAndIsr,
+                            coordinatorContext.getCoordinatorZkVersion());
                 } catch (Exception e) {
                     LOG.error("Error when register leader and isr.", e);
                     result.add(
@@ -2212,7 +2234,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         LeaderAndIsr newLeaderAndIsr = leaderAndIsr.newLeaderAndIsr(leaderAndIsr.isr());
 
         coordinatorContext.putBucketLeaderAndIsr(tableBucket, newLeaderAndIsr);
-        zooKeeperClient.updateLeaderAndIsr(tableBucket, newLeaderAndIsr);
+        zooKeeperClient.updateLeaderAndIsr(
+                tableBucket, newLeaderAndIsr, coordinatorContext.getCoordinatorZkVersion());
 
         coordinatorRequestBatch.newBatch();
         coordinatorRequestBatch.addNotifyLeaderRequestForTabletServers(

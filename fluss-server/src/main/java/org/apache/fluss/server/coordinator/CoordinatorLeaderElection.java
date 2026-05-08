@@ -18,6 +18,7 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.exception.CoordinatorEpochFencedException;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.leader.LeaderLatch;
@@ -106,6 +107,7 @@ public class CoordinatorLeaderElection implements AutoCloseable {
                         CompletableFuture<Void> cleanup = pendingCleanup.get();
                         // Run init on a separate thread to avoid deadlock with
                         // Curator's EventThread when performing ZK operations.
+
                         leaderCallbackExecutor.execute(
                                 () -> {
                                     // Wait for any pending cleanup to finish first.
@@ -123,16 +125,22 @@ public class CoordinatorLeaderElection implements AutoCloseable {
                                     }
                                     try {
                                         initLeaderServices.run();
+                                        // Set leader flag after init completes, so when zk found
+                                        // this leader, the leader can accept requests
+                                        isLeader.set(true);
+                                    } catch (CoordinatorEpochFencedException e) {
+                                        LOG.warn(
+                                                "Coordinator server {} has been fenced and not become leader successfully.",
+                                                serverId);
+                                        notLeader();
                                     } catch (Exception e) {
                                         LOG.error(
                                                 "Failed to initialize leader services for server {}",
                                                 serverId,
                                                 e);
+                                        notLeader();
                                     }
                                 });
-                        // Set leader flag before init completes, so when zk found this leader, the
-                        // leader can accept requests
-                        isLeader.set(true);
                     }
 
                     @Override

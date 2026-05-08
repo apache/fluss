@@ -20,6 +20,8 @@
     "@docusaurus/plugin-client-redirects": "^3.9.2",
     "@docusaurus/plugin-pwa": "^3.9.2",
     "@docusaurus/preset-classic": "^3.9.2",
+    "@fontsource/inter": "^5.2.8",
+    "@fontsource/roboto": "^5.2.10",
     "@mdx-js/react": "^3.0.0",
     "algoliasearch": "^5.10.2",
     "clsx": "^2.0.0",

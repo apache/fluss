@@ -56,7 +56,7 @@ import static org.apache.fluss.record.LogRecordBatchFormat.STATISTICS_VERSION;
  *
  * InternalRow minValues = ...;
  * InternalRow maxValues = ...;
- * Long[] nullCounts = ...;
+ * int[] nullCounts = ...;
  *
  * int bytesWritten = writer.writeStatistics(minValues, maxValues, nullCounts, outputView);
  * </pre>
@@ -114,7 +114,7 @@ public class LogRecordBatchStatisticsWriter {
      * @throws IOException If writing fails
      */
     public int writeStatistics(
-            InternalRow minValues, InternalRow maxValues, Long[] nullCounts, OutputView outputView)
+            InternalRow minValues, InternalRow maxValues, int[] nullCounts, OutputView outputView)
             throws IOException {
 
         int totalBytesWritten = 0;
@@ -134,9 +134,8 @@ public class LogRecordBatchStatisticsWriter {
         }
 
         // Write null counts for statistics columns only (4 bytes per count)
-        for (Long count : nullCounts) {
-            long nullCount = count != null ? count : 0;
-            outputView.writeInt((int) nullCount);
+        for (int count : nullCounts) {
+            outputView.writeInt(count);
             totalBytesWritten += 4;
         }
 

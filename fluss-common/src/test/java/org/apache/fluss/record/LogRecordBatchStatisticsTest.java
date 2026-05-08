@@ -264,7 +264,7 @@ public class LogRecordBatchStatisticsTest extends LogTestBase {
     @Test
     void testDefaultLogRecordBatchStatisticsBasicMethods() {
         MemorySegment segment = MemorySegment.allocateHeapMemory(512);
-        Long[] nullCounts = new Long[] {0L, 1L, 2L};
+        int[] nullCounts = new int[] {0, 1, 2};
         int[] statsIndexMapping = new int[] {0, 1, 2};
 
         DefaultLogRecordBatchStatistics stats =
@@ -287,14 +287,14 @@ public class LogRecordBatchStatisticsTest extends LogTestBase {
         assertThat(stats.hasMinValues()).isTrue();
         assertThat(stats.hasMaxValues()).isTrue();
         assertThat(stats.hasColumnStatistics(0)).isTrue();
-        assertThat(stats.getNullCounts()[0]).isEqualTo(0L);
-        assertThat(stats.getNullCounts()[1]).isEqualTo(1L);
+        assertThat(stats.getNullCounts()[0]).isEqualTo(0);
+        assertThat(stats.getNullCounts()[1]).isEqualTo(1);
     }
 
     @Test
     void testDefaultLogRecordBatchStatisticsPartialColumns() {
         MemorySegment segment = MemorySegment.allocateHeapMemory(512);
-        Long[] nullCounts = new Long[] {0L, 2L};
+        int[] nullCounts = new int[] {0, 2};
         int[] statsIndexMapping = new int[] {0, 2}; // Skip column 1
 
         DefaultLogRecordBatchStatistics stats =
@@ -319,7 +319,7 @@ public class LogRecordBatchStatisticsTest extends LogTestBase {
     @Test
     void testDefaultLogRecordBatchStatisticsNoMinMaxValues() {
         MemorySegment segment = MemorySegment.allocateHeapMemory(512);
-        Long[] nullCounts = new Long[] {0L, 1L, 2L};
+        int[] nullCounts = new int[] {0, 1, 2};
         int[] statsIndexMapping = new int[] {0, 1, 2};
 
         assertThatThrownBy(
@@ -361,7 +361,7 @@ public class LogRecordBatchStatisticsTest extends LogTestBase {
     void testDefaultLogRecordBatchStatisticsWithSerializedData() throws IOException {
         InternalRow minRow = DataTestUtils.row(new Object[] {1, "a", 10.5});
         InternalRow maxRow = DataTestUtils.row(new Object[] {100, "z", 99.9});
-        Long[] nullCounts = new Long[] {0L, 2L, 1L};
+        int[] nullCounts = new int[] {0, 2, 1};
         int[] statsIndexMapping = new int[] {0, 1, 2};
 
         LogRecordBatchStatisticsWriter writer =
@@ -391,7 +391,7 @@ public class LogRecordBatchStatisticsTest extends LogTestBase {
     void testPartialStatisticsWrapperThrowsForUnavailableColumns() throws IOException {
         InternalRow minRow = DataTestUtils.row(1, 10.5);
         InternalRow maxRow = DataTestUtils.row(100, 99.9);
-        Long[] nullCounts = new Long[] {0L, 1L};
+        int[] nullCounts = new int[] {0, 1};
         int[] statsIndexMapping = new int[] {0, 2}; // Skip column 1
 
         RowType fullRowType =
@@ -424,7 +424,7 @@ public class LogRecordBatchStatisticsTest extends LogTestBase {
     @Test
     void testDefaultLogRecordBatchStatisticsEqualsAndHashCode() {
         MemorySegment segment = MemorySegment.allocateHeapMemory(512);
-        Long[] nullCounts = new Long[] {0L, 1L, 2L};
+        int[] nullCounts = new int[] {0, 1, 2};
         int[] statsIndexMapping = new int[] {0, 1, 2};
 
         DefaultLogRecordBatchStatistics stats1 =

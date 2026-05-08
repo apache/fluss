@@ -190,6 +190,18 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
     }
 
     @Override
+    public InputStream fetchLogData(RemoteLogSegment remoteLogSegment)
+            throws RemoteStorageException {
+        FsPath segmentDir = remoteLogSegmentDir(remoteLogDir, remoteLogSegment);
+        FsPath logFile = remoteLogSegmentFile(segmentDir, remoteLogSegment.remoteLogStartOffset());
+        try {
+            return fileSystem.open(logFile);
+        } catch (IOException e) {
+            throw new RemoteStorageException("Failed to fetch log data from path: " + logFile, e);
+        }
+    }
+
+    @Override
     public RemoteLogManifest readRemoteLogManifestSnapshot(FsPath remoteLogManifestPath)
             throws RemoteStorageException {
         FSDataInputStream inputStream = null;

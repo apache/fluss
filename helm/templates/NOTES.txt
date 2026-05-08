@@ -22,3 +22,4 @@ APP VERSION: {{ .Chart.AppVersion }}
 
 {{ include "fluss.security.validateValues" . }}
 {{ include "fluss.metrics.validateValues" . }}
+{{ include "fluss.pdb.validateValues" . }}

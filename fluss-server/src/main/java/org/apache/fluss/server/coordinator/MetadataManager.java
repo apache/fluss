@@ -49,6 +49,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.server.entity.DatabasePropertyChanges;
 import org.apache.fluss.server.entity.TablePropertyChanges;
+import org.apache.fluss.server.utils.TableDescriptorValidation;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.DatabaseRegistration;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
@@ -75,7 +76,6 @@ import java.util.Set;
 import java.util.concurrent.Callable;
 
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableProperties;
-import static org.apache.fluss.server.utils.TableDescriptorValidation.validateTableDescriptor;
 
 /** A manager for metadata. */
 public class MetadataManager {
@@ -109,6 +109,14 @@ public class MetadataManager {
         this.maxPartitionNum = conf.get(ConfigOptions.MAX_PARTITION_NUM);
         this.maxBucketNum = conf.get(ConfigOptions.MAX_BUCKET_NUM);
         this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
+    }
+
+    /** Validates the table descriptor. */
+    public void validateTableDescriptor(TableDescriptor tableDescriptor) {
+        TableDescriptorValidation.validateTableDescriptor(
+                tableDescriptor,
+                maxBucketNum,
+                lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat());
     }
 
     public void createDatabase(
@@ -367,9 +375,6 @@ public class MetadataManager {
             @Nullable TableAssignment tableAssignment,
             boolean ignoreIfExists)
             throws TableAlreadyExistException, DatabaseNotExistException {
-        // validate table properties before creating table
-        validateTableDescriptor(tableToCreate, maxBucketNum);
-
         if (!databaseExists(tablePath.getDatabaseName())) {
             throw new DatabaseNotExistException(
                     "Database " + tablePath.getDatabaseName() + " does not exist.");
@@ -535,8 +540,7 @@ public class MetadataManager {
                 }
 
                 // reuse the same validate logic with the createTable() method
-                validateTableDescriptor(newDescriptor, maxBucketNum);
-
+                validateTableDescriptor(newDescriptor);
                 // pre alter table properties, e.g. create lake table in lake storage if it's to
                 // enable datalake for the table
                 preAlterTableProperties(

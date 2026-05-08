@@ -304,6 +304,31 @@ class LakeTableTieringManagerTest {
 
         // Advance time and request table
         manualClock.advanceTime(Duration.ofSeconds(10));
+
+        // Wait for the delayed task to execute and move to pending
+        waitValue(
+                () ->
+                        tableTieringManager.getTableState(tableId1)
+                                        == LakeTableTieringManager.TieringState.Pending
+                                ? Optional.of(true)
+                                : Optional.empty(),
+                Duration.ofSeconds(5),
+                "Table should be in pending state");
+
+        // pendingTime should be > 0 when in pending state
+        // The table entered pending after the 10s delay, so pendingTime should reflect time since
+        // then
+        assertThat(tableTieringManager.getTableState(tableId1))
+                .isEqualTo(LakeTableTieringManager.TieringState.Pending);
+
+        // Verify pendingTime is 0 initially (just entered pending state)
+        assertThat(tableTieringManager.getTablePendingTime(tableId1)).isEqualTo(0L);
+
+        // Advance time while in pending state - pendingTime should increase
+        manualClock.advanceTime(Duration.ofSeconds(5));
+        assertThat(tableTieringManager.getTablePendingTime(tableId1)).isEqualTo(5000L);
+
+        // Request table - should transition to Tiering and pendingTime should reset to 0
         assertRequestTable(tableId1, tablePath1, 1);
 
         // State should be Tiering (4)
@@ -372,6 +397,13 @@ class LakeTableTieringManagerTest {
         // State should be Pending (3) after failure
         assertThat(tableTieringManager.getTableState(tableId1))
                 .isEqualTo(LakeTableTieringManager.TieringState.Pending);
+
+        // After failure, table re-enters pending state, pendingTime should be 0 initially
+        assertThat(tableTieringManager.getTablePendingTime(tableId1)).isEqualTo(0L);
+
+        // Advance time - pendingTime should increase from failure time
+        manualClock.advanceTime(Duration.ofSeconds(3));
+        assertThat(tableTieringManager.getTablePendingTime(tableId1)).isEqualTo(3000L);
     }
 
     @Test

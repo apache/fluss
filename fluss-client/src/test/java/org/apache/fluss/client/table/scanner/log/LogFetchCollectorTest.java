@@ -20,8 +20,12 @@ package org.apache.fluss.client.table.scanner.log;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metadata.TestingMetadataUpdater;
 import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.compression.ArrowCompressionInfo;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
@@ -31,8 +35,10 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.apache.fluss.record.TestData.DATA1;
@@ -42,6 +48,7 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
+import static org.apache.fluss.testutils.DataTestUtils.createBasicMemoryLogRecords;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -205,6 +212,54 @@ public class LogFetchCollectorTest {
         assertThat(totalBytesRead).isEqualTo(expectedTotal);
     }
 
+    @Test
+    void testShouldContinueConsumeSameCompletedFetchAcrossPolls() throws Exception {
+        Configuration conf = new Configuration();
+        conf.setInt(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 2);
+        MetadataUpdater metadataUpdater =
+                new TestingMetadataUpdater(
+                        Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO));
+        LogFetchCollector collector =
+                new LogFetchCollector(DATA1_TABLE_PATH, logScannerStatus, conf, metadataUpdater);
+
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        FetchLogResultForBucket result =
+                new FetchLogResultForBucket(tb, genMemoryLogRecordsByObject(DATA1), 10L);
+        CompletedFetch completedFetch = makeCompletedFetch(tb, result, 0L);
+        logFetchBuffer.add(completedFetch);
+
+        ScanRecords firstPoll = collector.collectFetch(logFetchBuffer);
+        assertThat(firstPoll.records(tb).size()).isEqualTo(2);
+        assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(2L);
+        assertThat(completedFetch.isConsumed()).isFalse();
+
+        ScanRecords secondPoll = collector.collectFetch(logFetchBuffer);
+        assertThat(secondPoll.records(tb).size()).isEqualTo(2);
+        assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(4L);
+        assertThat(completedFetch.isConsumed()).isFalse();
+    }
+
+    @Test
+    void testFilteredEmptyResponseAdvancesOffset() {
+        Configuration conf = new Configuration();
+        conf.setInt(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 2);
+        MetadataUpdater metadataUpdater =
+                new TestingMetadataUpdater(
+                        Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO));
+        LogFetchCollector collector =
+                new LogFetchCollector(DATA1_TABLE_PATH, logScannerStatus, conf, metadataUpdater);
+
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
+        FetchLogResultForBucket filteredEmpty = new FetchLogResultForBucket(tb, 10L, 20L);
+        CompletedFetch completedFetch = makeCompletedFetch(tb, filteredEmpty, 0L);
+        logFetchBuffer.add(completedFetch);
+
+        ScanRecords scanRecords = collector.collectFetch(logFetchBuffer);
+        assertThat(scanRecords.records(tb)).isEmpty();
+        assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(20L);
+        assertThat(completedFetch.isConsumed()).isTrue();
+    }
+
     private DefaultCompletedFetch makeCompletedFetch(
             TableBucket tableBucket, FetchLogResultForBucket resultForBucket, long offset) {
         return new DefaultCompletedFetch(
@@ -226,5 +281,64 @@ public class LogFetchCollectorTest {
 
         assertThat(records.buckets()).isEmpty();
         assertThat(completedFetch.isConsumed()).isTrue();
+    }
+  
+    @Test
+    void testUpdateBeforeAndAfterNeverSplitAcrossPolls() throws Exception {
+        // Create records: INSERT, UPDATE_BEFORE, UPDATE_AFTER, INSERT
+        // With maxPollRecords=1, the fix should still return -U/+U together.
+        List<ChangeType> changeTypes =
+                Arrays.asList(
+                        ChangeType.INSERT,
+                        ChangeType.UPDATE_BEFORE,
+                        ChangeType.UPDATE_AFTER,
+                        ChangeType.INSERT);
+        List<Object[]> objects = DATA1.subList(0, 4);
+        MemoryLogRecords records =
+                createBasicMemoryLogRecords(
+                        DATA1_ROW_TYPE,
+                        DEFAULT_SCHEMA_ID,
+                        0L,
+                        System.currentTimeMillis(),
+                        LogRecordBatch.CURRENT_LOG_MAGIC_VALUE,
+                        org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID,
+                        org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE,
+                        changeTypes,
+                        objects,
+                        LogFormat.ARROW,
+                        ArrowCompressionInfo.DEFAULT_COMPRESSION);
+
+        Configuration conf = new Configuration();
+        conf.setInt(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 1);
+        MetadataUpdater metadataUpdater =
+                new TestingMetadataUpdater(
+                        Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO));
+        LogFetchCollector collector =
+                new LogFetchCollector(DATA1_TABLE_PATH, logScannerStatus, conf, metadataUpdater);
+
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        FetchLogResultForBucket result = new FetchLogResultForBucket(tb, records, 4L);
+        CompletedFetch completedFetch = makeCompletedFetch(tb, result, 0L);
+        logFetchBuffer.add(completedFetch);
+
+        // Poll 1: should get 1 INSERT record (maxPollRecords=1)
+        ScanRecords poll1 = collector.collectFetch(logFetchBuffer);
+        List<ScanRecord> records1 = poll1.records(tb);
+        assertThat(records1).hasSize(1);
+        assertThat(records1.get(0).getChangeType()).isEqualTo(ChangeType.INSERT);
+
+        // Poll 2: should get 2 records (-U and +U together) even though maxPollRecords=1,
+        // because -U/+U must never be split.
+        ScanRecords poll2 = collector.collectFetch(logFetchBuffer);
+        List<ScanRecord> records2 = poll2.records(tb);
+        assertThat(records2).hasSize(2);
+        assertThat(records2.get(0).getChangeType()).isEqualTo(ChangeType.UPDATE_BEFORE);
+        assertThat(records2.get(1).getChangeType()).isEqualTo(ChangeType.UPDATE_AFTER);
+
+        // Poll 3: should get the last INSERT record
+        ScanRecords poll3 = collector.collectFetch(logFetchBuffer);
+        List<ScanRecord> records3 = poll3.records(tb);
+        assertThat(records3).hasSize(1);
+        assertThat(records3.get(0).getChangeType()).isEqualTo(ChangeType.INSERT);
     }
 }

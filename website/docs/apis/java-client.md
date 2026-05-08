@@ -307,6 +307,41 @@ The supported type mappings are:
 | BINARY / BYTES | byte[] |
 | ARRAY | T[] / Collection |
 | MAP | Map |
+| ROW | Nested POJO |
+
+#### Nested POJOs (ROW Type)
+
+Fluss `ROW` type maps to a nested POJO. For example, if your table has a column of type `ROW<city STRING, zipCode INT>`, you can define a corresponding POJO:
+
+```java
+public class Address {
+    public String city;
+    public Integer zipCode;
+
+    public Address() {}
+}
+
+public class User {
+    public Integer id;
+    public String name;
+    public Address address;  // Maps to ROW<city STRING, zipCode INT>
+
+    public User() {}
+}
+```
+
+Nested POJOs are supported at any depth, and can also be used as element types in `ARRAY` and value types in `MAP`:
+
+```java
+public class Order {
+    public Integer orderId;
+    public Address[] shippingAddresses;      // ARRAY<ROW<...>>
+    public Map<String, Address> addressMap;  // MAP<STRING, ROW<...>>
+
+    public Order() {}
+}
+```
+
 ### Writing Data
 
 #### Append Writer

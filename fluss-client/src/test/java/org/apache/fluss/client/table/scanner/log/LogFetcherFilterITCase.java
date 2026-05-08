@@ -22,6 +22,7 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.TestingScannerMetricGroup;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
@@ -57,6 +58,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
     private LogFetcher logFetcher;
     private long tableId;
+    private MetadataUpdater metadataUpdater;
     private static final int BUCKET_ID_0 = 0;
     private static final int BUCKET_ID_1 = 1;
 
@@ -90,7 +92,7 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
         FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
 
         RpcClient rpcClient = FLUSS_CLUSTER_EXTENSION.getRpcClient();
-        MetadataUpdater metadataUpdater = new MetadataUpdater(clientConf, rpcClient);
+        metadataUpdater = new MetadataUpdater(clientConf, rpcClient);
         metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(DATA1_TABLE_PATH));
 
         Map<TableBucket, Long> scanBuckets = new HashMap<>();
@@ -305,6 +307,139 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
 
         // After offset advancement, fetcher should be clean
         assertThat(logFetcher.getCompletedFetchesSize()).isEqualTo(0);
+    }
+
+    @Test
+    void testFilterFetchKeepsConsumingSameCompletedFetchAcrossPolls() throws Exception {
+        // Recreate fetcher with tiny max poll records so one CompletedFetch must span polls.
+        clientConf.setInt(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 2);
+        logFetcher.close();
+        logFetcher =
+                createFetcherWithBuckets(
+                        Collections.singletonMap(new TableBucket(tableId, BUCKET_ID_0), 0L));
+
+        TableBucket tb0 = new TableBucket(tableId, BUCKET_ID_0);
+        List<Object[]> manyMatchingRows =
+                Arrays.asList(
+                        new Object[] {6, "u0"},
+                        new Object[] {7, "u1"},
+                        new Object[] {8, "u2"},
+                        new Object[] {9, "u3"},
+                        new Object[] {10, "u4"},
+                        new Object[] {11, "u5"});
+        addRecordsToBucket(
+                tb0,
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        manyMatchingRows, FILTER_TEST_ROW_TYPE, 0L, DEFAULT_SCHEMA_ID));
+
+        logFetcher.sendFetches();
+        retry(Duration.ofMinutes(1), () -> assertThat(logFetcher.hasAvailableFetches()).isTrue());
+
+        ScanRecords firstPoll = logFetcher.collectFetch();
+        List<ScanRecord> firstRecords = firstPoll.records(tb0);
+        assertThat(firstRecords).hasSize(2);
+        assertThat(
+                        firstRecords.stream()
+                                .map(r -> r.getRow().getInt(0))
+                                .collect(Collectors.toList()))
+                .containsExactly(6, 7);
+        assertThat(logFetcher.getLogScannerStatus().getBucketOffset(tb0)).isEqualTo(2L);
+
+        // This second poll must continue consuming the same in-buffer fetch instead of
+        // being treated as stale and drained.
+        ScanRecords secondPoll = logFetcher.collectFetch();
+        List<ScanRecord> secondRecords = secondPoll.records(tb0);
+        assertThat(secondRecords).hasSize(2);
+        assertThat(
+                        secondRecords.stream()
+                                .map(r -> r.getRow().getInt(0))
+                                .collect(Collectors.toList()))
+                .containsExactly(8, 9);
+        assertThat(logFetcher.getLogScannerStatus().getBucketOffset(tb0)).isEqualTo(4L);
+    }
+
+    @Test
+    void testFilterFetchWithMultipleBucketsKeepsOffsetProgressForSameBucket() throws Exception {
+        // Keep poll size small so one completed fetch spans multiple collectFetch calls.
+        clientConf.setInt(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 2);
+        logFetcher.close();
+        Map<TableBucket, Long> scanBuckets = new HashMap<>();
+        TableBucket tb0 = new TableBucket(tableId, BUCKET_ID_0);
+        TableBucket tb1 = new TableBucket(tableId, BUCKET_ID_1);
+        scanBuckets.put(tb0, 0L);
+        scanBuckets.put(tb1, 0L);
+        logFetcher = createFetcherWithBuckets(scanBuckets);
+
+        List<Object[]> bucket0Rows =
+                Arrays.asList(
+                        new Object[] {6, "b0_0"},
+                        new Object[] {7, "b0_1"},
+                        new Object[] {8, "b0_2"},
+                        new Object[] {9, "b0_3"},
+                        new Object[] {10, "b0_4"},
+                        new Object[] {11, "b0_5"});
+        List<Object[]> bucket1Rows =
+                Arrays.asList(
+                        new Object[] {12, "b1_0"},
+                        new Object[] {13, "b1_1"},
+                        new Object[] {14, "b1_2"},
+                        new Object[] {15, "b1_3"},
+                        new Object[] {16, "b1_4"},
+                        new Object[] {17, "b1_5"});
+        addRecordsToBucket(
+                tb0,
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        bucket0Rows, FILTER_TEST_ROW_TYPE, 0L, DEFAULT_SCHEMA_ID));
+        addRecordsToBucket(
+                tb1,
+                LogRecordBatchStatisticsTestUtils.createLogRecordsWithStatistics(
+                        bucket1Rows, FILTER_TEST_ROW_TYPE, 0L, DEFAULT_SCHEMA_ID));
+
+        logFetcher.sendFetches();
+        retry(Duration.ofMinutes(1), () -> assertThat(logFetcher.hasAvailableFetches()).isTrue());
+
+        ScanRecords firstPoll = logFetcher.collectFetch();
+        List<ScanRecord> firstTb0 = firstPoll.records(tb0);
+        List<ScanRecord> firstTb1 = firstPoll.records(tb1);
+        assertThat(firstTb0.size() + firstTb1.size()).isEqualTo(2);
+        TableBucket firstActiveBucket = firstTb0.isEmpty() ? tb1 : tb0;
+        TableBucket firstInactiveBucket = firstTb0.isEmpty() ? tb0 : tb1;
+        assertThat(firstPoll.records(firstActiveBucket)).hasSize(2);
+        assertThat(firstPoll.records(firstInactiveBucket)).isEmpty();
+        assertThat(logFetcher.getLogScannerStatus().getBucketOffset(firstActiveBucket))
+                .isEqualTo(2L);
+        assertThat(logFetcher.getLogScannerStatus().getBucketOffset(firstInactiveBucket))
+                .isEqualTo(0L);
+
+        // Core assertion: second poll should continue from the same bucket (tb0),
+        // not drain it as stale and jump to tb1.
+        ScanRecords secondPoll = logFetcher.collectFetch();
+        assertThat(secondPoll.records(firstActiveBucket)).hasSize(2);
+        assertThat(secondPoll.records(firstInactiveBucket)).isEmpty();
+        assertThat(logFetcher.getLogScannerStatus().getBucketOffset(firstActiveBucket))
+                .isEqualTo(4L);
+        assertThat(logFetcher.getLogScannerStatus().getBucketOffset(firstInactiveBucket))
+                .isEqualTo(0L);
+    }
+
+    private LogFetcher createFetcherWithBuckets(Map<TableBucket, Long> scanBuckets) {
+        LogScannerStatus scannerStatus = new LogScannerStatus();
+        scannerStatus.assignScanBuckets(scanBuckets);
+
+        PredicateBuilder builder = new PredicateBuilder(FILTER_TEST_ROW_TYPE);
+        Predicate recordBatchFilter = builder.greaterThan(0, 5); // a > 5
+
+        TestingScannerMetricGroup scannerMetricGroup = TestingScannerMetricGroup.newInstance();
+        return new LogFetcher(
+                DATA1_TABLE_INFO,
+                null,
+                recordBatchFilter,
+                scannerStatus,
+                clientConf,
+                metadataUpdater,
+                scannerMetricGroup,
+                new RemoteFileDownloader(1),
+                TEST_SCHEMA_GETTER);
     }
 
     private void addRecordsToBucket(TableBucket tableBucket, MemoryLogRecords logRecords)

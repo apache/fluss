@@ -20,7 +20,7 @@ package org.apache.fluss.spark.row
 import org.apache.fluss.spark.FlussSparkTestBase
 
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.util.GenericArrayData
+import org.apache.spark.sql.catalyst.util.{ArrayBasedMapData, GenericArrayData}
 import org.apache.spark.sql.types.{BooleanType, ByteType, Decimal, DecimalType, DoubleType, FloatType, IntegerType, LongType, ShortType, StringType, StructField, StructType}
 import org.apache.spark.unsafe.types.UTF8String
 import org.assertj.core.api.Assertions.assertThat
@@ -128,5 +128,43 @@ class SparkAsFlussArrayTest extends FlussSparkTestBase {
             .isEqualTo(flussRow(i).getString(2).toString)
         }
     }
+  }
+
+  test("Fluss SparkAsFlussArray: Map Type") {
+    val mapType = org.apache.spark.sql.types.MapType(StringType, IntegerType)
+    val data = Array(
+      ArrayBasedMapData.apply(
+        Array(UTF8String.fromString("key1"), UTF8String.fromString("key2"))
+          .asInstanceOf[Array[Any]],
+        Array(100, 200)),
+      ArrayBasedMapData.apply(
+        Array(UTF8String.fromString("key3"), UTF8String.fromString("key4"))
+          .asInstanceOf[Array[Any]],
+        Array(300, 400)),
+      null
+    )
+    val sparkArrayData = new GenericArrayData(data)
+    val flussArray = new SparkAsFlussArray(sparkArrayData, mapType)
+
+    assertThat(flussArray.size()).isEqualTo(3)
+    assertThat(flussArray.isNullAt(0)).isFalse()
+    assertThat(flussArray.isNullAt(1)).isFalse()
+    assertThat(flussArray.isNullAt(2)).isTrue()
+
+    // Check first map
+    val map1 = flussArray.getMap(0)
+    assertThat(map1.size()).isEqualTo(2)
+    assertThat(map1.keyArray().getString(0).toString).isEqualTo("key1")
+    assertThat(map1.keyArray().getString(1).toString).isEqualTo("key2")
+    assertThat(map1.valueArray().getInt(0)).isEqualTo(100)
+    assertThat(map1.valueArray().getInt(1)).isEqualTo(200)
+
+    // Check second map
+    val map2 = flussArray.getMap(1)
+    assertThat(map2.size()).isEqualTo(2)
+    assertThat(map2.keyArray().getString(0).toString).isEqualTo("key3")
+    assertThat(map2.keyArray().getString(1).toString).isEqualTo("key4")
+    assertThat(map2.valueArray().getInt(0)).isEqualTo(300)
+    assertThat(map2.valueArray().getInt(1)).isEqualTo(400)
   }
 }

@@ -111,6 +111,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.metadata.TablePath.DEFAULT_DATABASE_NAME;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclFilter;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toResolvedPartitionSpec;
 import static org.apache.fluss.security.acl.Resource.TABLE_SPLITTER;
@@ -245,10 +246,27 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
 
     @Override
     public CompletableFuture<DatabaseExistsResponse> databaseExists(DatabaseExistsRequest request) {
-        // By design: database exists not need to check database authorization.
+        String databaseName = request.getDatabaseName();
         DatabaseExistsResponse response = new DatabaseExistsResponse();
-        boolean exists = metadataManager.databaseExists(request.getDatabaseName());
-        response.setExists(exists);
+
+        // Check authorization first for efficiency - avoids unnecessary metadata lookup
+        // We skip authorization for the default database for backward compatibilities, as
+        // FlinkCatalog checks existence for the default database when open().
+        if (!DEFAULT_DATABASE_NAME.equals(databaseName)
+                && authorizer != null
+                && !authorizer.isAuthorized(
+                        currentSession(),
+                        OperationType.DESCRIBE,
+                        Resource.database(databaseName))) {
+            LOG.debug(
+                    "User {} not authorized to access database '{}', returning false",
+                    currentSession().getPrincipal(),
+                    databaseName);
+            response.setExists(false);
+            return CompletableFuture.completedFuture(response);
+        }
+
+        response.setExists(metadataManager.databaseExists(databaseName));
         return CompletableFuture.completedFuture(response);
     }
 
@@ -308,10 +326,22 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
 
     @Override
     public CompletableFuture<TableExistsResponse> tableExists(TableExistsRequest request) {
-        // By design: table exists not need to check table authorization.
+        TablePath tablePath = toTablePath(request.getTablePath());
         TableExistsResponse response = new TableExistsResponse();
-        boolean exists = metadataManager.tableExists(toTablePath(request.getTablePath()));
-        response.setExists(exists);
+
+        // Check authorization first for efficiency - avoids unnecessary metadata lookup
+        if (authorizer != null
+                && !authorizer.isAuthorized(
+                        currentSession(), OperationType.DESCRIBE, Resource.table(tablePath))) {
+            LOG.debug(
+                    "User {} not authorized to access table '{}', returning false",
+                    currentSession().getPrincipal(),
+                    tablePath);
+            response.setExists(false);
+            return CompletableFuture.completedFuture(response);
+        }
+
+        response.setExists(metadataManager.tableExists(tablePath));
         return CompletableFuture.completedFuture(response);
     }
 

@@ -28,6 +28,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.statemachine.BucketState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.metadata.ServerInfo;
+import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -55,6 +56,7 @@ public class CoordinatorContext {
     private static final Logger LOG = LoggerFactory.getLogger(CoordinatorContext.class);
 
     public static final int INITIAL_COORDINATOR_EPOCH = 0;
+    public static final int INITIAL_COORDINATOR_EPOCH_ZK_VERSION = 0;
 
     // for simplicity, we just use retry time, may consider make it a configurable value
     // and use combine retry times and retry delay
@@ -107,13 +109,31 @@ public class CoordinatorContext {
     /** A mapping from tabletServers to server tag. */
     private final Map<Integer, ServerTag> serverTags = new HashMap<>();
 
-    private ServerInfo coordinatorServerInfo = null;
-    private int coordinatorEpoch = INITIAL_COORDINATOR_EPOCH;
+    /**
+     * The epoch of the coordinator, which will be incremented whenever the coordinator is elected
+     * or re-elected.
+     */
+    private final int coordinatorEpoch;
 
-    public CoordinatorContext() {}
+    /**
+     * The coordinator epoch zk version is the zk version when the coordinator epoch is updated in
+     * Zookeeper.
+     */
+    private final int coordinatorEpochZkVersion;
+
+    private ServerInfo coordinatorServerInfo = null;
+
+    public CoordinatorContext(ZkEpoch zkEpoch) {
+        this.coordinatorEpoch = zkEpoch.getCoordinatorEpoch();
+        this.coordinatorEpochZkVersion = zkEpoch.getCoordinatorEpochZkVersion();
+    }
 
     public int getCoordinatorEpoch() {
         return coordinatorEpoch;
+    }
+
+    public int getCoordinatorZkVersion() {
+        return coordinatorEpochZkVersion;
     }
 
     public Set<String> getLiveCoordinatorServers() {
@@ -708,12 +728,11 @@ public class CoordinatorContext {
 
     public void resetContext() {
         tablesToBeDeleted.clear();
-        coordinatorEpoch = 0;
         clearTablesState();
         liveTabletServers.clear();
+        liveCoordinatorServers.clear();
         shuttingDownTabletServers.clear();
         serverTags.clear();
-        liveCoordinatorServers.clear();
     }
 
     public int getTotalPartitionCount() {

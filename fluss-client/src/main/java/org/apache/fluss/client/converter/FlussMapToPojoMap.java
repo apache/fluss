@@ -30,11 +30,20 @@ public class FlussMapToPojoMap {
     private final InternalMap flussMap;
     private final MapType mapType;
     private final String fieldName;
+    private final Class<?> keyClass;
+    private final Class<?> valueClass;
 
-    public FlussMapToPojoMap(InternalMap flussMap, MapType mapType, String fieldName) {
+    public FlussMapToPojoMap(
+            InternalMap flussMap,
+            MapType mapType,
+            String fieldName,
+            Class<?> keyClass,
+            Class<?> valueClass) {
         this.flussMap = flussMap;
         this.mapType = mapType;
         this.fieldName = fieldName;
+        this.keyClass = keyClass != null ? keyClass : Object.class;
+        this.valueClass = valueClass != null ? valueClass : Object.class;
     }
 
     public Object convertMap() {
@@ -44,7 +53,7 @@ public class FlussMapToPojoMap {
 
         List<Object> keys =
                 new FlussArrayToPojoArray(
-                                flussMap.keyArray(), mapType.getKeyType(), fieldName, Object.class)
+                                flussMap.keyArray(), mapType.getKeyType(), fieldName, keyClass)
                         .convertList();
 
         if (keys == null || keys.isEmpty()) {
@@ -56,7 +65,7 @@ public class FlussMapToPojoMap {
                                 flussMap.valueArray(),
                                 mapType.getValueType(),
                                 fieldName,
-                                Object.class)
+                                valueClass)
                         .convertList();
 
         // Build the result map

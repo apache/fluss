@@ -40,7 +40,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** Delegation token provider for S3 Hadoop filesystems. */
 public class S3DelegationTokenProvider {
@@ -52,14 +52,15 @@ public class S3DelegationTokenProvider {
 
     private static final String REGION_KEY = "fs.s3a.region";
     private static final String ENDPOINT_KEY = "fs.s3a.endpoint";
+    private static final String PATH_STYLE_ACCESS_KEY = "fs.s3a.path.style.access";
 
     private static final String ROLE_ARN_KEY = "fs.s3a.assumed.role.arn";
     private static final String STS_ENDPOINT_KEY = "fs.s3a.assumed.role.sts.endpoint";
 
     private final String scheme;
     private final String region;
-    private final String accessKey;
-    private final String secretKey;
+    @Nullable private final String accessKey;
+    @Nullable private final String secretKey;
     @Nullable private final String roleArn;
     @Nullable private final String stsEndpoint;
     private final Map<String, String> additionInfos;
@@ -67,13 +68,23 @@ public class S3DelegationTokenProvider {
     public S3DelegationTokenProvider(String scheme, Configuration conf) {
         this.scheme = scheme;
         this.region = conf.get(REGION_KEY);
-        checkNotNull(region, "Region is not set.");
+        checkArgument(region != null, "Region is not set.");
         this.accessKey = conf.get(ACCESS_KEY_ID);
         this.secretKey = conf.get(ACCESS_KEY_SECRET);
         this.roleArn = conf.get(ROLE_ARN_KEY);
         this.stsEndpoint = conf.get(STS_ENDPOINT_KEY);
+
+        checkArgument(
+                (accessKey == null) == (secretKey == null),
+                "S3 access key and secret key must both be set or both be unset.");
+        if (accessKey == null) {
+            checkArgument(
+                    roleArn != null,
+                    "Role ARN must be set when static credentials are not provided.");
+        }
+
         this.additionInfos = new HashMap<>();
-        for (String key : Arrays.asList(REGION_KEY, ENDPOINT_KEY)) {
+        for (String key : Arrays.asList(REGION_KEY, ENDPOINT_KEY, PATH_STYLE_ACCESS_KEY)) {
             if (conf.get(key) != null) {
                 additionInfos.put(key, conf.get(key));
             }
@@ -86,10 +97,7 @@ public class S3DelegationTokenProvider {
             Credentials credentials;
 
             if (roleArn != null) {
-                LOG.info(
-                        "Obtaining session credentials via AssumeRole with access key: {}, role: {}",
-                        accessKey,
-                        roleArn);
+                LOG.info("Obtaining session credentials via AssumeRole, role: {}", roleArn);
                 AssumeRoleRequest request =
                         new AssumeRoleRequest()
                                 .withRoleArn(roleArn)
@@ -121,10 +129,13 @@ public class S3DelegationTokenProvider {
 
     private AWSSecurityTokenService buildStsClient() {
         AWSSecurityTokenServiceClientBuilder builder =
-                AWSSecurityTokenServiceClientBuilder.standard()
-                        .withCredentials(
-                                new AWSStaticCredentialsProvider(
-                                        new BasicAWSCredentials(accessKey, secretKey)));
+                AWSSecurityTokenServiceClientBuilder.standard();
+
+        if (accessKey != null && secretKey != null) {
+            builder.withCredentials(
+                    new AWSStaticCredentialsProvider(
+                            new BasicAWSCredentials(accessKey, secretKey)));
+        }
 
         if (stsEndpoint != null) {
             builder.withEndpointConfiguration(

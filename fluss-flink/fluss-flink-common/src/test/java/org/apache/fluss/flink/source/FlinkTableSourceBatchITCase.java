@@ -23,6 +23,9 @@ import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericMap;
 
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -351,6 +354,39 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         assertThat(collected).hasSize(3);
     }
 
+    @Test
+    void testLimitLogTableScanWithComplexTypes() throws Exception {
+        String tableName = prepareLogTableWithComplexTypes();
+
+        // normal scan with complex types (array, map)
+        String query = String.format("SELECT * FROM %s limit 3", tableName);
+        CloseableIterator<Row> iterRows = tEnv.executeSql(query).collect();
+        List<String> collected = collectRowsWithTimeout(iterRows, 3);
+        List<String> expected =
+                Arrays.asList(
+                        "+I[1, [1, 10, 100], {key1=10}]",
+                        "+I[2, [2, 20, 200], {key2=20}]",
+                        "+I[3, [3, 30, 300], {key3=30}]",
+                        "+I[4, [4, 40, 400], {key4=40}]",
+                        "+I[5, [5, 50, 500], {key5=50}]");
+        assertThat(collected).isSubsetOf(expected);
+        assertThat(collected).hasSize(3);
+
+        // projection scan - select id and array column
+        query = String.format("SELECT id, arr FROM %s limit 3", tableName);
+        iterRows = tEnv.executeSql(query).collect();
+        collected = collectRowsWithTimeout(iterRows, 3);
+        expected =
+                Arrays.asList(
+                        "+I[1, [1, 10, 100]]",
+                        "+I[2, [2, 20, 200]]",
+                        "+I[3, [3, 30, 300]]",
+                        "+I[4, [4, 40, 400]]",
+                        "+I[5, [5, 50, 500]]");
+        assertThat(collected).isSubsetOf(expected);
+        assertThat(collected).hasSize(3);
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testCountPushDownForPkTable(boolean partitionTable) throws Exception {
@@ -545,6 +581,41 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                     // make sure every bucket has records
                     appendWriter.flush();
                 }
+            }
+        }
+
+        return tableName;
+    }
+
+    private String prepareLogTableWithComplexTypes() throws Exception {
+        String tableName = String.format("test_complex_log_table_%s", RandomUtils.nextInt());
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + "  id int not null,"
+                                + "  arr array<int>,"
+                                + "  mp map<varchar, int>)"
+                                + " with ("
+                                + "  'bucket.num' = '4', "
+                                + "  'table.auto-partition.enabled' = 'false' "
+                                + ")",
+                        tableName));
+
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+
+        // prepare table data with complex types
+        try (Table table = conn.getTable(tablePath)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            for (int i = 1; i <= 5; i++) {
+                Object[] values =
+                        new Object[] {
+                            i,
+                            new GenericArray(new int[] {i, i * 10, i * 100}),
+                            GenericMap.of(BinaryString.fromString("key" + i), i * 10)
+                        };
+                appendWriter.append(row(values));
+                // make sure every bucket has records
+                appendWriter.flush();
             }
         }
 

@@ -24,7 +24,6 @@ import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.StatisticsConfigUtils;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.ApiException;
@@ -457,11 +456,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         validateTableCreationPermission(tableDescriptor, tablePath);
 
         // apply system defaults if the config is not set
-        tableDescriptor =
-                applySystemDefaults(tableDescriptor, lakeCatalogContainer.getDataLakeFormat());
+        tableDescriptor = applySystemDefaults(tableDescriptor, lakeCatalogContainer);
 
-        // validate statistics configuration
-        StatisticsConfigUtils.validateStatisticsConfig(tableDescriptor);
+        // validate table descriptor before creating table in lake or fluss metadata,
+        // to avoid orphaned lake tables when validation fails
+        metadataManager.validateTableDescriptor(tableDescriptor);
 
         // the distribution and bucket count must be set now
         //noinspection OptionalGetWithoutIsPresent
@@ -573,7 +572,10 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     }
 
     private TableDescriptor applySystemDefaults(
-            TableDescriptor tableDescriptor, DataLakeFormat dataLakeFormat) {
+            TableDescriptor tableDescriptor,
+            LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer) {
+        DataLakeFormat dataLakeFormat = lakeCatalogContainer.getDataLakeFormat();
+        boolean clusterDataLakeTableEnabled = lakeCatalogContainer.isClusterDataLakeTableEnabled();
         TableDescriptor newDescriptor = tableDescriptor;
 
         // not set bucket num
@@ -607,7 +609,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         // lake table can only be enabled when the cluster configures datalake format
         boolean dataLakeEnabled = isDataLakeEnabled(tableDescriptor);
-        if (dataLakeEnabled && dataLakeFormat == null) {
+        if (dataLakeEnabled && !clusterDataLakeTableEnabled) {
             throw new InvalidTableException(
                     String.format(
                             "'%s' is enabled for the table, but the Fluss cluster doesn't enable datalake tables.",

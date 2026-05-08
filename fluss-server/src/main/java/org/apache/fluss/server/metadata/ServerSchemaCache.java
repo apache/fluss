@@ -27,13 +27,13 @@ import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.shaded.guava32.com.google.common.cache.Cache;
 import org.apache.fluss.shaded.guava32.com.google.common.cache.CacheBuilder;
 import org.apache.fluss.shaded.guava32.com.google.common.util.concurrent.UncheckedExecutionException;
-import org.apache.fluss.utils.MapUtils;
 
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 
 /**
@@ -55,8 +55,8 @@ public class ServerSchemaCache {
     public ServerSchemaCache(MetadataManager metadataManager) {
         this.metadataManager = metadataManager;
         // thread safe is guaranteed by subscriberCounters.
-        this.subscriberCounters = MapUtils.newConcurrentHashMap();
-        this.latestSchemaByTableId = MapUtils.newConcurrentHashMap();
+        this.subscriberCounters = new ConcurrentHashMap<>();
+        this.latestSchemaByTableId = new ConcurrentHashMap<>();
         this.schemaCache = CacheBuilder.newBuilder().maximumSize(100).build();
     }
 

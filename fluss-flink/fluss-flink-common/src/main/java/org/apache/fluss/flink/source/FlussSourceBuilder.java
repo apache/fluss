@@ -27,6 +27,7 @@ import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.types.RowType;
 
 import org.slf4j.Logger;
@@ -68,6 +69,7 @@ public class FlussSourceBuilder<OUT> {
 
     private int[] projectedFields;
     private String[] projectedFieldNames;
+    private Predicate logRecordBatchFilter;
     private Long scanPartitionDiscoveryIntervalMs;
     private OffsetsInitializer offsetsInitializer;
     private FlussDeserializationSchema<OUT> deserializationSchema;
@@ -171,6 +173,21 @@ public class FlussSourceBuilder<OUT> {
     public FlussSourceBuilder<OUT> setProjectedFields(String... projectedFieldNames) {
         checkNotNull(projectedFieldNames, "Field names must not be null");
         this.projectedFieldNames = projectedFieldNames;
+        return this;
+    }
+
+    /**
+     * Sets the filter predicate for server-side record batch filtering based on column statistics.
+     *
+     * <p>The predicate is evaluated against per-batch column statistics (min/max values) to skip
+     * entire record batches that cannot contain matching rows.
+     *
+     * @param filter the predicate to filter record batches
+     * @return this builder
+     */
+    public FlussSourceBuilder<OUT> setFilter(Predicate filter) {
+        checkNotNull(filter, "filter must not be null");
+        this.logRecordBatchFilter = filter;
         return this;
     }
 
@@ -297,6 +314,7 @@ public class FlussSourceBuilder<OUT> {
                 isPartitioned,
                 sourceOutputType,
                 projectedFields,
+                logRecordBatchFilter,
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 deserializationSchema,

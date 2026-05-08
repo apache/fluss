@@ -154,6 +154,84 @@ TableSourceScan(table=[[fluss_catalog, fluss, log_partitioned_table, filter=[=(c
 
 This confirms that only partitions matching `c_nationkey = 'US'` will be scanned.
 
+### Filter Pushdown
+
+Filter pushdown is a server-side optimization for **Log Tables** (non-primary-key tables). When enabled, the server evaluates filter predicates against per-batch column statistics (min, max, null count) and skips entire record batches that cannot contain matching rows. This reduces network I/O and deserialization cost without changing query semantics — Flink still applies the filter on the client side as a safety net.
+
+:::note
+1. Filter pushdown requires the Arrow log format (`'table.log.format' = 'arrow'`), which is enabled by default.
+2. Column statistics must be explicitly enabled via the `table.statistics.columns` table property. Without this configuration, no filters will be pushed down.
+3. Only data written **after** enabling statistics will contain batch-level statistics. Historical data will not benefit from filter pushdown.
+:::
+
+#### Enabling Column Statistics
+
+Set the `table.statistics.columns` property when creating or altering a table. It is recommended to specify only the columns used in your filter conditions to minimize overhead:
+
+```sql title="Flink SQL"
+-- Recommended: collect statistics only for columns used in filter conditions
+CREATE TABLE sensor_data (
+    sensor_id INT NOT NULL,
+    temperature DOUBLE NOT NULL,
+    humidity DOUBLE NOT NULL,
+    location STRING NOT NULL,
+    ts TIMESTAMP NOT NULL
+) WITH (
+    'table.statistics.columns' = 'temperature,humidity,location'
+);
+
+-- Or use '*' to collect statistics for all supported columns (higher overhead)
+ALTER TABLE sensor_data SET ('table.statistics.columns' = '*');
+```
+
+Statistics collection supports the following types: `BOOLEAN`, `TINYINT`, `SMALLINT`, `INTEGER`, `BIGINT`, `FLOAT`, `DOUBLE`, `STRING`, `CHAR`, `DECIMAL`, `DATE`, `TIME`, `TIMESTAMP`, `TIMESTAMP_LTZ`. Unsupported types (`BYTES`, `BINARY`, `ARRAY`, `MAP`, `ROW`) are automatically excluded.
+
+#### Supported Filter Operators
+
+The following filter operators can be pushed down to the server:
+
+- `=`, `<>`, `>`, `>=`, `<`, `<=`
+- `IN (...)`
+- `IS NULL`, `IS NOT NULL`
+- `BETWEEN ... AND ...`
+- `LIKE 'abc%'` (prefix), `LIKE '%abc'` (suffix), `LIKE '%abc%'` (contains)
+- `AND` / `OR` conjunctions
+
+All columns referenced in a filter expression must have statistics enabled. If any referenced column lacks statistics, that filter will not be pushed down.
+
+#### Example
+
+**1. Create a table with statistics enabled:**
+```sql title="Flink SQL"
+CREATE TABLE sensor_data (
+    sensor_id INT NOT NULL,
+    temperature DOUBLE NOT NULL,
+    humidity DOUBLE NOT NULL,
+    location STRING NOT NULL,
+    ts TIMESTAMP NOT NULL
+) WITH (
+    'table.statistics.columns' = 'temperature,location'
+);
+```
+
+**2. Query with filter:**
+```sql title="Flink SQL"
+SELECT * FROM sensor_data WHERE temperature > 30.0 AND location = 'warehouse-A';
+```
+
+**3. Verify with `EXPLAIN`:**
+```sql title="Flink SQL"
+EXPLAIN SELECT * FROM sensor_data WHERE temperature > 30.0 AND location = 'warehouse-A';
+```
+
+If filter pushdown is active, the `TableSourceScan` node in the execution plan will contain a `filter=[...]` clause showing the pushed-down predicates. For example:
+
+```text
+TableSourceScan(table=[[..., sensor_data, filter=[and(>(temperature, 30.0:DOUBLE), =(location, ...))]]], fields=[...])
+```
+
+The server evaluates these predicates against per-batch column statistics and skips entire record batches that cannot contain matching rows. Note that the filter also appears in a `Calc` node above the source — this is expected because Flink retains all filters for client-side verification as a safety net.
+
 ## Batch Read
 
 ### Limit Read

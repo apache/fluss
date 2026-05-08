@@ -41,9 +41,11 @@ import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine.
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.zk.NOPErrorHandler;
+import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.ZkVersion;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Sets;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.utils.clock.SystemClock;
@@ -54,7 +56,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
-import java.io.IOException;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
@@ -84,6 +85,8 @@ class TableBucketStateMachineTest {
 
     private static ZooKeeperClient zookeeperClient;
     private static CoordinatorContext coordinatorContext;
+    private static ZkEpoch zkEpoch;
+
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
     private CoordinatorRequestBatch coordinatorRequestBatch;
     private AutoPartitionManager autoPartitionManager;
@@ -92,20 +95,21 @@ class TableBucketStateMachineTest {
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
 
     @BeforeAll
-    static void baseBeforeAll() {
+    static void baseBeforeAll() throws Exception {
         zookeeperClient =
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+        zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("1");
     }
 
     @BeforeEach
-    void beforeEach() throws IOException {
+    void beforeEach() {
         Configuration conf = new Configuration();
         conf.setString(ConfigOptions.COORDINATOR_HOST, "localhost");
         String remoteDir = "/tmp/fluss/remote-data";
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, remoteDir);
-        coordinatorContext = new CoordinatorContext();
+        coordinatorContext = new CoordinatorContext(zkEpoch);
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
         coordinatorRequestBatch =
                 new CoordinatorRequestBatch(
@@ -146,6 +150,24 @@ class TableBucketStateMachineTest {
         TableBucket t2b0 = new TableBucket(t2Id, 0);
         coordinatorContext.putTablePath(t1Id, TablePath.of("db1", "t1"));
         coordinatorContext.putTablePath(t2Id, TablePath.of("db1", "t2"));
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        TablePath.of("db1", "t1"),
+                        t1Id,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        TablePath.of("db1", "t2"),
+                        t2Id,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
 
         coordinatorContext.setLiveTabletServers(createServers(Arrays.asList(0, 1, 3)));
         makeSendLeaderAndStopRequestAlwaysSuccess(
@@ -157,9 +179,13 @@ class TableBucketStateMachineTest {
 
         // create LeaderAndIsr for t10/t11 info in zk,
         zookeeperClient.registerLeaderAndIsr(
-                new TableBucket(t1Id, 0), new LeaderAndIsr(0, 0, Arrays.asList(0, 1), 0, 0));
+                new TableBucket(t1Id, 0),
+                new LeaderAndIsr(0, 0, Arrays.asList(0, 1), Collections.emptyList(), 0, 0),
+                ZkVersion.MATCH_ANY_VERSION.getVersion());
         zookeeperClient.registerLeaderAndIsr(
-                new TableBucket(t1Id, 1), new LeaderAndIsr(2, 0, Arrays.asList(2, 3), 0, 0));
+                new TableBucket(t1Id, 1),
+                new LeaderAndIsr(2, 0, Arrays.asList(2, 3), Collections.emptyList(), 0, 0),
+                ZkVersion.MATCH_ANY_VERSION.getVersion());
         // update the LeaderAndIsr to context
         coordinatorContext.putBucketLeaderAndIsr(
                 t1b0, zookeeperClient.getLeaderAndIsr(new TableBucket(t1Id, 0)).get());
@@ -303,6 +329,16 @@ class TableBucketStateMachineTest {
         tableId = 5;
         final TableBucket tableBucket1 = new TableBucket(tableId, 0);
         coordinatorContext.putTablePath(tableId, fakeTablePath);
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        fakeTablePath,
+                        tableId,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
+        coordinatorContext.putTablePath(tableId, fakeTablePath);
         coordinatorContext.updateBucketReplicaAssignment(tableBucket1, Arrays.asList(0, 1, 2));
         coordinatorContext.putBucketState(tableBucket1, NewBucket);
         tableBucketStateMachine.handleStateChange(
@@ -410,12 +446,71 @@ class TableBucketStateMachineTest {
         List<Integer> liveReplicas = Collections.singletonList(4);
 
         Optional<ElectionResult> leaderElectionResultOpt =
-                initReplicaLeaderElection(assignments, liveReplicas, 0);
+                initReplicaLeaderElection(assignments, liveReplicas, 0, false);
         assertThat(leaderElectionResultOpt.isPresent()).isTrue();
         ElectionResult leaderElectionResult = leaderElectionResultOpt.get();
         assertThat(leaderElectionResult.getLiveReplicas()).containsExactlyInAnyOrder(4);
         assertThat(leaderElectionResult.getLeaderAndIsr().leader()).isEqualTo(4);
         assertThat(leaderElectionResult.getLeaderAndIsr().isr()).containsExactlyInAnyOrder(4);
+        assertThat(leaderElectionResult.getLeaderAndIsr().standbyReplicas()).isEmpty();
+    }
+
+    @Test
+    void testInitReplicaLeaderElectionForPkTable() {
+        // PK table with multiple available replicas: first as leader, second as standby
+        List<Integer> assignments = Arrays.asList(1, 2, 3);
+        List<Integer> liveReplicas = Arrays.asList(1, 2, 3);
+
+        Optional<ElectionResult> resultOpt =
+                initReplicaLeaderElection(assignments, liveReplicas, 0, true);
+        assertThat(resultOpt).isPresent();
+        ElectionResult result = resultOpt.get();
+        assertThat(result.getLeaderAndIsr().leader()).isEqualTo(1);
+        assertThat(result.getLeaderAndIsr().isr()).containsExactlyInAnyOrder(1, 2, 3);
+        assertThat(result.getLeaderAndIsr().standbyReplicas()).containsExactly(2);
+    }
+
+    @Test
+    void testInitReplicaLeaderElectionForPkTableWithSingleAvailableReplica() {
+        // PK table with only one available replica: leader only, no standby
+        List<Integer> assignments = Arrays.asList(1, 2, 3);
+        List<Integer> liveReplicas = Collections.singletonList(2);
+
+        Optional<ElectionResult> resultOpt =
+                initReplicaLeaderElection(assignments, liveReplicas, 0, true);
+        assertThat(resultOpt).isPresent();
+        ElectionResult result = resultOpt.get();
+        assertThat(result.getLeaderAndIsr().leader()).isEqualTo(2);
+        assertThat(result.getLeaderAndIsr().isr()).containsExactlyInAnyOrder(2);
+        assertThat(result.getLeaderAndIsr().standbyReplicas()).isEmpty();
+    }
+
+    @Test
+    void testInitReplicaLeaderElectionForPkTableWithNoAliveReplica() {
+        // PK table with no alive replicas: should return empty
+        List<Integer> assignments = Arrays.asList(1, 2, 3);
+        List<Integer> liveReplicas = Collections.emptyList();
+
+        Optional<ElectionResult> resultOpt =
+                initReplicaLeaderElection(assignments, liveReplicas, 0, true);
+        assertThat(resultOpt).isEmpty();
+    }
+
+    @Test
+    void testInitReplicaLeaderElectionForPkTableWithPartiallyAliveReplicas() {
+        // PK table where first assigned replica is not alive,
+        // second and third are alive
+        List<Integer> assignments = Arrays.asList(1, 2, 3);
+        List<Integer> liveReplicas = Arrays.asList(2, 3);
+
+        Optional<ElectionResult> resultOpt =
+                initReplicaLeaderElection(assignments, liveReplicas, 0, true);
+        assertThat(resultOpt).isPresent();
+        ElectionResult result = resultOpt.get();
+        // First available (2) should be leader, second available (3) should be standby
+        assertThat(result.getLeaderAndIsr().leader()).isEqualTo(2);
+        assertThat(result.getLeaderAndIsr().isr()).containsExactlyInAnyOrder(2, 3);
+        assertThat(result.getLeaderAndIsr().standbyReplicas()).containsExactly(3);
     }
 
     private TableBucketStateMachine createTableBucketStateMachine() {

@@ -231,4 +231,283 @@ public class RowToPojoConverterTest {
             return pojo;
         }
     }
+
+    // ==================== Nested ROW Round-Trip Tests ====================
+
+    @Test
+    public void testSimpleNestedRowRoundTrip() {
+        RowType table =
+                RowType.builder()
+                        .field("id", DataTypes.INT())
+                        .field(
+                                "address",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("city", DataTypes.STRING()),
+                                        DataTypes.FIELD("zipCode", DataTypes.INT())))
+                        .build();
+
+        PojoToRowConverter<ConvertersTestFixtures.PersonPojo> writer =
+                PojoToRowConverter.of(ConvertersTestFixtures.PersonPojo.class, table, table);
+        RowToPojoConverter<ConvertersTestFixtures.PersonPojo> reader =
+                RowToPojoConverter.of(ConvertersTestFixtures.PersonPojo.class, table, table);
+
+        ConvertersTestFixtures.PersonPojo pojo = new ConvertersTestFixtures.PersonPojo();
+        pojo.id = 1;
+        pojo.address = new ConvertersTestFixtures.AddressPojo();
+        pojo.address.city = "Beijing";
+        pojo.address.zipCode = 100000;
+
+        GenericRow row = writer.toRow(pojo);
+        ConvertersTestFixtures.PersonPojo back = reader.fromRow(row);
+
+        assertThat(back.id).isEqualTo(1);
+        assertThat(back.address).isNotNull();
+        assertThat(back.address.city).isEqualTo("Beijing");
+        assertThat(back.address.zipCode).isEqualTo(100000);
+    }
+
+    @Test
+    public void testNullNestedRowRoundTrip() {
+        RowType table =
+                RowType.builder()
+                        .field("id", DataTypes.INT())
+                        .field(
+                                "address",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("city", DataTypes.STRING()),
+                                        DataTypes.FIELD("zipCode", DataTypes.INT())))
+                        .build();
+
+        PojoToRowConverter<ConvertersTestFixtures.PersonPojo> writer =
+                PojoToRowConverter.of(ConvertersTestFixtures.PersonPojo.class, table, table);
+        RowToPojoConverter<ConvertersTestFixtures.PersonPojo> reader =
+                RowToPojoConverter.of(ConvertersTestFixtures.PersonPojo.class, table, table);
+
+        ConvertersTestFixtures.PersonPojo pojo = new ConvertersTestFixtures.PersonPojo();
+        pojo.id = 2;
+        pojo.address = null;
+
+        GenericRow row = writer.toRow(pojo);
+        ConvertersTestFixtures.PersonPojo back = reader.fromRow(row);
+
+        assertThat(back.id).isEqualTo(2);
+        assertThat(back.address).isNull();
+    }
+
+    @Test
+    public void testDeeplyNestedRowRoundTrip() {
+        RowType innerRowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("val", DataTypes.DOUBLE()),
+                        DataTypes.FIELD("flag", DataTypes.BOOLEAN()));
+        RowType middleRowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("id", DataTypes.INT()),
+                        DataTypes.FIELD("inner", innerRowType));
+        RowType table =
+                RowType.builder()
+                        .field("name", DataTypes.STRING())
+                        .field("nested", middleRowType)
+                        .build();
+
+        PojoToRowConverter<ConvertersTestFixtures.DeepNestOuterPojo> writer =
+                PojoToRowConverter.of(ConvertersTestFixtures.DeepNestOuterPojo.class, table, table);
+        RowToPojoConverter<ConvertersTestFixtures.DeepNestOuterPojo> reader =
+                RowToPojoConverter.of(ConvertersTestFixtures.DeepNestOuterPojo.class, table, table);
+
+        ConvertersTestFixtures.DeepNestOuterPojo pojo =
+                new ConvertersTestFixtures.DeepNestOuterPojo();
+        pojo.name = "test";
+        pojo.nested = new ConvertersTestFixtures.MiddlePojo();
+        pojo.nested.id = 42;
+        pojo.nested.inner = new ConvertersTestFixtures.InnerPojo();
+        pojo.nested.inner.val = 3.14;
+        pojo.nested.inner.flag = true;
+
+        GenericRow row = writer.toRow(pojo);
+        ConvertersTestFixtures.DeepNestOuterPojo back = reader.fromRow(row);
+
+        assertThat(back.name).isEqualTo("test");
+        assertThat(back.nested).isNotNull();
+        assertThat(back.nested.id).isEqualTo(42);
+        assertThat(back.nested.inner).isNotNull();
+        assertThat(back.nested.inner.val).isEqualTo(3.14);
+        assertThat(back.nested.inner.flag).isTrue();
+    }
+
+    @Test
+    public void testNestedRowWithArrayFieldRoundTrip() {
+        RowType nestedRowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("label", DataTypes.STRING()),
+                        DataTypes.FIELD("values", DataTypes.ARRAY(DataTypes.INT())));
+        RowType table =
+                RowType.builder().field("id", DataTypes.INT()).field("data", nestedRowType).build();
+
+        PojoToRowConverter<ConvertersTestFixtures.RowWithArrayOuterPojo> writer =
+                PojoToRowConverter.of(
+                        ConvertersTestFixtures.RowWithArrayOuterPojo.class, table, table);
+        RowToPojoConverter<ConvertersTestFixtures.RowWithArrayOuterPojo> reader =
+                RowToPojoConverter.of(
+                        ConvertersTestFixtures.RowWithArrayOuterPojo.class, table, table);
+
+        ConvertersTestFixtures.RowWithArrayOuterPojo pojo =
+                new ConvertersTestFixtures.RowWithArrayOuterPojo();
+        pojo.id = 10;
+        pojo.data = new ConvertersTestFixtures.RowWithArrayPojo();
+        pojo.data.label = "scores";
+        pojo.data.values = new Integer[] {90, 85, 100};
+
+        GenericRow row = writer.toRow(pojo);
+        ConvertersTestFixtures.RowWithArrayOuterPojo back = reader.fromRow(row);
+
+        assertThat(back.id).isEqualTo(10);
+        assertThat(back.data).isNotNull();
+        assertThat(back.data.label).isEqualTo("scores");
+        assertThat(back.data.values).containsExactly(90, 85, 100);
+    }
+
+    @Test
+    public void testNestedRowWithMapFieldRoundTrip() {
+        RowType nestedRowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("name", DataTypes.STRING()),
+                        DataTypes.FIELD(
+                                "attrs", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT())));
+        RowType table =
+                RowType.builder().field("id", DataTypes.INT()).field("info", nestedRowType).build();
+
+        PojoToRowConverter<ConvertersTestFixtures.RowWithMapOuterPojo> writer =
+                PojoToRowConverter.of(
+                        ConvertersTestFixtures.RowWithMapOuterPojo.class, table, table);
+        RowToPojoConverter<ConvertersTestFixtures.RowWithMapOuterPojo> reader =
+                RowToPojoConverter.of(
+                        ConvertersTestFixtures.RowWithMapOuterPojo.class, table, table);
+
+        ConvertersTestFixtures.RowWithMapOuterPojo pojo =
+                new ConvertersTestFixtures.RowWithMapOuterPojo();
+        pojo.id = 5;
+        pojo.info = new ConvertersTestFixtures.RowWithMapPojo();
+        pojo.info.name = "config";
+        pojo.info.attrs = new HashMap<>();
+        pojo.info.attrs.put("timeout", 30);
+        pojo.info.attrs.put("retries", 3);
+
+        GenericRow row = writer.toRow(pojo);
+        ConvertersTestFixtures.RowWithMapOuterPojo back = reader.fromRow(row);
+
+        assertThat(back.id).isEqualTo(5);
+        assertThat(back.info).isNotNull();
+        assertThat(back.info.name).isEqualTo("config");
+        assertThat(back.info.attrs).containsEntry("timeout", 30);
+        assertThat(back.info.attrs).containsEntry("retries", 3);
+    }
+
+    @Test
+    public void testArrayOfNestedRowRoundTrip() {
+        RowType elementRowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("city", DataTypes.STRING()),
+                        DataTypes.FIELD("zipCode", DataTypes.INT()));
+        RowType table =
+                RowType.builder()
+                        .field("id", DataTypes.INT())
+                        .field("addresses", DataTypes.ARRAY(elementRowType))
+                        .build();
+
+        PojoToRowConverter<ConvertersTestFixtures.ArrayOfRowPojo> writer =
+                PojoToRowConverter.of(ConvertersTestFixtures.ArrayOfRowPojo.class, table, table);
+        RowToPojoConverter<ConvertersTestFixtures.ArrayOfRowPojo> reader =
+                RowToPojoConverter.of(ConvertersTestFixtures.ArrayOfRowPojo.class, table, table);
+
+        ConvertersTestFixtures.ArrayOfRowPojo pojo = new ConvertersTestFixtures.ArrayOfRowPojo();
+        pojo.id = 1;
+        ConvertersTestFixtures.AddressPojo addr1 = new ConvertersTestFixtures.AddressPojo();
+        addr1.city = "Beijing";
+        addr1.zipCode = 100000;
+        ConvertersTestFixtures.AddressPojo addr2 = new ConvertersTestFixtures.AddressPojo();
+        addr2.city = "Shanghai";
+        addr2.zipCode = 200000;
+        pojo.addresses = new ConvertersTestFixtures.AddressPojo[] {addr1, addr2};
+
+        GenericRow row = writer.toRow(pojo);
+        ConvertersTestFixtures.ArrayOfRowPojo back = reader.fromRow(row);
+
+        assertThat(back.id).isEqualTo(1);
+        assertThat(back.addresses).hasSize(2);
+        assertThat(back.addresses[0].city).isEqualTo("Beijing");
+        assertThat(back.addresses[0].zipCode).isEqualTo(100000);
+        assertThat(back.addresses[1].city).isEqualTo("Shanghai");
+        assertThat(back.addresses[1].zipCode).isEqualTo(200000);
+    }
+
+    @Test
+    public void testMapWithRowValuesRoundTrip() {
+        RowType valueRowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("city", DataTypes.STRING()),
+                        DataTypes.FIELD("zipCode", DataTypes.INT()));
+        RowType table =
+                RowType.builder()
+                        .field("id", DataTypes.INT())
+                        .field("addressMap", DataTypes.MAP(DataTypes.STRING(), valueRowType))
+                        .build();
+
+        PojoToRowConverter<ConvertersTestFixtures.MapOfRowPojo> writer =
+                PojoToRowConverter.of(ConvertersTestFixtures.MapOfRowPojo.class, table, table);
+        RowToPojoConverter<ConvertersTestFixtures.MapOfRowPojo> reader =
+                RowToPojoConverter.of(ConvertersTestFixtures.MapOfRowPojo.class, table, table);
+
+        ConvertersTestFixtures.MapOfRowPojo pojo = new ConvertersTestFixtures.MapOfRowPojo();
+        pojo.id = 1;
+        pojo.addressMap = new HashMap<>();
+        ConvertersTestFixtures.AddressPojo addr = new ConvertersTestFixtures.AddressPojo();
+        addr.city = "Beijing";
+        addr.zipCode = 100000;
+        pojo.addressMap.put("home", addr);
+
+        GenericRow row = writer.toRow(pojo);
+        ConvertersTestFixtures.MapOfRowPojo back = reader.fromRow(row);
+
+        assertThat(back.id).isEqualTo(1);
+        assertThat(back.addressMap).containsKey("home");
+        assertThat(back.addressMap.get("home")).isEqualTo(addr);
+    }
+
+    @Test
+    public void testListOfNestedRowRoundTrip() {
+        RowType elementRowType =
+                DataTypes.ROW(
+                        DataTypes.FIELD("city", DataTypes.STRING()),
+                        DataTypes.FIELD("zipCode", DataTypes.INT()));
+        RowType table =
+                RowType.builder()
+                        .field("id", DataTypes.INT())
+                        .field("addresses", DataTypes.ARRAY(elementRowType))
+                        .build();
+
+        PojoToRowConverter<ConvertersTestFixtures.ListOfRowPojo> writer =
+                PojoToRowConverter.of(ConvertersTestFixtures.ListOfRowPojo.class, table, table);
+        RowToPojoConverter<ConvertersTestFixtures.ListOfRowPojo> reader =
+                RowToPojoConverter.of(ConvertersTestFixtures.ListOfRowPojo.class, table, table);
+
+        ConvertersTestFixtures.AddressPojo addr1 = new ConvertersTestFixtures.AddressPojo();
+        addr1.city = "Beijing";
+        addr1.zipCode = 100000;
+        ConvertersTestFixtures.AddressPojo addr2 = new ConvertersTestFixtures.AddressPojo();
+        addr2.city = "Shanghai";
+        addr2.zipCode = 200000;
+
+        ConvertersTestFixtures.ListOfRowPojo pojo = new ConvertersTestFixtures.ListOfRowPojo();
+        pojo.id = 7;
+        pojo.addresses = java.util.Arrays.asList(addr1, addr2);
+
+        GenericRow row = writer.toRow(pojo);
+        ConvertersTestFixtures.ListOfRowPojo back = reader.fromRow(row);
+
+        assertThat(back.id).isEqualTo(7);
+        assertThat(back.addresses).hasSize(2);
+        assertThat(back.addresses.get(0)).isEqualTo(addr1);
+        assertThat(back.addresses.get(1)).isEqualTo(addr2);
+    }
 }

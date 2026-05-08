@@ -55,6 +55,7 @@ import org.apache.fluss.utils.types.Tuple2;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -85,6 +86,7 @@ class ZooKeeperClientTest {
 
     private static ZooKeeperClient zookeeperClient;
     private static String remoteDataDir;
+    private static ZkEpoch zkEpoch;
 
     @BeforeAll
     static void beforeAll() {
@@ -93,6 +95,12 @@ class ZooKeeperClientTest {
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
         remoteDataDir = zookeeperClient.getDefaultRemoteDataDir();
+    }
+
+    @BeforeEach
+    void beforeEach() throws Exception {
+        // create epoch node in beforeEach(), because it will always be cleaned up in afterEach()
+        zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("tmp");
     }
 
     @AfterEach
@@ -176,7 +184,8 @@ class ZooKeeperClientTest {
         // test update
         TableAssignment tableAssignment3 =
                 TableAssignment.builder().add(3, BucketAssignment.of(1, 5)).build();
-        zookeeperClient.updateTableAssignment(tableId1, tableAssignment3);
+        zookeeperClient.updateTableAssignment(
+                tableId1, tableAssignment3, zkEpoch.getCoordinatorEpochZkVersion());
         assertThat(zookeeperClient.getTableAssignment(tableId1)).contains(tableAssignment3);
 
         // test delete
@@ -193,19 +202,27 @@ class ZooKeeperClientTest {
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket2)).isEmpty();
 
         // try to register bucket leaderAndIsr
-        LeaderAndIsr leaderAndIsr1 = new LeaderAndIsr(1, 10, Arrays.asList(1, 2, 3), 100, 1000);
-        LeaderAndIsr leaderAndIsr2 = new LeaderAndIsr(2, 10, Arrays.asList(4, 5, 6), 100, 1000);
+        LeaderAndIsr leaderAndIsr1 =
+                new LeaderAndIsr(
+                        1, 10, Arrays.asList(1, 2, 3), Collections.singletonList(2), 0, 1000);
+        LeaderAndIsr leaderAndIsr2 =
+                new LeaderAndIsr(2, 10, Arrays.asList(4, 5, 6), Collections.emptyList(), 0, 1000);
 
-        zookeeperClient.registerLeaderAndIsr(tableBucket1, leaderAndIsr1);
-        zookeeperClient.registerLeaderAndIsr(tableBucket2, leaderAndIsr2);
+        zookeeperClient.registerLeaderAndIsr(
+                tableBucket1, leaderAndIsr1, zkEpoch.getCoordinatorEpochZkVersion());
+        zookeeperClient.registerLeaderAndIsr(
+                tableBucket2, leaderAndIsr2, zkEpoch.getCoordinatorEpochZkVersion());
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket1)).hasValue(leaderAndIsr1);
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket2)).hasValue(leaderAndIsr2);
         assertThat(zookeeperClient.getLeaderAndIsrs(Arrays.asList(tableBucket1, tableBucket2)))
                 .containsValues(leaderAndIsr1, leaderAndIsr2);
 
         // test update
-        leaderAndIsr1 = new LeaderAndIsr(2, 20, Collections.emptyList(), 200, 2000);
-        zookeeperClient.updateLeaderAndIsr(tableBucket1, leaderAndIsr1);
+        leaderAndIsr1 =
+                new LeaderAndIsr(
+                        2, 20, Collections.emptyList(), Collections.singletonList(3), 0, 2000);
+        zookeeperClient.updateLeaderAndIsr(
+                tableBucket1, leaderAndIsr1, zkEpoch.getCoordinatorEpochZkVersion());
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket1)).hasValue(leaderAndIsr1);
 
         // test delete
@@ -222,7 +239,13 @@ class ZooKeeperClientTest {
             TableBucket tableBucket =
                     isPartitionTable ? new TableBucket(1, 2L, i) : new TableBucket(1, i);
             LeaderAndIsr leaderAndIsr =
-                    new LeaderAndIsr(i, 10, Arrays.asList(i + 1, i + 2, i + 3), 100, 1000);
+                    new LeaderAndIsr(
+                            i,
+                            10,
+                            Arrays.asList(i + 1, i + 2, i + 3),
+                            Collections.emptyList(),
+                            0,
+                            1000);
             leaderAndIsrList.add(leaderAndIsr);
             RegisterTableBucketLeadAndIsrInfo info =
                     isPartitionTable
@@ -233,7 +256,8 @@ class ZooKeeperClientTest {
             tableBucketInfo.add(info);
         }
         // batch create
-        zookeeperClient.batchRegisterLeaderAndIsrForTablePartition(tableBucketInfo);
+        zookeeperClient.batchRegisterLeaderAndIsrForTablePartition(
+                tableBucketInfo, zkEpoch.getCoordinatorEpochZkVersion());
 
         for (int i = 0; i < 100; i++) {
             // each should register successful
@@ -258,12 +282,13 @@ class ZooKeeperClientTest {
                             LeaderAndIsr adjustLeaderAndIsr =
                                     originalLeaderAndIsr.newLeaderAndIsr(
                                             LeaderAndIsr.NO_LEADER,
-                                            originalLeaderAndIsr.isr().subList(0, 1));
+                                            originalLeaderAndIsr.isr().subList(0, 1),
+                                            Collections.emptyList());
                             leaderAndIsrUpdateList.add(adjustLeaderAndIsr);
                             entry.setValue(adjustLeaderAndIsr);
                         });
         // batch update
-        zookeeperClient.batchUpdateLeaderAndIsr(updateMap);
+        zookeeperClient.batchUpdateLeaderAndIsr(updateMap, zkEpoch.getCoordinatorEpochZkVersion());
         for (int i = 0; i < 100; i++) {
             // each should update successful
             Optional<LeaderAndIsr> optionalLeaderAndIsr =
@@ -282,9 +307,16 @@ class ZooKeeperClientTest {
         for (int i = 0; i < totalCount; i++) {
             TableBucket tableBucket = new TableBucket(1, i);
             LeaderAndIsr leaderAndIsr =
-                    new LeaderAndIsr(i, 10, Arrays.asList(i + 1, i + 2, i + 3), 100, 1000);
+                    new LeaderAndIsr(
+                            i,
+                            10,
+                            Arrays.asList(i + 1, i + 2, i + 3),
+                            Collections.emptyList(),
+                            0,
+                            1000);
             leaderAndIsrList.put(tableBucket, leaderAndIsr);
-            zookeeperClient.registerLeaderAndIsr(tableBucket, leaderAndIsr);
+            zookeeperClient.registerLeaderAndIsr(
+                    tableBucket, leaderAndIsr, zkEpoch.getCoordinatorEpochZkVersion());
         }
 
         // try to batch update
@@ -299,10 +331,12 @@ class ZooKeeperClientTest {
                                                     old.leader() + 1,
                                                     old.leaderEpoch() + 1,
                                                     old.isr(),
-                                                    old.coordinatorEpoch() + 1,
+                                                    Collections.emptyList(),
+                                                    old.coordinatorEpoch(),
                                                     old.bucketEpoch() + 1);
                                         }));
-        zookeeperClient.batchUpdateLeaderAndIsr(updateLeaderAndIsrList);
+        zookeeperClient.batchUpdateLeaderAndIsr(
+                updateLeaderAndIsrList, zkEpoch.getCoordinatorEpochZkVersion());
         for (Map.Entry<TableBucket, LeaderAndIsr> entry : updateLeaderAndIsrList.entrySet()) {
             TableBucket tableBucket = entry.getKey();
             LeaderAndIsr leaderAndIsr = entry.getValue();

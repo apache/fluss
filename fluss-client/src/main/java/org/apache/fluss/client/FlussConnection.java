@@ -48,7 +48,7 @@ import java.util.List;
 
 import static org.apache.fluss.client.utils.MetadataUtils.getOneAvailableTabletServerNode;
 import static org.apache.fluss.config.FlussConfigUtils.CLIENT_PREFIX;
-import static org.apache.fluss.utils.PropertiesUtils.extractPrefix;
+import static org.apache.fluss.utils.PropertiesUtils.extractAndRemovePrefix;
 
 /** A connection to Fluss cluster, and holds the client session resources. */
 public final class FlussConnection implements Connection {
@@ -74,7 +74,7 @@ public final class FlussConnection implements Connection {
         // only pass options with 'client.fs.' prefix
         FileSystem.initialize(
                 Configuration.fromMap(
-                        extractPrefix(new HashMap<>(conf.toMap()), CLIENT_PREFIX + "fs.")),
+                        extractAndRemovePrefix(new HashMap<>(conf.toMap()), CLIENT_PREFIX + "fs.")),
                 null);
         // for client metrics.
         setupClientMetricsConfiguration();

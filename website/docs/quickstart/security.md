@@ -105,7 +105,7 @@ services:
   #end
   #begin Flink cluster
   jobmanager:
-    image: apache/fluss-quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
+    image: apache/fluss-quickstart-flink:$FLUSS_QUICKSTART_FLINK_DOCKER_VERSION$
     ports:
       - "8083:8081"
     command: jobmanager
@@ -116,7 +116,7 @@ services:
     volumes:
       - shared-tmpfs:/tmp/paimon
   taskmanager:
-    image: apache/fluss-quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
+    image: apache/fluss-quickstart-flink:$FLUSS_QUICKSTART_FLINK_DOCKER_VERSION$
     depends_on:
       - jobmanager
     command: taskmanager
@@ -145,9 +145,6 @@ The Docker Compose environment consists of the following containers:
   It uses SASL/PLAIN for user authentication and defines three users: `admin`, `developer`, and `consumer`. The `admin` user is a `super.users` who has full administrative privileges on the Fluss cluster.
 - **Flink Cluster**: a Flink `JobManager` and a Flink `TaskManager` container to execute queries.
 
-**Note:** The `apache/fluss-quickstart-flink` image is based on [flink:1.20.3-java17](https://hub.docker.com/layers/library/flink/1.20-java17/images/sha256:296c7c23fa40a9a3547771b08fc65e25f06bc4cfd3549eee243c99890778cafc) and
-includes the [fluss-flink connector](engine-flink/getting-started.md) to simplify this guide.
-
 3. To start all containers, run:
 ```shell
 docker compose up -d
@@ -165,7 +162,7 @@ You can also visit http://localhost:8083/ to see if Flink is running normally.
 ### Enter into SQL-Client
 First, use the following command to enter the Flink SQL CLI Container:
 ```shell
-docker compose exec jobmanager ./sql-client
+docker compose exec jobmanager bin/sql-client.sh
 ```
 
 ### Create Catalogs for Each User
@@ -438,7 +435,7 @@ services:
   #end
   #begin Flink cluster
   jobmanager:
-    image: apache/fluss-quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
+    image: apache/fluss-quickstart-flink:$FLUSS_QUICKSTART_FLINK_DOCKER_VERSION$
     ports:
       - "8083:8081"
     command: jobmanager
@@ -449,7 +446,7 @@ services:
     volumes:
       - shared-tmpfs:/tmp/paimon
   taskmanager:
-    image: apache/fluss-quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
+    image: apache/fluss-quickstart-flink:$FLUSS_QUICKSTART_FLINK_DOCKER_VERSION$
     depends_on:
       - jobmanager
     command: taskmanager
@@ -474,7 +471,7 @@ volumes:
 ### Enter into SQL-Client
 First, use the following command to enter the Flink SQL CLI Container:
 ```shell
-docker compose exec jobmanager ./sql-client
+docker compose exec jobmanager bin/sql-client.sh
 ```
 
 ### Create Catalogs for Each User
@@ -625,5 +622,3 @@ CREATE TABLE `marketing_db`.`order` (
 [ERROR] Could not execute SQL statement. Reason:
 org.apache.fluss.exception.AuthorizationException: Principal FlussPrincipal{name='finance', type='User'} have no authorization to operate CREATE on resource Resource{type=DATABASE, name='marketing_db'} 
 ```
-
-

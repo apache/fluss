@@ -30,6 +30,7 @@ import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.zk.NOPErrorHandler;
+import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.RebalanceTask;
@@ -60,6 +61,7 @@ public class RebalanceManagerTest {
 
     private static ZooKeeperClient zookeeperClient;
     private static MetadataManager metadataManager;
+    private static ZkEpoch zkEpoch;
 
     private CoordinatorMetadataCache serverMetadataCache;
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
@@ -69,11 +71,12 @@ public class RebalanceManagerTest {
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
 
     @BeforeAll
-    static void baseBeforeAll() {
+    static void baseBeforeAll() throws Exception {
         zookeeperClient =
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+        zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("1");
     }
 
     @BeforeEach
@@ -136,7 +139,7 @@ public class RebalanceManagerTest {
                 zookeeperClient,
                 serverMetadataCache,
                 testCoordinatorChannelManager,
-                new CoordinatorContext(),
+                new CoordinatorContext(zkEpoch),
                 autoPartitionManager,
                 lakeTableTieringManager,
                 TestingMetricGroups.COORDINATOR_METRICS,

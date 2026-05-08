@@ -58,7 +58,7 @@ public class CompoundPredicate implements Predicate {
 
     @Override
     public boolean test(
-            long rowCount, InternalRow minValues, InternalRow maxValues, Long[] nullCounts) {
+            long rowCount, InternalRow minValues, InternalRow maxValues, int[] nullCounts) {
         return function.test(rowCount, minValues, maxValues, nullCounts, children);
     }
 
@@ -102,7 +102,7 @@ public class CompoundPredicate implements Predicate {
                 long rowCount,
                 InternalRow minValues,
                 InternalRow maxValues,
-                Long[] nullCounts,
+                int[] nullCounts,
                 List<Predicate> children);
 
         public abstract Optional<Predicate> negate(List<Predicate> children);

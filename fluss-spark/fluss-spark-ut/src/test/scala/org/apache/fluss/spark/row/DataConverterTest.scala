@@ -17,13 +17,15 @@
 
 package org.apache.fluss.spark.row
 
-import org.apache.fluss.row.{BinaryString, Decimal => FlussDecimal, GenericArray, GenericRow, TimestampLtz, TimestampNtz}
-import org.apache.fluss.types.{ArrayType, CharType, DataTypes, DecimalType, LocalZonedTimestampType, RowType, TimestampType}
+import org.apache.fluss.row.{BinaryString, Decimal => FlussDecimal, GenericArray, GenericMap, GenericRow, TimestampLtz, TimestampNtz}
+import org.apache.fluss.types.{ArrayType, CharType, DataTypes, DecimalType, LocalZonedTimestampType, MapType, RowType, TimestampType}
 
 import org.apache.spark.sql.types.{Decimal => SparkDecimal}
 import org.apache.spark.unsafe.types.UTF8String
 import org.assertj.core.api.Assertions.assertThat
 import org.scalatest.funsuite.AnyFunSuite
+
+import scala.collection.JavaConverters._
 
 class DataConverterTest extends AnyFunSuite {
 
@@ -77,21 +79,21 @@ class DataConverterTest extends AnyFunSuite {
     val sparkDecimal = DataConverter.toSparkDecimal(flussDecimal)
 
     assertThat(sparkDecimal).isInstanceOf(classOf[SparkDecimal])
-    assertThat(sparkDecimal.toBigDecimal.doubleValue()).isEqualTo(123.45)
+    assertThat(sparkDecimal.toBigDecimal.doubleValue).isEqualTo(123.45)
   }
 
   test("toSparkDecimal: negative decimal") {
     val flussDecimal = FlussDecimal.fromBigDecimal(new java.math.BigDecimal("-999.99"), 5, 2)
     val sparkDecimal = DataConverter.toSparkDecimal(flussDecimal)
 
-    assertThat(sparkDecimal.toBigDecimal.doubleValue()).isEqualTo(-999.99)
+    assertThat(sparkDecimal.toBigDecimal.doubleValue).isEqualTo(-999.99)
   }
 
   test("toSparkDecimal: zero") {
     val flussDecimal = FlussDecimal.fromBigDecimal(java.math.BigDecimal.ZERO, 5, 2)
     val sparkDecimal = DataConverter.toSparkDecimal(flussDecimal)
 
-    assertThat(sparkDecimal.toBigDecimal.doubleValue()).isEqualTo(0.0)
+    assertThat(sparkDecimal.toBigDecimal.doubleValue).isEqualTo(0.0)
   }
 
   test("toSparkUTF8String: ASCII string") {
@@ -274,6 +276,28 @@ class DataConverterTest extends AnyFunSuite {
     assertThat(result.asInstanceOf[Long]).isEqualTo(2000000000L) // microseconds
   }
 
+  test("toSparkMap: Map type") {
+    val flussMap = new GenericMap(
+      Map(
+        BinaryString.fromString("a") -> Integer.valueOf(1),
+        BinaryString.fromString("b") -> Integer.valueOf(2)).asJava)
+    val mapType = new MapType(DataTypes.STRING, DataTypes.INT)
+    val sparkMap = DataConverter.toSparkMap(flussMap, mapType)
+    assertThat(sparkMap.numElements()).isEqualTo(2)
+
+    val keyArray = sparkMap.keyArray()
+    val valueArray = sparkMap.valueArray()
+    assertThat(keyArray.numElements()).isEqualTo(2)
+    assertThat(valueArray.numElements()).isEqualTo(2)
+
+    val actualMap =
+      (0 until sparkMap.numElements())
+        .map(i => keyArray.getUTF8String(i).toString -> valueArray.getInt(i))
+        .toMap
+
+    assertThat(actualMap).isEqualTo(Map("a" -> 1, "b" -> 2))
+  }
+
   test("toSparkObject: ROW type") {
     val rowType = RowType
       .builder()
@@ -287,11 +311,5 @@ class DataConverterTest extends AnyFunSuite {
 
     assertThat(result).isNotNull()
     assertThat(result.asInstanceOf[FlussAsSparkRow].getInt(0)).isEqualTo(42)
-  }
-
-  test("toSparkMap: unsupported") {
-    assertThrows[UnsupportedOperationException] {
-      DataConverter.toSparkMap(null, null)
-    }
   }
 }

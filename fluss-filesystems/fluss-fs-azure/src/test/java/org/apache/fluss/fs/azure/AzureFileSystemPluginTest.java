@@ -43,12 +43,14 @@ public class AzureFileSystemPluginTest {
         AzureFileSystemPlugin plugin = new AbfsFileSystemPlugin();
         Configuration flussConfig = new Configuration();
         flussConfig.setString("fs.azure.some.prop", "some-value");
+        flussConfig.setString("azure.another.prop", "another-value");
         flussConfig.setString("other.prop", "other-value");
 
         org.apache.hadoop.conf.Configuration hadoopConfig =
                 plugin.getHadoopConfiguration(flussConfig);
 
         assertThat(hadoopConfig.get("fs.azure.some.prop")).isEqualTo("some-value");
+        assertThat(hadoopConfig.get("fs.azure.another.prop")).isEqualTo("another-value");
         assertThat(hadoopConfig.get("other.prop")).isNull();
     }
 

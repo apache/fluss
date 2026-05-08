@@ -562,9 +562,10 @@ public final class KvTablet {
 
         byte[] oldValueBytes = getFromBufferOrKv(key);
         if (oldValueBytes == null) {
+            BinaryValue valueToInsert = currentMerger.merge(null, currentValue);
             return applyInsert(
                     key,
-                    currentValue,
+                    valueToInsert,
                     walBuilder,
                     latestSchemaRow,
                     logOffset,

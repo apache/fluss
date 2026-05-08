@@ -54,7 +54,7 @@ public class LogRecordBatchStatisticsParserTest {
         RowType rowType = DataTypes.ROW(new IntType(false), new StringType(false));
 
         // Create test data
-        Long[] nullCounts = new Long[] {10L, 0L};
+        int[] nullCounts = new int[] {10, 0};
         IndexedRow minValues = createTestIndexedRow(rowType, -100, "aaa");
         IndexedRow maxValues = createTestIndexedRow(rowType, 999, "zzz");
 
@@ -79,7 +79,7 @@ public class LogRecordBatchStatisticsParserTest {
         RowType rowType = DataTypes.ROW(new IntType(false), new StringType(false));
 
         // Create test data
-        Long[] nullCounts = new Long[] {3L, 7L};
+        int[] nullCounts = new int[] {3, 7};
         IndexedRow minValues = createTestIndexedRow(rowType, 0, "first");
         IndexedRow maxValues = createTestIndexedRow(rowType, 500, "last");
 
@@ -106,7 +106,7 @@ public class LogRecordBatchStatisticsParserTest {
         RowType rowType = DataTypes.ROW(new IntType(false), new StringType(false));
 
         // Create test data
-        Long[] nullCounts = new Long[] {1L, 2L};
+        int[] nullCounts = new int[] {1, 2};
         IndexedRow minValues = createTestIndexedRow(rowType, 42, "test");
         IndexedRow maxValues = createTestIndexedRow(rowType, 84, "testing");
 
@@ -132,7 +132,7 @@ public class LogRecordBatchStatisticsParserTest {
         RowType rowType = DataTypes.ROW(new IntType(false), new StringType(false));
 
         // Create valid test statistics
-        Long[] nullCounts = new Long[] {1L, 2L};
+        int[] nullCounts = new int[] {1, 2};
         IndexedRow minValues = createTestIndexedRow(rowType, 1, "min");
         IndexedRow maxValues = createTestIndexedRow(rowType, 100, "max");
 
@@ -165,7 +165,7 @@ public class LogRecordBatchStatisticsParserTest {
         RowType rowType = DataTypes.ROW(new IntType(false), new StringType(false));
 
         // Create test statistics
-        Long[] nullCounts = new Long[] {1L, 2L};
+        int[] nullCounts = new int[] {1, 2};
         IndexedRow minValues = createTestIndexedRow(rowType, 1, "a");
         IndexedRow maxValues = createTestIndexedRow(rowType, 100, "z");
 
@@ -202,7 +202,7 @@ public class LogRecordBatchStatisticsParserTest {
         // Test basic write and parse cycle without detailed verification
         RowType rowType = DataTypes.ROW(new IntType(false));
 
-        Long[] nullCounts = new Long[] {0L};
+        int[] nullCounts = new int[] {0};
         IndexedRow minValues = createTestIndexedRow(rowType, 1);
         IndexedRow maxValues = createTestIndexedRow(rowType, 100);
 
@@ -251,7 +251,7 @@ public class LogRecordBatchStatisticsParserTest {
             LogRecordBatchStatisticsWriter writer,
             InternalRow minValues,
             InternalRow maxValues,
-            Long[] nullCounts)
+            int[] nullCounts)
             throws IOException {
 
         // Allocate enough memory for statistics

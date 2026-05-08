@@ -42,7 +42,6 @@ import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbLakeTieringStats;
 import org.apache.fluss.rpc.messages.PbLakeTieringTableInfo;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
-import org.apache.fluss.utils.MapUtils;
 
 import org.apache.flink.api.connector.source.ReaderInfo;
 import org.apache.flink.api.connector.source.SourceEvent;
@@ -66,6 +65,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -134,9 +134,9 @@ public class TieringSourceEnumerator
         this.pollTieringTableIntervalMs = pollTieringTableIntervalMs;
         this.pendingSplits = Collections.synchronizedList(new ArrayList<>());
         this.readersAwaitingSplit = Collections.synchronizedSet(new TreeSet<>());
-        this.tieringTableEpochs = MapUtils.newConcurrentHashMap();
-        this.finishedTables = MapUtils.newConcurrentHashMap();
-        this.failedTableEpochs = MapUtils.newConcurrentHashMap();
+        this.tieringTableEpochs = new ConcurrentHashMap<>();
+        this.finishedTables = new ConcurrentHashMap<>();
+        this.failedTableEpochs = new ConcurrentHashMap<>();
         this.tieringReachMaxDurationsTables = Collections.synchronizedSet(new TreeSet<>());
     }
 

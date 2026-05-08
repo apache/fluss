@@ -95,7 +95,7 @@ public class LogRecordBatchStatisticsCollectorTest {
 
         // All null counts should be 0
         for (int i = 0; i < 6; i++) {
-            assertThat(statistics.getNullCounts()[i]).isEqualTo(0L);
+            assertThat(statistics.getNullCounts()[i]).isEqualTo(0);
         }
     }
 
@@ -160,9 +160,9 @@ public class LogRecordBatchStatisticsCollectorTest {
                 LogRecordBatchStatisticsParser.parseStatistics(segment, 0, nullableRowType, 1);
 
         // Verify null counts
-        assertThat(statistics.getNullCounts()[0]).isEqualTo(1L);
-        assertThat(statistics.getNullCounts()[1]).isEqualTo(1L);
-        assertThat(statistics.getNullCounts()[2]).isEqualTo(1L);
+        assertThat(statistics.getNullCounts()[0]).isEqualTo(1);
+        assertThat(statistics.getNullCounts()[1]).isEqualTo(1);
+        assertThat(statistics.getNullCounts()[2]).isEqualTo(1);
 
         // Verify min/max values exclude nulls
         assertThat(statistics.getMinValues().getInt(0)).isEqualTo(1);
@@ -308,9 +308,9 @@ public class LogRecordBatchStatisticsCollectorTest {
         assertThat(statistics).isNotNull();
 
         // All null counts should be 0
-        Long[] nullCounts = statistics.getNullCounts();
+        int[] nullCounts = statistics.getNullCounts();
         for (int i = 0; i < rowType.getFieldCount(); i++) {
-            assertThat(nullCounts[i]).isEqualTo(0L);
+            assertThat(nullCounts[i]).isEqualTo(0);
         }
 
         // Min/max values row exists but all fields should be null since no rows were processed
@@ -368,8 +368,8 @@ public class LogRecordBatchStatisticsCollectorTest {
         assertThat(maxValues.isNullAt(2)).isTrue();
 
         // Other columns should have correct min/max
-        assertThat(statistics.getNullCounts()[0]).isEqualTo(0L);
-        assertThat(statistics.getNullCounts()[1]).isEqualTo(0L);
+        assertThat(statistics.getNullCounts()[0]).isEqualTo(0);
+        assertThat(statistics.getNullCounts()[1]).isEqualTo(0);
         assertThat(minValues.getInt(0)).isEqualTo(1);
         assertThat(maxValues.getInt(0)).isEqualTo(5);
         assertThat(minValues.getString(1)).isEqualTo(BinaryString.fromString("a"));

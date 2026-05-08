@@ -315,6 +315,7 @@ public class ReplicaFetcherITCase {
                         currentLeaderAndIsr.leader(),
                         currentLeaderAndIsr.leaderEpoch() + 1,
                         currentLeaderAndIsr.isr(),
+                        Collections.emptyList(),
                         currentLeaderAndIsr.coordinatorEpoch(),
                         currentLeaderAndIsr.bucketEpoch());
         FLUSS_CLUSTER_EXTENSION.notifyLeaderAndIsr(

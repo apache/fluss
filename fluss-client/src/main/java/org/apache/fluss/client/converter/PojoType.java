@@ -23,6 +23,7 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.Type;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Locale;
@@ -98,7 +99,13 @@ final class PojoType<T> {
             }
             props.put(
                     name,
-                    new Property(name, effectiveType, publicField ? field : null, getter, setter));
+                    new Property(
+                            name,
+                            effectiveType,
+                            field.getGenericType(),
+                            publicField ? field : null,
+                            getter,
+                            setter));
         }
 
         return new PojoType<>(pojoClass, ctor, props);
@@ -264,6 +271,9 @@ final class PojoType<T> {
     static final class Property {
         final String name;
         final Class<?> type;
+        /** The generic type of the field (e.g. {@code Map<String, AddressPojo>}). */
+        final Type genericType;
+
         @Nullable final Field publicField;
         @Nullable final Method getter;
         @Nullable final Method setter;
@@ -271,11 +281,13 @@ final class PojoType<T> {
         Property(
                 String name,
                 Class<?> type,
+                Type genericType,
                 @Nullable Field publicField,
                 @Nullable Method getter,
                 @Nullable Method setter) {
             this.name = Objects.requireNonNull(name, "name");
             this.type = Objects.requireNonNull(type, "type");
+            this.genericType = Objects.requireNonNull(genericType, "genericType");
             this.publicField = publicField;
             this.getter = getter;
             this.setter = setter;

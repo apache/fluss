@@ -83,6 +83,8 @@ import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.ScanKvRequest;
+import org.apache.fluss.rpc.messages.ScanKvResponse;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
@@ -285,7 +287,29 @@ public class TestTabletServerGateway implements TabletServerGateway {
             notifyLeaderAndIsrResponse.addAllNotifyBucketsLeaderResps(bucketsResps);
             return CompletableFuture.completedFuture(notifyLeaderAndIsrResponse);
         } else {
-            return CompletableFuture.completedFuture(new NotifyLeaderAndIsrResponse());
+            // Build success responses for all buckets in the request so that
+            // the coordinator can identify which buckets have been acknowledged.
+            List<PbNotifyLeaderAndIsrRespForBucket> bucketsResps = new ArrayList<>();
+            for (PbNotifyLeaderAndIsrReqForBucket pbNotifyLeaderForBucket :
+                    notifyLeaderAndIsrRequest.getNotifyBucketsLeaderReqsList()) {
+                PbNotifyLeaderAndIsrRespForBucket pbNotifyLeaderRespForBucket =
+                        new PbNotifyLeaderAndIsrRespForBucket();
+                pbNotifyLeaderRespForBucket
+                        .setTableBucket()
+                        .setTableId(pbNotifyLeaderForBucket.getTableBucket().getTableId())
+                        .setBucketId(pbNotifyLeaderForBucket.getTableBucket().getBucketId());
+                if (pbNotifyLeaderForBucket.getTableBucket().hasPartitionId()) {
+                    pbNotifyLeaderRespForBucket
+                            .getTableBucket()
+                            .setPartitionId(
+                                    pbNotifyLeaderForBucket.getTableBucket().getPartitionId());
+                }
+                bucketsResps.add(pbNotifyLeaderRespForBucket);
+            }
+            NotifyLeaderAndIsrResponse notifyLeaderAndIsrResponse =
+                    new NotifyLeaderAndIsrResponse();
+            notifyLeaderAndIsrResponse.addAllNotifyBucketsLeaderResps(bucketsResps);
+            return CompletableFuture.completedFuture(notifyLeaderAndIsrResponse);
         }
     }
 
@@ -430,5 +454,10 @@ public class TestTabletServerGateway implements TabletServerGateway {
         StopReplicaResponse stopReplicaResponse = new StopReplicaResponse();
         stopReplicaResponse.addAllStopReplicasResps(protoStopReplicaRespForBuckets);
         return stopReplicaResponse;
+    }
+
+    @Override
+    public CompletableFuture<ScanKvResponse> scanKv(ScanKvRequest request) {
+        return null;
     }
 }

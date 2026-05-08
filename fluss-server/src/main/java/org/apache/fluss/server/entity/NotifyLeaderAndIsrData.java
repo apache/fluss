@@ -85,4 +85,12 @@ public final class NotifyLeaderAndIsrData {
     public LeaderAndIsr getLeaderAndIsr() {
         return leaderAndIsr;
     }
+
+    public List<Integer> getStandbyReplicas() {
+        return leaderAndIsr.standbyReplicas();
+    }
+
+    public int[] getStandbyReplicasArray() {
+        return leaderAndIsr.standbyReplicas().stream().mapToInt(Integer::intValue).toArray();
+    }
 }

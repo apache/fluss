@@ -30,6 +30,7 @@ import org.apache.fluss.client.table.scanner.log.TypedLogScanner;
 import org.apache.fluss.client.table.scanner.log.TypedLogScannerImpl;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
@@ -122,6 +123,15 @@ public class TableScan implements Scan {
                     String.format(
                             "LogScanner doesn't support limit pushdown. Table: %s, requested limit: %d",
                             tableInfo.getTablePath(), limit));
+        }
+
+        if (recordBatchFilter != null
+                && tableInfo.getTableConfig().getLogFormat() != LogFormat.ARROW) {
+            throw new UnsupportedOperationException(
+                    String.format(
+                            "Filter pushdown is only supported for ARROW log format. "
+                                    + "Table: %s, current log format: %s",
+                            tableInfo.getTablePath(), tableInfo.getTableConfig().getLogFormat()));
         }
 
         return new LogScannerImpl(

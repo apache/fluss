@@ -177,7 +177,7 @@ class PaimonLakeSourceTest extends PaimonSourceTestBase {
                 long rowCount,
                 Object min,
                 Object max,
-                Long nullCount,
+                long nullCount,
                 List<Object> literals) {
             return false;
         }

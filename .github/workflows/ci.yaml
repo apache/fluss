@@ -24,10 +24,12 @@ on:
       - ci-**
     paths-ignore:
       - 'website/**'
+      - 'helm/**'
       - '**/*.md'
   pull_request:
     paths-ignore:
       - 'website/**'
+      - 'helm/**'
       - '**/*.md'
 
 concurrency:

@@ -73,6 +73,8 @@ public class FlinkSource<OUT>
     @Nullable private final LakeSource<LakeSplit> lakeSource;
     private final LeaseContext leaseContext;
 
+    @Nullable private final Predicate logRecordBatchFilter;
+
     public FlinkSource(
             Configuration flussConf,
             TablePath tablePath,
@@ -80,6 +82,7 @@ public class FlinkSource<OUT>
             boolean isPartitioned,
             RowType sourceOutputType,
             @Nullable int[] projectedFields,
+            @Nullable Predicate logRecordBatchFilter,
             OffsetsInitializer offsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             FlussDeserializationSchema<OUT> deserializationSchema,
@@ -93,6 +96,7 @@ public class FlinkSource<OUT>
                 isPartitioned,
                 sourceOutputType,
                 projectedFields,
+                logRecordBatchFilter,
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 deserializationSchema,
@@ -109,6 +113,7 @@ public class FlinkSource<OUT>
             boolean isPartitioned,
             RowType sourceOutputType,
             @Nullable int[] projectedFields,
+            @Nullable Predicate logRecordBatchFilter,
             OffsetsInitializer offsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             FlussDeserializationSchema<OUT> deserializationSchema,
@@ -122,6 +127,7 @@ public class FlinkSource<OUT>
         this.isPartitioned = isPartitioned;
         this.sourceOutputType = sourceOutputType;
         this.projectedFields = projectedFields;
+        this.logRecordBatchFilter = logRecordBatchFilter;
         this.offsetsInitializer = offsetsInitializer;
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.deserializationSchema = deserializationSchema;
@@ -213,6 +219,7 @@ public class FlinkSource<OUT>
                 sourceOutputType,
                 context,
                 projectedFields,
+                logRecordBatchFilter,
                 flinkSourceReaderMetrics,
                 recordEmitter,
                 lakeSource);

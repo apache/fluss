@@ -43,6 +43,42 @@ tablet:
     enabled: false
     size: 1Gi
     storageClass:
+  extraVolumes: []
+  extraVolumeMounts: []
+  initContainers: []
+  extraEnv: []
+  envFrom: []
+  podAnnotations: {}
+  podLabels: {}
+  podDisruptionBudget:
+    enabled: false
+    # minAvailable: 1
+    # maxUnavailable: 1
+  # Pod scheduling configuration
+  affinity: {}
+  # Example: spread tablet server pods across availability zones and nodes.
+  # Replace `<release-name>` below with your Helm release name (the value
+  # passed to `helm install <release-name>`) before uncommenting.
+  # affinity:
+  #   podAntiAffinity:
+  #     preferredDuringSchedulingIgnoredDuringExecution:
+  #       - weight: 100
+  #         podAffinityTerm:
+  #           topologyKey: topology.kubernetes.io/zone
+  #           labelSelector:
+  #             matchLabels:
+  #               app.kubernetes.io/instance: <release-name>
+  #               app.kubernetes.io/component: tablet
+  #       - weight: 50
+  #         podAffinityTerm:
+  #           topologyKey: kubernetes.io/hostname
+  #           labelSelector:
+  #             matchLabels:
+  #               app.kubernetes.io/instance: <release-name>
+  #               app.kubernetes.io/component: tablet
+  nodeSelector: {}
+  tolerations: []
+  topologySpreadConstraints: []
 
 coordinator:
   numberOfReplicas: 1
@@ -50,6 +86,21 @@ coordinator:
     enabled: false
     size: 1Gi
     storageClass:
+  extraVolumes: []
+  extraVolumeMounts: []
+  initContainers: []
+  extraEnv: []
+  envFrom: []
+  podAnnotations: {}
+  podLabels: {}
+  podDisruptionBudget:
+    enabled: false
+    # minAvailable: 1
+    # maxUnavailable: 1
+  affinity: {}
+  nodeSelector: {}
+  tolerations: []
+  topologySpreadConstraints: []
 
 # Fluss listener configurations
 listeners:
@@ -65,7 +116,16 @@ security:
       # "" | plain
       mechanism: ""
       plain:
+        # Each entry is either a literal {username, password} pair or an
+        # `existingSecret` reference that sources both from a Secret (same shape
+        # as internal/zookeeper). Mixing within one entry is not allowed.
         users: []
+        # - username: alice
+        #   password: alice-pass
+        # - existingSecret:
+        #     name: fluss-client-sasl-bob
+        #     usernameKey: username
+        #     passwordKey: password
 
   internal:
     sasl:
@@ -74,6 +134,12 @@ security:
       plain:
         username: ""
         password: ""
+        # When set, overrides literal username/password above.
+        existingSecret: {}
+        # existingSecret:
+        #   name: fluss-internal-sasl
+        #   usernameKey: username
+        #   passwordKey: password
 
   zookeeper:
     sasl:
@@ -83,6 +149,16 @@ security:
         username: ""
         password: ""
         loginModuleClass: "org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.server.auth.DigestLoginModule"
+        # When set, overrides literal username/password above.
+        existingSecret: {}
+        # existingSecret:
+        #   name: fluss-zk-sasl
+        #   usernameKey: username
+        #   passwordKey: password
+
+  # JAAS config is rendered at pod startup by an init container that reads a
+  # template ConfigMap and substitutes credentials from env. The init container
+  # reuses the main Fluss image (already available on the node).
 
 metrics:
   reporters: ""

@@ -29,7 +29,6 @@ import org.apache.fluss.server.metrics.group.AbstractUserMetricGroup;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.metrics.group.UserMetricGroup;
 import org.apache.fluss.server.metrics.group.UserPerTableMetricGroup;
-import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.concurrent.Scheduler;
 
 import org.slf4j.Logger;
@@ -39,6 +38,7 @@ import javax.annotation.Nullable;
 
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -71,7 +71,7 @@ public class UserMetrics implements AutoCloseable {
     private final ScheduledFuture<?> schedule;
 
     private final ConcurrentMap<MetricKey, AbstractUserMetricGroup> metrics =
-            MapUtils.newConcurrentHashMap();
+            new ConcurrentHashMap<>();
     private final AtomicBoolean isClosed = new AtomicBoolean(false);
 
     public UserMetrics(

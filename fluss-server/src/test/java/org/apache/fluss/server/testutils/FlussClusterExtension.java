@@ -921,6 +921,11 @@ public final class FlussClusterExtension
         return waitLeaderAndIsrReady(tb).leader();
     }
 
+    public int waitAndGetStandby(TableBucket tb) {
+        List<Integer> standbyReplicas = waitLeaderAndIsrReady(tb).standbyReplicas();
+        return standbyReplicas.get(0);
+    }
+
     public LeaderAndIsr waitLeaderAndIsrReady(TableBucket tb) {
         ZooKeeperClient zkClient = getZooKeeperClient();
         return waitValue(
@@ -942,11 +947,16 @@ public final class FlussClusterExtension
         return coordinatorServer;
     }
 
-    public void waitUntilCoordinatorServerElected() throws Exception {
+    private void waitUntilCoordinatorServerElected() {
         waitUntil(
                 () -> zooKeeperClient.getCoordinatorLeaderAddress().isPresent(),
                 Duration.ofSeconds(10),
                 "Fail to wait coordinator server elected");
+        // we need to wait some time for the coordinator leader start services after election
+        waitUntil(
+                () -> coordinatorServer.getCoordinatorService().isLeader(),
+                Duration.ofSeconds(10),
+                "Coordinator leader did not recognize itself as leader");
     }
 
     // --------------------------------------------------------------------------------------------

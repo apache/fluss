@@ -27,7 +27,6 @@ import org.apache.fluss.server.zk.data.lease.KvSnapshotTableLease;
 import org.apache.fluss.server.zk.data.lease.KvSnapshotTableLeaseJsonSerde;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.utils.IOUtils;
-import org.apache.fluss.utils.MapUtils;
 
 import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.AfterEach;
@@ -99,7 +98,7 @@ public class KvSnapshotLeaseMetadataManagerTest {
         Map<Long, KvSnapshotTableLease> tableIdToTableLease = new HashMap<>();
         tableIdToTableLease.put(1L, new KvSnapshotTableLease(1L, new Long[] {100L, -1L}));
 
-        ConcurrentHashMap<Long, Long[]> partitionSnapshots = MapUtils.newConcurrentHashMap();
+        ConcurrentHashMap<Long, Long[]> partitionSnapshots = new ConcurrentHashMap<>();
         partitionSnapshots.put(1000L, new Long[] {111L, 122L});
         partitionSnapshots.put(1001L, new Long[] {122L, -1L});
         tableIdToTableLease.put(2L, new KvSnapshotTableLease(2L, partitionSnapshots));

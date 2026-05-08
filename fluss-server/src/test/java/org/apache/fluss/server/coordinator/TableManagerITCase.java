@@ -514,6 +514,7 @@ class TableManagerITCase {
                     .updateMetadata(
                             makeUpdateMetadataRequest(
                                     coordinatorServerInfo,
+                                    null,
                                     new HashSet<>(tabletServerInfos),
                                     Collections.emptyList(),
                                     Collections.emptyList()))
@@ -652,6 +653,10 @@ class TableManagerITCase {
                     .updateMetadata(
                             makeLegacyUpdateMetadataRequest(
                                     Optional.of(coordinatorServerInfo),
+                                    FLUSS_CLUSTER_EXTENSION
+                                            .getCoordinatorServer()
+                                            .getCoordinatorEventProcessor()
+                                            .getCoordinatorEpoch(),
                                     new HashSet<>(tabletServerInfos)))
                     .get();
         }
@@ -873,7 +878,9 @@ class TableManagerITCase {
 
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     private UpdateMetadataRequest makeLegacyUpdateMetadataRequest(
-            Optional<ServerInfo> coordinatorServer, Set<ServerInfo> aliveTableServers) {
+            Optional<ServerInfo> coordinatorServer,
+            int coordinatorEpoch,
+            Set<ServerInfo> aliveTableServers) {
         UpdateMetadataRequest updateMetadataRequest = new UpdateMetadataRequest();
         Set<PbServerNode> aliveTableServerNodes = new HashSet<>();
         for (ServerInfo serverInfo : aliveTableServers) {
@@ -895,6 +902,7 @@ class TableManagerITCase {
                 node -> {
                     Endpoint endpoint = node.endpoints().get(0);
                     updateMetadataRequest
+                            .setCoordinatorEpoch(coordinatorEpoch)
                             .setCoordinatorServer()
                             .setNodeId(node.id())
                             .setHost(endpoint.getHost())
