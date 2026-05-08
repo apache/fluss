@@ -74,11 +74,9 @@ object FlussLakeBatch extends Logging {
       lakeSource: LakeSource[LakeSplit],
       predicates: java.util.List[FlussPredicate]): LakeSource.FilterPushDownResult = {
     val result = lakeSource.withFilters(predicates)
-    logDebug {
-      val accepted = result.acceptedPredicates().size()
-      val remaining = result.remainingPredicates().size()
-      s"Lake source accepted $accepted of ${accepted + remaining} pushed predicates"
-    }
+    logDebug(
+      s"Lake source accepted ${result.acceptedPredicates()}, " +
+        s"remaining ${result.remainingPredicates()}")
     result
   }
 
