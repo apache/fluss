@@ -22,6 +22,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LogStorageException;
+import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -338,6 +339,15 @@ public final class LogManager extends TabletManagerBase {
         PhysicalTablePath physicalTablePath = pathAndBucket.f0;
         TablePath tablePath = physicalTablePath.getTablePath();
         TableInfo tableInfo = getTableInfo(zkClient, tablePath);
+
+        // to check the partition existence
+        Long partitionId = tableBucket.getPartitionId();
+        if (partitionId != null) {
+            if (!zkClient.getPartitionIdAndNames(tablePath).keySet().contains(partitionId)) {
+                throw new PartitionNotExistException("Partition not exist");
+            }
+        }
+
         LogTablet logTablet =
                 LogTablet.create(
                         physicalTablePath,
@@ -487,9 +497,10 @@ public final class LogManager extends TabletManagerBase {
                     loadLog(tabletDir, cleanShutdown, recoveryPoints, conf, clock);
                 } catch (Exception e) {
                     LOG.error("Fail to loadLog from {}", tabletDir, e);
-                    if (e instanceof SchemaNotExistException) {
+                    if (e instanceof SchemaNotExistException
+                            || e instanceof PartitionNotExistException) {
                         LOG.error(
-                                "schema not exist, table for {} has already been dropped, the residual data will be removed.",
+                                "table bucket for {} has already been dropped, the residual data will be removed.",
                                 tabletDir,
                                 e);
                         FileUtils.deleteDirectoryQuietly(tabletDir);
