@@ -166,7 +166,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
             // register all readers
             registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 0);
-            waitUntilTieringTableSplitAssignmentReady(context, DEFAULT_BUCKET_NUM, 3000L);
+            waitUntilTieringTableSplitAssignmentReady(context, DEFAULT_BUCKET_NUM, 1000L);
 
             List<TieringSplit> expectedSnapshotAssignment = new ArrayList<>();
             for (int tableBucket = 0; tableBucket < DEFAULT_BUCKET_NUM; tableBucket++) {
@@ -457,7 +457,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                             0,
                             1);
 
-            waitUntilTieringTableSplitAssignmentReady(context, partitionNameByIds.size(), 3000L);
+            waitUntilTieringTableSplitAssignmentReady(context, partitionNameByIds.size(), 1000L);
 
             List<TieringSplit> expectedAssignment = new ArrayList<>();
             for (Map.Entry<String, Long> partitionNameById : partitionNameByIds.entrySet()) {
@@ -705,13 +705,25 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             int expectedSplitsNum,
             long sleepMs)
             throws Throwable {
+        long startTime = System.currentTimeMillis();
+        long timeoutMs = 10000; // 10秒超时
+
         while (context.getSplitsAssignmentSequence().size() < expectedSplitsNum) {
+            if (System.currentTimeMillis() - startTime > timeoutMs) {
+                throw new AssertionError(
+                        String.format(
+                                "等待分配超时: 期望 %d 个分配, 实际 %d 个分配, 超时时间 %dms",
+                                expectedSplitsNum,
+                                context.getSplitsAssignmentSequence().size(),
+                                timeoutMs));
+            }
+
             if (!context.getPeriodicCallables().isEmpty()) {
                 context.runPeriodicCallable(0);
             } else {
                 context.runNextOneTimeCallable();
             }
-            Thread.sleep(sleepMs);
+            Thread.sleep(Math.min(sleepMs, 100)); // 最大等待100ms
         }
     }
 
@@ -785,7 +797,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
             // register all readers
             registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 0);
-            waitUntilTieringTableSplitAssignmentReady(context, DEFAULT_BUCKET_NUM, 3000L);
+            waitUntilTieringTableSplitAssignmentReady(context, DEFAULT_BUCKET_NUM, 1000L);
 
             // Lease should be acquired
             assertThat(enumerator.getLeasedBucketsByTable()).containsOnlyKeys(tableId);
@@ -814,7 +826,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
             // register all readers with attempt 0
             registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 0);
-            waitUntilTieringTableSplitAssignmentReady(context, DEFAULT_BUCKET_NUM, 3000L);
+            waitUntilTieringTableSplitAssignmentReady(context, DEFAULT_BUCKET_NUM, 1000L);
 
             // Lease should be acquired
             assertThat(enumerator.getLeasedBucketsByTable()).containsOnlyKeys(tableId);
@@ -843,7 +855,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
             // register all readers
             registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 0);
-            waitUntilTieringTableSplitAssignmentReady(context, DEFAULT_BUCKET_NUM, 3000L);
+            waitUntilTieringTableSplitAssignmentReady(context, DEFAULT_BUCKET_NUM, 1000L);
 
             // Log-only table should not have any leased buckets
             assertThat(enumerator.getLeasedBucketsByTable()).isEmpty();
@@ -877,7 +889,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             waitUntilTieringTableSplitAssignmentReady(context, 2, 200L);
 
             retry(
-                    Duration.ofSeconds(30),
+                    Duration.ofSeconds(5),
                     () -> {
                         // Verify that TieringReachMaxDurationEvent was sent to all readers
                         // Use reflection to access events sent to readers
