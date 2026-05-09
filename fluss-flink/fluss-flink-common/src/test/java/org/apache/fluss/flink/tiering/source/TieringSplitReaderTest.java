@@ -31,8 +31,12 @@ import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSnapshotSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.utils.FlinkTestBase;
+import org.apache.fluss.lake.writer.LakeWriter;
+import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.CompactedKeyEncoder;
 
@@ -279,6 +283,58 @@ class TieringSplitReaderTest extends FlinkTestBase {
         }
     }
 
+    @Test
+    void testLogSplitWithoutWritableRecordsCanCompleteLakeWriter() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "tiering_table_without_writable_records");
+        TableDescriptor singleBucketPkTableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DEFAULT_PK_TABLE_SCHEMA)
+                        .distributedBy(1, "id")
+                        .build();
+        long tableId = createTable(tablePath, singleBucketPkTableDescriptor);
+        try (Connection connection =
+                        ConnectionFactory.createConnection(
+                                FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                Table table = connection.getTable(tablePath);
+                TieringSplitReader<TestingWriteResult> tieringSplitReader =
+                        createTieringReader(
+                                connection, new ThrowOnEmptyCompleteLakeTieringFactory())) {
+            int key1 = 1;
+            int key2 = 2;
+            int bucket = 0;
+            TableBucket tableBucket = new TableBucket(tableId, bucket);
+
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            //  produce offset0
+            upsertWriter.upsert(row(key1, "v1")).get();
+            // Deleting a non-existent key still advances the log offset, but this range does not
+            // produce any tierable record. produce offset1
+            upsertWriter.delete(row(key2, (Object) null)).get();
+            // produce offset2
+            upsertWriter.upsert(row(key2, "v2")).get();
+
+            long startingOffset = 1;
+            long stoppingOffset = 2;
+            TieringLogSplit tieringLogSplit =
+                    new TieringLogSplit(
+                            tablePath, tableBucket, null, startingOffset, stoppingOffset, 1);
+
+            // The custom factory fails if complete() is called on a writer that never received any
+            // record, which captures the regression this test covers.
+            tieringSplitReader.handleSplitsChanges(
+                    new SplitsAddition<TieringSplit>(Collections.singletonList(tieringLogSplit)));
+
+            RecordsWithSplitIds<TableBucketWriteResult<TestingWriteResult>> result =
+                    tieringSplitReader.fetch();
+
+            assertThat(result.nextSplit()).isEqualTo(tieringLogSplit.splitId());
+            TableBucketWriteResult<TestingWriteResult> writeResult = result.nextRecordFromSplit();
+            assertThat(writeResult).isNotNull();
+            // expect null write result since no any records written
+            assertThat(writeResult.writeResult()).isNull();
+        }
+    }
+
     private TieringSplitReader<TestingWriteResult> createTieringReader(Connection connection) {
         final TieringMetrics tieringMetrics =
                 new TieringMetrics(
@@ -286,6 +342,15 @@ class TieringSplitReaderTest extends FlinkTestBase {
                                 new MetricListener().getMetricGroup()));
         return new TieringSplitReader<>(
                 connection, new TestingLakeTieringFactory(), tieringMetrics);
+    }
+
+    private TieringSplitReader<TestingWriteResult> createTieringReader(
+            Connection connection, TestingLakeTieringFactory lakeTieringFactory) {
+        final TieringMetrics tieringMetrics =
+                new TieringMetrics(
+                        InternalSourceReaderMetricGroup.mock(
+                                new MetricListener().getMetricGroup()));
+        return new TieringSplitReader<>(connection, lakeTieringFactory, tieringMetrics);
     }
 
     private void verifyTieringRows(
@@ -383,5 +448,35 @@ class TieringSplitReaderTest extends FlinkTestBase {
         byte[] key = keyEncoder.encodeKey(row);
         HashBucketAssigner hashBucketAssigner = new HashBucketAssigner(DEFAULT_BUCKET_NUM);
         return hashBucketAssigner.assignBucket(key);
+    }
+
+    private static class ThrowOnEmptyCompleteLakeTieringFactory extends TestingLakeTieringFactory {
+
+        @Override
+        public LakeWriter<TestingWriteResult> createLakeWriter(WriterInitContext writerInitContext)
+                throws IOException {
+            return new ThrowOnEmptyCompleteLakeWriter();
+        }
+    }
+
+    private static class ThrowOnEmptyCompleteLakeWriter implements LakeWriter<TestingWriteResult> {
+
+        private int writtenRecords;
+
+        @Override
+        public void write(LogRecord record) throws IOException {
+            writtenRecords++;
+        }
+
+        @Override
+        public TestingWriteResult complete() throws IOException {
+            if (writtenRecords == 0) {
+                throw new IOException("complete called without any written records");
+            }
+            return new TestingWriteResult(writtenRecords);
+        }
+
+        @Override
+        public void close() throws IOException {}
     }
 }
