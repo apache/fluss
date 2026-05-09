@@ -17,14 +17,18 @@
 
 package org.apache.fluss.spark.read
 
+import org.apache.fluss.client.ConnectionFactory
 import org.apache.fluss.config.{Configuration => FlussConfiguration}
+import org.apache.fluss.exception.UnsupportedVersionException
 import org.apache.fluss.metadata.{LogFormat, TableInfo, TablePath}
 import org.apache.fluss.predicate.{Predicate => FlussPredicate}
 import org.apache.fluss.spark.read.lake.{FlussLakeBatch, FlussLakeUtils}
 import org.apache.fluss.spark.utils.{SparkPartitionPredicate, SparkPredicateConverter}
 
+import org.apache.spark.sql.connector.expressions.{FieldReference, NamedReference}
+import org.apache.spark.sql.connector.expressions.aggregate.{Aggregation, Count, CountStar}
 import org.apache.spark.sql.connector.expressions.filter.Predicate
-import org.apache.spark.sql.connector.read.{Scan, ScanBuilder, SupportsPushDownLimit, SupportsPushDownRequiredColumns, SupportsPushDownV2Filters}
+import org.apache.spark.sql.connector.read.{Scan, ScanBuilder, SupportsPushDownAggregates, SupportsPushDownLimit, SupportsPushDownRequiredColumns, SupportsPushDownV2Filters}
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
@@ -126,6 +130,104 @@ trait FlussLakeSupportsPushDownV2Filters extends FlussSupportsPushDownPartitionF
   }
 }
 
+/**
+ * Aggregation pushdown mixin: converts a single `COUNT(*)` / `COUNT(1)` / `COUNT(non_null_col)`
+ * without `GROUP BY` into a server-side row count. Only safe for PK (non-lake) tables, because KV
+ * upsert writes make the server-side row count match a full scan; log / lake-tiered tables can
+ * drift. Mirrors the Flink-side gating in `FlinkTableSource#applyAggregates`.
+ */
+trait FlussSupportsPushDownAggregates extends FlussScanBuilder with SupportsPushDownAggregates {
+
+  def tablePath: TablePath
+
+  def tableInfo: TableInfo
+
+  def flussConfig: FlussConfiguration
+
+  protected var pushedRowCount: Option[Long] = None
+
+  override def pushAggregation(aggregation: Aggregation): Boolean = {
+    if (!isPushable(aggregation)) {
+      return false
+    }
+    fetchRowCount() match {
+      case Some(count) =>
+        pushedRowCount = Some(count)
+        true
+      case None =>
+        false
+    }
+  }
+
+  override def supportCompletePushDown(aggregation: Aggregation): Boolean = isPushable(aggregation)
+
+  private def isPushable(aggregation: Aggregation): Boolean = {
+    if (aggregation.groupByExpressions().nonEmpty) {
+      return false
+    }
+    val aggs = aggregation.aggregateExpressions()
+    if (aggs.length != 1) {
+      return false
+    }
+    aggs.head match {
+      case _: CountStar => true
+      case c: Count if !c.isDistinct => isCountOnNonNullableColumn(c)
+      case _ => false
+    }
+  }
+
+  private def isCountOnNonNullableColumn(count: Count): Boolean = {
+    count.column() match {
+      case ref: NamedReference =>
+        val parts = ref.fieldNames()
+        // Only top-level column references are pushable.
+        if (parts.length != 1) {
+          return false
+        }
+        val colName = parts(0)
+        val rowType = tableInfo.getRowType
+        if (rowType.getFieldIndex(colName) < 0) {
+          return false
+        }
+        !rowType.getField(colName).getType.isNullable
+      case _ => false
+    }
+  }
+
+  // Probes server-side table stats; returns None on UnsupportedVersionException so Spark falls back.
+  private def fetchRowCount(): Option[Long] = {
+    val conn = ConnectionFactory.createConnection(flussConfig)
+    try {
+      val admin = conn.getAdmin
+      try {
+        Some(admin.getTableStats(tablePath).get().getRowCount)
+      } catch {
+        case e: Throwable =>
+          if (isUnsupportedVersion(e)) {
+            None
+          } else {
+            throw e
+          }
+      } finally {
+        admin.close()
+      }
+    } finally {
+      conn.close()
+    }
+  }
+
+  private def isUnsupportedVersion(t: Throwable): Boolean = {
+    var cur: Throwable = t
+    while (cur != null) {
+      if (cur.isInstanceOf[UnsupportedVersionException]) {
+        return true
+      }
+      cur = cur.getCause
+    }
+    false
+  }
+}
+
 /** Fluss Append Scan Builder. */
 class FlussAppendScanBuilder(
     tablePath: TablePath,
@@ -187,6 +289,22 @@ class FlussUpsertScanBuilder(
       limit,
       options,
       flussConfig)
+  }
+}
+
+/** Fluss Upsert Scan Builder. */
+class FlussUpsertScanBuilder(
+                              val tablePath: TablePath,
+                              val tableInfo: TableInfo,
+                              options: CaseInsensitiveStringMap,
+                              val flussConfig: FlussConfiguration)
+  extends FlussSupportsPushDownAggregates {
+
+  override def build(): Scan = {
+    pushedRowCount match {
+      case Some(count) => FlussCountScan(tablePath, tableInfo, count, requiredSchema)
+      case None => FlussUpsertScan(tablePath, tableInfo, requiredSchema, options, flussConfig)
+    }
   }
 }
 

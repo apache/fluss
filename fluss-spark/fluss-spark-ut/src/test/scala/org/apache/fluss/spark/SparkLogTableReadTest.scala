@@ -84,6 +84,30 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
           Row(1000L, 25L) ::
           Row(1100L, 260L) :: Nil
       )
+
+      // Insert one row with a NULL nullable column to make the COUNT(nullable_col)
+      // assertion below actually discriminate between row count and non-null count.
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t VALUES
+             |(1200L, 270L, 607, NULL)
+             |""".stripMargin)
+
+      // COUNT(*) / COUNT(1) — empty projection case (regression test for #2724)
+      checkAnswer(sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t"), Row(9L) :: Nil)
+      checkAnswer(sql(s"SELECT COUNT(1) FROM $DEFAULT_DATABASE.t"), Row(9L) :: Nil)
+
+      // COUNT(*) with filter — verifies the non-empty-projection path is unaffected
+      checkAnswer(
+        sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t WHERE orderId >= 900"),
+        Row(5L) :: Nil
+      )
+
+      // COUNT on a nullable column — address is nullable STRING and one row has NULL,
+      // so COUNT(address) must be strictly less than COUNT(*).
+      checkAnswer(
+        sql(s"SELECT COUNT(address) FROM $DEFAULT_DATABASE.t"),
+        Row(8L) :: Nil
+      )
     }
   }
 
@@ -129,6 +153,15 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
           Row(700L, "addr2", "2026-01-01") ::
           Row(800L, "addr3", "2026-01-02") ::
           Row(900L, "addr4", "2026-01-02") :: Nil
+      )
+
+      // COUNT(*) on partitioned log table
+      checkAnswer(sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t"), Row(5L) :: Nil)
+
+      // COUNT(*) with partition filter
+      checkAnswer(
+        sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01'"),
+        Row(2L) :: Nil
       )
     }
   }
@@ -560,20 +593,6 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
            |(1000L, 25L, 605, "addr5", "2026-01-03")
            |""".stripMargin)
     body
-  }
-
-  test("Spark Read: COUNT(*) without filter") {
-    withSampleTable {
-      val query = sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t")
-      checkAnswer(query, Row(5L) :: Nil)
-    }
-  }
-
-  test("Spark Read: COUNT(1) without filter") {
-    withSampleTable {
-      val query = sql(s"SELECT COUNT(1) FROM $DEFAULT_DATABASE.t")
-      checkAnswer(query, Row(5L) :: Nil)
-    }
   }
 
   private def withSampleTable(body: => Unit): Unit = withTable("t") {

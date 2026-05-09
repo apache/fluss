@@ -20,7 +20,7 @@ package org.apache.fluss.spark
 import org.apache.fluss.client.initializer.{BucketOffsetsRetrieverImpl, OffsetsInitializer}
 import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.metadata.{TableBucket, TablePath}
-import org.apache.fluss.spark.read.{FlussMetrics, FlussScan, FlussUpsertInputPartition, FlussUpsertScan}
+import org.apache.fluss.spark.read.{FlussCountScan, FlussMetrics, FlussScan, FlussUpsertInputPartition, FlussUpsertScan}
 
 import org.apache.spark.sql.{DataFrame, Row}
 import org.apache.spark.sql.execution.{FilterExec, SparkPlan}
@@ -136,6 +136,31 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
           Nil
       )
 
+      // Insert one row with a NULL nullable column to make the COUNT(nullable_col)
+      // assertion below actually discriminate between row count and non-null count.
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t VALUES
+             |(1200L, 270L, 607, NULL)
+             |""".stripMargin)
+
+      // COUNT(*) — empty projection case (regression test for #2724). PK table has 7 rows
+      // after upserts (600/700/800/900/1000/1100/1200).
+      checkAnswer(sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t"), Row(7L) :: Nil)
+      checkAnswer(sql(s"SELECT COUNT(1) FROM $DEFAULT_DATABASE.t"), Row(7L) :: Nil)
+
+      // COUNT(*) with filter
+      checkAnswer(
+        sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t WHERE amount <= 603"),
+        Row(3L) :: Nil
+      )
+
+      // COUNT on a nullable column — address is nullable STRING and one row has NULL,
+      // so COUNT(address) must be strictly less than COUNT(*).
+      checkAnswer(
+        sql(s"SELECT COUNT(address) FROM $DEFAULT_DATABASE.t"),
+        Row(6L) :: Nil
+      )
+
       // Only support FULL startup mode.
       withSQLConf(
         s"${SparkFlussConf.SPARK_FLUSS_CONF_PREFIX}${SparkFlussConf.SCAN_START_UP_MODE.key()}" -> "latest") {
@@ -241,6 +266,15 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
           Row(800L, 23L, 603, "addr3", "2026-01-02") ::
           Row(900L, 240L, 604, "addr4_updated", "2026-01-02") ::
           Nil
+      )
+
+      // COUNT(*) on partitioned PK table
+      checkAnswer(sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t"), Row(6L) :: Nil)
+
+      // COUNT(*) with partition filter
+      checkAnswer(
+        sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01'"),
+        Row(2L) :: Nil
       )
     }
   }
@@ -379,22 +413,65 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
     }
   }
 
-  test("Spark Read: primary key table COUNT(*) without filter") {
+  test("Spark Read: primary key table COUNT aggregate pushdown") {
     withTable("t") {
+      val tablePath = createTablePath("t")
       sql(s"""
              |CREATE TABLE $DEFAULT_DATABASE.t (orderId BIGINT, itemId BIGINT, amount INT, address STRING)
              |TBLPROPERTIES("primary.key" = "orderId", "bucket.num" = 1)
              |""".stripMargin)
-
       sql(s"""
              |INSERT INTO $DEFAULT_DATABASE.t VALUES
              |(600L, 21L, 601, "addr1"), (700L, 22L, 602, "addr2"),
              |(800L, 23L, 603, "addr3"), (900L, 24L, 604, "addr4"),
-             |(1000L, 25L, 605, "addr5")
+             |(1000L, 25L, 605, "addr5"), (1100L, 26L, 606, "addr6")
              |""".stripMargin)
 
-      checkAnswer(sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t"), Row(5L) :: Nil)
+      // Extra NULL row so COUNT(nullable_col) strictly differs from COUNT(*).
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t VALUES
+             |(1200L, 27L, 607, NULL)
+             |""".stripMargin)
+
+      // COUNT(*) — pushable.
+      val countStarDf = spark.sql(s"SELECT COUNT(*) FROM $DEFAULT_DATABASE.t")
+      assertThat(countStarDf.collect().head.getLong(0)).isEqualTo(7L)
+      assert(planContainsScan[FlussCountScan](countStarDf))
+
+      // COUNT(1) — Spark rewrites COUNT(<literal>) to CountStar, so it is pushable.
+      val countOneDf = spark.sql(s"SELECT COUNT(1) FROM $DEFAULT_DATABASE.t")
+      assertThat(countOneDf.collect().head.getLong(0)).isEqualTo(7L)
+      assert(planContainsScan[FlussCountScan](countOneDf))
+
+      // COUNT(non-null PK column) — pushable; PK columns are forced NOT NULL, so equals COUNT(*).
+      val countPkDf = spark.sql(s"SELECT COUNT(orderId) FROM $DEFAULT_DATABASE.t")
+      assertThat(countPkDf.collect().head.getLong(0)).isEqualTo(7L)
+      assert(planContainsScan[FlussCountScan](countPkDf))
+
+      // COUNT(nullable column) — NOT pushable; value (6) strictly smaller than COUNT(*) (7).
+      val countNullableDf = spark.sql(s"SELECT COUNT(address) FROM $DEFAULT_DATABASE.t")
+      assertThat(countNullableDf.collect().head.getLong(0)).isEqualTo(6L)
+      assert(!planContainsScan[FlussCountScan](countNullableDf))
+
+      // COUNT(DISTINCT ...) — NOT pushable.
+      val countDistinctDf = spark.sql(s"SELECT COUNT(DISTINCT orderId) FROM $DEFAULT_DATABASE.t")
+      assertThat(countDistinctDf.collect().head.getLong(0)).isEqualTo(7L)
+      assert(!planContainsScan[FlussCountScan](countDistinctDf))
+
+      // COUNT(*) with GROUP BY — NOT pushable.
+      val groupedDf =
+        spark.sql(s"SELECT itemId, COUNT(*) FROM $DEFAULT_DATABASE.t GROUP BY itemId")
+      assertThat(groupedDf.count()).isEqualTo(7L)
+      assert(!planContainsScan[FlussCountScan](groupedDf))
     }
+  }
+
+  private def planContainsScan[T <: FlussScan: scala.reflect.ClassTag](
+                                                                        df: org.apache.spark.sql.DataFrame): Boolean = {
+    val cls = implicitly[scala.reflect.ClassTag[T]].runtimeClass
+    df.queryExecution.executedPlan.collectFirst {
+      case b: BatchScanExec if cls.isInstance(b.scan) => b
+    }.isDefined
   }
 
   test("Spark Read: partition pushdown — equality on partition key (PK table)") {
