@@ -20,6 +20,7 @@ package org.apache.fluss.flink.source;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
 import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.metadata.TablePath;
@@ -71,6 +72,34 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
             long scanPartitionDiscoveryIntervalMs,
             FlussDeserializationSchema<OUT> deserializationSchema,
             boolean streaming) {
+        this(
+                flussConf,
+                tablePath,
+                hasPrimaryKey,
+                isPartitioned,
+                sourceOutputType,
+                projectedFields,
+                logRecordBatchFilter,
+                offsetsInitializer,
+                scanPartitionDiscoveryIntervalMs,
+                FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.defaultValue(),
+                deserializationSchema,
+                streaming);
+    }
+
+    FlussSource(
+            Configuration flussConf,
+            TablePath tablePath,
+            boolean hasPrimaryKey,
+            boolean isPartitioned,
+            RowType sourceOutputType,
+            @Nullable int[] projectedFields,
+            @Nullable Predicate logRecordBatchFilter,
+            OffsetsInitializer offsetsInitializer,
+            long scanPartitionDiscoveryIntervalMs,
+            int splitPerAssignmentBatchSize,
+            FlussDeserializationSchema<OUT> deserializationSchema,
+            boolean streaming) {
         // TODO: Support partition pushDown in datastream
         super(
                 flussConf,
@@ -82,6 +111,7 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
                 logRecordBatchFilter,
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
+                splitPerAssignmentBatchSize,
                 deserializationSchema,
                 streaming,
                 null,

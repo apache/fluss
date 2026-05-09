@@ -139,6 +139,7 @@ public class FlinkTableSource
     @Nullable private final LookupCache cache;
 
     private final long scanPartitionDiscoveryIntervalMs;
+    private final int splitPerAssignmentBatchSize;
     private final boolean isDataLakeEnabled;
     private final LeaseContext leaseContext;
 
@@ -194,6 +195,46 @@ public class FlinkTableSource
             @Nullable MergeEngineType mergeEngineType,
             Map<String, String> tableOptions,
             LeaseContext leaseContext) {
+        this(
+                tablePath,
+                flussConfig,
+                tableConfig,
+                tableOutputType,
+                primaryKeyIndexes,
+                bucketKeyIndexes,
+                partitionKeyIndexes,
+                streaming,
+                startupOptions,
+                lookupAsync,
+                insertIfNotExists,
+                cache,
+                scanPartitionDiscoveryIntervalMs,
+                FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.defaultValue(),
+                isDataLakeEnabled,
+                mergeEngineType,
+                tableOptions,
+                leaseContext);
+    }
+
+    public FlinkTableSource(
+            TablePath tablePath,
+            Configuration flussConfig,
+            TableConfig tableConfig,
+            org.apache.flink.table.types.logical.RowType tableOutputType,
+            int[] primaryKeyIndexes,
+            int[] bucketKeyIndexes,
+            int[] partitionKeyIndexes,
+            boolean streaming,
+            FlinkConnectorOptionsUtils.StartupOptions startupOptions,
+            boolean lookupAsync,
+            boolean insertIfNotExists,
+            @Nullable LookupCache cache,
+            long scanPartitionDiscoveryIntervalMs,
+            int splitPerAssignmentBatchSize,
+            boolean isDataLakeEnabled,
+            @Nullable MergeEngineType mergeEngineType,
+            Map<String, String> tableOptions,
+            LeaseContext leaseContext) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableOutputType = tableOutputType;
@@ -209,6 +250,7 @@ public class FlinkTableSource
         this.cache = cache;
 
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
+        this.splitPerAssignmentBatchSize = splitPerAssignmentBatchSize;
         this.isDataLakeEnabled = isDataLakeEnabled;
         this.leaseContext = leaseContext;
         this.mergeEngineType = mergeEngineType;
@@ -370,6 +412,7 @@ public class FlinkTableSource
                         logRecordBatchFilter,
                         offsetsInitializer,
                         scanPartitionDiscoveryIntervalMs,
+                        splitPerAssignmentBatchSize,
                         new RowDataDeserializationSchema(),
                         streaming,
                         partitionFilters,
@@ -478,6 +521,7 @@ public class FlinkTableSource
                         insertIfNotExists,
                         cache,
                         scanPartitionDiscoveryIntervalMs,
+                        splitPerAssignmentBatchSize,
                         isDataLakeEnabled,
                         mergeEngineType,
                         tableOptions,

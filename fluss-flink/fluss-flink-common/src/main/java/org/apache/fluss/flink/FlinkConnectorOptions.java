@@ -150,6 +150,15 @@ public class FlinkConnectorOptions {
                                     + "as a small value would cause frequent requests and increase server load. In the future, "
                                     + "once list partitions is optimized, the default value of this parameter can be reduced.");
 
+    public static final ConfigOption<Integer> SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE =
+            ConfigOptions.key("scan.split.assignment.batch-size")
+                    .intType()
+                    .defaultValue(Integer.MAX_VALUE)
+                    .withDescription(
+                            "The maximum number of Fluss source splits assigned to a reader in "
+                                    + "one assignment request. The value must be positive. By default, "
+                                    + "all pending splits for a reader are assigned in one request.");
+
     public static final ConfigOption<Boolean> SINK_IGNORE_DELETE =
             ConfigOptions.key("sink.ignore-delete")
                     .booleanType()

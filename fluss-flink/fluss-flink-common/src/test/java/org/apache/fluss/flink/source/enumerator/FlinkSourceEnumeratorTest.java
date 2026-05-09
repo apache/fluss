@@ -79,6 +79,7 @@ import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFS
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Unit tests for {@link FlinkSourceEnumerator}. */
 class FlinkSourceEnumeratorTest extends FlinkTestBase {
@@ -140,6 +141,73 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
             Map<Integer, List<SourceSplitBase>> actualAssignment =
                     getLastReadersAssignments(context);
             assertThat(actualAssignment).isEqualTo(expectedAssignment);
+        }
+    }
+
+    @Test
+    void testSplitAssignmentBatchSize() throws Throwable {
+        long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                new MockSplitEnumeratorContext<>(1)) {
+            FlinkSourceEnumerator enumerator =
+                    new FlinkSourceEnumerator(
+                            DEFAULT_TABLE_PATH,
+                            flussConf,
+                            true,
+                            false,
+                            context,
+                            OffsetsInitializer.full(),
+                            DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                            2,
+                            streaming,
+                            null,
+                            null,
+                            LeaseContext.DEFAULT,
+                            false);
+
+            enumerator.start();
+            registerReader(context, enumerator, 0);
+            context.runNextOneTimeCallable();
+
+            List<SplitsAssignment<SourceSplitBase>> assignments =
+                    context.getSplitsAssignmentSequence();
+            assertThat(assignments).hasSize(2);
+            assertThat(assignments.get(0).assignment().get(0)).hasSize(2);
+            assertThat(assignments.get(1).assignment().get(0)).hasSize(1);
+
+            List<SourceSplitBase> assignedSplits = new ArrayList<>();
+            assignments.forEach(
+                    assignment -> assignedSplits.addAll(assignment.assignment().get(0)));
+            assertThat(assignedSplits)
+                    .containsExactly(
+                            genLogSplit(tableId, 0),
+                            genLogSplit(tableId, 1),
+                            genLogSplit(tableId, 2));
+        }
+    }
+
+    @Test
+    void testInvalidSplitAssignmentBatchSize() throws Exception {
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                new MockSplitEnumeratorContext<>(1)) {
+            assertThatThrownBy(
+                            () ->
+                                    new FlinkSourceEnumerator(
+                                            DEFAULT_TABLE_PATH,
+                                            flussConf,
+                                            true,
+                                            false,
+                                            context,
+                                            OffsetsInitializer.full(),
+                                            DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                                            0,
+                                            streaming,
+                                            null,
+                                            null,
+                                            LeaseContext.DEFAULT,
+                                            false))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Split assignment batch size must be positive");
         }
     }
 
