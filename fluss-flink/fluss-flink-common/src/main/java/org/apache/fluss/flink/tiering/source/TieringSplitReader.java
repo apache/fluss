@@ -369,12 +369,16 @@ public class TieringSplitReader<WriteResult>
                 continue;
             }
             LOG.info("tiering table bucket stoppingOffset is not empty {}.", bucket);
-            LakeWriter<WriteResult> lakeWriter =
-                    getOrCreateLakeWriter(
-                            bucket, currentTableSplitsByBucket.get(bucket).getPartitionName());
+            LakeWriter<WriteResult> lakeWriter = null;
             for (ScanRecord record : bucketScanRecords) {
                 // if record is less than stopping offset
                 if (record.logOffset() < stoppingOffset) {
+                    if (lakeWriter == null) {
+                        lakeWriter =
+                                getOrCreateLakeWriter(
+                                        bucket,
+                                        currentTableSplitsByBucket.get(bucket).getPartitionName());
+                    }
                     lakeWriter.write(record);
                     if (record.getSizeInBytes() > 0) {
                         tieringMetrics.recordBytesRead(record.getSizeInBytes());
