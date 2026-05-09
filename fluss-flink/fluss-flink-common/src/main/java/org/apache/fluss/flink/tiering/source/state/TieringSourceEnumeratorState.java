@@ -19,23 +19,55 @@ package org.apache.fluss.flink.tiering.source.state;
 
 import org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator;
 
-/** The marker class of stateless component {@link TieringSourceEnumerator}. */
+import javax.annotation.Nullable;
+
+import java.util.Objects;
+
+/**
+ * The state of the {@link TieringSourceEnumerator}. Stores the KV snapshot lease id so that it can
+ * be recovered after a checkpoint restore, avoiding orphaned leases on the server side.
+ */
 public class TieringSourceEnumeratorState {
-    public TieringSourceEnumeratorState() {}
+
+    /**
+     * The KV snapshot lease id used by this tiering job. May be null for jobs that were
+     * checkpointed before lease support was introduced.
+     */
+    @Nullable private final String kvSnapshotLeaseId;
+
+    /** Creates a state with no lease id (backward compatible with older checkpoints). */
+    public TieringSourceEnumeratorState() {
+        this(null);
+    }
+
+    public TieringSourceEnumeratorState(@Nullable String kvSnapshotLeaseId) {
+        this.kvSnapshotLeaseId = kvSnapshotLeaseId;
+    }
+
+    @Nullable
+    public String getKvSnapshotLeaseId() {
+        return kvSnapshotLeaseId;
+    }
 
     @Override
-    public boolean equals(Object that) {
-        if (this == that) {
+    public boolean equals(Object o) {
+        if (this == o) {
             return true;
         }
-        if (that != null) {
-            return this.toString().equals(that.toString());
+        if (o == null || getClass() != o.getClass()) {
+            return false;
         }
-        return false;
+        TieringSourceEnumeratorState that = (TieringSourceEnumeratorState) o;
+        return Objects.equals(kvSnapshotLeaseId, that.kvSnapshotLeaseId);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(kvSnapshotLeaseId);
     }
 
     @Override
     public String toString() {
-        return "SourceEnumeratorState{}";
+        return "TieringSourceEnumeratorState{" + "kvSnapshotLeaseId='" + kvSnapshotLeaseId + "'}";
     }
 }

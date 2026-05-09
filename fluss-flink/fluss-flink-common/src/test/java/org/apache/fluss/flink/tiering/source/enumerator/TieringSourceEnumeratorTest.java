@@ -185,6 +185,12 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             assertThat(actualAssignment)
                     .containsExactlyInAnyOrderElementsOf(expectedSnapshotAssignment);
 
+            // Lease should have been acquired for this table's snapshot buckets after the
+            // snapshot splits are generated and assigned.
+            assertThat(enumerator.getLeasedBucketsByTable()).containsOnlyKeys(tableId);
+            assertThat(enumerator.getLeasedBucketsByTable().get(tableId))
+                    .hasSize(DEFAULT_BUCKET_NUM);
+
             // mock finished tiered this round, check second round
             context.getSplitsAssignmentSequence().clear();
             final Map<Integer, Long> initialBucketOffsets = new HashMap<>();
@@ -199,6 +205,9 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                     .get();
 
             enumerator.handleSourceEvent(1, new FinishedTieringEvent(tableId));
+
+            // Once the table is finished, the lease held for its buckets should be released.
+            assertThat(enumerator.getLeasedBucketsByTable()).doesNotContainKey(tableId);
 
             Map<Integer, Long> bucketOffsetOfSecondWrite =
                     upsertRow(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR, 10, 20);
@@ -728,6 +737,117 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
     private TieringSourceEnumerator createTieringSourceEnumerator(
             Configuration flussConf, MockSplitEnumeratorContext<TieringSplit> context) {
         return new TieringSourceEnumerator(flussConf, context, 500);
+    }
+
+    @Test
+    void testLeaseIdRestoredFromState() throws Throwable {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-lease-restore-test");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numSubtasks = 3;
+
+        upsertRow(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR, 0, 10);
+        triggerAndWaitSnapshot(tableId);
+
+        String capturedLeaseId;
+        // First enumerator: create and capture the lease id
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
+            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
+            enumerator.start();
+            capturedLeaseId = enumerator.getKvSnapshotLeaseId();
+            assertThat(capturedLeaseId).startsWith("tiering-");
+        }
+
+        // Second enumerator: restore from state with same lease id
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
+            TieringSourceEnumerator restoredEnumerator =
+                    new TieringSourceEnumerator(flussConf, context, 500, capturedLeaseId);
+            restoredEnumerator.start();
+            assertThat(restoredEnumerator.getKvSnapshotLeaseId()).isEqualTo(capturedLeaseId);
+            restoredEnumerator.close();
+        }
+    }
+
+    @Test
+    void testLeaseReleasedOnFailedTieringEvent() throws Throwable {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-lease-fail-test");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numSubtasks = 3;
+
+        upsertRow(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR, 0, 10);
+        triggerAndWaitSnapshot(tableId);
+
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
+            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
+            enumerator.start();
+
+            // register all readers
+            registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 0);
+            waitUntilTieringTableSplitAssignmentReady(context, DEFAULT_BUCKET_NUM, 3000L);
+
+            // Lease should be acquired
+            assertThat(enumerator.getLeasedBucketsByTable()).containsOnlyKeys(tableId);
+
+            // Simulate failed tiering event
+            enumerator.handleSourceEvent(1, new FailedTieringEvent(tableId, "test failure"));
+
+            // Lease should be released after failure
+            assertThat(enumerator.getLeasedBucketsByTable()).doesNotContainKey(tableId);
+        }
+    }
+
+    @Test
+    void testLeaseReleasedOnReaderFailover() throws Throwable {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-lease-failover-test");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numSubtasks = 3;
+
+        upsertRow(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR, 0, 10);
+        triggerAndWaitSnapshot(tableId);
+
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
+            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
+            enumerator.start();
+
+            // register all readers with attempt 0
+            registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 0);
+            waitUntilTieringTableSplitAssignmentReady(context, DEFAULT_BUCKET_NUM, 3000L);
+
+            // Lease should be acquired
+            assertThat(enumerator.getLeasedBucketsByTable()).containsOnlyKeys(tableId);
+
+            // Simulate reader failover (attempt 1)
+            context.getSplitsAssignmentSequence().clear();
+            registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 1);
+
+            // After failover, all leases for the failed tables should be released
+            assertThat(enumerator.getLeasedBucketsByTable()).doesNotContainKey(tableId);
+        }
+    }
+
+    @Test
+    void testLogOnlyTableDoesNotAcquireLease() throws Throwable {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-lease-log-only-test");
+        createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
+        int numSubtasks = 3;
+
+        appendRow(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR, 0, 10);
+
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
+            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
+            enumerator.start();
+
+            // register all readers
+            registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 0);
+            waitUntilTieringTableSplitAssignmentReady(context, DEFAULT_BUCKET_NUM, 3000L);
+
+            // Log-only table should not have any leased buckets
+            assertThat(enumerator.getLeasedBucketsByTable()).isEmpty();
+        }
     }
 
     @Test
