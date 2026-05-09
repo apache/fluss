@@ -233,6 +233,19 @@ public class TieringSourceEnumerator
         LOG.info("TieringSourceReader {} requests split.", subtaskId);
         readersAwaitingSplit.add(subtaskId);
 
+        // During failover we must not request a new tiering table or assign any splits.
+        // Otherwise we might re-acquire leases for a table whose leases were just released by
+        // handleSourceReaderFailOver, or assign splits to subtasks whose readers from the new
+        // attempt have not been fully registered yet. The pending failed-table report and the
+        // subsequent split request will be driven by the periodic callAsync once failover is
+        // marked complete.
+        if (isFailOvering) {
+            LOG.info(
+                    "Skip handling split request from subtask {} because the enumerator is in failover.",
+                    subtaskId);
+            return;
+        }
+
         // If pending splits exist, assign them directly to the requesting reader
         if (!pendingSplits.isEmpty()) {
             assignSplits();
@@ -294,11 +307,23 @@ public class TieringSourceEnumerator
                     int globalMaxAttempt = max(maxAttempts);
                     if (maxAttempts.size() == 1 && globalMaxAttempt >= 1) {
                         LOG.info(
-                                "Failover completed. All {} subtasks reached the same attempt number {}. Current registered readers are {}",
+                                "All {} subtasks reached the same attempt number {}. Current registered readers are {}. Waiting for failed-table report to complete before clearing failover state.",
                                 context.currentParallelism(),
                                 globalMaxAttempt,
                                 context.registeredReadersOfAttempts());
-                        isFailOvering = false;
+                        // Drive a heartbeat round to report the failed tables and request a
+                        // fresh tiering table; clear the failover flag only after that round
+                        // completes, so that no split is assigned and no lease is re-acquired
+                        // for a table whose leases were just released during failover.
+                        this.context.callAsync(
+                                this::requestTieringTableSplitsViaHeartBeat,
+                                (tieringTable, throwable) -> {
+                                    isFailOvering = false;
+                                    LOG.info(
+                                            "Failover completed for attempt {}. Cleared failover flag.",
+                                            globalMaxAttempt);
+                                    generateAndAssignSplits(tieringTable, throwable);
+                                });
                     }
                 }
             }
@@ -645,13 +670,33 @@ public class TieringSourceEnumerator
                 tableId,
                 bucketsToLease.size());
         try {
-            flussAdmin
-                    .createKvSnapshotLease(kvSnapshotLeaseId, KV_SNAPSHOT_LEASE_DURATION_MS)
-                    .acquireSnapshots(bucketsToLease)
-                    .get();
-            leasedBucketsByTable
-                    .computeIfAbsent(tableId, k -> ConcurrentHashMap.newKeySet())
-                    .addAll(bucketsToLease.keySet());
+            Set<TableBucket> unavailableBuckets =
+                    flussAdmin
+                            .createKvSnapshotLease(kvSnapshotLeaseId, KV_SNAPSHOT_LEASE_DURATION_MS)
+                            .acquireSnapshots(bucketsToLease)
+                            .get()
+                            .getUnavailableTableBucketSet();
+            // Only record successfully leased buckets so we don't later try to release
+            // buckets that were never actually acquired (e.g. snapshots already GC'ed or
+            // missing on the server).
+            Set<TableBucket> acquiredBuckets = new HashSet<>(bucketsToLease.keySet());
+            if (!unavailableBuckets.isEmpty()) {
+                LOG.warn(
+                        "Failed to acquire kv snapshot lease for {} of {} buckets of tiering "
+                                + "table {}: {}. The corresponding snapshots may have already "
+                                + "been garbage-collected; tiering for those buckets may fail "
+                                + "later when the snapshots are accessed.",
+                        unavailableBuckets.size(),
+                        bucketsToLease.size(),
+                        tableId,
+                        unavailableBuckets);
+                acquiredBuckets.removeAll(unavailableBuckets);
+            }
+            if (!acquiredBuckets.isEmpty()) {
+                leasedBucketsByTable
+                        .computeIfAbsent(tableId, k -> ConcurrentHashMap.newKeySet())
+                        .addAll(acquiredBuckets);
+            }
         } catch (Exception e) {
             if (ExceptionUtils.findThrowable(e, UnsupportedVersionException.class).isPresent()) {
                 LOG.warn(
@@ -678,8 +723,13 @@ public class TieringSourceEnumerator
      * for which acquire failed) are handled as no-ops.
      */
     private void maybeReleaseKvSnapshotLease(long tableId) {
-        Set<TableBucket> buckets = leasedBucketsByTable.remove(tableId);
+        // Peek the buckets without removing so that, if the release RPC fails, we can keep
+        // the entry in leasedBucketsByTable for a later retry instead of permanently
+        // forgetting which buckets are still leased on the server side.
+        Set<TableBucket> buckets = leasedBucketsByTable.get(tableId);
         if (flussAdmin == null || buckets == null || buckets.isEmpty()) {
+            // Nothing to release; clean up any empty entry.
+            leasedBucketsByTable.remove(tableId);
             return;
         }
         LOG.info(
@@ -687,20 +737,39 @@ public class TieringSourceEnumerator
                 kvSnapshotLeaseId,
                 tableId,
                 buckets.size());
+        // Take a defensive copy of the buckets to release so concurrent updates to the
+        // tracked set do not affect the in-flight RPC payload.
+        Set<TableBucket> bucketsToRelease = new HashSet<>(buckets);
         try {
             flussAdmin
                     .createKvSnapshotLease(kvSnapshotLeaseId, KV_SNAPSHOT_LEASE_DURATION_MS)
-                    .releaseSnapshots(buckets)
+                    .releaseSnapshots(bucketsToRelease)
                     .get();
+            // Only drop the bookkeeping entry after the server confirms the release.
+            Set<TableBucket> tracked = leasedBucketsByTable.get(tableId);
+            if (tracked != null) {
+                tracked.removeAll(bucketsToRelease);
+                if (tracked.isEmpty()) {
+                    leasedBucketsByTable.remove(tableId);
+                }
+            }
         } catch (Exception e) {
             if (ExceptionUtils.findThrowable(e, UnsupportedVersionException.class).isPresent()) {
+                // Server does not support the lease API; drop tracking since release is a
+                // no-op and there is no point retrying.
+                leasedBucketsByTable.remove(tableId);
                 LOG.warn(
                         "Failed to release kv snapshot lease for tiering table {} because the "
                                 + "server does not support kv snapshot lease API.",
                         tableId,
                         e);
             } else {
-                LOG.error("Failed to release kv snapshot lease for tiering table {}.", tableId, e);
+                // Keep the buckets tracked so we (or the next failover/close) can retry.
+                LOG.error(
+                        "Failed to release kv snapshot lease for tiering table {}; the buckets "
+                                + "remain tracked and will be retried on next release attempt.",
+                        tableId,
+                        e);
             }
         }
     }
@@ -710,37 +779,56 @@ public class TieringSourceEnumerator
      * avoid blocking the coordinator thread when multiple tables need to be released.
      */
     private void maybeReleaseKvSnapshotLeaseAsync(long tableId) {
-        Set<TableBucket> buckets = leasedBucketsByTable.remove(tableId);
-        if (flussAdmin == null || buckets == null || buckets.isEmpty()) {
+        // Peek the buckets without removing them yet; only drop the tracking entry once the
+        // server confirms the release. This way a transient failure (e.g. RPC timeout) does
+        // not silently leak the lease until expiry.
+        Set<TableBucket> tracked = leasedBucketsByTable.get(tableId);
+        if (flussAdmin == null || tracked == null || tracked.isEmpty()) {
+            leasedBucketsByTable.remove(tableId);
             return;
         }
+        Set<TableBucket> bucketsToRelease = new HashSet<>(tracked);
         LOG.info(
                 "Asynchronously releasing kv snapshot lease {} for tiering table {} with {} buckets.",
                 kvSnapshotLeaseId,
                 tableId,
-                buckets.size());
+                bucketsToRelease.size());
         flussAdmin
                 .createKvSnapshotLease(kvSnapshotLeaseId, KV_SNAPSHOT_LEASE_DURATION_MS)
-                .releaseSnapshots(buckets)
+                .releaseSnapshots(bucketsToRelease)
                 .whenComplete(
                         (ignored, e) -> {
-                            if (e != null) {
-                                if (ExceptionUtils.findThrowable(
-                                                e, UnsupportedVersionException.class)
-                                        .isPresent()) {
-                                    LOG.warn(
-                                            "Failed to release kv snapshot lease for tiering "
-                                                    + "table {} because the server does not "
-                                                    + "support kv snapshot lease API.",
-                                            tableId,
-                                            e);
-                                } else {
-                                    LOG.error(
-                                            "Failed to release kv snapshot lease for tiering "
-                                                    + "table {} during failover.",
-                                            tableId,
-                                            e);
+                            if (e == null) {
+                                Set<TableBucket> remaining = leasedBucketsByTable.get(tableId);
+                                if (remaining != null) {
+                                    remaining.removeAll(bucketsToRelease);
+                                    if (remaining.isEmpty()) {
+                                        leasedBucketsByTable.remove(tableId);
+                                    }
                                 }
+                                return;
+                            }
+                            if (ExceptionUtils.findThrowable(e, UnsupportedVersionException.class)
+                                    .isPresent()) {
+                                // Server does not support the lease API; tracking is useless,
+                                // drop it so we don't keep retrying.
+                                leasedBucketsByTable.remove(tableId);
+                                LOG.warn(
+                                        "Failed to release kv snapshot lease for tiering "
+                                                + "table {} because the server does not "
+                                                + "support kv snapshot lease API.",
+                                        tableId,
+                                        e);
+                            } else {
+                                // Keep the buckets tracked so a later failover/close can
+                                // retry the release instead of leaking the lease until
+                                // expiry.
+                                LOG.error(
+                                        "Failed to release kv snapshot lease for tiering "
+                                                + "table {} during failover; the buckets "
+                                                + "remain tracked and will be retried later.",
+                                        tableId,
+                                        e);
                             }
                         });
     }

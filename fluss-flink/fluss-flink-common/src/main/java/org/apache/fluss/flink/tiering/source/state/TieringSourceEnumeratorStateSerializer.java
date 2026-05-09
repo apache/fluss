@@ -55,16 +55,21 @@ public class TieringSourceEnumeratorStateSerializer
     @Override
     public byte[] serialize(TieringSourceEnumeratorState obj) throws IOException {
         final DataOutputSerializer out = SERIALIZER_CACHE.get();
-        String leaseId = obj.getKvSnapshotLeaseId();
-        if (leaseId != null) {
-            out.writeBoolean(true);
-            out.writeUTF(leaseId);
-        } else {
-            out.writeBoolean(false);
+        try {
+            String leaseId = obj.getKvSnapshotLeaseId();
+            if (leaseId != null) {
+                out.writeBoolean(true);
+                out.writeUTF(leaseId);
+            } else {
+                out.writeBoolean(false);
+            }
+            return out.getCopyOfBuffer();
+        } finally {
+            // Always clear the cached ThreadLocal serializer, even if a write throws, so that
+            // a partially-written buffer does not corrupt subsequent serializations on this
+            // thread.
+            out.clear();
         }
-        final byte[] result = out.getCopyOfBuffer();
-        out.clear();
-        return result;
     }
 
     @Override
