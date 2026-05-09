@@ -31,38 +31,11 @@ class TieringSourceEnumeratorStateSerializerTest {
             TieringSourceEnumeratorStateSerializer.INSTANCE;
 
     @Test
-    void testSerDeserializeWithLeaseId() throws Exception {
-        TieringSourceEnumeratorState state =
-                new TieringSourceEnumeratorState("tiering-test-lease-123");
-        byte[] serialized = serializer.serialize(state);
-        assertThat(serialized.length).isGreaterThan(0);
-        TieringSourceEnumeratorState deserialized =
-                serializer.deserialize(serializer.getVersion(), serialized);
-        assertThat(deserialized).isEqualTo(state);
-        assertThat(deserialized.getKvSnapshotLeaseId()).isEqualTo("tiering-test-lease-123");
-    }
-
-    @Test
-    void testSerDeserializeWithNullLeaseId() throws Exception {
-        TieringSourceEnumeratorState state = new TieringSourceEnumeratorState(null);
-        byte[] serialized = serializer.serialize(state);
-        TieringSourceEnumeratorState deserialized =
-                serializer.deserialize(serializer.getVersion(), serialized);
-        assertThat(deserialized).isEqualTo(state);
-        assertThat(deserialized.getKvSnapshotLeaseId()).isNull();
-    }
-
-    @Test
-    void testV0Compatibility() throws Exception {
-        // v0 serialized an empty byte array; deserialization should produce a state with null
-        // lease id
-        TieringSourceEnumeratorState deserialized = serializer.deserialize(0, new byte[0]);
-        assertThat(deserialized.getKvSnapshotLeaseId()).isNull();
-    }
-
-    @Test
-    void testDefaultConstructorHasNullLeaseId() {
+    void testSerDeserialize() throws Exception {
         TieringSourceEnumeratorState state = new TieringSourceEnumeratorState();
-        assertThat(state.getKvSnapshotLeaseId()).isNull();
+        byte[] serialized = serializer.serialize(state);
+        TieringSourceEnumeratorState deserialized =
+                serializer.deserialize(serializer.getVersion(), serialized);
+        assertThat(deserialized).isNotNull();
     }
 }

@@ -91,13 +91,8 @@ public class TieringSource<WriteResult>
     public SplitEnumerator<TieringSplit, TieringSourceEnumeratorState> restoreEnumerator(
             SplitEnumeratorContext<TieringSplit> splitEnumeratorContext,
             TieringSourceEnumeratorState tieringSourceEnumeratorState) {
-        // Restore with the lease id from the checkpoint so that the enumerator reuses
-        // the same lease instead of leaking orphaned leases.
         return new TieringSourceEnumerator(
-                flussConf,
-                splitEnumeratorContext,
-                pollTieringTableIntervalMs,
-                tieringSourceEnumeratorState.getKvSnapshotLeaseId());
+                flussConf, splitEnumeratorContext, pollTieringTableIntervalMs);
     }
 
     @Override

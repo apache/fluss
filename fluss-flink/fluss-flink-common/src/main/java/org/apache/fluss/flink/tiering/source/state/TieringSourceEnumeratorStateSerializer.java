@@ -18,34 +18,17 @@
 package org.apache.fluss.flink.tiering.source.state;
 
 import org.apache.flink.core.io.SimpleVersionedSerializer;
-import org.apache.flink.core.memory.DataInputDeserializer;
-import org.apache.flink.core.memory.DataOutputSerializer;
 
 import java.io.IOException;
 
-/**
- * Serializer for {@link TieringSourceEnumeratorState}.
- *
- * <h3>Version Evolution:</h3>
- *
- * <ul>
- *   <li><b>Version 0:</b> Empty state (stateless marker).
- *   <li><b>Version 1 (Current):</b> Stores the KV snapshot lease id so that it can be recovered
- *       after a checkpoint restore.
- * </ul>
- */
+/** Serializer for {@link TieringSourceEnumeratorState}. The state is a stateless marker. */
 public class TieringSourceEnumeratorStateSerializer
         implements SimpleVersionedSerializer<TieringSourceEnumeratorState> {
 
     public static final TieringSourceEnumeratorStateSerializer INSTANCE =
             new TieringSourceEnumeratorStateSerializer();
 
-    private static final int VERSION_0 = 0;
-    private static final int VERSION_1 = 1;
-    private static final int CURRENT_VERSION = VERSION_1;
-
-    private static final ThreadLocal<DataOutputSerializer> SERIALIZER_CACHE =
-            ThreadLocal.withInitial(() -> new DataOutputSerializer(64));
+    private static final int CURRENT_VERSION = 0;
 
     @Override
     public int getVersion() {
@@ -54,46 +37,19 @@ public class TieringSourceEnumeratorStateSerializer
 
     @Override
     public byte[] serialize(TieringSourceEnumeratorState obj) throws IOException {
-        final DataOutputSerializer out = SERIALIZER_CACHE.get();
-        try {
-            String leaseId = obj.getKvSnapshotLeaseId();
-            if (leaseId != null) {
-                out.writeBoolean(true);
-                out.writeUTF(leaseId);
-            } else {
-                out.writeBoolean(false);
-            }
-            return out.getCopyOfBuffer();
-        } finally {
-            // Always clear the cached ThreadLocal serializer, even if a write throws, so that
-            // a partially-written buffer does not corrupt subsequent serializations on this
-            // thread.
-            out.clear();
-        }
+        return new byte[0];
     }
 
     @Override
     public TieringSourceEnumeratorState deserialize(int version, byte[] serialized)
             throws IOException {
-        switch (version) {
-            case VERSION_0:
-                // v0 was an empty state; no lease id persisted
-                return new TieringSourceEnumeratorState();
-            case VERSION_1:
-                return deserializeV1(serialized);
-            default:
-                throw new IOException(
-                        String.format(
-                                "The bytes are serialized with version %d, "
-                                        + "while this deserializer only supports version up to %d",
-                                version, CURRENT_VERSION));
+        if (version != CURRENT_VERSION) {
+            throw new IOException(
+                    String.format(
+                            "The bytes are serialized with version %d, "
+                                    + "while this deserializer only supports version %d",
+                            version, CURRENT_VERSION));
         }
-    }
-
-    private TieringSourceEnumeratorState deserializeV1(byte[] serialized) throws IOException {
-        DataInputDeserializer in = new DataInputDeserializer(serialized);
-        boolean hasLeaseId = in.readBoolean();
-        String leaseId = hasLeaseId ? in.readUTF() : null;
-        return new TieringSourceEnumeratorState(leaseId);
+        return new TieringSourceEnumeratorState();
     }
 }

@@ -705,34 +705,13 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             int expectedSplitsNum,
             long sleepMs)
             throws Throwable {
-        long startTime = System.currentTimeMillis();
-        long timeoutMs = 10000; // 10秒超时
-
         while (context.getSplitsAssignmentSequence().size() < expectedSplitsNum) {
-            if (System.currentTimeMillis() - startTime > timeoutMs) {
-                throw new AssertionError(
-                        String.format(
-                                "等待分配超时: 期望 %d 个分配, 实际 %d 个分配, 超时时间 %dms",
-                                expectedSplitsNum,
-                                context.getSplitsAssignmentSequence().size(),
-                                timeoutMs));
-            }
-
-            // 优先运行periodic callable，这是主要的分配驱动机制
             if (!context.getPeriodicCallables().isEmpty()) {
                 context.runPeriodicCallable(0);
-            }
-
-            // 然后运行one-time callable
-            if (!context.getOneTimeCallables().isEmpty()) {
+            } else {
                 context.runNextOneTimeCallable();
             }
-
-            // 如果没有可运行的任务，等待一小段时间
-            if (context.getPeriodicCallables().isEmpty()
-                    && context.getOneTimeCallables().isEmpty()) {
-                Thread.sleep(Math.min(sleepMs, 100)); // 最大等待100ms
-            }
+            Thread.sleep(sleepMs);
         }
     }
 
@@ -758,36 +737,6 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
     private TieringSourceEnumerator createTieringSourceEnumerator(
             Configuration flussConf, MockSplitEnumeratorContext<TieringSplit> context) {
         return new TieringSourceEnumerator(flussConf, context, 500);
-    }
-
-    @Test
-    void testLeaseIdRestoredFromState() throws Throwable {
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-lease-restore-test");
-        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
-        int numSubtasks = 3;
-
-        upsertRow(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR, 0, 10);
-        triggerAndWaitSnapshot(tableId);
-
-        String capturedLeaseId;
-        // First enumerator: create and capture the lease id
-        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
-                new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
-            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
-            enumerator.start();
-            capturedLeaseId = enumerator.getKvSnapshotLeaseId();
-            assertThat(capturedLeaseId).startsWith("tiering-");
-        }
-
-        // Second enumerator: restore from state with same lease id
-        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
-                new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
-            TieringSourceEnumerator restoredEnumerator =
-                    new TieringSourceEnumerator(flussConf, context, 500, capturedLeaseId);
-            restoredEnumerator.start();
-            assertThat(restoredEnumerator.getKvSnapshotLeaseId()).isEqualTo(capturedLeaseId);
-            restoredEnumerator.close();
-        }
     }
 
     @Test
@@ -843,15 +792,6 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             // Simulate reader failover (attempt 1)
             context.getSplitsAssignmentSequence().clear();
             registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 1);
-
-            // The lease release is dispatched via context.callAsync to avoid blocking the
-            // coordinator thread. Drive only the very next one-time callable, which is the
-            // release task enqueued by handleSourceReaderFailOver. We intentionally do NOT
-            // drain all queued callables here, because subsequent callables may issue a
-            // heartbeat that re-acquires a lease for the same table and would mask the
-            // release we are trying to verify.
-            assertThat(context.getOneTimeCallables()).isNotEmpty();
-            context.runNextOneTimeCallable();
 
             // After failover, all leases for the failed tables should be released
             assertThat(enumerator.getLeasedBucketsByTable()).doesNotContainKey(tableId);

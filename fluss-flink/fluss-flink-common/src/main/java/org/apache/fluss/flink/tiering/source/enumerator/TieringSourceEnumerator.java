@@ -106,14 +106,10 @@ public class TieringSourceEnumerator
      * KV snapshot lease duration for the whole tiering job. One lease covers the entire job
      * lifecycle; it is renewed implicitly by every {@code acquireSnapshots} call, so a relatively
      * long duration is safe and also bounds the worst-case leaked-lease lifetime if the job dies
-     * abnormally.
-     *
-     * <p>TODO: introduce an explicit periodic lease-renewal mechanism so that a single tiering
-     * round that exceeds {@link #KV_SNAPSHOT_LEASE_DURATION_MS} (e.g. for very large tables) will
-     * not see its snapshots garbage-collected mid-flight. Tracked as a follow-up issue; tiering
-     * rounds are typically minute-level today so a 1-day lease is sufficient in practice.
+     * abnormally. Tiering rounds are typically minute-level today so a 6-hour lease is more than
+     * sufficient for most cases.
      */
-    private static final long KV_SNAPSHOT_LEASE_DURATION_MS = Duration.ofDays(1).toMillis();
+    private static final long KV_SNAPSHOT_LEASE_DURATION_MS = Duration.ofHours(6).toMillis();
 
     private final Configuration flussConf;
     private final SplitEnumeratorContext<TieringSplit> context;
@@ -156,19 +152,6 @@ public class TieringSourceEnumerator
             Configuration flussConf,
             SplitEnumeratorContext<TieringSplit> context,
             long pollTieringTableIntervalMs) {
-        this(flussConf, context, pollTieringTableIntervalMs, null);
-    }
-
-    /**
-     * Creates a new enumerator, optionally restoring from a previously persisted lease id.
-     *
-     * @param restoredLeaseId the lease id from a previous checkpoint, or null for fresh start
-     */
-    public TieringSourceEnumerator(
-            Configuration flussConf,
-            SplitEnumeratorContext<TieringSplit> context,
-            long pollTieringTableIntervalMs,
-            @Nullable String restoredLeaseId) {
         this.flussConf = flussConf;
         this.context = context;
         this.timerService =
@@ -185,8 +168,7 @@ public class TieringSourceEnumerator
         // Thread safety: outer map is ConcurrentHashMap, values are ConcurrentHashMap-backed
         // Sets. Reads/writes are safe across the coordinator thread and the timer thread.
         this.leasedBucketsByTable = new ConcurrentHashMap<>();
-        this.kvSnapshotLeaseId =
-                restoredLeaseId != null ? restoredLeaseId : "tiering-" + UUID.randomUUID();
+        this.kvSnapshotLeaseId = "tiering-" + UUID.randomUUID();
     }
 
     @Override
@@ -232,19 +214,6 @@ public class TieringSourceEnumerator
         }
         LOG.info("TieringSourceReader {} requests split.", subtaskId);
         readersAwaitingSplit.add(subtaskId);
-
-        // During failover we must not request a new tiering table or assign any splits.
-        // Otherwise we might re-acquire leases for a table whose leases were just released by
-        // handleSourceReaderFailOver, or assign splits to subtasks whose readers from the new
-        // attempt have not been fully registered yet. The pending failed-table report and the
-        // subsequent split request will be driven by the periodic callAsync once failover is
-        // marked complete.
-        if (isFailOvering) {
-            LOG.info(
-                    "Skip handling split request from subtask {} because the enumerator is in failover.",
-                    subtaskId);
-            return;
-        }
 
         // If pending splits exist, assign them directly to the requesting reader
         if (!pendingSplits.isEmpty()) {
@@ -307,23 +276,11 @@ public class TieringSourceEnumerator
                     int globalMaxAttempt = max(maxAttempts);
                     if (maxAttempts.size() == 1 && globalMaxAttempt >= 1) {
                         LOG.info(
-                                "All {} subtasks reached the same attempt number {}. Current registered readers are {}. Waiting for failed-table report to complete before clearing failover state.",
+                                "Failover completed. All {} subtasks reached the same attempt number {}. Current registered readers are {}",
                                 context.currentParallelism(),
                                 globalMaxAttempt,
                                 context.registeredReadersOfAttempts());
-                        // Drive a heartbeat round to report the failed tables and request a
-                        // fresh tiering table; clear the failover flag only after that round
-                        // completes, so that no split is assigned and no lease is re-acquired
-                        // for a table whose leases were just released during failover.
-                        this.context.callAsync(
-                                this::requestTieringTableSplitsViaHeartBeat,
-                                (tieringTable, throwable) -> {
-                                    isFailOvering = false;
-                                    LOG.info(
-                                            "Failover completed for attempt {}. Cleared failover flag.",
-                                            globalMaxAttempt);
-                                    generateAndAssignSplits(tieringTable, throwable);
-                                });
+                        isFailOvering = false;
                     }
                 }
             }
@@ -391,17 +348,14 @@ public class TieringSourceEnumerator
                 tieringTableEpochs);
         // we need to make all as failed
         failedTableEpochs.putAll(new HashMap<>(tieringTableEpochs));
-        // release all currently leased buckets for tables that are being marked failed;
-        // take a snapshot of the keys first to avoid concurrent modification.
-        Set<Long> tableIdsToRelease = new HashSet<>(tieringTableEpochs.keySet());
         tieringTableEpochs.clear();
         tieringReachMaxDurationsTables.clear();
         // also clean all pending splits since we mark all as failed
         pendingSplits.clear();
-        // Release leases asynchronously to avoid blocking the coordinator thread when
-        // multiple tables are involved and RPC calls may time out.
-        for (Long tableId : tableIdsToRelease) {
-            maybeReleaseKvSnapshotLeaseAsync(tableId);
+        // Release leases for all currently tracked tables to avoid leaking server-side
+        // snapshot references when those tables are marked failed during failover.
+        for (Long tableId : new HashSet<>(leasedBucketsByTable.keySet())) {
+            maybeReleaseKvSnapshotLease(tableId);
         }
         if (!failedTableEpochs.isEmpty()) {
             // call one round of heartbeat to notify table has been finished or failed
@@ -589,9 +543,7 @@ public class TieringSourceEnumerator
 
     @Override
     public TieringSourceEnumeratorState snapshotState(long checkpointId) throws Exception {
-        // Persist the lease id so that on restore we can reuse the same id instead of leaking
-        // an orphaned lease on the server.
-        return new TieringSourceEnumeratorState(kvSnapshotLeaseId);
+        return new TieringSourceEnumeratorState();
     }
 
     @Override
@@ -611,18 +563,16 @@ public class TieringSourceEnumerator
                 LOG.error("Failed to close Tiering Source enumerator.", e);
             }
         }
-        // NOTE: we intentionally do NOT drop the kv snapshot lease here. The lease id is
-        // persisted into the enumerator checkpoint state and will be reused by the restored
-        // enumerator after a JM failover. Dropping it on close would destroy the lease that
-        // the restored enumerator expects to reuse, potentially causing the referenced
-        // snapshots to be garbage-collected before tiering finishes. The lease will expire
-        // naturally on the server side (see KV_SNAPSHOT_LEASE_DURATION_MS).
-        //
-        // TODO: if the job is cancelled by the user (rather than restarted), the lease will only
-        // be reclaimed on the server side when it expires (up to KV_SNAPSHOT_LEASE_DURATION_MS).
-        // We cannot currently distinguish "user cancel" from "failover" at the SplitEnumerator
-        // layer; consider wiring a cancel hook (or using Flink's close(reason) when available)
-        // so that user-initiated cancellations can drop the lease eagerly.
+        // Release any remaining leases held by this enumerator. The fluss cluster will also
+        // expire stale leases naturally after KV_SNAPSHOT_LEASE_DURATION_MS, so a best-effort
+        // release here is sufficient.
+        for (Long tableId : new HashSet<>(leasedBucketsByTable.keySet())) {
+            try {
+                maybeReleaseKvSnapshotLease(tableId);
+            } catch (Exception e) {
+                LOG.warn("Failed to release kv snapshot lease for table {} on close.", tableId, e);
+            }
+        }
         try {
             if (flussAdmin != null) {
                 LOG.info("Closing Fluss Admin client...");
@@ -651,9 +601,6 @@ public class TieringSourceEnumerator
      * snapshot lease API, to preserve compatibility with older Fluss clusters.
      */
     private void maybeAcquireKvSnapshotLease(long tableId, List<TieringSplit> tieringSplits) {
-        if (flussAdmin == null) {
-            return;
-        }
         Map<TableBucket, Long> bucketsToLease = new HashMap<>();
         for (TieringSplit split : tieringSplits) {
             if (split.isTieringSnapshotSplit()) {
@@ -723,136 +670,35 @@ public class TieringSourceEnumerator
      * for which acquire failed) are handled as no-ops.
      */
     private void maybeReleaseKvSnapshotLease(long tableId) {
-        // Peek the buckets without removing so that, if the release RPC fails, we can keep
-        // the entry in leasedBucketsByTable for a later retry instead of permanently
-        // forgetting which buckets are still leased on the server side.
-        Set<TableBucket> buckets = leasedBucketsByTable.get(tableId);
-        if (flussAdmin == null || buckets == null || buckets.isEmpty()) {
-            // Nothing to release; clean up any empty entry.
-            leasedBucketsByTable.remove(tableId);
+        Set<TableBucket> bucketsToRelease = leasedBucketsByTable.remove(tableId);
+        if (bucketsToRelease == null || bucketsToRelease.isEmpty()) {
             return;
         }
         LOG.info(
                 "Try to release kv snapshot lease {} for tiering table {} with {} buckets.",
                 kvSnapshotLeaseId,
                 tableId,
-                buckets.size());
-        // Take a defensive copy of the buckets to release so concurrent updates to the
-        // tracked set do not affect the in-flight RPC payload.
-        Set<TableBucket> bucketsToRelease = new HashSet<>(buckets);
+                bucketsToRelease.size());
         try {
             flussAdmin
                     .createKvSnapshotLease(kvSnapshotLeaseId, KV_SNAPSHOT_LEASE_DURATION_MS)
                     .releaseSnapshots(bucketsToRelease)
                     .get();
-            // Only drop the bookkeeping entry after the server confirms the release.
-            Set<TableBucket> tracked = leasedBucketsByTable.get(tableId);
-            if (tracked != null) {
-                tracked.removeAll(bucketsToRelease);
-                if (tracked.isEmpty()) {
-                    leasedBucketsByTable.remove(tableId);
-                }
-            }
         } catch (Exception e) {
             if (ExceptionUtils.findThrowable(e, UnsupportedVersionException.class).isPresent()) {
-                // Server does not support the lease API; drop tracking since release is a
-                // no-op and there is no point retrying.
-                leasedBucketsByTable.remove(tableId);
                 LOG.warn(
                         "Failed to release kv snapshot lease for tiering table {} because the "
                                 + "server does not support kv snapshot lease API.",
                         tableId,
                         e);
             } else {
-                // Keep the buckets tracked so we (or the next failover/close) can retry.
                 LOG.error(
-                        "Failed to release kv snapshot lease for tiering table {}; the buckets "
-                                + "remain tracked and will be retried on next release attempt.",
+                        "Failed to release kv snapshot lease for tiering table {}. The lease "
+                                + "will expire naturally on the server side.",
                         tableId,
                         e);
             }
         }
-    }
-
-    /**
-     * Asynchronous variant of {@link #maybeReleaseKvSnapshotLease(long)} used during failover to
-     * avoid blocking the coordinator thread when multiple tables need to be released.
-     *
-     * <p>Implementation note: the actual blocking RPC is dispatched via {@link
-     * SplitEnumeratorContext#callAsync}, which executes the work on the source coordinator's worker
-     * pool and routes the completion handler back to the coordinator thread. This gives us:
-     *
-     * <ul>
-     *   <li>The same simple synchronous semantics as {@link #maybeReleaseKvSnapshotLease(long)} for
-     *       state updates (the bookkeeping map is mutated only from the coordinator thread).
-     *   <li>No blocking of the coordinator thread itself, even when many tables are released at
-     *       once during a failover.
-     *   <li>Deterministic behavior under tests, since the mock enumerator context lets the test
-     *       drive the queued one-time callable explicitly.
-     * </ul>
-     */
-    private void maybeReleaseKvSnapshotLeaseAsync(long tableId) {
-        // Peek the buckets without removing so that, if the release RPC fails, we can keep
-        // the entry in leasedBucketsByTable for a later retry instead of permanently
-        // forgetting which buckets are still leased on the server side.
-        Set<TableBucket> tracked = leasedBucketsByTable.get(tableId);
-        if (flussAdmin == null || tracked == null || tracked.isEmpty()) {
-            // Nothing to release; clean up any empty entry.
-            leasedBucketsByTable.remove(tableId);
-            return;
-        }
-        Set<TableBucket> bucketsToRelease = new HashSet<>(tracked);
-        LOG.info(
-                "Asynchronously releasing kv snapshot lease {} for tiering table {} with {} buckets.",
-                kvSnapshotLeaseId,
-                tableId,
-                bucketsToRelease.size());
-        context.callAsync(
-                () -> {
-                    // Executed on the coordinator worker pool: it is OK to block here
-                    // waiting for the release RPC to complete.
-                    flussAdmin
-                            .createKvSnapshotLease(kvSnapshotLeaseId, KV_SNAPSHOT_LEASE_DURATION_MS)
-                            .releaseSnapshots(bucketsToRelease)
-                            .get();
-                    return null;
-                },
-                (ignored, e) -> {
-                    // Executed back on the coordinator thread: safe to mutate the
-                    // bookkeeping map without extra synchronization.
-                    if (e == null) {
-                        Set<TableBucket> remaining = leasedBucketsByTable.get(tableId);
-                        if (remaining != null) {
-                            remaining.removeAll(bucketsToRelease);
-                            if (remaining.isEmpty()) {
-                                leasedBucketsByTable.remove(tableId);
-                            }
-                        }
-                        return;
-                    }
-                    if (ExceptionUtils.findThrowable(e, UnsupportedVersionException.class)
-                            .isPresent()) {
-                        // Server does not support the lease API; tracking is useless,
-                        // drop it so we don't keep retrying.
-                        leasedBucketsByTable.remove(tableId);
-                        LOG.warn(
-                                "Failed to release kv snapshot lease for tiering "
-                                        + "table {} because the server does not "
-                                        + "support kv snapshot lease API.",
-                                tableId,
-                                e);
-                    } else {
-                        // Keep the buckets tracked so a later failover/close can
-                        // retry the release instead of leaking the lease until
-                        // expiry.
-                        LOG.error(
-                                "Failed to release kv snapshot lease for tiering "
-                                        + "table {} during failover; the buckets "
-                                        + "remain tracked and will be retried later.",
-                                tableId,
-                                e);
-                    }
-                });
     }
 
     @VisibleForTesting
