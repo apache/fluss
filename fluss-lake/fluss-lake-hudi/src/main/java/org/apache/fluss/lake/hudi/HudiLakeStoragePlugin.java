@@ -21,7 +21,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
 import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
 
-/** Implement of Hudi Lake Storage Plugin. */
+/** Hudi implementation of {@link LakeStoragePlugin}. */
 public class HudiLakeStoragePlugin implements LakeStoragePlugin {
 
     private static final String IDENTIFIER = "hudi";
