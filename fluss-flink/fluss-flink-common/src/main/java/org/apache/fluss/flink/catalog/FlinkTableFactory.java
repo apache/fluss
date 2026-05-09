@@ -28,6 +28,7 @@ import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.flink.source.BinlogFlinkTableSource;
 import org.apache.fluss.flink.source.ChangelogFlinkTableSource;
 import org.apache.fluss.flink.source.FlinkTableSource;
+import org.apache.fluss.flink.source.WatermarkContext;
 import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.metadata.MergeEngineType;
@@ -37,6 +38,7 @@ import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.ExecutionOptions;
 import org.apache.flink.configuration.ReadableConfig;
+import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.table.api.config.TableConfigOptions;
 import org.apache.flink.table.catalog.ObjectIdentifier;
 import org.apache.flink.table.catalog.ResolvedCatalogTable;
@@ -49,8 +51,11 @@ import org.apache.flink.table.connector.source.lookup.cache.LookupCache;
 import org.apache.flink.table.factories.DynamicTableSinkFactory;
 import org.apache.flink.table.factories.DynamicTableSourceFactory;
 import org.apache.flink.table.factories.FactoryUtil;
+import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.RowType;
 
+import java.time.Duration;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -148,6 +153,22 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                         .toMillis();
 
         LeaseContext leaseContext = LeaseContext.fromConf(tableOptions);
+
+        // Build watermark context from hint configuration
+        boolean watermarkEnabled = tableOptions.get(FlinkConnectorOptions.SCAN_WATERMARK_ENABLED);
+        String watermarkColumn =
+                tableOptions.getOptional(FlinkConnectorOptions.SCAN_WATERMARK_COLUMN).orElse(null);
+        if (watermarkColumn != null) {
+            validateWatermarkColumn(watermarkColumn, tableOutputType);
+        }
+        Duration watermarkDelay = tableOptions.get(FlinkConnectorOptions.SCAN_WATERMARK_DELAY);
+        Duration sourceIdleTimeout =
+                context.getConfiguration()
+                        .get(ExecutionConfigOptions.TABLE_EXEC_SOURCE_IDLE_TIMEOUT);
+        WatermarkContext watermarkContext =
+                new WatermarkContext(
+                        watermarkEnabled, watermarkColumn, watermarkDelay, sourceIdleTimeout);
+
         return new FlinkTableSource(
                 toFlussTablePath(context.getObjectIdentifier()),
                 toFlussClientConfig(
@@ -166,7 +187,8 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_DATALAKE_ENABLED)),
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
                 context.getCatalogTable().getOptions(),
-                leaseContext);
+                leaseContext,
+                watermarkContext);
     }
 
     @Override
@@ -234,6 +256,9 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                                 FlinkConnectorOptions.SCAN_STARTUP_MODE,
                                 FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP,
                                 FlinkConnectorOptions.SCAN_PARTITION_DISCOVERY_INTERVAL,
+                                FlinkConnectorOptions.SCAN_WATERMARK_ENABLED,
+                                FlinkConnectorOptions.SCAN_WATERMARK_COLUMN,
+                                FlinkConnectorOptions.SCAN_WATERMARK_DELAY,
                                 FlinkConnectorOptions.SCAN_KV_SNAPSHOT_LEASE_ID,
                                 FlinkConnectorOptions.SCAN_KV_SNAPSHOT_LEASE_DURATION,
                                 FlinkConnectorOptions.LOOKUP_ASYNC,
@@ -316,6 +341,33 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
      */
     private static void validateSourceOptions(ReadableConfig tableOptions) {
         FlinkConnectorOptionsUtils.validateTableSourceOptions(tableOptions);
+    }
+
+    /**
+     * Validates that the watermark column specified in the hint exists in the table schema and has
+     * a supported type (TIMESTAMP, TIMESTAMP_LTZ, or BIGINT).
+     */
+    private static void validateWatermarkColumn(String watermarkColumn, RowType tableOutputType) {
+        int columnIndex = tableOutputType.getFieldIndex(watermarkColumn);
+        if (columnIndex < 0) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Watermark column '%s' specified in hint does not exist in the table. "
+                                    + "Available columns: %s",
+                            watermarkColumn, tableOutputType.getFieldNames()));
+        }
+
+        LogicalType columnType = tableOutputType.getTypeAt(columnIndex);
+        LogicalTypeRoot typeRoot = columnType.getTypeRoot();
+        if (typeRoot != LogicalTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE
+                && typeRoot != LogicalTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE
+                && typeRoot != LogicalTypeRoot.BIGINT) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Watermark column '%s' has unsupported type '%s'. "
+                                    + "Only TIMESTAMP, TIMESTAMP_LTZ, and BIGINT (epoch millis) are supported.",
+                            watermarkColumn, columnType.asSummaryString()));
+        }
     }
 
     /** Creates a ChangelogFlinkTableSource for $changelog virtual tables. */

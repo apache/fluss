@@ -150,6 +150,32 @@ public class FlinkConnectorOptions {
                                     + "as a small value would cause frequent requests and increase server load. In the future, "
                                     + "once list partitions is optimized, the default value of this parameter can be reduced.");
 
+    public static final ConfigOption<Boolean> SCAN_WATERMARK_ENABLED =
+            ConfigOptions.key("scan.watermark.enabled")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription(
+                            "Whether to enable watermark generation. "
+                                    + "Set to false via SQL hints to disable watermark for tables "
+                                    + "that already have a table-level WATERMARK definition.");
+
+    public static final ConfigOption<String> SCAN_WATERMARK_COLUMN =
+            ConfigOptions.key("scan.watermark.column")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The column name used for event-time watermark generation. "
+                                    + "When specified via SQL hints, it overrides the table-level WATERMARK definition. "
+                                    + "The column must be of type TIMESTAMP, TIMESTAMP_LTZ, or BIGINT (epoch millis).");
+
+    public static final ConfigOption<Duration> SCAN_WATERMARK_DELAY =
+            ConfigOptions.key("scan.watermark.delay")
+                    .durationType()
+                    .defaultValue(Duration.ZERO)
+                    .withDescription(
+                            "The maximum out-of-orderness allowed for event-time watermark generation. "
+                                    + "Used together with 'scan.watermark.column'. Default is 0 (no delay).");
+
     public static final ConfigOption<Boolean> SINK_IGNORE_DELETE =
             ConfigOptions.key("sink.ignore-delete")
                     .booleanType()

@@ -42,6 +42,7 @@ For Flink's Table API, Fluss supports the following features:
 | [SQL Delete From](writes.md#delete-from)                        | ✔️    | Only in batch mode.                      |
 | [SQL Update](writes.md#update)                                  | ✔️    | Only in batch mode.                      |
 | [SQL Lookup Join](lookups.md)                                   | ✔️    |                                          |
+| [Watermark](watermark.md)                                       | ✔️    | Table-level and hint-based watermark     |
 
 For Flink's DataStream API, you can see [DataStream API](docs/engine-flink/datastream.mdx) for more details.
 
