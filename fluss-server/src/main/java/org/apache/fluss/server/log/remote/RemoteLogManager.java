@@ -81,7 +81,6 @@ public class RemoteLogManager implements Closeable {
     private final Clock clock;
     private final ZooKeeperClient zkClient;
     private final LogManager logManager;
-    private final LocalDiskManager localDiskManager;
 
     private final Map<TableBucket, TaskWithFuture> rlmTasks = new ConcurrentHashMap<>();
     private final Map<TableBucket, RemoteLogTablet> remoteLogs = new ConcurrentHashMap<>();
@@ -123,7 +122,6 @@ public class RemoteLogManager implements Closeable {
         this.zkClient = zkClient;
         this.coordinatorGateway = coordinatorGateway;
         this.logManager = logManager;
-        this.localDiskManager = localDiskManager;
         this.remoteLogIndexCachesByDir = new ConcurrentHashMap<>();
         int cacheSize = (int) conf.get(ConfigOptions.REMOTE_LOG_INDEX_FILE_CACHE_SIZE).getBytes();
         for (File dataDir : localDiskManager.dataDirs()) {
@@ -203,7 +201,8 @@ public class RemoteLogManager implements Closeable {
                             .map(RemoteLogSegment::remoteLogSegmentId)
                             .collect(Collectors.toList());
             // remove cache.
-            remoteLogIndexCache(replica.getLogTablet().getDataDir()).removeAll(remoteLogSegmentIdList);
+            remoteLogIndexCache(replica.getLogTablet().getDataDir())
+                    .removeAll(remoteLogSegmentIdList);
             // unregister the remote log metrics, only leader needs to report
             remoteLog.unregisterMetrics();
         }
