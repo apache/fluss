@@ -718,12 +718,21 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                                 timeoutMs));
             }
 
+            // 优先运行periodic callable，这是主要的分配驱动机制
             if (!context.getPeriodicCallables().isEmpty()) {
                 context.runPeriodicCallable(0);
-            } else {
+            }
+
+            // 然后运行one-time callable
+            if (!context.getOneTimeCallables().isEmpty()) {
                 context.runNextOneTimeCallable();
             }
-            Thread.sleep(Math.min(sleepMs, 100)); // 最大等待100ms
+
+            // 如果没有可运行的任务，等待一小段时间
+            if (context.getPeriodicCallables().isEmpty()
+                    && context.getOneTimeCallables().isEmpty()) {
+                Thread.sleep(Math.min(sleepMs, 100)); // 最大等待100ms
+            }
         }
     }
 
@@ -834,6 +843,15 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             // Simulate reader failover (attempt 1)
             context.getSplitsAssignmentSequence().clear();
             registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 1);
+
+            // The lease release is dispatched via context.callAsync to avoid blocking the
+            // coordinator thread. Drive only the very next one-time callable, which is the
+            // release task enqueued by handleSourceReaderFailOver. We intentionally do NOT
+            // drain all queued callables here, because subsequent callables may issue a
+            // heartbeat that re-acquires a lease for the same table and would mask the
+            // release we are trying to verify.
+            assertThat(context.getOneTimeCallables()).isNotEmpty();
+            context.runNextOneTimeCallable();
 
             // After failover, all leases for the failed tables should be released
             assertThat(enumerator.getLeasedBucketsByTable()).doesNotContainKey(tableId);
