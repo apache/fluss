@@ -15,19 +15,31 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.annotation.docs;
-
-import org.apache.fluss.annotation.Internal;
+package org.apache.fluss.annotation;
 
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
-/** Annotation used to override the default value string in the documentation. */
+/** Annotations for generating configuration documentation. */
 @Internal
-@Target(ElementType.FIELD)
-@Retention(RetentionPolicy.RUNTIME)
-public @interface ConfigOverrideDefault {
-    String value();
+public @interface Documentation {
+
+    /** Annotation to mark the section a config option belongs to. */
+    @Target(ElementType.FIELD)
+    @Retention(RetentionPolicy.RUNTIME)
+    public @interface Section {
+        String value();
+    }
+
+    /**
+     * Annotation to override the default value in documentation. Useful for dynamic defaults like
+     * system paths or timezones.
+     */
+    @Target(ElementType.FIELD)
+    @Retention(RetentionPolicy.RUNTIME)
+    public @interface OverrideDefault {
+        String value();
+    }
 }
