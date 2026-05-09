@@ -138,8 +138,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                 expectedAssignment.put(i, Collections.singletonList(genLogSplit(tableId, i)));
             }
 
-            Map<Integer, List<SourceSplitBase>> actualAssignment =
-                    getLastReadersAssignments(context);
+            Map<Integer, List<SourceSplitBase>> actualAssignment = getReadersAssignments(context);
             assertThat(actualAssignment).isEqualTo(expectedAssignment);
         }
     }
@@ -245,8 +244,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
             // make enumerate to get splits and assign
             context.runNextOneTimeCallable();
 
-            Map<Integer, List<SourceSplitBase>> actualAssignment =
-                    getLastReadersAssignments(context);
+            Map<Integer, List<SourceSplitBase>> actualAssignment = getReadersAssignments(context);
 
             Map<Integer, List<SourceSplitBase>> expectedAssignment = new HashMap<>();
 
@@ -332,8 +330,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 new LogSplit(new TableBucket(tableId, i), null, -2L)));
             }
 
-            Map<Integer, List<SourceSplitBase>> actualAssignment =
-                    getLastReadersAssignments(context);
+            Map<Integer, List<SourceSplitBase>> actualAssignment = getReadersAssignments(context);
             assertThat(actualAssignment).isEqualTo(expectedAssignment);
         }
     }
@@ -545,10 +542,11 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                     createPartitions(zooKeeperClient, DEFAULT_TABLE_PATH, newPartitions);
 
             /// invoke partition discovery callable again and there should assignments.
+            int assignmentStart = context.getSplitsAssignmentSequence().size();
             runPeriodicPartitionDiscovery(workExecutor);
 
             expectedAssignment = expectAssignments(enumerator, tableId, newPartitionNameIds);
-            actualAssignments = getLastReadersAssignments(context);
+            actualAssignments = getReadersAssignments(context, assignmentStart);
             checkAssignmentIgnoreOrder(actualAssignments, expectedAssignment);
 
             // drop + create partitions;
@@ -561,6 +559,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                     createPartitions(zooKeeperClient, DEFAULT_TABLE_PATH, newPartitions);
 
             // invoke partition discovery callable again
+            assignmentStart = context.getSplitsAssignmentSequence().size();
             runPeriodicPartitionDiscovery(workExecutor);
 
             // there should be partition removed events
@@ -581,7 +580,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
 
             // check new assignments.
             expectedAssignment = expectAssignments(enumerator, tableId, newPartitionNameIds);
-            actualAssignments = getLastReadersAssignments(context);
+            actualAssignments = getReadersAssignments(context, assignmentStart);
             checkAssignmentIgnoreOrder(actualAssignments, expectedAssignment);
 
             Map<Long, String> assignedPartitions =
@@ -984,11 +983,21 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
 
     private Map<Integer, List<SourceSplitBase>> getReadersAssignments(
             MockSplitEnumeratorContext<SourceSplitBase> context) {
+        return getReadersAssignments(context, 0);
+    }
+
+    private Map<Integer, List<SourceSplitBase>> getReadersAssignments(
+            MockSplitEnumeratorContext<SourceSplitBase> context, int startIndex) {
         List<SplitsAssignment<SourceSplitBase>> splitsAssignments =
                 context.getSplitsAssignmentSequence();
         Map<Integer, List<SourceSplitBase>> assignment = new HashMap<>();
-        for (SplitsAssignment<SourceSplitBase> splitAssignment : splitsAssignments) {
-            assignment.putAll(splitAssignment.assignment());
+        for (int i = startIndex; i < splitsAssignments.size(); i++) {
+            for (Map.Entry<Integer, List<SourceSplitBase>> splitAssignment :
+                    splitsAssignments.get(i).assignment().entrySet()) {
+                assignment
+                        .computeIfAbsent(splitAssignment.getKey(), key -> new ArrayList<>())
+                        .addAll(splitAssignment.getValue());
+            }
         }
         return assignment;
     }
