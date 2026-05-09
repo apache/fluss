@@ -60,6 +60,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
@@ -570,18 +571,11 @@ public final class LogManager extends TabletManagerBase {
 
     @VisibleForTesting
     void checkpointRecoveryOffsets(File dataDir) {
-        try {
-            Map<TableBucket, Long> recoveryOffsets = new HashMap<>();
-            for (Map.Entry<TableBucket, LogTablet> entry : currentLogs.entrySet()) {
-                if (entry.getValue().getDataDir().equals(dataDir)) {
-                    recoveryOffsets.put(entry.getKey(), entry.getValue().getRecoveryPoint());
-                }
-            }
-            recoveryPointCheckpoints.get(dataDir).write(recoveryOffsets);
-        } catch (Exception e) {
-            throw new LogStorageException(
-                    "Disk error while writing recovery offsets checkpoint", e);
-        }
+        checkpointRecoveryOffsets(
+                dataDir,
+                currentLogs.values().stream()
+                        .filter(log -> log.getDataDir().equals(dataDir))
+                        .collect(Collectors.toList()));
     }
 
     private void checkpointRecoveryOffsets(File dataDir, List<LogTablet> logs) {
