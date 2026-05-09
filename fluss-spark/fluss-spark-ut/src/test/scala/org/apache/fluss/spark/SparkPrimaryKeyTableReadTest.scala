@@ -467,7 +467,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
   }
 
   private def planContainsScan[T <: FlussScan: scala.reflect.ClassTag](
-                                                                        df: org.apache.spark.sql.DataFrame): Boolean = {
+      df: org.apache.spark.sql.DataFrame): Boolean = {
     val cls = implicitly[scala.reflect.ClassTag[T]].runtimeClass
     df.queryExecution.executedPlan.collectFirst {
       case b: BatchScanExec if cls.isInstance(b.scan) => b

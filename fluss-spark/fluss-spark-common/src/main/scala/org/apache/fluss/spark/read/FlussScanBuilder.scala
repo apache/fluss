@@ -136,11 +136,11 @@ trait FlussLakeSupportsPushDownV2Filters extends FlussSupportsPushDownPartitionF
  * upsert writes make the server-side row count match a full scan; log / lake-tiered tables can
  * drift. Mirrors the Flink-side gating in `FlinkTableSource#applyAggregates`.
  */
-trait FlussSupportsPushDownAggregates extends FlussScanBuilder with SupportsPushDownAggregates {
+trait FlussSupportsPushDownAggregates
+  extends FlussSupportsPushDownPartitionFilters
+  with SupportsPushDownAggregates {
 
   def tablePath: TablePath
-
-  def tableInfo: TableInfo
 
   def flussConfig: FlussConfiguration
 
@@ -163,6 +163,11 @@ trait FlussSupportsPushDownAggregates extends FlussScanBuilder with SupportsPush
 
   private def isPushable(aggregation: Aggregation): Boolean = {
     if (aggregation.groupByExpressions().nonEmpty) {
+      return false
+    }
+    // When a partition predicate is present, we cannot use the whole-table row count
+    // from server-side stats because it would include rows from non-matching partitions.
+    if (partitionPredicate.isDefined) {
       return false
     }
     val aggs = aggregation.aggregateExpressions()
@@ -274,36 +279,25 @@ class FlussLakeAppendScanBuilder(
 
 /** Fluss Upsert Scan Builder. */
 class FlussUpsertScanBuilder(
-    tablePath: TablePath,
+    val tablePath: TablePath,
     val tableInfo: TableInfo,
     options: CaseInsensitiveStringMap,
     val flussConfig: FlussConfiguration)
-  extends FlussSupportsPushDownV2Filters {
-
-  override def build(): Scan = {
-    FlussUpsertScan(
-      tablePath,
-      tableInfo,
-      requiredSchema,
-      partitionPredicate,
-      limit,
-      options,
-      flussConfig)
-  }
-}
-
-/** Fluss Upsert Scan Builder. */
-class FlussUpsertScanBuilder(
-                              val tablePath: TablePath,
-                              val tableInfo: TableInfo,
-                              options: CaseInsensitiveStringMap,
-                              val flussConfig: FlussConfiguration)
-  extends FlussSupportsPushDownAggregates {
+  extends FlussSupportsPushDownAggregates
+  with FlussSupportsPushDownV2Filters {
 
   override def build(): Scan = {
     pushedRowCount match {
       case Some(count) => FlussCountScan(tablePath, tableInfo, count, requiredSchema)
-      case None => FlussUpsertScan(tablePath, tableInfo, requiredSchema, options, flussConfig)
+      case None =>
+        FlussUpsertScan(
+          tablePath,
+          tableInfo,
+          requiredSchema,
+          partitionPredicate,
+          limit,
+          options,
+          flussConfig)
     }
   }
 }
