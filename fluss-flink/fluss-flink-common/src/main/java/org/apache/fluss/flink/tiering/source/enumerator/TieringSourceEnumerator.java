@@ -215,6 +215,14 @@ public class TieringSourceEnumerator
         LOG.info("TieringSourceReader {} requests split.", subtaskId);
         readersAwaitingSplit.add(subtaskId);
 
+        // Skip the synchronous split request path during failover. Otherwise we may immediately
+        // re-acquire a kv snapshot lease for the same table that was just released by the
+        // failover handling, leaving stale lease state until the next periodic poll. The
+        // periodic callAsync task will resume normal split generation once failover completes.
+        if (isFailOvering) {
+            return;
+        }
+
         // If pending splits exist, assign them directly to the requesting reader
         if (!pendingSplits.isEmpty()) {
             assignSplits();
@@ -280,7 +288,13 @@ public class TieringSourceEnumerator
                                 context.currentParallelism(),
                                 globalMaxAttempt,
                                 context.registeredReadersOfAttempts());
-                        isFailOvering = false;
+                        // Defer clearing isFailOvering until the next periodic poll runs in
+                        // the coordinator thread. This guarantees that any synchronous
+                        // handleSplitRequest invoked right after addReader still observes
+                        // isFailOvering=true and skips the synchronous fetch path, so we
+                        // don't immediately re-acquire a kv snapshot lease that was just
+                        // released by handleSourceReaderFailOver().
+                        context.runInCoordinatorThread(() -> isFailOvering = false);
                     }
                 }
             }
