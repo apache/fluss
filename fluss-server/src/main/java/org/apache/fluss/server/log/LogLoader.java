@@ -190,8 +190,20 @@ final class LogLoader {
             // TODO: use logStartOffset if issue https://github.com/apache/fluss/issues/744 ready
             logSegments.add(LogSegment.open(logTabletDir, 0L, conf, logFormat));
         }
+
         long logEndOffset = logSegments.lastSegment().get().readNextOffset();
-        return Tuple2.of(recoveryPointCheckpoint, logEndOffset);
+
+        // Update the recovery point if there was a clean shutdown and did not perform any changes
+        // to the segment. Otherwise, we just ensure that the recovery point is not ahead of the log
+        // end offset. To ensure correctness and to make it easier to reason about, it's best to
+        // only advance the recovery point when the log is flushed. If we advanced the recovery
+        // point here, we could skip recovery for unflushed segments if the server crashed after we
+        // checkpointed the recovery point and before we flush the segment.
+        if (isCleanShutdown) {
+            return Tuple2.of(logEndOffset, logEndOffset);
+        } else {
+            return Tuple2.of(Math.min(recoveryPointCheckpoint, logEndOffset), logEndOffset);
+        }
     }
 
     /**
@@ -298,8 +310,8 @@ final class LogLoader {
                                 LOG.error(
                                         "Could not find offset index file corresponding to log file {} "
                                                 + "for bucket {}, recovering segment and rebuilding index files...",
-                                        logSegments.getTableBucket(),
-                                        segment.getFileLogRecords().file().getAbsoluteFile());
+                                        segment.getFileLogRecords().file().getAbsoluteFile(),
+                                        logSegments.getTableBucket());
                             }
                             recoverSegment(segment);
                         }

@@ -45,6 +45,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -554,7 +555,8 @@ final class LogLoaderTest extends LogTestBase {
     }
 
     /**
-     * Tests that log recovery is correctly triggered after an unclean shutdown (broker crash).
+     * Tests that log recovery is correctly triggered after an unclean shutdown (TabletServer
+     * crash).
      *
      * <p>The test simulates an unclean shutdown by:
      *
@@ -602,10 +604,11 @@ final class LogLoaderTest extends LogTestBase {
         // (simulate a partial/incomplete batch that was being written at crash time)
         try (FileChannel logFileChannel =
                 FileChannel.open(activeLogFile.toPath(), StandardOpenOption.APPEND)) {
-            byte[] garbage = new byte[64];
-            for (int i = 0; i < garbage.length; i++) {
-                garbage[i] = (byte) (i & 0xFF);
-            }
+            byte[] garbage = new byte[40];
+            // Corrupt the last log file in the active segment by appending zero bytes,
+            // simulating a typical interrupted write during an unclean shutdown where
+            // the filesystem zero-fills pre-allocated but unwritten blocks.
+            Arrays.fill(garbage, (byte) 0);
             logFileChannel.write(ByteBuffer.wrap(garbage));
         }
 
