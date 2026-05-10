@@ -1,9 +1,9 @@
 ---
-title: Contribute a Blog Post
-sidebar_position: 1
+title: Contribute Blog Posts
+sidebar_position: 4
 ---
 
-# Contribute a Blog Post
+# Contribute Blog Posts
 
 The [Apache Fluss blog](https://fluss.apache.org/blog) is a space for the community to share use cases, deep dives, release announcements, and project updates. Blog posts are authored by community members and reviewed by committers before being published.
 
@@ -131,14 +131,18 @@ Run the production build before opening a pull request; the Docusaurus build cat
 ## Submitting Your Post
 
 1. Commit your changes with a descriptive message:
-   ```bash
-   git add .
-   git commit -m "blog: add post on <topic>"
-   ```
+
+```bash
+git add .
+git commit -m "blog: add post on <topic>"
+```
+
 2. Push to your fork:
-   ```bash
-   git push origin your-branch-name
-   ```
+
+```bash
+git push origin your-branch-name
+```
+
 3. Open a pull request against [apache/fluss-blog](https://github.com/apache/fluss-blog), linking the topic issue you opened earlier.
 
 ## Review and Publication

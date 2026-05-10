@@ -1,6 +1,6 @@
 ---
 title: Contribute Documentation
-sidebar_position: 1
+sidebar_position: 3
 ---
 
 # Contribute Documentation
