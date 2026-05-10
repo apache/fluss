@@ -99,6 +99,7 @@ class ScannerManagerTest {
                         physicalTablePath.getTableName());
         logTablet =
                 LogTablet.create(
+                        tempLogDir,
                         physicalTablePath,
                         logTabletDir,
                         conf,
