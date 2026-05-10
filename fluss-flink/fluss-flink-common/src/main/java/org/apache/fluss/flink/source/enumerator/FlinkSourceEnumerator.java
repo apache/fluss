@@ -377,9 +377,12 @@ public class FlinkSourceEnumerator
                                                                         p.getPartitionId(),
                                                                         p.getPartitionName()))
                                                 .collect(Collectors.toList());
-                                splits = this.initPartitionedSplits(partitions);
+                                // Use log-only splits to avoid generating mixed split
+                                // types (HybridSnapshotLogSplit + LogSplit) for
+                                // primary-key tables, which is not supported.
+                                splits = this.initLogTablePartitionSplits(partitions);
                             } else {
-                                splits = this.initNonPartitionedSplits();
+                                splits = this.getLogSplit(null, null);
                             }
                         }
                         return splits;
@@ -734,18 +737,21 @@ public class FlinkSourceEnumerator
         }
 
         if (!bucketsNeedInitOffset.isEmpty()) {
-            startingOffsetsInitializer
-                    .getBucketOffsets(partitionName, bucketsNeedInitOffset, bucketOffsetsRetriever)
-                    .forEach(
-                            (bucketId, startingOffset) ->
-                                    splits.add(
-                                            new LogSplit(
-                                                    new TableBucket(
-                                                            tableInfo.getTableId(),
-                                                            partitionId,
-                                                            bucketId),
-                                                    partitionName,
-                                                    startingOffset)));
+            Map<Integer, Long> startingOffsets =
+                    startingOffsetsInitializer.getBucketOffsets(
+                            partitionName, bucketsNeedInitOffset, bucketOffsetsRetriever);
+            Map<Integer, Long> stoppingOffsets =
+                    stoppingOffsetsInitializer.getBucketOffsets(
+                            partitionName, bucketsNeedInitOffset, bucketOffsetsRetriever);
+            startingOffsets.forEach(
+                    (bucketId, startingOffset) ->
+                            splits.add(
+                                    new LogSplit(
+                                            new TableBucket(
+                                                    tableInfo.getTableId(), partitionId, bucketId),
+                                            partitionName,
+                                            startingOffset,
+                                            stoppingOffsets.get(bucketId))));
         }
         return splits;
     }
