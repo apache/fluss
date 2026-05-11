@@ -198,6 +198,7 @@ import static org.apache.fluss.config.ConfigOptions.CURRENT_KV_FORMAT_VERSION;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
+import static org.apache.fluss.security.acl.OperationType.WRITE;
 import static org.apache.fluss.server.coordinator.rebalance.goal.GoalUtils.getGoalByType;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.addTableOffsetsToResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.fromTablePath;
@@ -787,6 +788,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<CommitRemoteLogManifestResponse> commitRemoteLogManifest(
             CommitRemoteLogManifestRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), WRITE, Resource.cluster());
+        }
         CompletableFuture<CommitRemoteLogManifestResponse> response = new CompletableFuture<>();
         eventManagerSupplier
                 .get()
@@ -882,6 +886,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<LakeTieringHeartbeatResponse> lakeTieringHeartbeat(
             LakeTieringHeartbeatRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), WRITE, Resource.cluster());
+        }
         LakeTieringHeartbeatResponse heartbeatResponse = new LakeTieringHeartbeatResponse();
         int currentCoordinatorEpoch = coordinatorEpochSupplier.get();
         heartbeatResponse.setCoordinatorEpoch(currentCoordinatorEpoch);

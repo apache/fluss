@@ -423,6 +423,9 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<NotifyRemoteLogOffsetsResponse> notifyRemoteLogOffsets(
             NotifyRemoteLogOffsetsRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), WRITE, Resource.cluster());
+        }
         CompletableFuture<NotifyRemoteLogOffsetsResponse> response = new CompletableFuture<>();
         replicaManager.notifyRemoteLogOffsets(
                 getNotifyRemoteLogOffsetsData(request), response::complete);
