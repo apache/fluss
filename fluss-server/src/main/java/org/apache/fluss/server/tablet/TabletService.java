@@ -432,6 +432,9 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<NotifyKvSnapshotOffsetResponse> notifyKvSnapshotOffset(
             NotifyKvSnapshotOffsetRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), WRITE, Resource.cluster());
+        }
         CompletableFuture<NotifyKvSnapshotOffsetResponse> response = new CompletableFuture<>();
         replicaManager.notifyKvSnapshotOffset(
                 getNotifySnapshotOffsetData(request), response::complete);
@@ -441,6 +444,9 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<NotifyLakeTableOffsetResponse> notifyLakeTableOffset(
             NotifyLakeTableOffsetRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), WRITE, Resource.cluster());
+        }
         CompletableFuture<NotifyLakeTableOffsetResponse> response = new CompletableFuture<>();
         replicaManager.notifyLakeTableOffset(getNotifyLakeTableOffset(request), response::complete);
         return response;
