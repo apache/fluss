@@ -362,7 +362,11 @@ public class RebalanceManager {
             List<Integer> assignment = coordinatorContext.getAssignment(tableBucket);
             Optional<LeaderAndIsr> bucketLeaderAndIsrOpt =
                     coordinatorContext.getBucketLeaderAndIsr(tableBucket);
-            checkArgument(bucketLeaderAndIsrOpt.isPresent(), "Bucket leader and isr is empty.");
+            // Skip the bucket if leader and ISR information is not available yet
+            // This can happen during table creation when leader election is not completed
+            if (!bucketLeaderAndIsrOpt.isPresent()) {
+                continue;
+            }
             LeaderAndIsr isr = bucketLeaderAndIsrOpt.get();
             int leader = isr.leader();
             // Skip the bucket if it is in a transient state (e.g., during table creation)
