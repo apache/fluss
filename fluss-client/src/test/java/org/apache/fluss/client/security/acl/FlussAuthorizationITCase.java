@@ -1461,7 +1461,92 @@ public class FlussAuthorizationITCase {
                                     guestPrincipal));
         }
 
-        // Test 5: Verify internal sessions bypass authorization
+        // Test 5: Grant CLUSTER/WRITE permission and verify operations succeed
+        List<AclBinding> aclBindings =
+                Collections.singletonList(
+                        new AclBinding(
+                                Resource.cluster(),
+                                new AccessControlEntry(
+                                        guestPrincipal,
+                                        "*",
+                                        OperationType.WRITE,
+                                        PermissionType.ALLOW)));
+        rootAdmin.createAcls(aclBindings).all().get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+
+        try (RpcClient authorizedRpcClient =
+                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance())) {
+
+            TabletServerGateway authorizedTabletGateway =
+                    GatewayClientProxy.createGatewayProxy(
+                            () -> FLUSS_CLUSTER_EXTENSION.getTabletServerNodes("CLIENT").get(0),
+                            authorizedRpcClient,
+                            TabletServerGateway.class);
+
+            CoordinatorGateway authorizedCoordinatorGateway =
+                    GatewayClientProxy.createGatewayProxy(
+                            () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("CLIENT"),
+                            authorizedRpcClient,
+                            CoordinatorGateway.class);
+
+            // Now with WRITE permission, operations should NOT throw AuthorizationException
+            // (they may fail for other reasons like invalid data, but not authorization)
+
+            NotifyLeaderAndIsrRequest authorizedNotifyRequest = new NotifyLeaderAndIsrRequest();
+            authorizedNotifyRequest.setCoordinatorEpoch(1);
+            Throwable notifyThrown =
+                    catchThrowable(
+                            () ->
+                                    authorizedTabletGateway
+                                            .notifyLeaderAndIsr(authorizedNotifyRequest)
+                                            .get());
+            if (notifyThrown != null) {
+                assertThat(notifyThrown)
+                        .rootCause()
+                        .isNotInstanceOf(AuthorizationException.class);
+            }
+
+            UpdateMetadataRequest authorizedUpdateRequest = new UpdateMetadataRequest();
+            authorizedUpdateRequest.setCoordinatorEpoch(1);
+            Throwable updateThrown =
+                    catchThrowable(
+                            () ->
+                                    authorizedTabletGateway
+                                            .updateMetadata(authorizedUpdateRequest)
+                                            .get());
+            if (updateThrown != null) {
+                assertThat(updateThrown)
+                        .rootCause()
+                        .isNotInstanceOf(AuthorizationException.class);
+            }
+
+            StopReplicaRequest authorizedStopRequest = new StopReplicaRequest();
+            authorizedStopRequest.setCoordinatorEpoch(1);
+            Throwable stopThrown =
+                    catchThrowable(
+                            () -> authorizedTabletGateway.stopReplica(authorizedStopRequest).get());
+            if (stopThrown != null) {
+                assertThat(stopThrown)
+                        .rootCause()
+                        .isNotInstanceOf(AuthorizationException.class);
+            }
+
+            AdjustIsrRequest authorizedAdjustRequest = new AdjustIsrRequest();
+            authorizedAdjustRequest.setServerId(0);
+            Throwable adjustThrown =
+                    catchThrowable(
+                            () ->
+                                    authorizedCoordinatorGateway
+                                            .adjustIsr(authorizedAdjustRequest)
+                                            .get());
+            if (adjustThrown != null) {
+                assertThat(adjustThrown)
+                        .rootCause()
+                        .isNotInstanceOf(AuthorizationException.class);
+            }
+        }
+
+        // Test 6: Verify internal sessions bypass authorization
         TabletServerGateway internalTabletGateway =
                 GatewayClientProxy.createGatewayProxy(
                         () -> FLUSS_CLUSTER_EXTENSION.getTabletServerNodes("FLUSS").get(0),
@@ -1470,13 +1555,14 @@ public class FlussAuthorizationITCase {
 
         // Internal connection should NOT throw AuthorizationException
         // (may fail for other reasons like invalid data, but not authorization)
-        NotifyLeaderAndIsrRequest notifyRequest = new NotifyLeaderAndIsrRequest();
-        notifyRequest.setCoordinatorEpoch(1);
+        NotifyLeaderAndIsrRequest internalNotifyRequest = new NotifyLeaderAndIsrRequest();
+        internalNotifyRequest.setCoordinatorEpoch(1);
 
         // The request will likely fail due to invalid data, but importantly
         // it should NOT fail with AuthorizationException
         Throwable thrown =
-                catchThrowable(() -> internalTabletGateway.notifyLeaderAndIsr(notifyRequest).get());
+                catchThrowable(
+                        () -> internalTabletGateway.notifyLeaderAndIsr(internalNotifyRequest).get());
         if (thrown != null) {
             assertThat(thrown).rootCause().isNotInstanceOf(AuthorizationException.class);
         }
