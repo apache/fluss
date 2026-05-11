@@ -43,6 +43,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.flink.configuration.CoreOptions.TMP_DIRS;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
+import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_MODE;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP;
 import static org.apache.fluss.flink.FlinkConnectorOptions.ScanStartupMode.TIMESTAMP;
@@ -61,6 +62,7 @@ public class FlinkConnectorOptionsUtils {
 
     public static void validateTableSourceOptions(ReadableConfig tableOptions) {
         validateScanStartupMode(tableOptions);
+        validateScanSplitAssignmentBatchSize(tableOptions);
     }
 
     /**
@@ -151,6 +153,16 @@ public class FlinkConnectorOptionsUtils {
                                 "'%s' is required int '%s' startup mode but missing.",
                                 SCAN_STARTUP_TIMESTAMP.key(), TIMESTAMP));
             }
+        }
+    }
+
+    private static void validateScanSplitAssignmentBatchSize(ReadableConfig tableOptions) {
+        int batchSize = tableOptions.get(SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE);
+        if (batchSize <= 0) {
+            throw new ValidationException(
+                    String.format(
+                            "'%s' must be positive, but was %s.",
+                            SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.key(), batchSize));
         }
     }
 

@@ -93,6 +93,18 @@ abstract class FlinkTableFactoryTest {
                 FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP.key(), "2023-12-09 23:09:12");
         createTableSource(schema, scanModeProperties);
 
+        // test split assignment batch size
+        Map<String, String> splitAssignmentBatchProperties = getBasicOptions();
+        splitAssignmentBatchProperties.put(
+                FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.key(), "0");
+        assertThatThrownBy(() -> createTableSource(schema, splitAssignmentBatchProperties))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining(
+                        "'scan.split.assignment.batch-size' must be positive, but was 0.");
+        splitAssignmentBatchProperties.put(
+                FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.key(), "1");
+        createTableSource(schema, splitAssignmentBatchProperties);
+
         // test datalake options
         Map<String, String> datalakeProperties = getBasicOptions();
         datalakeProperties.put("table.datalake.format", "paimon");

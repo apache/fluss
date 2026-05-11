@@ -27,6 +27,7 @@ import java.util.TimeZone;
 
 import static org.apache.flink.configuration.CoreOptions.TMP_DIRS;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
+import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP;
 import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.parseTimestamp;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -61,6 +62,21 @@ class FlinkConnectorOptionsUtilTest {
                         "Invalid properties 'scan.startup.timestamp' should follow the format 'yyyy-MM-dd HH:mm:ss' "
                                 + "or 'timestamp', but is '2023-12-09T23:09:12'. "
                                 + "You can config like: '2023-12-09 23:09:12' or '1678883047356'.");
+    }
+
+    @Test
+    void testValidateSplitAssignmentBatchSize() {
+        org.apache.flink.configuration.Configuration tableOptions =
+                new org.apache.flink.configuration.Configuration();
+
+        tableOptions.set(SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE, 1);
+        FlinkConnectorOptionsUtils.validateTableSourceOptions(tableOptions);
+
+        tableOptions.set(SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE, 0);
+        assertThatThrownBy(
+                        () -> FlinkConnectorOptionsUtils.validateTableSourceOptions(tableOptions))
+                .isInstanceOf(ValidationException.class)
+                .hasMessage("'scan.split.assignment.batch-size' must be positive, but was 0.");
     }
 
     @Test
