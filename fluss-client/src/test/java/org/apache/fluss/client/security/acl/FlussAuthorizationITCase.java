@@ -1392,10 +1392,12 @@ public class FlussAuthorizationITCase {
                             CoordinatorGateway.class);
 
             // Test 1: notifyRemoteLogOffsets without WRITE permission
-            NotifyRemoteLogOffsetsRequest notifyRemoteRequest =
-                    new NotifyRemoteLogOffsetsRequest();
+            NotifyRemoteLogOffsetsRequest notifyRemoteRequest = new NotifyRemoteLogOffsetsRequest();
             assertThatThrownBy(
-                            () -> guestTabletGateway.notifyRemoteLogOffsets(notifyRemoteRequest).get())
+                            () ->
+                                    guestTabletGateway
+                                            .notifyRemoteLogOffsets(notifyRemoteRequest)
+                                            .get())
                     .rootCause()
                     .isInstanceOf(AuthorizationException.class)
                     .hasMessageContaining(
@@ -1421,7 +1423,10 @@ public class FlussAuthorizationITCase {
             // Test 3: lakeTieringHeartbeat without WRITE permission
             LakeTieringHeartbeatRequest heartbeatRequest = new LakeTieringHeartbeatRequest();
             assertThatThrownBy(
-                            () -> guestCoordinatorGateway.lakeTieringHeartbeat(heartbeatRequest).get())
+                            () ->
+                                    guestCoordinatorGateway
+                                            .lakeTieringHeartbeat(heartbeatRequest)
+                                            .get())
                     .rootCause()
                     .isInstanceOf(AuthorizationException.class)
                     .hasMessageContaining(
@@ -1436,7 +1441,10 @@ public class FlussAuthorizationITCase {
                         new AclBinding(
                                 Resource.cluster(),
                                 new AccessControlEntry(
-                                        guestPrincipal, "*", OperationType.WRITE, PermissionType.ALLOW)));
+                                        guestPrincipal,
+                                        "*",
+                                        OperationType.WRITE,
+                                        PermissionType.ALLOW)));
         rootAdmin.createAcls(aclBindings).all().get();
         FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
 
@@ -1456,8 +1464,7 @@ public class FlussAuthorizationITCase {
                             CoordinatorGateway.class);
 
             // Test notifyRemoteLogOffsets with permission
-            NotifyRemoteLogOffsetsRequest notifyRemoteRequest =
-                    new NotifyRemoteLogOffsetsRequest();
+            NotifyRemoteLogOffsetsRequest notifyRemoteRequest = new NotifyRemoteLogOffsetsRequest();
             Throwable thrown1 =
                     catchThrowable(
                             () ->
@@ -1511,13 +1518,15 @@ public class FlussAuthorizationITCase {
         NotifyRemoteLogOffsetsRequest notifyRemoteRequest = new NotifyRemoteLogOffsetsRequest();
         Throwable thrown4 =
                 catchThrowable(
-                        () -> internalTabletGateway.notifyRemoteLogOffsets(notifyRemoteRequest).get());
+                        () ->
+                                internalTabletGateway
+                                        .notifyRemoteLogOffsets(notifyRemoteRequest)
+                                        .get());
         if (thrown4 != null) {
             assertThat(thrown4).rootCause().isNotInstanceOf(AuthorizationException.class);
         }
 
-        CommitRemoteLogManifestRequest commitManifestRequest =
-                new CommitRemoteLogManifestRequest();
+        CommitRemoteLogManifestRequest commitManifestRequest = new CommitRemoteLogManifestRequest();
         Throwable thrown5 =
                 catchThrowable(
                         () ->
@@ -1531,7 +1540,10 @@ public class FlussAuthorizationITCase {
         LakeTieringHeartbeatRequest heartbeatRequest = new LakeTieringHeartbeatRequest();
         Throwable thrown6 =
                 catchThrowable(
-                        () -> internalCoordinatorGateway.lakeTieringHeartbeat(heartbeatRequest).get());
+                        () ->
+                                internalCoordinatorGateway
+                                        .lakeTieringHeartbeat(heartbeatRequest)
+                                        .get());
         if (thrown6 != null) {
             assertThat(thrown6).rootCause().isNotInstanceOf(AuthorizationException.class);
         }
