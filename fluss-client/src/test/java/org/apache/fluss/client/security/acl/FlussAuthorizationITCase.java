@@ -1394,7 +1394,8 @@ public class FlussAuthorizationITCase {
 
             // Test 1: notifyKvSnapshotOffset without WRITE permission
             NotifyKvSnapshotOffsetRequest notifyKvRequest = new NotifyKvSnapshotOffsetRequest();
-            assertThatThrownBy(() -> guestTabletGateway.notifyKvSnapshotOffset(notifyKvRequest).get())
+            assertThatThrownBy(
+                            () -> guestTabletGateway.notifyKvSnapshotOffset(notifyKvRequest).get())
                     .rootCause()
                     .isInstanceOf(AuthorizationException.class)
                     .hasMessageContaining(
@@ -1404,7 +1405,8 @@ public class FlussAuthorizationITCase {
 
             // Test 2: notifyLakeTableOffset without WRITE permission
             NotifyLakeTableOffsetRequest notifyLakeRequest = new NotifyLakeTableOffsetRequest();
-            assertThatThrownBy(() -> guestTabletGateway.notifyLakeTableOffset(notifyLakeRequest).get())
+            assertThatThrownBy(
+                            () -> guestTabletGateway.notifyLakeTableOffset(notifyLakeRequest).get())
                     .rootCause()
                     .isInstanceOf(AuthorizationException.class)
                     .hasMessageContaining(
@@ -1414,7 +1416,8 @@ public class FlussAuthorizationITCase {
 
             // Test 3: commitKvSnapshot without WRITE permission
             CommitKvSnapshotRequest commitKvRequest = new CommitKvSnapshotRequest();
-            assertThatThrownBy(() -> guestCoordinatorGateway.commitKvSnapshot(commitKvRequest).get())
+            assertThatThrownBy(
+                            () -> guestCoordinatorGateway.commitKvSnapshot(commitKvRequest).get())
                     .rootCause()
                     .isInstanceOf(AuthorizationException.class)
                     .hasMessageContaining(
@@ -1425,7 +1428,10 @@ public class FlussAuthorizationITCase {
             // Test 4: commitLakeTableSnapshot without WRITE permission
             CommitLakeTableSnapshotRequest commitLakeRequest = new CommitLakeTableSnapshotRequest();
             assertThatThrownBy(
-                            () -> guestCoordinatorGateway.commitLakeTableSnapshot(commitLakeRequest).get())
+                            () ->
+                                    guestCoordinatorGateway
+                                            .commitLakeTableSnapshot(commitLakeRequest)
+                                            .get())
                     .rootCause()
                     .isInstanceOf(AuthorizationException.class)
                     .hasMessageContaining(
@@ -1440,7 +1446,10 @@ public class FlussAuthorizationITCase {
                         new AclBinding(
                                 Resource.cluster(),
                                 new AccessControlEntry(
-                                        guestPrincipal, "*", OperationType.WRITE, PermissionType.ALLOW)));
+                                        guestPrincipal,
+                                        "*",
+                                        OperationType.WRITE,
+                                        PermissionType.ALLOW)));
         rootAdmin.createAcls(aclBindings).all().get();
         FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
 
@@ -1463,7 +1472,10 @@ public class FlussAuthorizationITCase {
             NotifyKvSnapshotOffsetRequest notifyKvRequest = new NotifyKvSnapshotOffsetRequest();
             Throwable thrown1 =
                     catchThrowable(
-                            () -> authorizedTabletGateway.notifyKvSnapshotOffset(notifyKvRequest).get());
+                            () ->
+                                    authorizedTabletGateway
+                                            .notifyKvSnapshotOffset(notifyKvRequest)
+                                            .get());
             if (thrown1 != null) {
                 assertThat(thrown1).rootCause().isNotInstanceOf(AuthorizationException.class);
             }
@@ -1472,7 +1484,10 @@ public class FlussAuthorizationITCase {
             NotifyLakeTableOffsetRequest notifyLakeRequest = new NotifyLakeTableOffsetRequest();
             Throwable thrown2 =
                     catchThrowable(
-                            () -> authorizedTabletGateway.notifyLakeTableOffset(notifyLakeRequest).get());
+                            () ->
+                                    authorizedTabletGateway
+                                            .notifyLakeTableOffset(notifyLakeRequest)
+                                            .get());
             if (thrown2 != null) {
                 assertThat(thrown2).rootCause().isNotInstanceOf(AuthorizationException.class);
             }
@@ -1481,7 +1496,10 @@ public class FlussAuthorizationITCase {
             CommitKvSnapshotRequest commitKvRequest = new CommitKvSnapshotRequest();
             Throwable thrown3 =
                     catchThrowable(
-                            () -> authorizedCoordinatorGateway.commitKvSnapshot(commitKvRequest).get());
+                            () ->
+                                    authorizedCoordinatorGateway
+                                            .commitKvSnapshot(commitKvRequest)
+                                            .get());
             if (thrown3 != null) {
                 assertThat(thrown3).rootCause().isNotInstanceOf(AuthorizationException.class);
             }
