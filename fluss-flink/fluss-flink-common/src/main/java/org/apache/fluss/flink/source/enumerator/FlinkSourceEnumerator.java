@@ -1042,7 +1042,25 @@ public class FlinkSourceEnumerator
 
         // Assign pending splits to readers
         if (!incrementalAssignment.isEmpty()) {
-            LOG.info("Assigning splits to readers {}", incrementalAssignment);
+            int totalSplits = incrementalAssignment.values().stream().mapToInt(List::size).sum();
+            Map<Integer, Integer> batchesPerReader =
+                    incrementalAssignment.entrySet().stream()
+                            .collect(
+                                    Collectors.toMap(
+                                            Map.Entry::getKey,
+                                            entry ->
+                                                    (entry.getValue().size()
+                                                                    + splitPerAssignmentBatchSize
+                                                                    - 1)
+                                                            / splitPerAssignmentBatchSize));
+            LOG.info(
+                    "Assigning splits to {} readers: totalSplits={}, batchesPerReader={}",
+                    incrementalAssignment.size(),
+                    totalSplits,
+                    batchesPerReader);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Assigning splits to readers {}", incrementalAssignment);
+            }
             for (Map.Entry<Integer, List<SourceSplitBase>> entry :
                     incrementalAssignment.entrySet()) {
                 int readerId = entry.getKey();
