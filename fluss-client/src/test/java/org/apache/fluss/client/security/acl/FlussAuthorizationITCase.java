@@ -1393,6 +1393,11 @@ public class FlussAuthorizationITCase {
 
             // Test 1: notifyRemoteLogOffsets without WRITE permission
             NotifyRemoteLogOffsetsRequest notifyRemoteRequest = new NotifyRemoteLogOffsetsRequest();
+            notifyRemoteRequest.setTableId(1L);
+            notifyRemoteRequest.setBucketId(0);
+            notifyRemoteRequest.setCoordinatorEpoch(1);
+            notifyRemoteRequest.setRemoteStartOffset(0L);
+            notifyRemoteRequest.setRemoteEndOffset(100L);
             assertThatThrownBy(
                             () ->
                                     guestTabletGateway
@@ -1408,6 +1413,13 @@ public class FlussAuthorizationITCase {
             // Test 2: commitRemoteLogManifest without WRITE permission
             CommitRemoteLogManifestRequest commitManifestRequest =
                     new CommitRemoteLogManifestRequest();
+            commitManifestRequest.setTableId(1L);
+            commitManifestRequest.setBucketId(0);
+            commitManifestRequest.setRemoteLogManifestPath("/path/to/manifest");
+            commitManifestRequest.setRemoteLogStartOffset(0L);
+            commitManifestRequest.setRemoteLogEndOffset(100L);
+            commitManifestRequest.setCoordinatorEpoch(1);
+            commitManifestRequest.setBucketLeaderEpoch(1);
             assertThatThrownBy(
                             () ->
                                     guestCoordinatorGateway
@@ -1465,6 +1477,11 @@ public class FlussAuthorizationITCase {
 
             // Test notifyRemoteLogOffsets with permission
             NotifyRemoteLogOffsetsRequest notifyRemoteRequest = new NotifyRemoteLogOffsetsRequest();
+            notifyRemoteRequest.setTableId(1L);
+            notifyRemoteRequest.setBucketId(0);
+            notifyRemoteRequest.setCoordinatorEpoch(1);
+            notifyRemoteRequest.setRemoteStartOffset(0L);
+            notifyRemoteRequest.setRemoteEndOffset(100L);
             Throwable thrown1 =
                     catchThrowable(
                             () ->
@@ -1478,6 +1495,13 @@ public class FlussAuthorizationITCase {
             // Test commitRemoteLogManifest with permission
             CommitRemoteLogManifestRequest commitManifestRequest =
                     new CommitRemoteLogManifestRequest();
+            commitManifestRequest.setTableId(1L);
+            commitManifestRequest.setBucketId(0);
+            commitManifestRequest.setRemoteLogManifestPath("/path/to/manifest");
+            commitManifestRequest.setRemoteLogStartOffset(0L);
+            commitManifestRequest.setRemoteLogEndOffset(100L);
+            commitManifestRequest.setCoordinatorEpoch(1);
+            commitManifestRequest.setBucketLeaderEpoch(1);
             Throwable thrown2 =
                     catchThrowable(
                             () ->
@@ -1516,6 +1540,11 @@ public class FlussAuthorizationITCase {
 
         // Internal connections should NOT throw AuthorizationException
         NotifyRemoteLogOffsetsRequest notifyRemoteRequest = new NotifyRemoteLogOffsetsRequest();
+        notifyRemoteRequest.setTableId(1L);
+        notifyRemoteRequest.setBucketId(0);
+        notifyRemoteRequest.setCoordinatorEpoch(1);
+        notifyRemoteRequest.setRemoteStartOffset(0L);
+        notifyRemoteRequest.setRemoteEndOffset(100L);
         Throwable thrown4 =
                 catchThrowable(
                         () ->
@@ -1527,6 +1556,13 @@ public class FlussAuthorizationITCase {
         }
 
         CommitRemoteLogManifestRequest commitManifestRequest = new CommitRemoteLogManifestRequest();
+        commitManifestRequest.setTableId(1L);
+        commitManifestRequest.setBucketId(0);
+        commitManifestRequest.setRemoteLogManifestPath("/path/to/manifest");
+        commitManifestRequest.setRemoteLogStartOffset(0L);
+        commitManifestRequest.setRemoteLogEndOffset(100L);
+        commitManifestRequest.setCoordinatorEpoch(1);
+        commitManifestRequest.setBucketLeaderEpoch(1);
         Throwable thrown5 =
                 catchThrowable(
                         () ->
