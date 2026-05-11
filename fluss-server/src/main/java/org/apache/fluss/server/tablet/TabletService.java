@@ -348,6 +348,9 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<NotifyLeaderAndIsrResponse> notifyLeaderAndIsr(
             NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), WRITE, Resource.cluster());
+        }
         CompletableFuture<NotifyLeaderAndIsrResponse> response = new CompletableFuture<>();
         List<NotifyLeaderAndIsrData> notifyLeaderAndIsrRequestData =
                 getNotifyLeaderAndIsrRequestData(notifyLeaderAndIsrRequest);
@@ -373,6 +376,9 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<UpdateMetadataResponse> updateMetadata(UpdateMetadataRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), WRITE, Resource.cluster());
+        }
         int coordinatorEpoch =
                 request.hasCoordinatorEpoch()
                         ? request.getCoordinatorEpoch()
@@ -385,6 +391,9 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<StopReplicaResponse> stopReplica(
             StopReplicaRequest stopReplicaRequest) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), WRITE, Resource.cluster());
+        }
         CompletableFuture<StopReplicaResponse> response = new CompletableFuture<>();
         replicaManager.stopReplicas(
                 stopReplicaRequest.getCoordinatorEpoch(),

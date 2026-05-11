@@ -51,12 +51,16 @@ import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.ControlledShutdownRequest;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
+import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
+import org.apache.fluss.rpc.messages.StopReplicaRequest;
+import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.security.acl.AccessControlEntry;
 import org.apache.fluss.security.acl.AccessControlEntryFilter;
@@ -1392,6 +1396,90 @@ public class FlussAuthorizationITCase {
         conf.set(ConfigOptions.SUPER_USERS, "User:root");
         conf.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         return conf;
+    }
+
+    @Test
+    void testInternalReplicationControlAuthorization() throws Exception {
+        // These RPCs are internal-only, so we test via direct gateway access
+        try (RpcClient rpcClient =
+                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance())) {
+
+            TabletServerGateway guestTabletGateway =
+                    GatewayClientProxy.createGatewayProxy(
+                            () -> FLUSS_CLUSTER_EXTENSION.getTabletServerNodes("CLIENT").get(0),
+                            rpcClient,
+                            TabletServerGateway.class);
+
+            CoordinatorGateway guestCoordinatorGateway =
+                    GatewayClientProxy.createGatewayProxy(
+                            () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("CLIENT"),
+                            rpcClient,
+                            CoordinatorGateway.class);
+
+            // Test 1: notifyLeaderAndIsr without WRITE permission
+            NotifyLeaderAndIsrRequest notifyRequest = new NotifyLeaderAndIsrRequest();
+            notifyRequest.setCoordinatorEpoch(1);
+            assertThatThrownBy(() -> guestTabletGateway.notifyLeaderAndIsr(notifyRequest).get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            String.format(
+                                    "Principal %s have no authorization to operate WRITE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                    guestPrincipal));
+
+            // Test 2: updateMetadata without WRITE permission
+            UpdateMetadataRequest updateRequest = new UpdateMetadataRequest();
+            updateRequest.setCoordinatorEpoch(1);
+            assertThatThrownBy(() -> guestTabletGateway.updateMetadata(updateRequest).get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            String.format(
+                                    "Principal %s have no authorization to operate WRITE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                    guestPrincipal));
+
+            // Test 3: stopReplica without WRITE permission
+            StopReplicaRequest stopRequest = new StopReplicaRequest();
+            stopRequest.setCoordinatorEpoch(1);
+            assertThatThrownBy(() -> guestTabletGateway.stopReplica(stopRequest).get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            String.format(
+                                    "Principal %s have no authorization to operate WRITE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                    guestPrincipal));
+
+            // Test 4: adjustIsr without WRITE permission
+            AdjustIsrRequest adjustRequest = new AdjustIsrRequest();
+            adjustRequest.setServerId(0);
+            assertThatThrownBy(() -> guestCoordinatorGateway.adjustIsr(adjustRequest).get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            String.format(
+                                    "Principal %s have no authorization to operate WRITE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                    guestPrincipal));
+        }
+
+        // Test 5: Verify internal sessions bypass authorization
+        TabletServerGateway internalTabletGateway =
+                GatewayClientProxy.createGatewayProxy(
+                        () -> FLUSS_CLUSTER_EXTENSION.getTabletServerNodes("FLUSS").get(0),
+                        FLUSS_CLUSTER_EXTENSION.getRpcClient(),
+                        TabletServerGateway.class);
+
+        // Internal connection should NOT throw AuthorizationException
+        // (may fail for other reasons like invalid data, but not authorization)
+        NotifyLeaderAndIsrRequest notifyRequest = new NotifyLeaderAndIsrRequest();
+        notifyRequest.setCoordinatorEpoch(1);
+
+        // The request will likely fail due to invalid data, but importantly
+        // it should NOT fail with AuthorizationException
+        Throwable thrown =
+                catchThrowable(() -> internalTabletGateway.notifyLeaderAndIsr(notifyRequest).get());
+        if (thrown != null) {
+            assertThat(thrown).rootCause().isNotInstanceOf(AuthorizationException.class);
+        }
     }
 
     private void assertNoTableDescribeAuth(ThrowableAssert.ThrowingCallable callable) {
