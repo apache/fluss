@@ -1394,6 +1394,10 @@ public class FlussAuthorizationITCase {
 
             // Test 1: notifyKvSnapshotOffset without WRITE permission
             NotifyKvSnapshotOffsetRequest notifyKvRequest = new NotifyKvSnapshotOffsetRequest();
+            notifyKvRequest.setTableId(1L);
+            notifyKvRequest.setBucketId(0);
+            notifyKvRequest.setCoordinatorEpoch(1);
+            notifyKvRequest.setMinRetainOffset(0L);
             assertThatThrownBy(
                             () -> guestTabletGateway.notifyKvSnapshotOffset(notifyKvRequest).get())
                     .rootCause()
@@ -1405,6 +1409,7 @@ public class FlussAuthorizationITCase {
 
             // Test 2: notifyLakeTableOffset without WRITE permission
             NotifyLakeTableOffsetRequest notifyLakeRequest = new NotifyLakeTableOffsetRequest();
+            notifyLakeRequest.setCoordinatorEpoch(1);
             assertThatThrownBy(
                             () -> guestTabletGateway.notifyLakeTableOffset(notifyLakeRequest).get())
                     .rootCause()
@@ -1416,6 +1421,9 @@ public class FlussAuthorizationITCase {
 
             // Test 3: commitKvSnapshot without WRITE permission
             CommitKvSnapshotRequest commitKvRequest = new CommitKvSnapshotRequest();
+            commitKvRequest.setCompletedSnapshot(new byte[0]);
+            commitKvRequest.setCoordinatorEpoch(1);
+            commitKvRequest.setBucketLeaderEpoch(1);
             assertThatThrownBy(
                             () -> guestCoordinatorGateway.commitKvSnapshot(commitKvRequest).get())
                     .rootCause()
@@ -1470,6 +1478,10 @@ public class FlussAuthorizationITCase {
 
             // Test notifyKvSnapshotOffset with permission
             NotifyKvSnapshotOffsetRequest notifyKvRequest = new NotifyKvSnapshotOffsetRequest();
+            notifyKvRequest.setTableId(1L);
+            notifyKvRequest.setBucketId(0);
+            notifyKvRequest.setCoordinatorEpoch(1);
+            notifyKvRequest.setMinRetainOffset(0L);
             Throwable thrown1 =
                     catchThrowable(
                             () ->
@@ -1482,6 +1494,7 @@ public class FlussAuthorizationITCase {
 
             // Test notifyLakeTableOffset with permission
             NotifyLakeTableOffsetRequest notifyLakeRequest = new NotifyLakeTableOffsetRequest();
+            notifyLakeRequest.setCoordinatorEpoch(1);
             Throwable thrown2 =
                     catchThrowable(
                             () ->
@@ -1494,6 +1507,9 @@ public class FlussAuthorizationITCase {
 
             // Test commitKvSnapshot with permission
             CommitKvSnapshotRequest commitKvRequest = new CommitKvSnapshotRequest();
+            commitKvRequest.setCompletedSnapshot(new byte[0]);
+            commitKvRequest.setCoordinatorEpoch(1);
+            commitKvRequest.setBucketLeaderEpoch(1);
             Throwable thrown3 =
                     catchThrowable(
                             () ->
@@ -1532,6 +1548,10 @@ public class FlussAuthorizationITCase {
 
         // Internal connections should NOT throw AuthorizationException
         NotifyKvSnapshotOffsetRequest notifyKvRequest = new NotifyKvSnapshotOffsetRequest();
+        notifyKvRequest.setTableId(1L);
+        notifyKvRequest.setBucketId(0);
+        notifyKvRequest.setCoordinatorEpoch(1);
+        notifyKvRequest.setMinRetainOffset(0L);
         Throwable thrown5 =
                 catchThrowable(
                         () -> internalTabletGateway.notifyKvSnapshotOffset(notifyKvRequest).get());
@@ -1540,6 +1560,7 @@ public class FlussAuthorizationITCase {
         }
 
         NotifyLakeTableOffsetRequest notifyLakeRequest = new NotifyLakeTableOffsetRequest();
+        notifyLakeRequest.setCoordinatorEpoch(1);
         Throwable thrown6 =
                 catchThrowable(
                         () -> internalTabletGateway.notifyLakeTableOffset(notifyLakeRequest).get());
@@ -1548,6 +1569,9 @@ public class FlussAuthorizationITCase {
         }
 
         CommitKvSnapshotRequest commitKvRequest = new CommitKvSnapshotRequest();
+        commitKvRequest.setCompletedSnapshot(new byte[0]);
+        commitKvRequest.setCoordinatorEpoch(1);
+        commitKvRequest.setBucketLeaderEpoch(1);
         Throwable thrown7 =
                 catchThrowable(
                         () -> internalCoordinatorGateway.commitKvSnapshot(commitKvRequest).get());
