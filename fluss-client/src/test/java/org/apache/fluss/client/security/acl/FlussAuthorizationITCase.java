@@ -1501,9 +1501,7 @@ public class FlussAuthorizationITCase {
                                             .notifyLeaderAndIsr(authorizedNotifyRequest)
                                             .get());
             if (notifyThrown != null) {
-                assertThat(notifyThrown)
-                        .rootCause()
-                        .isNotInstanceOf(AuthorizationException.class);
+                assertThat(notifyThrown).rootCause().isNotInstanceOf(AuthorizationException.class);
             }
 
             UpdateMetadataRequest authorizedUpdateRequest = new UpdateMetadataRequest();
@@ -1515,9 +1513,7 @@ public class FlussAuthorizationITCase {
                                             .updateMetadata(authorizedUpdateRequest)
                                             .get());
             if (updateThrown != null) {
-                assertThat(updateThrown)
-                        .rootCause()
-                        .isNotInstanceOf(AuthorizationException.class);
+                assertThat(updateThrown).rootCause().isNotInstanceOf(AuthorizationException.class);
             }
 
             StopReplicaRequest authorizedStopRequest = new StopReplicaRequest();
@@ -1526,9 +1522,7 @@ public class FlussAuthorizationITCase {
                     catchThrowable(
                             () -> authorizedTabletGateway.stopReplica(authorizedStopRequest).get());
             if (stopThrown != null) {
-                assertThat(stopThrown)
-                        .rootCause()
-                        .isNotInstanceOf(AuthorizationException.class);
+                assertThat(stopThrown).rootCause().isNotInstanceOf(AuthorizationException.class);
             }
 
             AdjustIsrRequest authorizedAdjustRequest = new AdjustIsrRequest();
@@ -1540,9 +1534,7 @@ public class FlussAuthorizationITCase {
                                             .adjustIsr(authorizedAdjustRequest)
                                             .get());
             if (adjustThrown != null) {
-                assertThat(adjustThrown)
-                        .rootCause()
-                        .isNotInstanceOf(AuthorizationException.class);
+                assertThat(adjustThrown).rootCause().isNotInstanceOf(AuthorizationException.class);
             }
         }
 
@@ -1562,7 +1554,10 @@ public class FlussAuthorizationITCase {
         // it should NOT fail with AuthorizationException
         Throwable thrown =
                 catchThrowable(
-                        () -> internalTabletGateway.notifyLeaderAndIsr(internalNotifyRequest).get());
+                        () ->
+                                internalTabletGateway
+                                        .notifyLeaderAndIsr(internalNotifyRequest)
+                                        .get());
         if (thrown != null) {
             assertThat(thrown).rootCause().isNotInstanceOf(AuthorizationException.class);
         }
