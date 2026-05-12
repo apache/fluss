@@ -18,26 +18,46 @@
 package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.client.admin.ClientToServerITCaseBase;
+import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.FetchException;
+import org.apache.fluss.lake.source.LakeSource;
+import org.apache.fluss.lake.source.LakeSplit;
+import org.apache.fluss.lake.source.RecordReader;
+import org.apache.fluss.lake.source.TestingLakeSource;
+import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.record.TestData;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
+import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
+import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
+import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.CloseableIterator;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -49,6 +69,7 @@ import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -465,6 +486,137 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
                                 String.format(
                                         "The fetching offset %s is out of range", Long.MIN_VALUE));
             }
+        }
+    }
+
+    /**
+     * When local log no longer contains the subscribed offset but the bucket can read from lake,
+     * the tablet returns lake fetch metadata after {@code LogOffsetOutOfRangeException}; the client
+     * then reads via {@link LakeCompletedFetch} using a {@link TestingLakeSource}-based
+     * implementation (split planning from the parent, non-empty records from the override).
+     */
+    @Test
+    void testReadFromLakeAfterLocalLogOutOfRange() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_log_scanner_lake_oore_fallback");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA)
+                        .distributedBy(1, "a")
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                        .build();
+        long tableId = createTable(tablePath, tableDescriptor, false);
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
+
+        TableBucket tb = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+
+        try (Table writeTable = conn.getTable(tablePath)) {
+            AppendWriter appendWriter = writeTable.newAppend().createWriter();
+            for (Object[] tuple : TestData.DATA1) {
+                appendWriter.append(row((Integer) tuple[0], (String) tuple[1])).get();
+            }
+            appendWriter.flush();
+        }
+
+        Map<Integer, Long> latestOffsets =
+                admin.listOffsets(
+                                tablePath,
+                                Collections.singletonList(0),
+                                new OffsetSpec.LatestSpec())
+                        .all()
+                        .get();
+        long lakeLogEndOffset = latestOffsets.get(0);
+        long snapshotId = 1L;
+        CoordinatorGateway coordinator = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
+        coordinator
+                .commitLakeTableSnapshot(
+                        newCommitLakeTableSnapshotRequest(tableId, snapshotId, lakeLogEndOffset))
+                .get();
+
+        retry(
+                Duration.ofMinutes(2),
+                () -> {
+                    Replica leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tb);
+                    LogTablet logTablet = leader.getLogTablet();
+                    assertThat(logTablet.canFetchFromLakeLog(0L)).isTrue();
+                    assertThat(logTablet.getLakeLogEndOffset()).isEqualTo(lakeLogEndOffset);
+                });
+
+        Replica leaderReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tb);
+        leaderReplica.truncateFullyAndStartAt(lakeLogEndOffset);
+
+        LakeSource<LakeSplit> lakeSource = new DataLogTestingLakeSource();
+
+        List<GenericRow> actual = new ArrayList<>();
+        try (Table table = conn.getTable(tablePath);
+                LogScanner logScanner = table.newScan().createLogScanner(lakeSource)) {
+            logScanner.subscribeFromBeginning(0);
+            while (actual.size() < TestData.DATA1.size()) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(5));
+                for (ScanRecord scanRecord : scanRecords) {
+                    assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
+                    InternalRow internalRow = scanRecord.getRow();
+                    actual.add(row(internalRow.getInt(0), internalRow.getString(1)));
+                }
+            }
+        }
+
+        List<GenericRow> expected = new ArrayList<>();
+        for (Object[] tuple : TestData.DATA1) {
+            expected.add(row((Integer) tuple[0], (String) tuple[1]));
+        }
+        assertThat(actual).containsExactlyInAnyOrderElementsOf(expected);
+    }
+
+    private static CommitLakeTableSnapshotRequest newCommitLakeTableSnapshotRequest(
+            long tableId, long snapshotId, long logEndOffset) {
+        CommitLakeTableSnapshotRequest request = new CommitLakeTableSnapshotRequest();
+        PbLakeTableSnapshotInfo tableReq = request.addTablesReq();
+        tableReq.setTableId(tableId);
+        tableReq.setSnapshotId(snapshotId);
+        PbLakeTableOffsetForBucket bucketReq = tableReq.addBucketsReq();
+        bucketReq.setBucketId(0);
+        bucketReq.setLogEndOffset(logEndOffset);
+        bucketReq.setMaxTimestamp(System.currentTimeMillis());
+        return request;
+    }
+
+    /**
+     * Uses {@link TestingLakeSource} for planner and split serialization; overrides {@link
+     * RecordReader} so the lake fallback returns the same rows as {@link TestData#DATA1}.
+     */
+    private static final class DataLogTestingLakeSource extends TestingLakeSource {
+
+        DataLogTestingLakeSource() {
+            super(
+                    1,
+                    Collections.singletonList(
+                            new PartitionInfo(
+                                    -1L,
+                                    new ResolvedPartitionSpec(
+                                            Collections.emptyList(), Collections.emptyList()),
+                                    null)));
+        }
+
+        @Override
+        public RecordReader createRecordReader(LakeSource.ReaderContext<LakeSplit> context)
+                throws IOException {
+            return () -> lakeTierRowsAsLogIterator();
+        }
+
+        private static CloseableIterator<LogRecord> lakeTierRowsAsLogIterator() {
+            List<LogRecord> list = new ArrayList<>();
+            long offset = 0L;
+            for (Object[] tuple : TestData.DATA1) {
+                list.add(
+                        new ScanRecord(
+                                offset,
+                                offset,
+                                ChangeType.APPEND_ONLY,
+                                row((Integer) tuple[0], (String) tuple[1])));
+                offset++;
+            }
+            return CloseableIterator.wrap(list.iterator());
         }
     }
 }

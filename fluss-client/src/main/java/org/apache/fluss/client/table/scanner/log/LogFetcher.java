@@ -417,7 +417,7 @@ public class LogFetcher implements Closeable {
                                     fetchOffset,
                                     fetchResultForBucket.getHighWatermark());
                         } else if (fetchResultForBucket.fetchFromLake()) {
-                            pendLakeFetch(
+                            addLakeFetches(
                                     tb,
                                     fetchResultForBucket.lakeLogFetchInfo(),
                                     fetchOffset,
@@ -514,7 +514,7 @@ public class LogFetcher implements Closeable {
         }
     }
 
-    private void pendLakeFetch(
+    private void addLakeFetches(
             TableBucket tableBucket,
             LakeLogFetchInfo lakeLogFetchInfo,
             long firstFetchOffset,
