@@ -21,12 +21,12 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.RemoteStorageException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.remote.RemoteLogSegment;
-import org.apache.fluss.utils.MapUtils;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -76,26 +76,18 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
      * #fetchLogData} calls that target that segment throw a {@link RemoteStorageException};
      * subsequent calls for the same segment behave normally. Useful for tests that need a specific
      * segment's prefetch to exhaust its retries (i.e. {@code DOWNLOAD_MAX_RETRIES + 1} attempts) so
-     * the prefetch path raises {@code ExecutionException} and the sync fallback inside {@code
-     * RemoteLogFetcher#fetchSegmentFile} then succeeds — without poisoning unrelated segments.
+     * the prefetch path raises {@code ExecutionException} which is then propagated directly by
+     * {@code RemoteLogFetcher#fetchSegmentFile} — without poisoning unrelated segments.
      */
-    public final Map<UUID, AtomicInteger> fetchLogDataFailureBudget =
-            MapUtils.newConcurrentHashMap();
+    public final Map<UUID, AtomicInteger> fetchLogDataFailureBudget = new ConcurrentHashMap<>();
 
     private final AtomicInteger fetchLogDataCount = new AtomicInteger(0);
 
     /**
-     * Optional test hook invoked at the start of {@link #fetchLogData} (after the injected-failure
-     * branches but before the {@link #fetchLogDataDelayMs} sleep and the real fetch). When
-     * non-null, the barrier runs on the worker thread so tests can block the worker on their own
-     * {@link java.util.concurrent.CountDownLatch}s (captured by the lambda) and assert real
-     * interruption by observing the latch they count down from inside the barrier. Default null
-     * preserves existing behavior.
-     *
-     * <p>If the barrier throws {@link InterruptedException}, the worker's interrupt status is
-     * re-asserted and a {@link RemoteStorageException} is propagated — the same exception surface
-     * as the {@link #fetchLogDataDelayMs} sleep path, so prefetch-worker error handling does not
-     * need to distinguish the two.
+     * Optional test hook invoked inside {@link #fetchLogData} on the worker thread. Tests can block
+     * the worker on their own latches and assert real interruption. If it throws {@link
+     * InterruptedException}, the worker's interrupt flag is restored and a {@link
+     * RemoteStorageException} is propagated. Default null preserves existing behavior.
      */
     public volatile FetchLogDataBarrier fetchLogDataBarrier = null;
 

@@ -58,29 +58,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.apache.fluss.utils.FileUtils.deleteDirectoryQuietly;
 
 /**
- * A utility class that fetches remote log segments and makes them available as {@link
- * FileLogRecords} for KV recovery. It downloads remote log data into a local temporary directory
- * using a UUID to avoid conflicts with other concurrent recovery operations.
+ * Fetches remote log segments as {@link FileLogRecords} for KV recovery, downloading into a
+ * per-instance UUID temp directory. Must be closed after use (prefer try-with-resources).
  *
- * <p>The fetcher is {@link Closeable} and the caller must close it after use to clean up the
- * temporary directory. It is recommended to use try-with-resources to ensure proper resource
- * cleanup:
- *
- * <pre>{@code
- * try (RemoteLogFetcher fetcher = new RemoteLogFetcher(...)) {
- *     for (LogRecordBatch batch : fetcher.fetch(startOffset, localLogStartOffset)) {
- *         // process batch
- *     }
- * }
- * }</pre>
- *
- * <p>Segments are prefetched in a bounded sliding window. The window size (prefetch depth) and the
- * number of concurrent download threads are configurable via {@code
- * kv.recover.remote-log.prefetch-num} and {@code kv.recover.remote-log.download-threads}
- * respectively. As the consumer advances to a segment it takes the matching entry out of the
- * window, frees its slot, and the fetcher immediately submits the next pending segment so the
- * window stays full as long as more segments remain. This overlaps network round-trips with the
- * local {@link FileLogRecords} iteration the consumer is doing in parallel.
+ * <p>Segments are prefetched in a bounded sliding window ({@code prefetchNum} slots, {@code
+ * downloadThreads} concurrent downloads). As the consumer advances, consumed slots are freed and
+ * back-filled, overlapping network I/O with local iteration.
  */
 @NotThreadSafe
 public class RemoteLogFetcher implements Closeable {
@@ -200,8 +183,7 @@ public class RemoteLogFetcher implements Closeable {
         RemoteLogBatchIterator iterator =
                 new RemoteLogBatchIterator(segments, startOffset, localLogStartOffset);
         this.activeIterator = iterator;
-        // Kick off the initial prefetch window eagerly so that the very first advance() can
-        // consume from the ring instead of falling back to a synchronous download.
+        // Kick off the initial prefetch window so downloads start before the first advance().
         iterator.fillPrefetchWindow();
         return () -> iterator;
     }
@@ -229,18 +211,26 @@ public class RemoteLogFetcher implements Closeable {
                         e);
             }
 
-            if (terminated) {
-                // Remove the entire "tmp" parent directory to clean up our subdirectory as well
-                // as any stale recovery directories left by a previous failed recovery.
-                Path tmpDir = tempDir.getParent();
-                if (tmpDir != null && Files.exists(tmpDir)) {
-                    LOG.info("Cleaning up remote log recovery tmp dir: {}", tmpDir);
-                    deleteDirectoryQuietly(tmpDir.toFile());
-                }
-            } else {
+            if (!terminated) {
                 LOG.warn(
-                        "Skip cleaning remote log recovery tmp dir because download executor did not terminate within 1 second for table bucket {}.",
+                        "Download executor did not terminate within 1 second for table bucket {}. "
+                                + "Proceeding with best-effort cleanup.",
                         tableBucket);
+            }
+
+            // Best-effort cleanup: always attempt to delete our own tempDir regardless of
+            // whether the executor terminated. If a download is still in progress the
+            // directory may not be fully removable, which is fine — we log and move on.
+            if (Files.exists(tempDir)) {
+                LOG.info("Cleaning up remote log recovery temp dir: {}", tempDir);
+                deleteDirectoryQuietly(tempDir.toFile());
+                if (Files.exists(tempDir)) {
+                    LOG.warn(
+                            "Failed to fully clean up remote log recovery temp dir {} for table bucket {}. "
+                                    + "Some files may still be in use by an ongoing download.",
+                            tempDir,
+                            tableBucket);
+                }
             }
         }
     }
@@ -256,14 +246,8 @@ public class RemoteLogFetcher implements Closeable {
     }
 
     /**
-     * Returns a snapshot of the prefetch futures currently in the window, in submission order
-     * (oldest first).
-     *
-     * <p><b>Thread-safety:</b> must be called on the consumer thread (the one that drives {@link
-     * #fetch}) while that thread is not actively advancing the iterator. Worker threads never touch
-     * the underlying prefetch ring, so this is race-free as long as the single consumer thread is
-     * quiescent at the call site — consistent with the class-level {@link NotThreadSafe} contract.
-     * The returned list is an immutable copy.
+     * Returns an immutable snapshot of in-flight prefetch futures in submission order. Must be
+     * called on the consumer thread while it is not advancing the iterator.
      */
     @VisibleForTesting
     List<Future<File>> snapshotPrefetchFuturesForTest() {
@@ -303,11 +287,9 @@ public class RemoteLogFetcher implements Closeable {
             throw new IOException(
                     "Failed to download remote log segment: " + segment.remoteLogSegmentId(), e);
         } finally {
-            // Most remote/file InputStreams don't honor Thread.interrupt() mid-read: the
-            // call simply returns a normally-completed copy and we'd fall through with
-            // success=true while the worker has been interrupted by close()/cancel(true).
-            // Treat "interrupt observed during the copy" as a failure for cleanup purposes
-            // so we don't leave a stale segment file behind in tempDir.
+            // Most InputStreams don't honor Thread.interrupt() mid-read, so the copy may
+            // succeed despite interruption. Treat interrupt-after-success as failure to
+            // avoid leaving stale files in tempDir.
             if (!success || Thread.currentThread().isInterrupted()) {
                 try {
                     Files.deleteIfExists(localFile.toPath());
@@ -317,6 +299,13 @@ public class RemoteLogFetcher implements Closeable {
                             localFile,
                             segment.remoteLogSegmentId(),
                             cleanupException);
+                }
+                // File was deleted above; throw instead of returning a dangling reference
+                // so the retry layer or consumer sees a clear failure.
+                if (success && Thread.currentThread().isInterrupted()) {
+                    throw new IOException(
+                            "Download completed but was interrupted for segment "
+                                    + segment.remoteLogSegmentId());
                 }
             }
         }
@@ -412,6 +401,9 @@ public class RemoteLogFetcher implements Closeable {
         private int nextConsumeIndex = 0;
 
         private LogRecordBatch nextBatch;
+        /** The local .log file currently opened as {@link #currentFileLogRecords}. */
+        private File currentLocalFile;
+
         private boolean finished = false;
         private boolean closed = false;
 
@@ -517,10 +509,9 @@ public class RemoteLogFetcher implements Closeable {
 
                 try {
                     File localFile = fetchSegmentFile(segment);
+                    currentLocalFile = localFile;
                     currentFileLogRecords = FileLogRecords.open(localFile, false);
-                    // Refill after opening the just-consumed segment's file. fetchSegmentFile()
-                    // already refilled on cache hit; this handles the sync-fallback path.
-                    fillPrefetchWindow();
+                    // fetchSegmentFile() already calls fillPrefetchWindow() in its finally block.
                     int startPosition = 0;
                     // if this segment contains data before currentOffset, find the right position
                     if (segment.remoteLogStartOffset() < currentOffset) {
@@ -561,20 +552,24 @@ public class RemoteLogFetcher implements Closeable {
          * long as more segments remain.
          */
         private File fetchSegmentFile(RemoteLogSegment segment) throws IOException {
-            // Invariant: fillPrefetchWindow() and advance() walk the same pre-filtered
-            // `segments` list in strict order with identical skip rules; consumption is
-            // single-threaded FIFO; prefetchNum >= 1 (Math.max(1, ...) in the ctor). So
-            // the ring head is *always* the segment advance() is asking for.
+            // advance() and fillPrefetchWindow() use identical skip rules in FIFO order,
+            // so the ring head always matches the segment advance() is requesting.
             int headSlot = nextConsumeIndex % prefetchNum;
             RemoteLogSegment headSegment = prefetchSegments[headSlot];
-            assert isSameSegmentId(segment, headSegment)
-                    : "prefetch ring head "
-                            + (headSegment == null ? "null" : headSegment.remoteLogSegmentId())
-                            + " does not match requested "
-                            + segment.remoteLogSegmentId();
+            if (!isSameSegmentId(segment, headSegment)) {
+                // Ring head mismatch — drain the window and fail fast rather than consume
+                // the wrong file.
+                drainPrefetchWindow();
+                throw new IOException(
+                        "Prefetch ring head mismatch: requested "
+                                + segment.remoteLogSegmentId()
+                                + " but head is "
+                                + (headSegment == null
+                                        ? "null"
+                                        : headSegment.remoteLogSegmentId()));
+            }
             Future<File> headFuture = prefetchSlots[headSlot];
-            // Eagerly null the slot refs so the ring never keeps stale references even if the
-            // consumer throws below — also releases the RemoteLogSegment for GC early.
+            // Null the slot eagerly so the ring never keeps stale references.
             prefetchSlots[headSlot] = null;
             prefetchSegments[headSlot] = null;
             nextConsumeIndex++;
@@ -594,11 +589,13 @@ public class RemoteLogFetcher implements Closeable {
                 return downloadSegmentWithRetry(segment);
             } catch (ExecutionException e) {
                 LOG.warn(
-                        "Prefetched segment {} failed even after async retries, "
-                                + "fallback to one more synchronous retry round.",
+                        "Prefetched segment {} failed even after async retries.",
                         segment.remoteLogSegmentId(),
                         e.getCause());
-                return downloadSegmentWithRetry(segment);
+                throw new IOException(
+                        "Failed to download remote log segment after async retries: "
+                                + segment.remoteLogSegmentId(),
+                        e.getCause());
             } finally {
                 // Window slot released — try to submit the next prefetch right away.
                 fillPrefetchWindow();
@@ -641,10 +638,8 @@ public class RemoteLogFetcher implements Closeable {
                 final RemoteLogSegment target = segment;
                 Future<File> future;
                 try {
-                    // submit(Callable) returns a FutureTask whose cancel(true) actually calls
-                    // Thread.interrupt() on the worker, unlike CompletableFuture.cancel which
-                    // only flips state. This lets stale-fallback / inject / second-fetch paths
-                    // really stop in-flight downloads instead of orphaning their files in tempDir.
+                    // submit(Callable) returns a FutureTask whose cancel(true) interrupts the
+                    // worker thread, unlike CompletableFuture which only flips state.
                     future =
                             downloadExecutor.submit(
                                     (Callable<File>) () -> downloadSegmentWithRetry(target));
@@ -671,11 +666,7 @@ public class RemoteLogFetcher implements Closeable {
             }
         }
 
-        /**
-         * Cancel or clean up every entry currently in the window. Used on close, iterator failure,
-         * and stale-ring fallback. After this runs the invariant {@code nextConsumeIndex ==
-         * nextPrefetchIndex} holds, so the window is empty.
-         */
+        /** Cancel or clean up all entries in the window, leaving it empty. */
         private void drainPrefetchWindow() {
             while (nextConsumeIndex < nextPrefetchIndex) {
                 int slot = nextConsumeIndex % prefetchNum;
@@ -696,12 +687,8 @@ public class RemoteLogFetcher implements Closeable {
         }
 
         /**
-         * Drain a future that is (now) known to be completed: pull its file out via {@link
-         * Future#get()} and delete it. {@code isDone()} guarantees {@code get()} does not block.
-         *
-         * @return {@code true} on a clean drain, {@code false} if this thread was interrupted while
-         *     calling {@code get()} (caller should bail out and let close()'s shutdownNow path
-         *     reclaim the remaining slots).
+         * Retrieve and delete the file from a completed future. Returns {@code false} if
+         * interrupted (caller should bail out).
          */
         private boolean cleanupCompletedFuture(Future<File> future) {
             try {
@@ -711,10 +698,8 @@ public class RemoteLogFetcher implements Closeable {
             } catch (CancellationException | ExecutionException ignored) {
                 // no local file to clean up
             } catch (InterruptedException e) {
-                // A completed future never actually blocks here, so an interrupt on this
-                // thread came from elsewhere. Restore the flag and bail out — close()'s
-                // follow-up shutdownNow()/awaitTermination path will reclaim whatever's
-                // left in the ring.
+                // Interrupt came from elsewhere; restore flag and bail out. close()'s
+                // shutdownNow path will reclaim remaining slots.
                 Thread.currentThread().interrupt();
                 return false;
             }
@@ -742,6 +727,14 @@ public class RemoteLogFetcher implements Closeable {
                 IOUtils.closeQuietly(currentFileLogRecords, "FileLogRecords");
                 currentFileLogRecords = null;
                 currentBatchIterator = null;
+            }
+            if (currentLocalFile != null) {
+                try {
+                    Files.deleteIfExists(currentLocalFile.toPath());
+                } catch (IOException e) {
+                    LOG.warn("Failed to delete consumed segment file {}", currentLocalFile, e);
+                }
+                currentLocalFile = null;
             }
         }
 
