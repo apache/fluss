@@ -113,7 +113,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Field name2 does not exist in the row type.");
 
-        FlinkSourceSplitReader flinkSourceSplitReader =
+        try (FlinkSourceSplitReader flinkSourceSplitReader =
                 new FlinkSourceSplitReader(
                         clientConf,
                         tablePath1,
@@ -123,8 +123,9 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                         null,
                         null,
                         null,
-                        createMockSourceReaderMetrics());
-        assertThat(flinkSourceSplitReader.getProjectedFields()).isNull();
+                        createMockSourceReaderMetrics())) {
+            assertThat(flinkSourceSplitReader.getProjectedFields()).isNull();
+        }
     }
 
     @Test

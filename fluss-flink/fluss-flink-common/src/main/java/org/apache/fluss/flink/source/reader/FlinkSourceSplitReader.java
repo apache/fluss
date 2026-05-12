@@ -141,7 +141,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                 table.newScan()
                         .project(projectedFields)
                         .filter(logRecordBatchFilter)
-                        .createLogScanner();
+                        .createLogScanner(lakeSource);
         this.stoppingOffsets = new HashMap<>();
         this.emptyLogSplits = new HashSet<>();
         this.lakeSource = lakeSource;

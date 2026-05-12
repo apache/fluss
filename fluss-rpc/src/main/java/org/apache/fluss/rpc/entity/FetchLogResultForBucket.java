@@ -18,6 +18,7 @@
 package org.apache.fluss.rpc.entity;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.lake.source.LakeLogFetchInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
@@ -33,6 +34,7 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 @Internal
 public class FetchLogResultForBucket extends ResultForBucket {
     private final @Nullable RemoteLogFetchInfo remoteLogFetchInfo;
+    private final @Nullable LakeLogFetchInfo lakeLogFetchInfo;
     private final @Nullable LogRecords records;
     private final long highWatermark;
     private final long filteredEndOffset;
@@ -41,6 +43,7 @@ public class FetchLogResultForBucket extends ResultForBucket {
             TableBucket tableBucket, LogRecords records, long highWatermark) {
         this(
                 tableBucket,
+                null,
                 null,
                 checkNotNull(records, "records can not be null"),
                 highWatermark,
@@ -56,6 +59,7 @@ public class FetchLogResultForBucket extends ResultForBucket {
         this(
                 tableBucket,
                 null,
+                null,
                 checkNotNull(records, "records can not be null"),
                 highWatermark,
                 filteredEndOffset,
@@ -63,7 +67,7 @@ public class FetchLogResultForBucket extends ResultForBucket {
     }
 
     public FetchLogResultForBucket(TableBucket tableBucket, ApiError error) {
-        this(tableBucket, null, null, -1L, -1L, error);
+        this(tableBucket, null, null, null, -1L, -1L, error);
     }
 
     public FetchLogResultForBucket(
@@ -71,6 +75,19 @@ public class FetchLogResultForBucket extends ResultForBucket {
         this(
                 tableBucket,
                 checkNotNull(remoteLogFetchInfo, "remote log fetch info can not be null"),
+                null,
+                null,
+                highWatermark,
+                -1L,
+                ApiError.NONE);
+    }
+
+    public FetchLogResultForBucket(
+            TableBucket tableBucket, LakeLogFetchInfo lakeLogFetchInfo, long highWatermark) {
+        this(
+                tableBucket,
+                null,
+                checkNotNull(lakeLogFetchInfo, "lake log fetch info can not be null"),
                 null,
                 highWatermark,
                 -1L,
@@ -84,18 +101,20 @@ public class FetchLogResultForBucket extends ResultForBucket {
      */
     public FetchLogResultForBucket(
             TableBucket tableBucket, long highWatermark, long filteredEndOffset) {
-        this(tableBucket, null, null, highWatermark, filteredEndOffset, ApiError.NONE);
+        this(tableBucket, null, null, null, highWatermark, filteredEndOffset, ApiError.NONE);
     }
 
     private FetchLogResultForBucket(
             TableBucket tableBucket,
             @Nullable RemoteLogFetchInfo remoteLogFetchInfo,
+            @Nullable LakeLogFetchInfo lakeLogFetchInfo,
             @Nullable LogRecords records,
             long highWatermark,
             long filteredEndOffset,
             ApiError error) {
         super(tableBucket, error);
         this.remoteLogFetchInfo = remoteLogFetchInfo;
+        this.lakeLogFetchInfo = lakeLogFetchInfo;
         this.records = records;
         this.highWatermark = highWatermark;
         this.filteredEndOffset = filteredEndOffset;
@@ -103,13 +122,18 @@ public class FetchLogResultForBucket extends ResultForBucket {
 
     /**
      * The fetch result currently supporting only fetch from remote or fetch from local. It means
-     * that if remoteLogFetchInfo is not null, the records should be null. Otherwise, the records
-     * should not be null.
+     * that if remoteLogFetchInfo/lakeLogFetchInfo is not null, the records should be null.
+     * Otherwise, the records should not be null.
      *
      * @return {@code true} if the log is fetched from remote.
      */
     public boolean fetchFromRemote() {
         return remoteLogFetchInfo != null;
+    }
+
+    /** Returns {@code true} if the log should be fetched from lake. */
+    public boolean fetchFromLake() {
+        return lakeLogFetchInfo != null;
     }
 
     public @Nullable LogRecords records() {
@@ -126,6 +150,10 @@ public class FetchLogResultForBucket extends ResultForBucket {
 
     public @Nullable RemoteLogFetchInfo remoteLogFetchInfo() {
         return remoteLogFetchInfo;
+    }
+
+    public @Nullable LakeLogFetchInfo lakeLogFetchInfo() {
+        return lakeLogFetchInfo;
     }
 
     public long getHighWatermark() {

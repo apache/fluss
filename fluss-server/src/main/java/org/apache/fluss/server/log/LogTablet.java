@@ -261,6 +261,10 @@ public final class LogTablet {
         return isDataLakeEnabled;
     }
 
+    public boolean isChangeLog() {
+        return isChangeLog;
+    }
+
     public long getLakeTableSnapshotId() {
         return lakeTableSnapshotId;
     }

@@ -30,6 +30,7 @@ import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.lake.committer.LakeCommitResult;
+import org.apache.fluss.lake.source.LakeLogFetchInfo;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PartitionSpec;
@@ -1018,6 +1019,19 @@ public class ServerRpcMessageUtils {
                         fetchLogRespForBucket
                                 .setRemoteLogFetchInfo()
                                 .setPartitionName(rlfInfo.partitionName());
+                    }
+                } else if (bucketResult.fetchFromLake()) {
+                    LakeLogFetchInfo lakeLogFetchInfo = bucketResult.lakeLogFetchInfo();
+                    checkNotNull(lakeLogFetchInfo, "Lake log fetch info is null.");
+                    fetchLogRespForBucket
+                            .setLakeLogFetchInfo()
+                            .setSnapshotId(lakeLogFetchInfo.snapshotId())
+                            .setStartOffset(lakeLogFetchInfo.startOffset())
+                            .setEndOffset(lakeLogFetchInfo.endOffset());
+                    if (lakeLogFetchInfo.partitionName() != null) {
+                        fetchLogRespForBucket
+                                .setLakeLogFetchInfo()
+                                .setPartitionName(lakeLogFetchInfo.partitionName());
                     }
                 } else {
                     // set records

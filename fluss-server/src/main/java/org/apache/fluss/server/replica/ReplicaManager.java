@@ -34,6 +34,7 @@ import org.apache.fluss.exception.StorageException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.lake.source.LakeLogFetchInfo;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
@@ -153,6 +154,8 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 /** A manager for replica. */
 public class ReplicaManager implements ServerReconfigurable {
     private static final Logger LOG = LoggerFactory.getLogger(ReplicaManager.class);
+
+    private static final long INITIAL_LAKE_LOG_START_OFFSET = 0L;
 
     public static final String HIGH_WATERMARK_CHECKPOINT_FILE_NAME = "high-watermark-checkpoint";
     private final Configuration conf;
@@ -1079,13 +1082,16 @@ public class ReplicaManager implements ServerReconfigurable {
                         LogTablet logTablet = getReplicaOrException(tb).getLogTablet();
                         logTablet.updateLakeTableSnapshotId(lakeBucketOffset.getSnapshotId());
 
-                        lakeBucketOffset
-                                .getLogStartOffset()
-                                .ifPresent(logTablet::updateLakeLogStartOffset);
+                        Optional<Long> logStartOffset = lakeBucketOffset.getLogStartOffset();
+                        Optional<Long> logEndOffset = lakeBucketOffset.getLogEndOffset();
+                        if (!logTablet.isChangeLog()) {
+                            logStartOffset.ifPresent(logTablet::updateLakeLogStartOffset);
+                            if (!logStartOffset.isPresent() && logEndOffset.isPresent()) {
+                                logTablet.updateLakeLogStartOffset(INITIAL_LAKE_LOG_START_OFFSET);
+                            }
+                        }
 
-                        lakeBucketOffset
-                                .getLogEndOffset()
-                                .ifPresent(logTablet::updateLakeLogEndOffset);
+                        logEndOffset.ifPresent(logTablet::updateLakeLogEndOffset);
 
                         lakeBucketOffset
                                 .getMaxTimestamp()
@@ -1146,10 +1152,13 @@ public class ReplicaManager implements ServerReconfigurable {
         if (optLakeTableSnapshot.isPresent()) {
             LakeTableSnapshot lakeTableSnapshot = optLakeTableSnapshot.get();
             long snapshotId = optLakeTableSnapshot.get().getSnapshotId();
-            replica.getLogTablet().updateLakeTableSnapshotId(snapshotId);
-            lakeTableSnapshot
-                    .getLogEndOffset(tb)
-                    .ifPresent(replica.getLogTablet()::updateLakeLogEndOffset);
+            LogTablet logTablet = replica.getLogTablet();
+            logTablet.updateLakeTableSnapshotId(snapshotId);
+            Optional<Long> logEndOffset = lakeTableSnapshot.getLogEndOffset(tb);
+            if (!logTablet.isChangeLog() && logEndOffset.isPresent()) {
+                logTablet.updateLakeLogStartOffset(INITIAL_LAKE_LOG_START_OFFSET);
+            }
+            logEndOffset.ifPresent(logTablet::updateLakeLogEndOffset);
         }
     }
 
@@ -1481,7 +1490,8 @@ public class ReplicaManager implements ServerReconfigurable {
 
                 FetchLogResultForBucket result;
                 if (replica != null && e instanceof LogOffsetOutOfRangeException) {
-                    result = handleFetchOutOfRangeException(replica, fetchOffset, e);
+                    result =
+                            handleFetchOutOfRangeException(replica, fetchOffset, e, isFromFollower);
                 } else {
                     result = new FetchLogResultForBucket(tb, ApiError.fromThrowable(e));
                 }
@@ -1493,18 +1503,15 @@ public class ReplicaManager implements ServerReconfigurable {
     }
 
     private FetchLogResultForBucket handleFetchOutOfRangeException(
-            Replica replica, long fetchOffset, Exception e) {
+            Replica replica, long fetchOffset, Exception e, boolean isFromFollower) {
         TableBucket tb = replica.getTableBucket();
         if (fetchOffset == FetchParams.FETCH_FROM_EARLIEST_OFFSET) {
             fetchOffset = replica.getLogStartOffset();
         }
 
-        if (canFetchFromLakeLog(replica, fetchOffset)) {
-            // todo: currently, we just return empty records directly
-            // need to return the info of datalake to make client can fetch
-            // from datalake directly
-            return new FetchLogResultForBucket(
-                    tb, MemoryLogRecords.EMPTY, replica.getLogHighWatermark());
+        if (!isFromFollower && canFetchFromLakeLog(replica, fetchOffset)) {
+            LakeLogFetchInfo lakeLogFetchInfo = fetchLogFromLake(replica, fetchOffset);
+            return new FetchLogResultForBucket(tb, lakeLogFetchInfo, replica.getLogHighWatermark());
         }
         // Once we get a fetch out of range exception from local storage, we need to check whether
         // the log segment already upload to the remote storage. If uploaded, we will return a list
@@ -1538,6 +1545,14 @@ public class ReplicaManager implements ServerReconfigurable {
 
     private boolean canFetchFromRemoteLog(Replica replica, long fetchOffset) {
         return replica.getLogTablet().canFetchFromRemoteLog(fetchOffset);
+    }
+
+    private LakeLogFetchInfo fetchLogFromLake(Replica replica, long fetchOffset) {
+        return new LakeLogFetchInfo(
+                replica.getLogTablet().getLakeTableSnapshotId(),
+                replica.getPhysicalTablePath().getPartitionName(),
+                fetchOffset,
+                replica.getLogTablet().getLakeLogEndOffset());
     }
 
     private @Nullable RemoteLogFetchInfo fetchLogFromRemote(Replica replica, long fetchOffset) {
@@ -1696,7 +1711,8 @@ public class ReplicaManager implements ServerReconfigurable {
                 }
             }
 
-            if (!fetchLogResultForBucket.fetchFromRemote()) {
+            if (!fetchLogResultForBucket.fetchFromRemote()
+                    && !fetchLogResultForBucket.fetchFromLake()) {
                 hasFetchFromLocal = true;
                 bytesReadable += fetchLogResultForBucket.recordsOrEmpty().sizeInBytes();
             }

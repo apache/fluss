@@ -121,8 +121,10 @@ class CommitLakeTableSnapshotITCase {
                     Duration.ofMinutes(2),
                     () -> {
                         LogTablet logTablet = replica.getLogTablet();
+                        assertThat(logTablet.getLakeLogStartOffset()).isEqualTo(0L);
                         assertThat(logTablet.getLakeLogEndOffset()).isEqualTo(dataLakeLogEndOffset);
                         assertThat(logTablet.getLakeMaxTimestamp()).isEqualTo(dataLakeMaxTimestamp);
+                        assertThat(logTablet.canFetchFromLakeLog(0L)).isTrue();
                     });
         }
 

@@ -28,15 +28,22 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
+import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.lake.source.LakeLogFetchInfo;
+import org.apache.fluss.lake.source.LakeSource;
+import org.apache.fluss.lake.source.LakeSplit;
+import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
@@ -55,6 +62,7 @@ import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.util.PredicateMessageUtils;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ChunkedAllocationManager;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.Projection;
 
@@ -70,6 +78,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -108,6 +117,7 @@ public class LogFetcher implements Closeable {
     private final LogFetchBuffer logFetchBuffer;
     private final LogFetchCollector logFetchCollector;
     private final RemoteLogDownloader remoteLogDownloader;
+    @Nullable private final LakeSource<LakeSplit> lakeSource;
 
     @GuardedBy("this")
     private final Set<Integer> nodesWithPendingFetchRequests;
@@ -127,6 +137,7 @@ public class LogFetcher implements Closeable {
             MetadataUpdater metadataUpdater,
             ScannerMetricGroup scannerMetricGroup,
             RemoteFileDownloader remoteFileDownloader,
+            @Nullable LakeSource<LakeSplit> lakeSource,
             SchemaGetter schemaGetter) {
         this.tablePath = tableInfo.getTablePath();
         this.isPartitioned = tableInfo.isPartitioned();
@@ -165,6 +176,7 @@ public class LogFetcher implements Closeable {
         this.scannerMetricGroup = scannerMetricGroup;
         this.remoteLogDownloader =
                 new RemoteLogDownloader(tablePath, conf, remoteFileDownloader, scannerMetricGroup);
+        this.lakeSource = lakeSource;
         remoteLogDownloader.start();
     }
 
@@ -404,6 +416,12 @@ public class LogFetcher implements Closeable {
                                     fetchResultForBucket.remoteLogFetchInfo(),
                                     fetchOffset,
                                     fetchResultForBucket.getHighWatermark());
+                        } else if (fetchResultForBucket.fetchFromLake()) {
+                            pendLakeFetch(
+                                    tb,
+                                    fetchResultForBucket.lakeLogFetchInfo(),
+                                    fetchOffset,
+                                    fetchResultForBucket.getHighWatermark());
                         } else {
                             LogRecords logRecords = fetchResultForBucket.recordsOrEmpty();
                             boolean hasRecords = !MemoryLogRecords.EMPTY.equals(logRecords);
@@ -493,6 +511,138 @@ public class LogFetcher implements Closeable {
                             isCheckCrcs);
             logFetchBuffer.pend(pendingFetch);
             downloadFuture.onComplete(() -> logFetchBuffer.tryComplete(segment.tableBucket()));
+        }
+    }
+
+    private void pendLakeFetch(
+            TableBucket tableBucket,
+            LakeLogFetchInfo lakeLogFetchInfo,
+            long firstFetchOffset,
+            long highWatermark) {
+        checkNotNull(lakeLogFetchInfo, "LakeLogFetchInfo is null");
+        if (lakeSource == null) {
+            LogOffsetOutOfRangeException exception =
+                    new LogOffsetOutOfRangeException(
+                            String.format(
+                                    "The fetch offset %s is only readable from lake for bucket %s, but no lake source is configured.",
+                                    firstFetchOffset, tableBucket));
+            logFetchBuffer.add(
+                    new DefaultCompletedFetch(
+                            tableBucket,
+                            new FetchLogResultForBucket(
+                                    tableBucket, ApiError.fromThrowable(exception)),
+                            readContext,
+                            logScannerStatus,
+                            isCheckCrcs,
+                            firstFetchOffset,
+                            null));
+            return;
+        }
+
+        try {
+            List<LakeSplit> lakeSplits = planLakeSplits(tableBucket, lakeLogFetchInfo);
+            if (lakeSplits.isEmpty()) {
+                throw new LogOffsetOutOfRangeException(
+                        String.format(
+                                "No lake split found for bucket %s in snapshot %s.",
+                                tableBucket, lakeLogFetchInfo.snapshotId()));
+            }
+
+            logFetchBuffer.add(
+                    new LakeCompletedFetch(
+                            tableBucket,
+                            createLakeRecordIterator(lakeSplits),
+                            firstFetchOffset,
+                            lakeLogFetchInfo.endOffset(),
+                            highWatermark,
+                            readContext,
+                            logScannerStatus));
+        } catch (Exception e) {
+            logFetchBuffer.add(
+                    new DefaultCompletedFetch(
+                            tableBucket,
+                            new FetchLogResultForBucket(tableBucket, ApiError.fromThrowable(e)),
+                            readContext,
+                            logScannerStatus,
+                            isCheckCrcs,
+                            firstFetchOffset,
+                            null));
+        }
+    }
+
+    private List<LakeSplit> planLakeSplits(
+            TableBucket tableBucket, LakeLogFetchInfo lakeLogFetchInfo) throws IOException {
+        List<LakeSplit> plannedSplits =
+                checkNotNull(lakeSource).createPlanner(() -> lakeLogFetchInfo.snapshotId()).plan();
+        List<LakeSplit> lakeSplits = new ArrayList<>();
+        for (LakeSplit lakeSplit : plannedSplits) {
+            if (isLakeSplitForBucket(lakeSplit, tableBucket, lakeLogFetchInfo.partitionName())) {
+                lakeSplits.add(lakeSplit);
+            }
+        }
+        return lakeSplits;
+    }
+
+    private boolean isLakeSplitForBucket(
+            LakeSplit lakeSplit, TableBucket tableBucket, @Nullable String partitionName) {
+        if (lakeSplit.bucket() != tableBucket.getBucket()) {
+            return false;
+        }
+        if (partitionName == null) {
+            return lakeSplit.partition() == null || lakeSplit.partition().isEmpty();
+        }
+        return partitionName.equals(
+                String.join(ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR, lakeSplit.partition()));
+    }
+
+    private CloseableIterator<LogRecord> createLakeRecordIterator(List<LakeSplit> lakeSplits)
+            throws IOException {
+        List<CloseableIterator<LogRecord>> iterators = new ArrayList<>(lakeSplits.size());
+        try {
+            for (LakeSplit lakeSplit : lakeSplits) {
+                RecordReader recordReader =
+                        checkNotNull(lakeSource)
+                                .createRecordReader(
+                                        (LakeSource.ReaderContext<LakeSplit>) () -> lakeSplit);
+                iterators.add(recordReader.read());
+            }
+            return new CompositeCloseableIterator<>(iterators);
+        } catch (IOException | RuntimeException e) {
+            IOUtils.closeAllQuietly(iterators);
+            throw e;
+        }
+    }
+
+    private static class CompositeCloseableIterator<T> implements CloseableIterator<T> {
+
+        private final List<CloseableIterator<T>> iterators;
+        private final Iterator<CloseableIterator<T>> iterator;
+        private CloseableIterator<T> currentIterator;
+
+        private CompositeCloseableIterator(List<CloseableIterator<T>> iterators) {
+            this.iterators = iterators;
+            this.iterator = iterators.iterator();
+        }
+
+        @Override
+        public boolean hasNext() {
+            while ((currentIterator == null || !currentIterator.hasNext()) && iterator.hasNext()) {
+                if (currentIterator != null) {
+                    currentIterator.close();
+                }
+                currentIterator = iterator.next();
+            }
+            return currentIterator != null && currentIterator.hasNext();
+        }
+
+        @Override
+        public T next() {
+            return currentIterator.next();
+        }
+
+        @Override
+        public void close() {
+            IOUtils.closeAllQuietly(iterators);
         }
     }
 

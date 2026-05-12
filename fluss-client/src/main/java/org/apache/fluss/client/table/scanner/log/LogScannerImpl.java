@@ -23,6 +23,8 @@ import org.apache.fluss.client.metrics.ScannerMetricGroup;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.WakeupException;
+import org.apache.fluss.lake.source.LakeSource;
+import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -81,6 +83,7 @@ public class LogScannerImpl implements LogScanner {
             MetadataUpdater metadataUpdater,
             ClientMetricGroup clientMetricGroup,
             RemoteFileDownloader remoteFileDownloader,
+            @Nullable LakeSource<LakeSplit> lakeSource,
             @Nullable int[] projectedFields,
             SchemaGetter schemaGetter,
             @Nullable Predicate recordBatchFilter) {
@@ -103,6 +106,7 @@ public class LogScannerImpl implements LogScanner {
                         metadataUpdater,
                         scannerMetricGroup,
                         remoteFileDownloader,
+                        lakeSource,
                         schemaGetter);
     }
 

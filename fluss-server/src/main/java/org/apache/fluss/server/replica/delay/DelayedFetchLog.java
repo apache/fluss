@@ -90,7 +90,8 @@ public class DelayedFetchLog extends DelayedOperation {
                 fetchBucketStatusMap.entrySet()) {
             FetchBucketStatus fetchBucketStatus = fetchBucketStatusEntry.getValue();
             TableBucket tb = fetchBucketStatusEntry.getKey();
-            if (fetchBucketStatus.previousFetchLogResultForBucket.fetchFromRemote()) {
+            if (fetchBucketStatus.previousFetchLogResultForBucket.fetchFromRemote()
+                    || fetchBucketStatus.previousFetchLogResultForBucket.fetchFromLake()) {
                 result.put(tb, fetchBucketStatus.previousFetchLogResultForBucket);
             } else {
                 reFetchBuckets.put(tb, fetchBucketStatus.fetchReqInfo);
@@ -127,6 +128,7 @@ public class DelayedFetchLog extends DelayedOperation {
             LogOffsetMetadata fetchOffset = fetchBucketStatus.startOffsetMetadata;
             try {
                 if (!fetchBucketStatus.previousFetchLogResultForBucket.fetchFromRemote()
+                        && !fetchBucketStatus.previousFetchLogResultForBucket.fetchFromLake()
                         && fetchOffset != LogOffsetMetadata.UNKNOWN_OFFSET_METADATA) {
                     Replica replica = replicaManager.getReplicaOrException(tb);
                     LogOffsetSnapshot logOffsetSnapshot =

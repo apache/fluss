@@ -206,7 +206,10 @@ class BoundedSplitReaderTest {
             while (recordIter.hasNext()) {
                 RecordAndPos recordAndPos = recordIter.next();
                 records.add(
-                        new RecordAndPos(recordAndPos.scanRecord, recordAndPos.readRecordsCount));
+                        new RecordAndPos(
+                                recordAndPos.scanRecord,
+                                recordAndPos.readRecordsCount,
+                                recordAndPos.currentSplitIndex));
             }
             recordIter.close();
         }

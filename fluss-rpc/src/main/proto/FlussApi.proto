@@ -885,6 +885,7 @@ message PbFetchLogRespForBucket {
   // filter. When set (>= 0), the records field MUST be empty — the two fields are mutually
   // exclusive. The client should use this offset as the starting offset for the next fetch.
   optional int64 filtered_end_offset = 9;
+  optional PbLakeLogFetchInfo lake_log_fetch_info = 10;
 }
 
 message PbPutKvReqForBucket {
@@ -1055,6 +1056,13 @@ message PbRemoteLogFetchInfo {
   optional string partition_name = 2;
   repeated PbRemoteLogSegment remote_log_segments = 3;
   optional int32 first_start_pos = 4;
+}
+
+message PbLakeLogFetchInfo {
+  required int64 snapshot_id = 1;
+  optional string partition_name = 2;
+  required int64 start_offset = 3;
+  required int64 end_offset = 4;
 }
 
 message PbRemoteLogSegment {

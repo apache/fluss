@@ -30,6 +30,8 @@ import org.apache.fluss.client.table.scanner.log.TypedLogScanner;
 import org.apache.fluss.client.table.scanner.log.TypedLogScannerImpl;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.lake.source.LakeSource;
+import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -118,6 +120,11 @@ public class TableScan implements Scan {
 
     @Override
     public LogScanner createLogScanner() {
+        return createLogScanner(null);
+    }
+
+    @Override
+    public LogScanner createLogScanner(@Nullable LakeSource<LakeSplit> lakeSource) {
         if (limit != null) {
             throw new UnsupportedOperationException(
                     String.format(
@@ -140,6 +147,7 @@ public class TableScan implements Scan {
                 conn.getMetadataUpdater(),
                 conn.getClientMetricGroup(),
                 conn.getOrCreateRemoteFileDownloader(),
+                lakeSource,
                 projectedColumns,
                 schemaGetter,
                 recordBatchFilter);
