@@ -24,10 +24,10 @@ import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.TablePath;
 
-/** Implementation of Hudi lake storage. */
+/** Hudi Implementation of {@link LakeStorage}. */
 public class HudiLakeStorage implements LakeStorage {
 
-    protected final Configuration hudiConfig;
+    private final Configuration hudiConfig;
 
     public HudiLakeStorage(Configuration configuration) {
         this.hudiConfig = configuration;
@@ -36,26 +36,26 @@ public class HudiLakeStorage implements LakeStorage {
     @Override
     public LakeTieringFactory<?, ?> createLakeTieringFactory() {
         throw new UnsupportedOperationException(
-            "HudiLakeStorage is currently a scaffold and does not support creating a "
-                + "LakeTieringFactory yet. Verify that Hudi lake storage was selected "
-                + "intentionally and that the required Hudi support/module is available.");
+                "HudiLakeStorage is currently a scaffold and does not support creating a "
+                        + "LakeTieringFactory yet. Verify that Hudi lake storage was selected "
+                        + "intentionally and that the required Hudi support/module is available.");
     }
 
     @Override
     public LakeCatalog createLakeCatalog() {
         throw new UnsupportedOperationException(
-            "HudiLakeStorage is currently a scaffold and does not support creating a "
-                + "LakeCatalog yet. Verify that Hudi lake storage was selected "
-                + "intentionally and that the required Hudi support/module is available.");
+                "HudiLakeStorage is currently a scaffold and does not support creating a "
+                        + "LakeCatalog yet. Verify that Hudi lake storage was selected "
+                        + "intentionally and that the required Hudi support/module is available.");
     }
 
     @Override
     public LakeSource<?> createLakeSource(TablePath tablePath) {
         throw new UnsupportedOperationException(
-            "HudiLakeStorage is currently a scaffold and does not support creating a "
-                + "LakeSource for table '"
-                + tablePath
-                + "' yet. Verify that Hudi lake storage was selected intentionally "
-                + "and that the required Hudi support/module is available.");
+                "HudiLakeStorage is currently a scaffold and does not support creating a "
+                        + "LakeSource for table '"
+                        + tablePath
+                        + "' yet. Verify that Hudi lake storage was selected intentionally "
+                        + "and that the required Hudi support/module is available.");
     }
 }

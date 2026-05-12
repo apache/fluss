@@ -95,25 +95,6 @@
             <scope>provided</scope>
         </dependency>
 
-        <!-- Hudi -->
-        <dependency>
-            <groupId>org.apache.hudi</groupId>
-            <artifactId>hudi-flink${flink.major.version}-bundle</artifactId>
-            <version>${hudi.version}</version>
-            <scope>provided</scope>
-            <exclusions>
-                <exclusion>
-                    <groupId>org.slf4j</groupId>
-                    <artifactId>slf4j-reload4j</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>ch.qos.reload4j</groupId>
-                    <artifactId>reload4j</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
-
-
         <!-- test dependency -->
         <dependency>
             <groupId>org.apache.fluss</groupId>
