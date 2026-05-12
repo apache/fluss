@@ -603,7 +603,7 @@ public class MetadataManager {
         // We should always alter lake table even though datalake is disabled.
         // Otherwise, if user alter the fluss table when datalake is disabled, then enable datalake
         // again, the lake table will mismatch.
-        if (lakeCatalog != null) {
+        if (lakeCatalog != null && tableDescriptor.getProperties().containsKey(ConfigOptions.TABLE_DATALAKE_ENABLED.key())) {
             try {
                 lakeCatalog.alterTable(tablePath, tableChanges, lakeCatalogContext);
             } catch (TableNotExistException e) {
