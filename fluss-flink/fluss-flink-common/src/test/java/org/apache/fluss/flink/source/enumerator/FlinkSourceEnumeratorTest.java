@@ -543,12 +543,12 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         }
     }
 
-    @Test
-    void testGetSplitOwner() throws Exception {
-        int numSubtasks = 3;
+    @ParameterizedTest
+    @ValueSource(ints = {2, 3})
+    void testGetSplitOwner(int parallelism) throws Exception {
         long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
         try (MockSplitEnumeratorContext<SourceSplitBase> context =
-                        new MockSplitEnumeratorContext<>(numSubtasks);
+                        new MockSplitEnumeratorContext<>(parallelism);
                 FlinkSourceEnumerator enumerator =
                         new FlinkSourceEnumerator(
                                 DEFAULT_TABLE_PATH,
@@ -563,6 +563,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 null,
                                 LeaseContext.DEFAULT,
                                 false)) {
+
+            enumerator.start();
 
             // test splits for same non-partitioned bucket, should assign to same task
             TableBucket t1 = new TableBucket(tableId, 0);
@@ -585,13 +587,19 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
             assertThat(enumerator.getSplitOwner(s1)).isEqualTo(0);
             assertThat(enumerator.getSplitOwner(s2)).isEqualTo(1);
 
-            // splits are with different partitions
             t1 = new TableBucket(tableId, 1L, 0);
             t2 = new TableBucket(tableId, 2L, 0);
             s1 = new LogSplit(t1, "p1", 0);
             s2 = new LogSplit(t2, "p2", 0);
-            assertThat(enumerator.getSplitOwner(s1)).isEqualTo(1);
-            assertThat(enumerator.getSplitOwner(s2)).isEqualTo(2);
+
+            if (parallelism % DEFAULT_BUCKET_NUM == 0) {
+                // splits are with different partitions but the same bucket: when bucket count is
+                // divisible by parallelism, the enumerator uses bucket-only routing (same as w/o
+                // partition id), so both splits share the same owner.
+                assertThat(enumerator.getSplitOwner(s1)).isEqualTo(enumerator.getSplitOwner(s2));
+            } else {
+                assertThat(enumerator.getSplitOwner(s1)).isNotEqualTo(enumerator.getSplitOwner(s2));
+            }
         }
     }
 
