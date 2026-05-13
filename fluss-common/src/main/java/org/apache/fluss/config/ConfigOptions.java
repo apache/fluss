@@ -1813,6 +1813,16 @@ public class ConfigOptions {
                                     + "The RateLimiter is always enabled. The default value is Long.MAX_VALUE (effectively unlimited). "
                                     + "Set to a lower value (e.g., 100MB) to limit the rate.");
 
+    public static final ConfigOption<Duration> KV_HISTORICAL_IDLE_TIMEOUT =
+            key("kv.historical.idle-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(30))
+                    .withDescription(
+                            "The idle timeout for historical partition RocksDB instances. "
+                                    + "When a historical KV instance has not been accessed for longer "
+                                    + "than this duration, it will be closed and its local data "
+                                    + "deleted. The default value is 30 minutes.");
+
     // --------------------------------------------------------------------------
     // Provided configurable ColumnFamilyOptions within Fluss
     // --------------------------------------------------------------------------
