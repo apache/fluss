@@ -19,6 +19,7 @@ package org.apache.fluss.utils;
 
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -36,13 +37,17 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.apache.fluss.metadata.TablePath.detectInvalidName;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.PartitionUtils.convertValueOfType;
 import static org.apache.fluss.utils.PartitionUtils.generateAutoPartition;
+import static org.apache.fluss.utils.PartitionUtils.isHistoricalPartitionSpec;
 import static org.apache.fluss.utils.PartitionUtils.parseValueOfType;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionValues;
@@ -553,5 +558,90 @@ class PartitionUtilsTest {
         String str = convertValueOfType(originalValue, type);
         Object parsed = parseValueOfType(str, type);
         assertThat(parsed).isEqualTo(originalValue);
+    }
+
+    // ---- Tests for isHistoricalPartitionSpec ----
+
+    @Test
+    void testIsHistoricalPartitionSpec() {
+        // Build an auto-partition strategy with auto-partition enabled, key = "dt"
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true);
+        conf.setString(ConfigOptions.TABLE_AUTO_PARTITION_KEY.key(), "dt");
+        conf.set(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.DAY);
+        AutoPartitionStrategy strategy = AutoPartitionStrategy.from(conf);
+
+        // Single key table: {dt: "__historical__"} → true
+        PartitionSpec historicalSpec =
+                new PartitionSpec(Collections.singletonMap("dt", HISTORICAL_PARTITION_VALUE));
+        assertThat(
+                        isHistoricalPartitionSpec(
+                                historicalSpec, Collections.singletonList("dt"), strategy))
+                .isTrue();
+
+        // Multi key table: {region: "us-east", dt: "__historical__"} → true (dt is auto key)
+        Map<String, String> multiKeyHistorical = new HashMap<>();
+        multiKeyHistorical.put("region", "us-east");
+        multiKeyHistorical.put("dt", HISTORICAL_PARTITION_VALUE);
+        assertThat(
+                        isHistoricalPartitionSpec(
+                                new PartitionSpec(multiKeyHistorical),
+                                Arrays.asList("region", "dt"),
+                                strategy))
+                .isTrue();
+
+        // Normal partition: {dt: "20240101"} → false
+        PartitionSpec normalSpec = new PartitionSpec(Collections.singletonMap("dt", "20240101"));
+        assertThat(isHistoricalPartitionSpec(normalSpec, Collections.singletonList("dt"), strategy))
+                .isFalse();
+
+        // Auto-partition not enabled → false
+        Configuration disabledConf = new Configuration();
+        disabledConf.set(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, false);
+        disabledConf.set(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.DAY);
+        AutoPartitionStrategy disabledStrategy = AutoPartitionStrategy.from(disabledConf);
+        assertThat(
+                        isHistoricalPartitionSpec(
+                                historicalSpec, Collections.singletonList("dt"), disabledStrategy))
+                .isFalse();
+    }
+
+    @Test
+    void testHistoricalPartitionPassesStructureValidation() {
+        // validatePartitionSpec with isCreate=false should pass for __historical__
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA)
+                        .distributedBy(3)
+                        .partitionedBy("b")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.YEAR)
+                        .build();
+        TableInfo tableInfo =
+                TableInfo.of(DATA1_TABLE_PATH, 1L, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
+        PartitionSpec historicalSpec =
+                new PartitionSpec(Collections.singletonMap("b", HISTORICAL_PARTITION_VALUE));
+        assertThatNoException()
+                .isThrownBy(
+                        () ->
+                                validatePartitionSpec(
+                                        tableInfo.getTablePath(),
+                                        tableInfo.getPartitionKeys(),
+                                        historicalSpec,
+                                        false));
+    }
+
+    @Test
+    void testHistoricalPartitionBlockedByPrefixValidation() {
+        // validatePartitionValues with isCreate=true should reject __historical__
+        assertThatThrownBy(
+                        () ->
+                                validatePartitionValues(
+                                        Collections.singletonList(HISTORICAL_PARTITION_VALUE),
+                                        true))
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining("__historical__");
     }
 }

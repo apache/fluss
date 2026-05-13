@@ -66,6 +66,7 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.apache.fluss.utils.PartitionUtils.generateAutoPartition;
 import static org.apache.fluss.utils.PartitionUtils.generateAutoPartitionTime;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -271,6 +272,12 @@ public class AutoPartitionManager implements AutoCloseable {
             TableInfo tableInfo,
             NavigableMap<String, Set<String>> partitionMap,
             String partitionName) {
+        // Skip historical partitions — they should not be tracked for
+        // auto-partition creation or TTL expiry.
+        String autoPartitionValue = extractAutoPartitionValue(tableInfo, partitionName);
+        if (HISTORICAL_PARTITION_VALUE.equals(autoPartitionValue)) {
+            return;
+        }
         if (tableInfo.getPartitionKeys().size() > 1) {
             Set<String> partitionSet =
                     partitionMap.computeIfAbsent(

@@ -43,6 +43,9 @@ import static org.apache.fluss.metadata.TablePath.validatePrefix;
 /** Utils for partition. */
 public class PartitionUtils {
 
+    /** The partition value used for the auto-partition key in a historical partition. */
+    public static final String HISTORICAL_PARTITION_VALUE = "__historical__";
+
     public static final List<DataTypeRoot> PARTITION_KEY_SUPPORTED_TYPES =
             Arrays.asList(
                     DataTypeRoot.CHAR,
@@ -149,6 +152,28 @@ public class PartitionUtils {
                                     + "partition is '%s'.",
                             partitionTime, lastRetainPartitionTime));
         }
+    }
+
+    /**
+     * Returns true if the given partition spec represents a historical partition. A historical
+     * partition has its auto-partition key value equal to {@link #HISTORICAL_PARTITION_VALUE}.
+     *
+     * <p>For single-key tables: checks if the only value is "__historical__". For multi-key tables:
+     * checks if the auto-partition key's value is "__historical__".
+     */
+    public static boolean isHistoricalPartitionSpec(
+            PartitionSpec partitionSpec,
+            List<String> partitionKeys,
+            AutoPartitionStrategy autoPartitionStrategy) {
+        if (!autoPartitionStrategy.isAutoPartitionEnabled()) {
+            return false;
+        }
+        String autoPartitionKey =
+                autoPartitionStrategy.key() != null
+                        ? autoPartitionStrategy.key()
+                        : partitionKeys.get(0);
+        String value = partitionSpec.getSpecMap().get(autoPartitionKey);
+        return HISTORICAL_PARTITION_VALUE.equals(value);
     }
 
     /**

@@ -61,6 +61,7 @@ import java.util.stream.Stream;
 
 import static org.apache.fluss.metadata.ResolvedPartitionSpec.fromPartitionName;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
+import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link AutoPartitionManager}. */
@@ -611,6 +612,152 @@ class AutoPartitionManagerTest {
         assertThat(partitions.keySet())
                 .containsExactlyInAnyOrder(
                         "2024091003", "2024091004", "2024091005", "2024091006", "2024091007");
+    }
+
+    @Test
+    void testHistoricalPartitionNotDroppedByAutoPartition() throws Exception {
+        ZonedDateTime startTime =
+                LocalDateTime.parse("2024-09-10T01:00:00").atZone(ZoneId.systemDefault());
+        long startMs = startTime.toInstant().toEpochMilli();
+        ManualClock clock = new ManualClock(startMs);
+        ManuallyTriggeredScheduledExecutorService periodicExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+
+        AutoPartitionManager autoPartitionManager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        metadataManager,
+                        new Configuration(),
+                        clock,
+                        periodicExecutor);
+        autoPartitionManager.start();
+
+        // Create a single-key auto-partition table with retention=2
+        TableInfo table = createPartitionedTable(2, 4, AutoPartitionTimeUnit.HOUR);
+        TablePath tablePath = table.getTablePath();
+        autoPartitionManager.addAutoPartitionTable(table, true);
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+
+        // Verify initial partitions
+        Map<String, PartitionRegistration> partitions =
+                zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder("2024091001", "2024091002", "2024091003", "2024091004");
+
+        // Manually create __historical__ partition
+        long tableId = table.getTableId();
+        int replicaFactor = table.getTableConfig().getReplicationFactor();
+        Map<Integer, BucketAssignment> bucketAssignments =
+                generateAssignment(
+                                table.getNumBuckets(),
+                                replicaFactor,
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                })
+                        .getBucketAssignments();
+        PartitionAssignment partitionAssignment =
+                new PartitionAssignment(tableId, bucketAssignments);
+
+        metadataManager.createPartition(
+                tablePath,
+                tableId,
+                partitionAssignment,
+                fromPartitionName(table.getPartitionKeys(), HISTORICAL_PARTITION_VALUE),
+                false);
+        autoPartitionManager.addPartition(tableId, HISTORICAL_PARTITION_VALUE);
+
+        // Advance time significantly to trigger TTL
+        clock.advanceTime(Duration.ofHours(5));
+        periodicExecutor.triggerPeriodicScheduledTasks();
+
+        // __historical__ should still exist (not dropped by auto-partition)
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet()).contains(HISTORICAL_PARTITION_VALUE);
+
+        // Also verify normal expired partitions were dropped
+        assertThat(partitions.keySet()).doesNotContain("2024091001", "2024091002");
+    }
+
+    @Test
+    void testHistoricalPartitionNotDroppedByAutoPartitionMultiKey() throws Exception {
+        ZonedDateTime startTime =
+                LocalDateTime.parse("2024-09-10T01:00:00").atZone(ZoneId.systemDefault());
+        long startMs = startTime.toInstant().toEpochMilli();
+        ManualClock clock = new ManualClock(startMs);
+        ManuallyTriggeredScheduledExecutorService periodicExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+
+        AutoPartitionManager autoPartitionManager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        metadataManager,
+                        new Configuration(),
+                        clock,
+                        periodicExecutor);
+        autoPartitionManager.start();
+
+        // Create a multi-key auto-partition table with retention=2
+        TableInfo table = createPartitionedTable(2, 0, AutoPartitionTimeUnit.HOUR, true);
+        TablePath tablePath = table.getTablePath();
+        autoPartitionManager.addAutoPartitionTable(table, true);
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+
+        long tableId = table.getTableId();
+        int replicaFactor = table.getTableConfig().getReplicationFactor();
+        Map<Integer, BucketAssignment> bucketAssignments =
+                generateAssignment(
+                                table.getNumBuckets(),
+                                replicaFactor,
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                })
+                        .getBucketAssignments();
+        PartitionAssignment partitionAssignment =
+                new PartitionAssignment(tableId, bucketAssignments);
+
+        // Manually create regular partitions and a historical partition
+        // For multi-key table with partitionKeys=[dt, a], auto-partition key is "dt"
+        // partition name format: dt_value$a_value
+        String[] regularPartitions =
+                new String[] {
+                    "2024091001$A", "2024091001$B", "2024091002$A", "2024091003$A", "2024091004$A"
+                };
+        for (String partitionName : regularPartitions) {
+            metadataManager.createPartition(
+                    tablePath,
+                    tableId,
+                    partitionAssignment,
+                    fromPartitionName(table.getPartitionKeys(), partitionName),
+                    false);
+            autoPartitionManager.addPartition(tableId, partitionName);
+        }
+
+        // Create historical partitions (e.g., us-east$__historical__ in a different key ordering)
+        // For this table: partitionKeys=[dt, a], auto key=dt => historical = __historical__$A
+        String historicalPartition = HISTORICAL_PARTITION_VALUE + "$A";
+        metadataManager.createPartition(
+                tablePath,
+                tableId,
+                partitionAssignment,
+                fromPartitionName(table.getPartitionKeys(), historicalPartition),
+                false);
+        autoPartitionManager.addPartition(tableId, historicalPartition);
+
+        // Advance time significantly to trigger TTL
+        clock.advanceTime(Duration.ofHours(5));
+        periodicExecutor.triggerPeriodicScheduledTasks();
+
+        // __historical__$A should still exist (not dropped by auto-partition)
+        Map<String, PartitionRegistration> partitions =
+                zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet()).contains(historicalPartition);
+
+        // Normal expired partitions should be dropped
+        assertThat(partitions.keySet()).doesNotContain("2024091001$A", "2024091001$B");
     }
 
     private static class TestParams {

@@ -31,6 +31,7 @@ import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidDatabaseException;
+import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
@@ -171,6 +172,7 @@ import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.producer.ProducerOffsets;
+import org.apache.fluss.utils.AutoPartitionStrategy;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 import org.apache.fluss.utils.json.TableBucketOffsets;
@@ -217,6 +219,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toDatabaseChan
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucketOffsets;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
+import static org.apache.fluss.utils.PartitionUtils.isHistoricalPartitionSpec;
 import static org.apache.fluss.utils.PartitionUtils.validateAutoPartitionTime;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -688,13 +691,31 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         // first, validate the partition spec, and get resolved partition spec.
         PartitionSpec partitionSpec = getPartitionSpec(request.getPartitionSpec());
-        validatePartitionSpec(tablePath, table.partitionKeys, partitionSpec, true);
 
-        // second, check whether the partition is out-of-date.
-        validateAutoPartitionTime(
-                partitionSpec,
-                table.partitionKeys,
-                table.getTableConfig().getAutoPartitionStrategy());
+        // Check if this is a historical partition creation
+        AutoPartitionStrategy autoPartitionStrategy =
+                table.getTableConfig().getAutoPartitionStrategy();
+        boolean isHistorical =
+                isHistoricalPartitionSpec(
+                        partitionSpec, table.partitionKeys, autoPartitionStrategy);
+
+        if (isHistorical) {
+            // Historical partition requires data-lake-enabled
+            // (auto-partition-enabled is already guaranteed by isHistoricalPartitionSpec)
+            if (!table.getTableConfig().isDataLakeEnabled()) {
+                throw new InvalidPartitionException(
+                        "Historical partition can only be created on tables "
+                                + "with data-lake enabled.");
+            }
+            // Validate structure only (skip __ prefix check via isCreate=false)
+            validatePartitionSpec(tablePath, table.partitionKeys, partitionSpec, false);
+            // Skip validateAutoPartitionTime — __historical__ is not a time value
+        } else {
+            validatePartitionSpec(tablePath, table.partitionKeys, partitionSpec, true);
+
+            // second, check whether the partition is out-of-date.
+            validateAutoPartitionTime(partitionSpec, table.partitionKeys, autoPartitionStrategy);
+        }
 
         ResolvedPartitionSpec partitionToCreate =
                 ResolvedPartitionSpec.fromPartitionSpec(table.partitionKeys, partitionSpec);
