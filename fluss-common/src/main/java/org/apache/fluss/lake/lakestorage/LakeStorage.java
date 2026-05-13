@@ -50,4 +50,17 @@ public interface LakeStorage {
      * @return a configured lake source instance for the specified table
      */
     LakeSource<?> createLakeSource(TablePath tablePath);
+
+    /**
+     * Creates a {@link LakeTableLookuper} for point lookup against the specified table in lake
+     * storage.
+     *
+     * @param tablePath the logical path identifying the table in the lakehouse storage
+     * @return a lake table lookuper for the specified table
+     * @throws UnsupportedOperationException if point lookup is not supported
+     */
+    default LakeTableLookuper createLakeTableLookuper(TablePath tablePath) {
+        throw new UnsupportedOperationException(
+                "Point lookup is not supported for this lake storage.");
+    }
 }

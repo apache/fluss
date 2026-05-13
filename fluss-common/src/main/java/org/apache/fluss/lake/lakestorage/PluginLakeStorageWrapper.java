@@ -135,5 +135,45 @@ public class PluginLakeStorageWrapper implements LakeStoragePlugin {
         public LakeSource<?> createLakeSource(TablePath tablePath) {
             return inner.createLakeSource(tablePath);
         }
+
+        @Override
+        public LakeTableLookuper createLakeTableLookuper(TablePath tablePath) {
+            try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
+                return new ClassLoaderFixingLakeTableLookuper(
+                        inner.createLakeTableLookuper(tablePath), loader);
+            }
+        }
+    }
+
+    static class ClassLoaderFixingLakeTableLookuper
+            implements LakeTableLookuper, WrappingProxy<LakeTableLookuper> {
+
+        private final LakeTableLookuper inner;
+        private final ClassLoader loader;
+
+        private ClassLoaderFixingLakeTableLookuper(
+                final LakeTableLookuper inner, final ClassLoader loader) {
+            this.inner = inner;
+            this.loader = loader;
+        }
+
+        @Override
+        public byte[] lookup(byte[] key, LookupContext context) throws Exception {
+            try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
+                return inner.lookup(key, context);
+            }
+        }
+
+        @Override
+        public void close() throws Exception {
+            try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
+                inner.close();
+            }
+        }
+
+        @Override
+        public LakeTableLookuper getWrappedDelegate() {
+            return inner;
+        }
     }
 }
