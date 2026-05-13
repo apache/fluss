@@ -466,6 +466,51 @@ When the queue is full, the server rejects the request with a `HISTORICAL_PARTIT
 
 Queue size rationale: the upper bound of useful queue capacity is constrained by request timeout — requests that wait too long in the queue will time out before execution, wasting resources. The default queue capacity is configurable; the final value needs to be determined by benchmarking actual lake I/O latency. The formula for tuning: `queue_size = thread_count × (max_acceptable_wait / avg_lake_io_latency)`.
 
+#### C.4 Client-side: Resource Isolation between Real-time and Historical Paths
+
+Server-side isolation (C.2, C.3) ensures that historical lake I/O does not block RPC threads. However, the client-side also has shared resources that can propagate historical path slowness to real-time paths if not properly isolated.
+
+##### C.4.1 Write path: checkpoint flush 不等待历史 batch
+
+**Problem**: Flink checkpoint 时，Sink 调用 `flush()` 等待所有 in-flight batch 完成。历史 batch 的 ACK 慢（服务端 lake old-value lookup），会拖慢 checkpoint 甚至导致超时，影响整个作业。
+
+**Why append is not the problem**: `RecordAccumulator.append()` 本身只是微秒级的 memcpy 操作，不等待 ACK。历史 batch 的内存占用 = `发送速率 × ACK 延迟`，在典型场景下远小于 buffer pool 总量（< 5%），不会导致内存池耗尽。而且 Flink 算子是单线程处理 record 的，无法在 append 层面选择性阻塞历史记录而不影响实时记录。
+
+**Solution**: checkpoint flush 只等待实时 batch 完成，不等待历史 batch：
+
+```text
+Sink.snapshotState() / flush():
+  1. flush 所有实时 batch → 等待 ACK 完成（毫秒级，与当前行为一致）
+  2. 历史 batch → 不等待，继续在后台异步处理
+```
+
+**Correctness**: 历史 batch 不参与 checkpoint 不影响正确性：
+- 失败恢复时，source 从 checkpoint offset 重放，相同的历史记录会被重新发送到 `__historical__`。
+- PK 表 upsert 天然幂等，重放结果与原始写入一致。
+- Log 表可能产生少量重复，但 `__historical__` 本身是 best-effort late-data append path（见 A.2），在设计语义范围内。
+
+**Effect**: checkpoint 耗时完全由实时 batch 决定，不受历史写入的 lake I/O 延迟影响。
+
+##### C.4.2 Lookup path: separate inflight permits
+
+**Problem**: `LookupSender` uses a single `Semaphore(maxInflightRequests)` (default 128) for all lookup requests. Historical lookups receive slow responses (lake fallback). If historical lookups occupy all permits, the sender thread blocks at `acquire()`, and no real-time lookups can be sent — real-time lookup latency degrades from sub-millisecond to seconds.
+
+**Solution**: Split the single `maxInFlightRequestsSemaphore` into two independent semaphores:
+
+```text
+realtimeLookupSemaphore   = new Semaphore(realtimeLookupPermits)    // e.g., 96
+historicalLookupSemaphore = new Semaphore(historicalLookupPermits)  // e.g., 32
+```
+
+`LookupSender` determines the lookup type (real-time vs. historical) when sending each batch and acquires the corresponding semaphore:
+- Real-time lookup → `realtimeLookupSemaphore.acquire()` — only competes with other real-time lookups.
+- Historical lookup → `historicalLookupSemaphore.acquire()` — only competes with other historical lookups.
+
+Effect:
+- Even if all 32 historical permits are occupied by slow lake fallback requests, real-time lookups still have 96 permits available.
+- Real-time lookup latency is completely unaffected by historical lookup volume or response latency.
+- When historical permits are exhausted, the sender thread skips historical batches and continues processing real-time batches — historical lookups are retried in subsequent iterations.
+
 ## Compatibility, Deprecation, and Migration Plan
 
 ### Previous behavior (before this FIP)

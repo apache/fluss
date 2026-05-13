@@ -151,7 +151,7 @@ partition 被判定为"已过期"，当且仅当：
 
 **目标**: 建立历史操作与实时操作的性能隔离机制，确保历史路径的 lake I/O 不阻塞实时路径。
 
-**对应设计文档章节**: C.1, C.2, C.3
+**对应设计文档章节**: C.2, C.3
 
 **前置依赖**: PR 1（可与 PR 2, PR 3 并行开发）
 
@@ -247,7 +247,7 @@ cleanup 完成后 → 后续 lookup 看到 null handle → fall through 到 lake
 
 **目标**: Log 表对过期分区的写入能正确 redirect 到 `__historical__` 并被下游消费。
 
-**对应设计文档章节**: A.2, C.1 (constraint 1)
+**对应设计文档章节**: A.2, C.1 (constraint 1), C.4.1
 
 **前置依赖**: PR 2
 
@@ -261,6 +261,7 @@ cleanup 完成后 → 后续 lookup 看到 null handle → fall through 到 lake
 | fluss-client | `fluss-client/src/main/java/org/apache/fluss/client/write/RecordAccumulator.java` | 实时和 `__historical__` 分离 batch |
 | fluss-client | `fluss-client/src/main/java/org/apache/fluss/client/write/Sender.java` | 确保历史 batch 作为独立 request 发送 |
 | fluss-client | bucket assigner 相关类 | `__historical__` 分区的 bucket 计算复用 sticky / bucket-key 策略 |
+| fluss-client | Flink Sink flush 相关逻辑 | checkpoint flush 只等待实时 batch，不等待历史 batch |
 
 ### RecordAccumulator 改动边界
 
@@ -271,6 +272,24 @@ cleanup 完成后 → 后续 lookup 看到 null handle → fall through 到 lake
 - 只需确保 `__historical__` 作为独立的 `PhysicalTablePath` 与实时分区的 batch 分开即可
 
 > PR 7a 会在此基础上增加 PK 历史写入所需的 per-original-partition batch 拆分。
+
+### Checkpoint flush 隔离（对应设计文档 C.4.1）
+
+Flink checkpoint 时 Sink 调用 `flush()` 等待所有 in-flight batch 完成。历史 batch ACK 慢（lake I/O），会拖慢 checkpoint。
+
+解决方案：checkpoint flush 只等待实时 batch，不等待历史 batch。
+
+```
+Sink.snapshotState() / flush():
+  1. flush 所有实时 batch → 等待 ACK 完成（毫秒级）
+  2. 历史 batch → 不等待，继续在后台异步处理
+```
+
+正确性保证：
+- 失败恢复时 source 从 checkpoint offset 重放，历史记录被重新发送
+- PK 表 upsert 幂等，Log 表在 best-effort 语义范围内允许少量重复
+
+> **注意**：`append()` 本身是微秒级 memcpy，不等 ACK。历史 batch 的内存占用 = 发送速率 × ACK 延迟，典型场景下 < buffer 总量的 5%，不会导致内存池耗尽。
 
 ### 关键行为
 
@@ -284,11 +303,13 @@ cleanup 完成后 → 后续 lookup 看到 null handle → fall through 到 lake
 - 下游 consumer 从 `__historical__` 消费数据 → 能从 row 中还原原始分区名
 - 同时写入实时分区和过期分区 → batch 分离 → 互不影响
 - 非过期分区不存在 → 仍抛 `PartitionNotExistException`
+- **隔离性**: checkpoint flush 只等待实时 batch，历史 batch 不阻塞 checkpoint
 
 ### 验收标准
 
 - Log 表过期分区写入完全兼容现有 producer/consumer 协议
 - 实时写入路径不受任何影响
+- checkpoint 耗时不受历史 batch ACK 延迟影响
 
 ---
 
@@ -379,9 +400,9 @@ PK 历史写入需要额外的 per-original-partition 维度：
 
 ## PR 8: 历史分区点查路径
 
-**目标**: 对过期分区的 point lookup 能正确路由到 `__historical__` 并返回最新值（含 local-first 语义）。
+**目标**: 对过期分区的 point lookup 能正确路由到 `__historical__` 并返回最新值（含 local-first 语义），且不影响实时分区的 lookup 延迟。
 
-**对应设计文档章节**: B.1, B.2
+**对应设计文档章节**: B.1, B.2, C.4.2
 
 **前置依赖**: PR 7b（PR 3/4/5 通过 PR 7b 传递；需要先有 historical write 才能完整测试 local-first lookup）
 
@@ -390,9 +411,31 @@ PK 历史写入需要额外的 per-original-partition 维度：
 | 模块 | 文件 | 改动内容 |
 |---|---|---|
 | fluss-client | `fluss-client/src/main/java/org/apache/fluss/client/lookup/PrimaryKeyLookuper.java` | 过期分区检测 → 路由到 `__historical__` bucket leader；携带 `partition_name`；调用 PR 2 提供的过期谓词 + `__historical__` 创建逻辑 |
-| fluss-client | `fluss-client/src/main/java/org/apache/fluss/client/lookup/LookupSender.java` | batch 按 `(__historical__ bucket, original partition name)` 拆分（`LookupSender` 负责从 `LookupQueue` 取出 lookup 操作并按 node 分组发送） |
+| fluss-client | `fluss-client/src/main/java/org/apache/fluss/client/lookup/LookupSender.java` | batch 按 `(__historical__ bucket, original partition name)` 拆分；拆分 inflight 信号量（实时/历史独立） |
 | fluss-server | `fluss-server/src/main/java/org/apache/fluss/server/replica/ReplicaManager.java` | `__historical__` lookup 分发到 ioExecutor（并发，无需 ordering） |
 | fluss-server | `fluss-server/src/main/java/org/apache/fluss/server/kv/KvTablet.java` 或新增 | local-first lookup 逻辑 |
+| fluss-common | 配置类 | 新增 `historicalLookupPermits` 配置项 |
+
+### LookupSender 客户端隔离：拆分 inflight 信号量
+
+当前 `LookupSender` 使用一个共享 `Semaphore(128)` 控制所有 lookup 的 inflight 并发。历史 lookup response 慢（lake fallback），可能占满所有 permit，导致实时 lookup 在 `acquire()` 处阻塞。
+
+解决方案（对应设计文档 C.4.2）：
+
+```
+当前:
+  maxInFlightRequestsSemaphore = new Semaphore(128)  // 实时 + 历史共用
+
+改为:
+  realtimeLookupSemaphore    = new Semaphore(realtimeLookupPermits)    // 如 96
+  historicalLookupSemaphore  = new Semaphore(historicalLookupPermits)  // 如 32
+
+发送前判断 lookup 类型:
+  实时 lookup → realtimeLookupSemaphore.acquire()
+  历史 lookup → historicalLookupSemaphore.acquire()
+```
+
+效果：历史 lookup 占满 32 个 permit 时，只阻塞后续历史 lookup，实时 lookup 的 96 个 permit 不受影响。
 
 ### Server-side lookup chain（与写入的 old-value resolution 一致）
 
@@ -418,12 +461,14 @@ Historical lookup batch key = (__historical__ bucket, original partition name)
 - lookup 不存在的 key → 返回 null
 - lookup batch 包含不同 original partition 的 key → 正确拆分为多个 request
 - lookup 不受 per-bucket write ordering 约束，可并发
+- **隔离性**: 大量历史 lookup 占满历史 permit 时，实时 lookup 延迟不受影响
 
 ### 验收标准
 
 - local-first 语义保证：写入后立即可查到最新值，不依赖 tiering 延迟
 - lookup 通过 ioExecutor 异步执行，不阻塞 RPC 线程
 - 正常分区 lookup 完全不受影响
+- 历史 lookup 的慢 response 不占用实时 lookup 的 inflight permit
 
 ---
 
