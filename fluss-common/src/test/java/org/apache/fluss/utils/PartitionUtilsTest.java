@@ -49,6 +49,7 @@ import static org.apache.fluss.utils.PartitionUtils.buildHistoricalPartitionName
 import static org.apache.fluss.utils.PartitionUtils.convertValueOfType;
 import static org.apache.fluss.utils.PartitionUtils.generateAutoPartition;
 import static org.apache.fluss.utils.PartitionUtils.isExpiredPartition;
+import static org.apache.fluss.utils.PartitionUtils.isHistoricalPartitionName;
 import static org.apache.fluss.utils.PartitionUtils.isHistoricalPartitionSpec;
 import static org.apache.fluss.utils.PartitionUtils.parseValueOfType;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
@@ -756,5 +757,32 @@ class PartitionUtilsTest {
                 buildHistoricalPartitionName(
                         "us-east$20230101", Arrays.asList("region", "dt"), strategy);
         assertThat(result).isEqualTo("us-east$" + HISTORICAL_PARTITION_VALUE);
+    }
+
+    // ---- Tests for isHistoricalPartitionName ----
+
+    @Test
+    void testIsHistoricalPartitionName() {
+        // null → false
+        assertThat(isHistoricalPartitionName(null)).isFalse();
+
+        // exact match (single key)
+        assertThat(isHistoricalPartitionName(HISTORICAL_PARTITION_VALUE)).isTrue();
+
+        // multi-key: "__historical__" as one segment
+        assertThat(isHistoricalPartitionName("us-east$" + HISTORICAL_PARTITION_VALUE)).isTrue();
+        assertThat(isHistoricalPartitionName(HISTORICAL_PARTITION_VALUE + "$us-east")).isTrue();
+        assertThat(isHistoricalPartitionName("region1$" + HISTORICAL_PARTITION_VALUE + "$extra"))
+                .isTrue();
+
+        // normal partition name → false
+        assertThat(isHistoricalPartitionName("20240101")).isFalse();
+        assertThat(isHistoricalPartitionName("us-east$20240101")).isFalse();
+
+        // substring that is not a full segment → false
+        assertThat(isHistoricalPartitionName("prefix__historical__suffix")).isFalse();
+
+        // empty string → false
+        assertThat(isHistoricalPartitionName("")).isFalse();
     }
 }

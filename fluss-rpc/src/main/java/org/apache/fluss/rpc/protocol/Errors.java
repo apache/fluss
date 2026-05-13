@@ -30,6 +30,7 @@ import org.apache.fluss.exception.DeletionDisabledException;
 import org.apache.fluss.exception.DuplicateSequenceException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.FencedTieringEpochException;
+import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
@@ -265,7 +266,11 @@ public enum Errors {
     TOO_MANY_SCANNERS(
             69,
             "The per-bucket or per-server scanner session limit has been reached.",
-            TooManyScannersException::new);
+            TooManyScannersException::new),
+    HISTORICAL_PARTITION_THROTTLED(
+            70,
+            "The historical partition request queue is full. Please retry later.",
+            HistoricalPartitionThrottledException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

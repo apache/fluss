@@ -24,6 +24,7 @@ import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
+import org.apache.fluss.exception.HistoricalPartitionThrottledException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
@@ -112,6 +113,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
+import org.apache.fluss.utils.PartitionUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.Scheduler;
 
@@ -136,6 +138,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
@@ -213,6 +216,8 @@ public class ReplicaManager implements ServerReconfigurable {
     private final Clock clock;
 
     private final ScannerManager scannerManager;
+
+    private final HistoricalPartitionHandler historicalPartitionHandler;
 
     public ReplicaManager(
             Configuration conf,
@@ -332,6 +337,13 @@ public class ReplicaManager implements ServerReconfigurable {
         this.ioExecutor = ioExecutor;
         this.minInSyncReplicas = conf.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER);
         this.scannerManager = checkNotNull(scannerManager, "scannerManager");
+
+        int maxQueued = conf.getInt(ConfigOptions.NETTY_SERVER_MAX_QUEUED_REQUESTS);
+        double ratio = conf.get(ConfigOptions.SERVER_HISTORICAL_REQUEST_QUEUE_RATIO);
+        int historicalCapacity = Math.max(1, (int) (maxQueued * ratio));
+        this.historicalPartitionHandler =
+                new HistoricalPartitionHandler(ioExecutor, historicalCapacity);
+
         registerMetrics();
     }
 
@@ -663,17 +675,65 @@ public class ReplicaManager implements ServerReconfigurable {
             throw new InvalidRequiredAcksException("Invalid required acks: " + requiredAcks);
         }
 
-        long startTime = System.currentTimeMillis();
-        Map<TableBucket, PutKvResultForBucket> kvPutResult =
-                putToLocalKv(entriesPerBucket, targetColumns, mergeMode, requiredAcks, apiVersion);
-        LOG.debug(
-                "Put records to local kv storage and wait generate cdc log in {} ms",
-                System.currentTimeMillis() - startTime);
+        // The client guarantees a single request contains only realtime or only historical
+        // buckets, so we check any one bucket to determine the request type.
+        if (!isHistoricalRequest(entriesPerBucket.keySet())) {
+            // Realtime path: synchronous processing on the RPC thread
+            long startTime = System.currentTimeMillis();
+            Map<TableBucket, PutKvResultForBucket> kvPutResult =
+                    putToLocalKv(
+                            entriesPerBucket, targetColumns, mergeMode, requiredAcks, apiVersion);
+            LOG.debug(
+                    "Put records to local kv storage and wait generate cdc log in {} ms",
+                    System.currentTimeMillis() - startTime);
+            maybeAddDelayedWrite(
+                    timeoutMs,
+                    requiredAcks,
+                    entriesPerBucket.size(),
+                    kvPutResult,
+                    responseCallback);
+            return;
+        }
 
-        // maybe do delay write operation to write cdc log to be replicated to other follower
-        // replicas.
-        maybeAddDelayedWrite(
-                timeoutMs, requiredAcks, entriesPerBucket.size(), kvPutResult, responseCallback);
+        // Historical path: acquire one request permit. If the queue is full, reject the
+        // entire request so the client retries as a whole.
+        int totalBuckets = entriesPerBucket.size();
+        if (!historicalPartitionHandler.tryAcquire()) {
+            throw new HistoricalPartitionThrottledException(
+                    "Historical partition request queue is full. Please retry later.");
+        }
+
+        // Permit acquired. Submit per-bucket write tasks. The count is pre-initialized to
+        // the total number of buckets since all submissions are guaranteed to succeed (permits
+        // are already acquired and submitWrite only enqueues).
+        Map<TableBucket, PutKvResultForBucket> results =
+                Collections.synchronizedMap(new HashMap<>());
+        AtomicInteger pendingCount = new AtomicInteger(totalBuckets);
+
+        for (Map.Entry<TableBucket, KvRecordBatch> entry : entriesPerBucket.entrySet()) {
+            TableBucket tb = entry.getKey();
+            KvRecordBatch batch = entry.getValue();
+            historicalPartitionHandler.submitWrite(
+                    tb,
+                    () -> {
+                        results.putAll(
+                                putToLocalKv(
+                                        Collections.singletonMap(tb, batch),
+                                        targetColumns,
+                                        mergeMode,
+                                        requiredAcks,
+                                        apiVersion));
+                        if (pendingCount.decrementAndGet() == 0) {
+                            historicalPartitionHandler.release();
+                            maybeAddDelayedWrite(
+                                    timeoutMs,
+                                    requiredAcks,
+                                    totalBuckets,
+                                    results,
+                                    responseCallback);
+                        }
+                    });
+        }
     }
 
     /** Context for tracking missing keys that need to be inserted. */
@@ -762,34 +822,10 @@ public class ReplicaManager implements ServerReconfigurable {
             Map<TableBucket, List<byte[]>> entriesPerBucket,
             short apiVersion,
             Consumer<Map<TableBucket, LookupResultForBucket>> responseCallback) {
-        Map<TableBucket, LookupResultForBucket> lookupResultForBucketMap = new HashMap<>();
-        long startTime = System.currentTimeMillis();
-        TableMetricGroup tableMetrics = null;
-        for (Map.Entry<TableBucket, List<byte[]>> entry : entriesPerBucket.entrySet()) {
-            TableBucket tb = entry.getKey();
-            try {
-                Replica replica = getReplicaOrException(tb);
-                validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
-                tableMetrics = replica.tableMetrics();
-                tableMetrics.totalLookupRequests().inc();
-                lookupResultForBucketMap.put(
-                        tb, new LookupResultForBucket(tb, replica.lookups(entry.getValue())));
-            } catch (Exception e) {
-                if (isUnexpectedException(e)) {
-                    LOG.error("Error lookup from local kv on replica {}", tb, e);
-                    // NOTE: Failed lookup requests metric is not incremented for known exceptions
-                    // since it is supposed to indicate un-expected failure of a server in handling
-                    // a lookup request.
-                    if (tableMetrics != null) {
-                        tableMetrics.failedLookupRequests().inc();
-                    }
-                }
-                lookupResultForBucketMap.put(
-                        tb, new LookupResultForBucket(tb, ApiError.fromThrowable(e)));
-            }
-        }
-
+        // TODO: support async historical path for insertIfNotExists (lookup-with-insert)
         if (insertIfNotExists) {
+            Map<TableBucket, LookupResultForBucket> lookupResultForBucketMap =
+                    processLookupsSync(entriesPerBucket, apiVersion);
             // Lookup-with-insert-if-not-exists flow:
             // 1. Initial lookup may find some keys missing
             // 2. For missing keys, we call putKv to insert them
@@ -833,10 +869,79 @@ public class ReplicaManager implements ServerReconfigurable {
                 // All keys exist, directly return lookup results
                 responseCallback.accept(lookupResultForBucketMap);
             }
-        } else {
-            responseCallback.accept(lookupResultForBucketMap);
+            return;
+        }
+
+        // The client guarantees a single request contains only realtime or only historical
+        // buckets, so we check any one bucket to determine the request type.
+        if (!isHistoricalRequest(entriesPerBucket.keySet())) {
+            // Realtime path: synchronous processing on the RPC thread
+            responseCallback.accept(processLookupsSync(entriesPerBucket, apiVersion));
+            return;
+        }
+
+        // Historical path: acquire one request permit. If the queue is full, reject the
+        // entire request so the client retries as a whole.
+        if (!historicalPartitionHandler.tryAcquire()) {
+            throw new HistoricalPartitionThrottledException(
+                    "Historical partition request queue is full. Please retry later.");
+        }
+
+        // Permit acquired. Submit per-bucket lookup tasks. The count is pre-initialized to
+        // the total number of buckets since all submissions are guaranteed to succeed.
+        Map<TableBucket, LookupResultForBucket> results =
+                Collections.synchronizedMap(new HashMap<>());
+        AtomicInteger pendingCount = new AtomicInteger(entriesPerBucket.size());
+
+        for (Map.Entry<TableBucket, List<byte[]>> entry : entriesPerBucket.entrySet()) {
+            TableBucket tb = entry.getKey();
+            List<byte[]> keys = entry.getValue();
+            historicalPartitionHandler.submitLookup(
+                    () -> {
+                        results.putAll(
+                                processLookupsSync(Collections.singletonMap(tb, keys), apiVersion));
+                        if (pendingCount.decrementAndGet() == 0) {
+                            historicalPartitionHandler.release();
+                            responseCallback.accept(results);
+                        }
+                    });
+        }
+    }
+
+    /**
+     * Process lookups synchronously for the given entries. This is extracted as a helper so it can
+     * be reused by both the synchronous realtime path and the async historical path.
+     */
+    private Map<TableBucket, LookupResultForBucket> processLookupsSync(
+            Map<TableBucket, List<byte[]>> entriesPerBucket, short apiVersion) {
+        Map<TableBucket, LookupResultForBucket> lookupResultForBucketMap = new HashMap<>();
+        long startTime = System.currentTimeMillis();
+        TableMetricGroup tableMetrics = null;
+        for (Map.Entry<TableBucket, List<byte[]>> entry : entriesPerBucket.entrySet()) {
+            TableBucket tb = entry.getKey();
+            try {
+                Replica replica = getReplicaOrException(tb);
+                validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
+                tableMetrics = replica.tableMetrics();
+                tableMetrics.totalLookupRequests().inc();
+                lookupResultForBucketMap.put(
+                        tb, new LookupResultForBucket(tb, replica.lookups(entry.getValue())));
+            } catch (Exception e) {
+                if (isUnexpectedException(e)) {
+                    LOG.error("Error lookup from local kv on replica {}", tb, e);
+                    // NOTE: Failed lookup requests metric is not incremented for known exceptions
+                    // since it is supposed to indicate un-expected failure of a server in handling
+                    // a lookup request.
+                    if (tableMetrics != null) {
+                        tableMetrics.failedLookupRequests().inc();
+                    }
+                }
+                lookupResultForBucketMap.put(
+                        tb, new LookupResultForBucket(tb, ApiError.fromThrowable(e)));
+            }
         }
         LOG.debug("Lookup from local kv in {}ms", System.currentTimeMillis() - startTime);
+        return lookupResultForBucketMap;
     }
 
     /**
@@ -2028,6 +2133,29 @@ public class ReplicaManager implements ServerReconfigurable {
 
     public HostedReplica getReplica(TableBucket tableBucket) {
         return allReplicas.getOrDefault(tableBucket, new NoneReplica());
+    }
+
+    /**
+     * Returns {@code true} if the request contains historical partition buckets. The client
+     * guarantees that a single request does not mix historical and realtime buckets, so checking
+     * any one bucket is sufficient.
+     */
+    private boolean isHistoricalRequest(Iterable<TableBucket> buckets) {
+        for (TableBucket tb : buckets) {
+            HostedReplica hosted = getReplica(tb);
+            if (hosted instanceof OnlineReplica) {
+                String partitionName =
+                        ((OnlineReplica) hosted)
+                                .getReplica()
+                                .getPhysicalTablePath()
+                                .getPartitionName();
+                return PartitionUtils.isHistoricalPartitionName(partitionName);
+            }
+            // If the first bucket is not online, it will fail later in getReplicaOrException;
+            // treat as non-historical so it follows the normal error path.
+            return false;
+        }
+        return false;
     }
 
     private boolean isRequiredAcksInvalid(int requiredAcks) {

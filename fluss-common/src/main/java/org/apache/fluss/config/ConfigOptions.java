@@ -335,6 +335,18 @@ public class ConfigOptions {
                                     + "The default value is 10.")
                     .withDeprecatedKeys("coordinator.io-pool.size");
 
+    public static final ConfigOption<Double> SERVER_HISTORICAL_REQUEST_QUEUE_RATIO =
+            key("server.historical-request-queue-ratio")
+                    .doubleType()
+                    .defaultValue(0.1)
+                    .withDescription(
+                            "The ratio of historical request queue capacity to the total "
+                                    + "netty server max queued requests ("
+                                    + "netty.server.max-queued-requests). When the historical "
+                                    + "request queue is full, new historical partition requests "
+                                    + "are rejected with a retriable error. The default value "
+                                    + "of 0.1 means 10% of the total request queue capacity.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Coordinator Server
     // ------------------------------------------------------------------------

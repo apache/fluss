@@ -28,6 +28,8 @@ import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypeRoot;
 
+import javax.annotation.Nullable;
+
 import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
@@ -174,6 +176,33 @@ public class PartitionUtils {
                         : partitionKeys.get(0);
         String value = partitionSpec.getSpecMap().get(autoPartitionKey);
         return HISTORICAL_PARTITION_VALUE.equals(value);
+    }
+
+    /**
+     * Returns {@code true} if the given partition name contains the {@link
+     * #HISTORICAL_PARTITION_VALUE} as one of its segments. This method works with both single-key
+     * and multi-key partition names.
+     *
+     * <p>For single-key tables, the partition name is just the value (e.g., {@code
+     * "__historical__"}). For multi-key tables, the partition name contains segments separated by
+     * {@code $} (e.g., {@code "us-east$__historical__"}).
+     *
+     * @param partitionName the partition name to check, may be {@code null}
+     * @return {@code true} if the partition name contains the historical partition value
+     */
+    public static boolean isHistoricalPartitionName(@Nullable String partitionName) {
+        if (partitionName == null) {
+            return false;
+        }
+        if (partitionName.equals(HISTORICAL_PARTITION_VALUE)) {
+            return true;
+        }
+        for (String segment : partitionName.split("\\$")) {
+            if (HISTORICAL_PARTITION_VALUE.equals(segment)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
