@@ -926,20 +926,32 @@ public class FlinkSourceEnumerator
     /**
      * Returns the index of the target subtask that a specific split should be assigned to.
      *
-     * <p>The resulting distribution of splits of a single table has the following contract:
+     * <p>Routing rules (in order):
      *
      * <ul>
-     *   <li>1. Splits in same bucket are assigned to same subtask
-     *   <li>2. Uniformly distributed across subtasks
-     *   <li>3. For partitioned table, the buckets in same partition are round-robin distributed
-     *       (strictly clockwise w.r.t. ascending subtask indices) by using the partition id as the
-     *       offset from a starting index. The starting index is the index of the subtask which
-     *       bucket 0 of the partition will be assigned to, determined using the partition id to
-     *       make sure the partitions' buckets of a table are distributed uniformly
+     *   <li>Lake splits with bucket {@code -1}: subtask is {@code splitId().hashCode() %
+     *       parallelism} (bucket-unaware lake paths).
+     *   <li>Otherwise, let {@code P} be parallelism and {@code B} be the table bucket count from
+     *       {@link org.apache.fluss.metadata.TableInfo#getNumBuckets()}:
+     *       <ul>
+     *         <li>If the split has no partition id (non-partitioned table): {@code bucket % P}.
+     *         <li>If the split has a partition id and {@code B % P == 0}: {@code bucket % P} only;
+     *             partition id is not used (same channel formula as without partitioning).
+     *         <li>If the split has a partition id and {@code B % P != 0}: partition id participates
+     *             in the channel via {@link org.apache.fluss.flink.sink.ChannelComputer} (hash of
+     *             partition id picks a starting channel, then buckets of that partition round-robin
+     *             from there) so buckets from different partitions spread more evenly when {@code
+     *             B} does not divide {@code P}.
+     *       </ul>
      * </ul>
+     *
+     * <p>All splits for the same physical bucket still map to the same subtask.
      *
      * @param split the split to assign.
      * @return the id of the subtask that owns the split.
+     * @throws IllegalStateException if table metadata is not loaded yet (see {@link #start()});
+     *     bucket-based routing requires {@code tableInfo}. Lake splits with bucket {@code -1} do
+     *     not consult {@code tableInfo} and may be resolved before {@link #start()}.
      */
     @VisibleForTesting
     protected int getSplitOwner(SourceSplitBase split) {
@@ -954,11 +966,15 @@ public class FlinkSourceEnumerator
             return (split.splitId().hashCode() & 0x7FFFFFFF) % numChannels;
         }
 
-        Long partitionId = tableBucket.getPartitionId();
+        checkState(
+                tableInfo != null,
+                "Table metadata is not loaded yet; call start() on the enumerator before "
+                        + "getSplitOwner() for this split (bucket-based assignment needs numBuckets).");
+
         int bucketId = tableBucket.getBucket();
         if (shouldCombinePartitionInSharding(
-                partitionId != null, tableInfo.getNumBuckets(), numChannels)) {
-            return select(partitionId, bucketId, numChannels);
+                tableInfo.isPartitioned(), tableInfo.getNumBuckets(), numChannels)) {
+            return select(tableBucket.getPartitionId(), bucketId, numChannels);
         }
         return select(bucketId, numChannels);
     }
