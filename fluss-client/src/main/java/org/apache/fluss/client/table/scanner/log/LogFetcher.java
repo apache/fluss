@@ -25,11 +25,7 @@ import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.ApiException;
-import org.apache.fluss.exception.InvalidMetadataException;
-import org.apache.fluss.exception.LeaderNotAvailableException;
-import org.apache.fluss.exception.LogOffsetOutOfRangeException;
-import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.*;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.lake.source.LakeLogFetchInfo;
 import org.apache.fluss.lake.source.LakeSource;
@@ -520,34 +516,8 @@ public class LogFetcher implements Closeable {
             long firstFetchOffset,
             long highWatermark) {
         checkNotNull(lakeLogFetchInfo, "LakeLogFetchInfo is null");
-        if (lakeSource == null) {
-            LogOffsetOutOfRangeException exception =
-                    new LogOffsetOutOfRangeException(
-                            String.format(
-                                    "The fetch offset %s is only readable from lake for bucket %s, but no lake source is configured.",
-                                    firstFetchOffset, tableBucket));
-            logFetchBuffer.add(
-                    new DefaultCompletedFetch(
-                            tableBucket,
-                            new FetchLogResultForBucket(
-                                    tableBucket, ApiError.fromThrowable(exception)),
-                            readContext,
-                            logScannerStatus,
-                            isCheckCrcs,
-                            firstFetchOffset,
-                            null));
-            return;
-        }
-
         try {
             List<LakeSplit> lakeSplits = planLakeSplits(tableBucket, lakeLogFetchInfo);
-            if (lakeSplits.isEmpty()) {
-                throw new LogOffsetOutOfRangeException(
-                        String.format(
-                                "No lake split found for bucket %s in snapshot %s.",
-                                tableBucket, lakeLogFetchInfo.snapshotId()));
-            }
-
             logFetchBuffer.add(
                     new LakeCompletedFetch(
                             tableBucket,
@@ -558,15 +528,7 @@ public class LogFetcher implements Closeable {
                             readContext,
                             logScannerStatus));
         } catch (Exception e) {
-            logFetchBuffer.add(
-                    new DefaultCompletedFetch(
-                            tableBucket,
-                            new FetchLogResultForBucket(tableBucket, ApiError.fromThrowable(e)),
-                            readContext,
-                            logScannerStatus,
-                            isCheckCrcs,
-                            firstFetchOffset,
-                            null));
+            throw new FlussRuntimeException(e);
         }
     }
 
