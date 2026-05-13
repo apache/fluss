@@ -177,6 +177,94 @@ public class PartitionUtils {
     }
 
     /**
+     * Returns {@code true} if the given partition name represents an expired partition for a
+     * data-lake-enabled, auto-partitioned table. A partition is considered expired when all of the
+     * following conditions are met:
+     *
+     * <ol>
+     *   <li>Auto-partitioning is enabled and data lake is enabled for the table.
+     *   <li>{@code numToRetain} is positive (a non-positive value means partitions never expire).
+     *   <li>The partition time value matches the expected format for the configured time unit.
+     *   <li>The partition time is older than the earliest retained partition boundary.
+     * </ol>
+     *
+     * <p>Note: The caller is responsible for verifying that the partition does not already exist
+     * (condition 4 in the design document).
+     *
+     * @param partitionName the partition name to check
+     * @param partitionKeys the ordered partition keys of the table
+     * @param autoPartitionStrategy the auto-partition strategy configuration
+     * @param isDataLakeEnabled whether the data lake is enabled for this table
+     * @return {@code true} if the partition is expired, {@code false} otherwise
+     */
+    public static boolean isExpiredPartition(
+            String partitionName,
+            List<String> partitionKeys,
+            AutoPartitionStrategy autoPartitionStrategy,
+            boolean isDataLakeEnabled) {
+        // Condition 1: auto-partitioned + data-lake enabled
+        if (!autoPartitionStrategy.isAutoPartitionEnabled() || !isDataLakeEnabled) {
+            return false;
+        }
+        // numToRetain <= 0 means partitions never expire
+        if (autoPartitionStrategy.numToRetain() <= 0) {
+            return false;
+        }
+        // Parse partition name to extract the auto-partition key value
+        ResolvedPartitionSpec resolvedSpec =
+                ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName);
+        String autoPartitionKey =
+                autoPartitionStrategy.key() != null
+                        ? autoPartitionStrategy.key()
+                        : partitionKeys.get(0);
+        String partitionTime = resolvedSpec.toPartitionSpec().getSpecMap().get(autoPartitionKey);
+        AutoPartitionTimeUnit timeUnit = autoPartitionStrategy.timeUnit();
+        // Condition 2: time format must be valid
+        if (partitionTime == null || !isValidPartitionTime(partitionTime, timeUnit)) {
+            return false;
+        }
+        // Condition 3: older than the retention boundary
+        ZonedDateTime now =
+                ZonedDateTime.ofInstant(Instant.now(), autoPartitionStrategy.timeZone().toZoneId());
+        String lastRetainPartitionTime =
+                generateAutoPartitionTime(now, -autoPartitionStrategy.numToRetain(), timeUnit);
+        return lastRetainPartitionTime.compareTo(partitionTime) > 0;
+    }
+
+    /**
+     * Builds a historical partition name by replacing the auto-partition key value in the original
+     * partition name with {@link #HISTORICAL_PARTITION_VALUE}.
+     *
+     * <p>Examples:
+     *
+     * <ul>
+     *   <li>Single key {@code [dt]}: {@code "20230101"} → {@code "__historical__"}
+     *   <li>Multi key {@code [region, dt]} (dt is auto key): {@code "us-east$20230101"} → {@code
+     *       "us-east$__historical__"}
+     * </ul>
+     *
+     * @param partitionName the original partition name
+     * @param partitionKeys the ordered partition keys of the table
+     * @param autoPartitionStrategy the auto-partition strategy configuration
+     * @return the historical partition name
+     */
+    public static String buildHistoricalPartitionName(
+            String partitionName,
+            List<String> partitionKeys,
+            AutoPartitionStrategy autoPartitionStrategy) {
+        ResolvedPartitionSpec resolvedSpec =
+                ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName);
+        String autoPartitionKey =
+                autoPartitionStrategy.key() != null
+                        ? autoPartitionStrategy.key()
+                        : partitionKeys.get(0);
+        int autoKeyIndex = partitionKeys.indexOf(autoPartitionKey);
+        List<String> historicalValues = new ArrayList<>(resolvedSpec.getPartitionValues());
+        historicalValues.set(autoKeyIndex, HISTORICAL_PARTITION_VALUE);
+        return new ResolvedPartitionSpec(partitionKeys, historicalValues).getPartitionName();
+    }
+
+    /**
      * Generate {@link ResolvedPartitionSpec} for auto partition in server. When we auto creating a
      * partition, we need to first generate a {@link ResolvedPartitionSpec}.
      *
@@ -245,7 +333,7 @@ public class PartitionUtils {
     /**
      * Returns true if the given time string matches the format expected for the given time unit.
      */
-    private static boolean isValidPartitionTime(String time, AutoPartitionTimeUnit timeUnit) {
+    static boolean isValidPartitionTime(String time, AutoPartitionTimeUnit timeUnit) {
         try {
             DateTimeFormatter.ofPattern(getPartitionTimeFormat(timeUnit)).parse(time);
             return true;

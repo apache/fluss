@@ -45,8 +45,10 @@ import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.utils.PartitionUtils.HISTORICAL_PARTITION_VALUE;
+import static org.apache.fluss.utils.PartitionUtils.buildHistoricalPartitionName;
 import static org.apache.fluss.utils.PartitionUtils.convertValueOfType;
 import static org.apache.fluss.utils.PartitionUtils.generateAutoPartition;
+import static org.apache.fluss.utils.PartitionUtils.isExpiredPartition;
 import static org.apache.fluss.utils.PartitionUtils.isHistoricalPartitionSpec;
 import static org.apache.fluss.utils.PartitionUtils.parseValueOfType;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
@@ -643,5 +645,116 @@ class PartitionUtilsTest {
                                         true))
                 .isInstanceOf(InvalidPartitionException.class)
                 .hasMessageContaining("__historical__");
+    }
+
+    // ---- Tests for isExpiredPartition ----
+
+    @Test
+    void testIsExpiredPartition() {
+        // Build a strategy: auto-partition enabled, DAY unit, numToRetain=7
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true);
+        conf.set(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.DAY);
+        conf.set(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION, 7);
+        AutoPartitionStrategy strategy = AutoPartitionStrategy.from(conf);
+
+        // A partition far in the past should be expired
+        assertThat(isExpiredPartition("20200101", Collections.singletonList("dt"), strategy, true))
+                .isTrue();
+
+        // A partition far in the future should NOT be expired
+        assertThat(isExpiredPartition("20990101", Collections.singletonList("dt"), strategy, true))
+                .isFalse();
+
+        // Invalid time format should NOT be considered expired
+        assertThat(
+                        isExpiredPartition(
+                                "not-a-date", Collections.singletonList("dt"), strategy, true))
+                .isFalse();
+
+        // Data lake disabled → not expired
+        assertThat(isExpiredPartition("20200101", Collections.singletonList("dt"), strategy, false))
+                .isFalse();
+
+        // Auto-partition disabled → not expired
+        Configuration disabledConf = new Configuration();
+        disabledConf.set(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, false);
+        disabledConf.set(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.DAY);
+        AutoPartitionStrategy disabledStrategy = AutoPartitionStrategy.from(disabledConf);
+        assertThat(
+                        isExpiredPartition(
+                                "20200101",
+                                Collections.singletonList("dt"),
+                                disabledStrategy,
+                                true))
+                .isFalse();
+
+        // numToRetain = 0 → partitions never expire
+        Configuration zeroRetainConf = new Configuration();
+        zeroRetainConf.set(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true);
+        zeroRetainConf.set(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.DAY);
+        zeroRetainConf.set(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION, 0);
+        AutoPartitionStrategy zeroRetainStrategy = AutoPartitionStrategy.from(zeroRetainConf);
+        assertThat(
+                        isExpiredPartition(
+                                "20200101",
+                                Collections.singletonList("dt"),
+                                zeroRetainStrategy,
+                                true))
+                .isFalse();
+    }
+
+    @Test
+    void testIsExpiredPartitionWithMultipleKeys() {
+        // Multi-key table: [region, dt], auto key = dt
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true);
+        conf.setString(ConfigOptions.TABLE_AUTO_PARTITION_KEY.key(), "dt");
+        conf.set(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.DAY);
+        conf.set(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION, 7);
+        AutoPartitionStrategy strategy = AutoPartitionStrategy.from(conf);
+
+        // "us-east$20200101" should be expired (dt=20200101 is old)
+        assertThat(
+                        isExpiredPartition(
+                                "us-east$20200101", Arrays.asList("region", "dt"), strategy, true))
+                .isTrue();
+
+        // "us-east$20990101" should NOT be expired
+        assertThat(
+                        isExpiredPartition(
+                                "us-east$20990101", Arrays.asList("region", "dt"), strategy, true))
+                .isFalse();
+    }
+
+    // ---- Tests for buildHistoricalPartitionName ----
+
+    @Test
+    void testBuildHistoricalPartitionNameSingleKey() {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true);
+        conf.set(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.DAY);
+        AutoPartitionStrategy strategy = AutoPartitionStrategy.from(conf);
+
+        // Single key [dt]: "20230101" → "__historical__"
+        String result =
+                buildHistoricalPartitionName("20230101", Collections.singletonList("dt"), strategy);
+        assertThat(result).isEqualTo(HISTORICAL_PARTITION_VALUE);
+    }
+
+    @Test
+    void testBuildHistoricalPartitionNameMultiKey() {
+        // Multi-key [region, dt], auto key = dt
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true);
+        conf.setString(ConfigOptions.TABLE_AUTO_PARTITION_KEY.key(), "dt");
+        conf.set(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.DAY);
+        AutoPartitionStrategy strategy = AutoPartitionStrategy.from(conf);
+
+        // "us-east$20230101" → "us-east$__historical__"
+        String result =
+                buildHistoricalPartitionName(
+                        "us-east$20230101", Arrays.asList("region", "dt"), strategy);
+        assertThat(result).isEqualTo("us-east$" + HISTORICAL_PARTITION_VALUE);
     }
 }

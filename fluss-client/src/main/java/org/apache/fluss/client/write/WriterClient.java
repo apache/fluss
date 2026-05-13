@@ -179,7 +179,8 @@ public class WriterClient {
             dynamicPartitionCreator.checkAndCreatePartitionAsync(
                     physicalTablePath,
                     tableInfo.getPartitionKeys(),
-                    tableInfo.getTableConfig().getAutoPartitionStrategy());
+                    tableInfo.getTableConfig().getAutoPartitionStrategy(),
+                    tableInfo.getTableConfig().isDataLakeEnabled());
 
             // maybe create bucket assigner.
             Cluster cluster = metadataUpdater.getCluster();
