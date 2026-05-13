@@ -542,6 +542,8 @@ public class LogFetcher implements Closeable {
                 checkNotNull(lakeSource).createPlanner(() -> lakeLogFetchInfo.snapshotId()).plan();
         List<LakeSplit> lakeSplits = new ArrayList<>();
         for (LakeSplit lakeSplit : plannedSplits) {
+            // todo: partition + bucket filter and offset column filter could be supported in the
+            // planning stage
             if (isLakeSplitForBucket(lakeSplit, tableBucket, lakeLogFetchInfo.partitionName())) {
                 lakeSplits.add(lakeSplit);
             }
