@@ -973,7 +973,7 @@ public class FlinkSourceEnumerator
 
         int bucketId = tableBucket.getBucket();
         if (shouldCombinePartitionInSharding(
-                tableInfo.isPartitioned(), tableInfo.getNumBuckets(), numChannels)) {
+                tableBucket.getPartitionId() != null, tableInfo.getNumBuckets(), numChannels)) {
             return select(tableBucket.getPartitionId(), bucketId, numChannels);
         }
         return select(bucketId, numChannels);

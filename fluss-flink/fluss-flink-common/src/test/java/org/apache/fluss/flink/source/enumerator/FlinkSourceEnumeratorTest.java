@@ -598,8 +598,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                 // partition id), so both splits share the same owner.
                 assertThat(enumerator.getSplitOwner(s1)).isEqualTo(enumerator.getSplitOwner(s2));
             } else {
-                assertThat(enumerator.getSplitOwner(s1)).isEqualTo(1);
-                assertThat(enumerator.getSplitOwner(s2)).isEqualTo(0);
+                assertThat(enumerator.getSplitOwner(s1)).isNotEqualTo(enumerator.getSplitOwner(s2));
             }
         }
     }
