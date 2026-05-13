@@ -9,7 +9,7 @@ We'd like to thank the following members and committers to the Apache Fluss proj
 ### Members
 
 | Public Name          | GitHub Username                                    | Apache ID                                                                     | Role(s)             |
-|----------------------| -------------------------------------------------- | ----------------------------------------------------------------------------- | ------------------- |
+|----------------------|----------------------------------------------------|-------------------------------------------------------------------------------| ------------------- |
 | Yu Li                | [@carp84](https://github.com/carp84)               | [liyu](https://people.apache.org/committer-index.html#liyu)                   | Mentor, PPMC Member |
 | Becket Qin           | [@becketqin](https://github.com/becketqin)         | [jqin](https://people.apache.org/committer-index.html#jqin)                   | Mentor, PPMC Member |
 | Jean-Baptiste Onofré | [@jbonofre](https://github.com/jbonofre)           | [jbonofre](https://people.apache.org/committer-index.html#jbonofre)           | Mentor, PPMC Member |
@@ -28,7 +28,7 @@ We'd like to thank the following members and committers to the Apache Fluss proj
 | Cheng Wang           | [@xx789633](https://github.com/xx789633)           | [chengwang](https://people.apache.org/committer-index.html#chengwang)         | Committer           |
 | Leonard Xu           | [@leonardBang](https://github.com/leonardBang)     | [leonard](https://people.apache.org/committer-index.html#leonard)             | Committer           |
 | Anton Borisov        | [@fresh-borzoni](https://github.com/fresh-borzoni) | [aborisov](https://people.apache.org/committer-index.html#aborisov)           | Committer           |
-
+| Liebing Yu           | [@LiebingYu](https://github.com/LiebingYu)     | [liebing](https://people.apache.org/committer-index.html#liebing)            | Committer           |
 
 The Apache Fluss project recognizes the following roles, each representing a distinct type of contribution to the project’s development:
 
