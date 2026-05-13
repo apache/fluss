@@ -92,7 +92,8 @@ class LogScannerIcebergLakeFallbackITCase extends FlinkIcebergTieringTestBase {
 
         List<InternalRow> polledResult = new ArrayList<>();
         try (Table table = conn.getTable(tablePath);
-                LogScanner lakeScanner = table.newScan().createLogScanner(lakeSource)) {
+                LogScanner lakeScanner =
+                        table.newScan().lakeSource(lakeSource).createLogScanner()) {
             lakeScanner.subscribeFromBeginning(0);
             pollScanRecordsUntilCount(
                     lakeScanner, batchA.size(), polledResult, Duration.ofMinutes(2));

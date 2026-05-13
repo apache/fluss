@@ -22,7 +22,6 @@ import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.TypedLogScanner;
 import org.apache.fluss.lake.source.LakeSource;
-import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.predicate.Predicate;
 
@@ -74,22 +73,14 @@ public interface Scan {
      */
     Scan filter(@Nullable Predicate predicate);
 
+    Scan lakeSource(@Nullable LakeSource lakeSource);
+
     /**
      * Creates a {@link LogScanner} to continuously read log data for this scan.
      *
      * <p>Note: this API doesn't support pre-configured with {@link #limit(int)}.
      */
     LogScanner createLogScanner();
-
-    /**
-     * Creates a {@link LogScanner} with lake source support for fallback reads when requested by
-     * the tablet server.
-     *
-     * <p>Note: this API doesn't support pre-configured with {@link #limit(int)}.
-     */
-    default LogScanner createLogScanner(@Nullable LakeSource<LakeSplit> lakeSource) {
-        return createLogScanner();
-    }
 
     /**
      * Creates a {@link TypedLogScanner} to continuously read log data as POJOs of the given class.

@@ -549,7 +549,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
 
         List<GenericRow> actual = new ArrayList<>();
         try (Table table = conn.getTable(tablePath);
-                LogScanner logScanner = table.newScan().createLogScanner(lakeSource)) {
+                LogScanner logScanner = table.newScan().lakeSource(lakeSource).createLogScanner()) {
             logScanner.subscribeFromBeginning(0);
             while (actual.size() < TestData.DATA1.size()) {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(5));
