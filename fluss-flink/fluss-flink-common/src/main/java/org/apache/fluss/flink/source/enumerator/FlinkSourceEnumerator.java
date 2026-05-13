@@ -32,7 +32,6 @@ import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.flink.lake.LakeSplitGenerator;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
-import org.apache.fluss.flink.sink.ChannelComputer;
 import org.apache.fluss.flink.source.FlinkSource;
 import org.apache.fluss.flink.source.event.FinishedKvSnapshotConsumeEvent;
 import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
@@ -84,6 +83,8 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.flink.sink.ChannelComputer.select;
+import static org.apache.fluss.flink.sink.ChannelComputer.shouldCombinePartitionInSharding;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
@@ -955,11 +956,11 @@ public class FlinkSourceEnumerator
 
         Long partitionId = tableBucket.getPartitionId();
         int bucketId = tableBucket.getBucket();
-        if (ChannelComputer.shouldCombinePartitionInSharding(
+        if (shouldCombinePartitionInSharding(
                 partitionId != null, tableInfo.getNumBuckets(), numChannels)) {
-            return ChannelComputer.select(partitionId, bucketId, numChannels);
+            return select(partitionId, bucketId, numChannels);
         }
-        return ChannelComputer.select(bucketId, numChannels);
+        return select(bucketId, numChannels);
     }
 
     private void checkReaderRegistered(int readerId) {
