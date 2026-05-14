@@ -220,7 +220,7 @@ public class Sender implements Runnable {
                 // TODO: this try-catch is not needed when we don't update metadata for
                 //  unready partitions
                 Throwable t = ExceptionUtils.stripExecutionException(e);
-                if (t.getCause() instanceof PartitionNotExistException) {
+                if (ExceptionUtils.findThrowable(t, PartitionNotExistException.class).isPresent()) {
                     // ignore this exception, this is probably happen because the partition
                 } else {
                     throw e;

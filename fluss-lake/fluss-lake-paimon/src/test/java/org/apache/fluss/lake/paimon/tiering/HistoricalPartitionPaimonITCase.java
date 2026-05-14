@@ -19,6 +19,7 @@ package org.apache.fluss.lake.paimon.tiering;
 
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.FlussConnection;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
@@ -26,12 +27,14 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.paimon.testutils.FlinkPaimonTieringTestBase;
 import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.testutils.common.CommonTestUtils;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.core.execution.JobClient;
@@ -196,6 +199,13 @@ class HistoricalPartitionPaimonITCase extends FlinkPaimonTieringTestBase {
         admin.dropPartition(tablePath, new PartitionSpec(Collections.singletonMap("c", p2)), true)
                 .get();
 
+        // Wait for tablet server metadata cache to reflect partition drops.
+        // The coordinator sends UpdateMetadataRequest asynchronously after the ZK
+        // node is deleted; until tablet servers process the deletion markers, their
+        // cache may return stale partition data, causing the client to bypass expired
+        // partition detection and write to the old (dropped) partitionId.
+        waitUntilPartitionDropPropagated(tablePath, p1, p2);
+
         // Phase 3: Write to expired partitions with dynamic creation disabled
         Configuration historicalConf = new Configuration(clientConf);
         historicalConf.set(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED, false);
@@ -227,6 +237,45 @@ class HistoricalPartitionPaimonITCase extends FlinkPaimonTieringTestBase {
     }
 
     // ---- Helper methods ----
+
+    /**
+     * Waits until dropped partitions are no longer returned by the tablet server's metadata cache.
+     *
+     * <p>After {@code admin.dropPartition()}, the coordinator asynchronously sends {@code
+     * UpdateMetadataRequest} with deletion markers to tablet servers. Until a tablet server
+     * processes the marker, its {@code ServerMetadataCache} still contains the old partition entry.
+     * A client {@code MetadataRequest} hitting this stale cache will re-populate the client-side
+     * metadata, causing {@code DynamicPartitionCreator} to skip expired-partition detection.
+     */
+    private void waitUntilPartitionDropPropagated(
+            TablePath tablePath, String... droppedPartitions) {
+        CommonTestUtils.waitUntil(
+                () -> {
+                    try (Connection conn = ConnectionFactory.createConnection(clientConf)) {
+                        // Initialize table-level metadata so partition lookups can proceed.
+                        conn.getTable(tablePath).close();
+                        for (String partition : droppedPartitions) {
+                            PhysicalTablePath path = PhysicalTablePath.of(tablePath, partition);
+                            boolean found;
+                            try {
+                                found =
+                                        ((FlussConnection) conn)
+                                                .getMetadataUpdater()
+                                                .checkAndUpdatePartitionMetadata(path);
+                            } catch (Exception ignored) {
+                                // PartitionNotExistException means the partition is truly gone.
+                                found = false;
+                            }
+                            if (found) {
+                                return false;
+                            }
+                        }
+                        return true;
+                    }
+                },
+                Duration.ofSeconds(30),
+                "partition drops to propagate to tablet server cache");
+    }
 
     /**
      * Creates a lake-enabled, auto-partitioned primary key table with YEAR time unit and 5-year
