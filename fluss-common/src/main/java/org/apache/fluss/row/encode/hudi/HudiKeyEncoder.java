@@ -29,19 +29,17 @@ import java.util.List;
 /**
  * An implementation of {@link KeyEncoder} to follow Hudi's encoding strategy.
  *
- * <p>The encoded bytes are a 4-byte big-endian representation of {@code
- * List<String>.hashCode()} over the stringified key fields, which matches the way
- * Hudi's {@code BucketIdentifier} hashes a record key. Null fields are replaced by
- * {@link #NULL_RECORDKEY_PLACEHOLDER} so that an explicit null and the literal
- * string {@code "null"} no longer collide in the hash space.
+ * <p>The encoded bytes are a 4-byte big-endian representation of {@code List<String>.hashCode()}
+ * over the stringified key fields, which matches the way Hudi's {@code BucketIdentifier} hashes a
+ * record key. Null fields are replaced by {@link #NULL_RECORDKEY_PLACEHOLDER} so that an explicit
+ * null and the literal string {@code "null"} no longer collide in the hash space.
  */
 public class HudiKeyEncoder implements KeyEncoder {
 
     /**
-     * Placeholder used to represent a {@code null} key field when computing the
-     * record-key hash. It is intentionally aligned with Hudi's
-     * {@code KeyGenUtils.NULL_RECORDKEY_PLACEHOLDER} so that the resulting bucket id
-     * stays identical to what Hudi would compute on its side.
+     * Placeholder used to represent a {@code null} key field when computing the record-key hash. It
+     * is intentionally aligned with Hudi's {@code KeyGenUtils.NULL_RECORDKEY_PLACEHOLDER} so that
+     * the resulting bucket id stays identical to what Hudi would compute on its side.
      */
     public static final String NULL_RECORDKEY_PLACEHOLDER = "__null__";
 

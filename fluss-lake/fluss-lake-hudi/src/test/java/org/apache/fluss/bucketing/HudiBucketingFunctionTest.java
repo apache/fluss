@@ -266,8 +266,7 @@ class HudiBucketingFunctionTest {
         String key = "name";
 
         RowType rowType =
-                RowType.of(
-                        new DataType[] {DataTypes.STRING().copy(true)}, new String[] {key});
+                RowType.of(new DataType[] {DataTypes.STRING().copy(true)}, new String[] {key});
 
         // a row with an explicit null on the bucket key column
         GenericRow row = GenericRow.of((Object) null);
@@ -281,8 +280,7 @@ class HudiBucketingFunctionTest {
         assertThat(ourEncodedKey).isEqualTo(placeholderBytes);
         assertThat(ourEncodedKey).isNotEqualTo(javaNullLiteralBytes);
 
-        int hudiBucket =
-                BucketIdentifier.getBucketId(NULL_RECORDKEY_PLACEHOLDER, key, bucketNum);
+        int hudiBucket = BucketIdentifier.getBucketId(NULL_RECORDKEY_PLACEHOLDER, key, bucketNum);
         int ourBucket = new HudiBucketingFunction().bucketing(ourEncodedKey, bucketNum);
         assertThat(ourBucket).isEqualTo(hudiBucket);
     }
@@ -293,8 +291,7 @@ class HudiBucketingFunctionTest {
         // null value — a regression test for the previous String.valueOf(null) behavior.
         String key = "name";
         RowType rowType =
-                RowType.of(
-                        new DataType[] {DataTypes.STRING().copy(true)}, new String[] {key});
+                RowType.of(new DataType[] {DataTypes.STRING().copy(true)}, new String[] {key});
 
         HudiKeyEncoder encoder = new HudiKeyEncoder(rowType, Collections.singletonList(key));
 
@@ -361,8 +358,7 @@ class HudiBucketingFunctionTest {
         HudiKeyEncoder encoder = new HudiKeyEncoder(rowType, Arrays.asList(f1, f2));
 
         byte[] ourEncodedKey = encoder.encodeKey(row);
-        byte[] expected =
-                toBytes(new String[] {String.valueOf(idValue), regionValue});
+        byte[] expected = toBytes(new String[] {String.valueOf(idValue), regionValue});
         assertThat(ourEncodedKey).isEqualTo(expected);
 
         // Compare against Hudi's List<String>-based overload to avoid Hudi's own
@@ -382,9 +378,7 @@ class HudiBucketingFunctionTest {
 
         RowType rowType =
                 RowType.of(
-                        new DataType[] {
-                            DataTypes.INT().copy(true), DataTypes.STRING().copy(true)
-                        },
+                        new DataType[] {DataTypes.INT().copy(true), DataTypes.STRING().copy(true)},
                         new String[] {f1, f2});
         // f2 is null on purpose
         GenericRow row = GenericRow.of(42, null);
@@ -406,25 +400,14 @@ class HudiBucketingFunctionTest {
         int bucketNum = 10;
         // BOOLEAN
         assertSingleFieldRoundTrip(
-                DataTypes.BOOLEAN(),
-                true,
-                String.valueOf(true),
-                "flag",
-                bucketNum);
+                DataTypes.BOOLEAN(), true, String.valueOf(true), "flag", bucketNum);
         assertSingleFieldRoundTrip(
-                DataTypes.BOOLEAN(),
-                false,
-                String.valueOf(false),
-                "flag",
-                bucketNum);
+                DataTypes.BOOLEAN(), false, String.valueOf(false), "flag", bucketNum);
         // TINYINT / SMALLINT
-        assertSingleFieldRoundTrip(
-                DataTypes.TINYINT(), (byte) 7, "7", "b", bucketNum);
-        assertSingleFieldRoundTrip(
-                DataTypes.SMALLINT(), (short) 12345, "12345", "s", bucketNum);
+        assertSingleFieldRoundTrip(DataTypes.TINYINT(), (byte) 7, "7", "b", bucketNum);
+        assertSingleFieldRoundTrip(DataTypes.SMALLINT(), (short) 12345, "12345", "s", bucketNum);
         // FLOAT (use a value whose Float.toString is stable across JVMs)
-        assertSingleFieldRoundTrip(
-                DataTypes.FLOAT(), 3.5f, Float.toString(3.5f), "f", bucketNum);
+        assertSingleFieldRoundTrip(DataTypes.FLOAT(), 3.5f, Float.toString(3.5f), "f", bucketNum);
     }
 
     @Test
@@ -453,8 +436,7 @@ class HudiBucketingFunctionTest {
         assertThat(enc).isEqualTo(expected);
 
         int hudiBucket =
-                BucketIdentifier.getBucketId(
-                        Collections.singletonList(ts.toString()), bucketNum);
+                BucketIdentifier.getBucketId(Collections.singletonList(ts.toString()), bucketNum);
         int ourBucket = new HudiBucketingFunction().bucketing(enc, bucketNum);
         assertThat(ourBucket).isEqualTo(hudiBucket);
     }
@@ -473,21 +455,14 @@ class HudiBucketingFunctionTest {
         int expected = (hash & Integer.MAX_VALUE) % Integer.MAX_VALUE;
         assertThat(f.bucketing(key, Integer.MAX_VALUE)).isEqualTo(expected);
         // bucket id must always be in [0, numBuckets)
-        assertThat(f.bucketing(key, 7))
-                .isGreaterThanOrEqualTo(0)
-                .isLessThan(7);
+        assertThat(f.bucketing(key, 7)).isGreaterThanOrEqualTo(0).isLessThan(7);
     }
 
     private void assertSingleFieldRoundTrip(
-            DataType dataType,
-            Object value,
-            String stringified,
-            String key,
-            int bucketNum) {
+            DataType dataType, Object value, String stringified, String key, int bucketNum) {
         RowType rowType = RowType.of(new DataType[] {dataType}, new String[] {key});
         GenericRow row = GenericRow.of(value);
-        HudiKeyEncoder encoder =
-                new HudiKeyEncoder(rowType, Collections.singletonList(key));
+        HudiKeyEncoder encoder = new HudiKeyEncoder(rowType, Collections.singletonList(key));
         byte[] ourEncodedKey = encoder.encodeKey(row);
         byte[] expected = toBytes(new String[] {stringified});
         assertThat(ourEncodedKey).isEqualTo(expected);
@@ -498,9 +473,7 @@ class HudiBucketingFunctionTest {
     }
 
     private static byte[] intToBytes(int v) {
-        return new byte[] {
-            (byte) (v >>> 24), (byte) (v >>> 16), (byte) (v >>> 8), (byte) v
-        };
+        return new byte[] {(byte) (v >>> 24), (byte) (v >>> 16), (byte) (v >>> 8), (byte) v};
     }
 
     private byte[] toBytes(String[] value) {

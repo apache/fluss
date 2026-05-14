@@ -22,8 +22,8 @@ package org.apache.fluss.bucketing;
  *
  * <p>The bucket id is computed in the same way as Hudi's {@code
  * org.apache.hudi.index.bucket.BucketIdentifier#getBucketId(String, String, int)}: take a 32-bit
- * integer hash that is encoded as a fixed 4-byte big-endian array by {@code HudiKeyEncoder},
- * mask its sign bit and modulo by {@code numBuckets}.
+ * integer hash that is encoded as a fixed 4-byte big-endian array by {@code HudiKeyEncoder}, mask
+ * its sign bit and modulo by {@code numBuckets}.
  */
 public class HudiBucketingFunction implements BucketingFunction {
 
