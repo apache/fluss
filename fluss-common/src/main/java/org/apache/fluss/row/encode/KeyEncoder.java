@@ -20,6 +20,7 @@ package org.apache.fluss.row.encode;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.encode.hudi.HudiKeyEncoder;
 import org.apache.fluss.row.encode.iceberg.IcebergKeyEncoder;
 import org.apache.fluss.row.encode.paimon.PaimonKeyEncoder;
 import org.apache.fluss.types.RowType;
@@ -129,6 +130,8 @@ public interface KeyEncoder {
             return CompactedKeyEncoder.createKeyEncoder(rowType, keyFields);
         } else if (lakeFormat == DataLakeFormat.ICEBERG) {
             return new IcebergKeyEncoder(rowType, keyFields);
+        } else if (lakeFormat == DataLakeFormat.HUDI) {
+            return new HudiKeyEncoder(rowType, keyFields);
         } else {
             throw new UnsupportedOperationException("Unsupported datalake format: " + lakeFormat);
         }
