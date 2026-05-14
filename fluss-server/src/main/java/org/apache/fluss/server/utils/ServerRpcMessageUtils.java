@@ -1070,6 +1070,30 @@ public class ServerRpcMessageUtils {
         return fetchLogResponse;
     }
 
+    /**
+     * Extracts partition_name per bucket from a PutKvRequest. Returns null if no bucket has
+     * partition_name set.
+     */
+    @Nullable
+    public static Map<TableBucket, String> getPartitionNames(PutKvRequest putKvRequest) {
+        long tableId = putKvRequest.getTableId();
+        Map<TableBucket, String> partitionNames = null;
+        for (PbPutKvReqForBucket req : putKvRequest.getBucketsReqsList()) {
+            if (req.hasPartitionName()) {
+                if (partitionNames == null) {
+                    partitionNames = new HashMap<>();
+                }
+                TableBucket tb =
+                        new TableBucket(
+                                tableId,
+                                req.hasPartitionId() ? req.getPartitionId() : null,
+                                req.getBucketId());
+                partitionNames.put(tb, req.getPartitionName());
+            }
+        }
+        return partitionNames;
+    }
+
     public static Map<TableBucket, KvRecordBatch> getPutKvData(PutKvRequest putKvRequest) {
         long tableId = putKvRequest.getTableId();
         Map<TableBucket, KvRecordBatch> produceEntryData = new HashMap<>();

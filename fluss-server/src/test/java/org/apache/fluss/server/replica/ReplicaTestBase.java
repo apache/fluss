@@ -355,7 +355,8 @@ public class ReplicaTestBase {
                 scannerManager,
                 manualClock,
                 ioExecutor,
-                localDiskManager);
+                localDiskManager,
+                null);
     }
 
     @AfterEach
@@ -543,7 +544,8 @@ public class ReplicaTestBase {
                 DATA1_TABLE_INFO,
                 manualClock,
                 remoteLogManager,
-                scannerManager);
+                scannerManager,
+                null);
     }
 
     private void initRemoteLogEnv() throws Exception {

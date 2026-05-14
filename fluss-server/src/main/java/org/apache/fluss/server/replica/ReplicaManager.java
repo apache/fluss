@@ -35,6 +35,8 @@ import org.apache.fluss.exception.StorageException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.lake.lakestorage.LakeStorage;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
@@ -68,6 +70,7 @@ import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
+import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.entity.LakeBucketOffset;
 import org.apache.fluss.server.entity.NotifyKvSnapshotOffsetData;
@@ -113,6 +116,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
+import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.PartitionUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.Scheduler;
@@ -219,6 +223,12 @@ public class ReplicaManager implements ServerReconfigurable {
 
     private final HistoricalPartitionHandler historicalPartitionHandler;
 
+    @Nullable private final LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
+    /** Tracks the LakeStorage instance used to create cached loopers for invalidation. */
+    @Nullable private LakeStorage currentLakeStorage;
+
+    private final Map<TablePath, LakeTableLookuper> lakeTableLooperCache = new HashMap<>();
+
     public ReplicaManager(
             Configuration conf,
             Scheduler scheduler,
@@ -236,7 +246,8 @@ public class ReplicaManager implements ServerReconfigurable {
             ScannerManager scannerManager,
             Clock clock,
             ExecutorService ioExecutor,
-            LocalDiskManager localDiskManager)
+            LocalDiskManager localDiskManager,
+            @Nullable LakeCatalogDynamicLoader lakeCatalogDynamicLoader)
             throws IOException {
         this(
                 conf,
@@ -263,7 +274,8 @@ public class ReplicaManager implements ServerReconfigurable {
                 scannerManager,
                 clock,
                 ioExecutor,
-                localDiskManager);
+                localDiskManager,
+                lakeCatalogDynamicLoader);
     }
 
     @VisibleForTesting
@@ -285,7 +297,8 @@ public class ReplicaManager implements ServerReconfigurable {
             ScannerManager scannerManager,
             Clock clock,
             ExecutorService ioExecutor,
-            LocalDiskManager localDiskManager)
+            LocalDiskManager localDiskManager,
+            @Nullable LakeCatalogDynamicLoader lakeCatalogDynamicLoader)
             throws IOException {
         this.conf = conf;
         this.zkClient = zkClient;
@@ -343,6 +356,7 @@ public class ReplicaManager implements ServerReconfigurable {
         int historicalCapacity = Math.max(1, (int) (maxQueued * ratio));
         this.historicalPartitionHandler =
                 new HistoricalPartitionHandler(ioExecutor, historicalCapacity);
+        this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
 
         registerMetrics();
     }
@@ -667,6 +681,7 @@ public class ReplicaManager implements ServerReconfigurable {
             int timeoutMs,
             int requiredAcks,
             Map<TableBucket, KvRecordBatch> entriesPerBucket,
+            @Nullable Map<TableBucket, String> partitionNames,
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
             short apiVersion,
@@ -682,7 +697,12 @@ public class ReplicaManager implements ServerReconfigurable {
             long startTime = System.currentTimeMillis();
             Map<TableBucket, PutKvResultForBucket> kvPutResult =
                     putToLocalKv(
-                            entriesPerBucket, targetColumns, mergeMode, requiredAcks, apiVersion);
+                            entriesPerBucket,
+                            partitionNames,
+                            targetColumns,
+                            mergeMode,
+                            requiredAcks,
+                            apiVersion);
             LOG.debug(
                     "Put records to local kv storage and wait generate cdc log in {} ms",
                     System.currentTimeMillis() - startTime);
@@ -719,6 +739,7 @@ public class ReplicaManager implements ServerReconfigurable {
                         results.putAll(
                                 putToLocalKv(
                                         Collections.singletonMap(tb, batch),
+                                        partitionNames,
                                         targetColumns,
                                         mergeMode,
                                         requiredAcks,
@@ -856,6 +877,7 @@ public class ReplicaManager implements ServerReconfigurable {
                         timeoutMs,
                         requiredAcks,
                         produceEntryData,
+                        null,
                         schema.getPrimaryKeyIndexes(),
                         MergeMode.DEFAULT,
                         apiVersion,
@@ -1401,6 +1423,7 @@ public class ReplicaManager implements ServerReconfigurable {
 
     private Map<TableBucket, PutKvResultForBucket> putToLocalKv(
             Map<TableBucket, KvRecordBatch> entriesPerBucket,
+            @Nullable Map<TableBucket, String> partitionNames,
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
             int requiredAcks,
@@ -1415,9 +1438,14 @@ public class ReplicaManager implements ServerReconfigurable {
                 validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPutKvRequests().inc();
+                String partitionName = partitionNames != null ? partitionNames.get(tb) : null;
                 LogAppendInfo appendInfo =
                         replica.putRecordsToLeader(
-                                entry.getValue(), targetColumns, mergeMode, requiredAcks);
+                                entry.getValue(),
+                                targetColumns,
+                                mergeMode,
+                                requiredAcks,
+                                partitionName);
                 LOG.trace(
                         "Written to local kv for {}, and the cdc log beginning at offset {} and ending at offset {}",
                         tb,
@@ -2055,6 +2083,28 @@ public class ReplicaManager implements ServerReconfigurable {
         }
     }
 
+    @Nullable
+    private LakeTableLookuper getOrCreateLakeTableLookuper(TablePath tablePath) {
+        if (lakeCatalogDynamicLoader == null) {
+            return null;
+        }
+        LakeStorage lakeStorage =
+                lakeCatalogDynamicLoader.getLakeCatalogContainer().getLakeStorage();
+        if (lakeStorage == null) {
+            return null;
+        }
+        // If LakeStorage changed (dynamic reconfiguration), invalidate the cache
+        if (lakeStorage != currentLakeStorage) {
+            for (LakeTableLookuper lookuper : lakeTableLooperCache.values()) {
+                IOUtils.closeQuietly(lookuper, "lake table lookuper");
+            }
+            lakeTableLooperCache.clear();
+            currentLakeStorage = lakeStorage;
+        }
+        return lakeTableLooperCache.computeIfAbsent(
+                tablePath, path -> lakeStorage.createLakeTableLookuper(path));
+    }
+
     protected Optional<Replica> maybeCreateReplica(NotifyLeaderAndIsrData data) {
         Optional<Replica> replicaOpt = Optional.empty();
         try {
@@ -2077,6 +2127,14 @@ public class ReplicaManager implements ServerReconfigurable {
                 BucketMetricGroup bucketMetricGroup =
                         serverMetricGroup.addTableBucketMetricGroup(
                                 physicalTablePath, tb, isKvTable);
+                // For historical partition KV tablets, provide a LakeTableLookuper
+                // so old-value lookups can fall back to lake storage
+                LakeTableLookuper lookuper =
+                        isKvTable
+                                        && PartitionUtils.isHistoricalPartitionName(
+                                                physicalTablePath.getPartitionName())
+                                ? getOrCreateLakeTableLookuper(tablePath)
+                                : null;
                 Replica replica =
                         new Replica(
                                 dataDir,
@@ -2099,7 +2157,8 @@ public class ReplicaManager implements ServerReconfigurable {
                                 tableInfo,
                                 clock,
                                 remoteLogManager,
-                                scannerManager);
+                                scannerManager,
+                                lookuper);
                 if (!existingLogTabletOpt.isPresent()) {
                     localDiskManager.recordReplicaLoad(dataDir, isKvTable);
                 }
@@ -2218,6 +2277,12 @@ public class ReplicaManager implements ServerReconfigurable {
         replicaFetcherManager.shutdown();
         delayedWriteManager.shutdown();
         delayedFetchLogManager.shutdown();
+
+        // Close all cached LakeTableLoopers
+        for (LakeTableLookuper lookuper : lakeTableLooperCache.values()) {
+            IOUtils.closeQuietly(lookuper, "lake table lookuper");
+        }
+        lakeTableLooperCache.clear();
 
         // Checkpoint highWatermark.
         checkpointHighWatermarks();

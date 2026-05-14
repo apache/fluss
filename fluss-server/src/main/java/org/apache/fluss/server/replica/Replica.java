@@ -33,6 +33,7 @@ import org.apache.fluss.exception.NotEnoughReplicasException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.TooManyScannersException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -222,6 +223,9 @@ public final class Replica {
      */
     private final ScannerManager scannerManager;
 
+    /** LakeTableLookuper for old-value fallback from lake (historical partitions only). */
+    @Nullable private final LakeTableLookuper lakeTableLookuper;
+
     // ------- metrics
     private Counter isrShrinks;
     private Counter isrExpands;
@@ -249,7 +253,8 @@ public final class Replica {
             TableInfo tableInfo,
             Clock clock,
             RemoteLogManager remoteLogManager,
-            ScannerManager scannerManager)
+            ScannerManager scannerManager,
+            @Nullable LakeTableLookuper lakeTableLookuper)
             throws Exception {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
@@ -283,6 +288,7 @@ public final class Replica {
         this.clock = clock;
         this.remoteLogManager = remoteLogManager;
         this.scannerManager = checkNotNull(scannerManager, "scannerManager");
+        this.lakeTableLookuper = lakeTableLookuper;
         registerMetrics();
     }
 
@@ -819,6 +825,11 @@ public final class Replica {
                 autoIncIDRange = null;
             }
 
+            // Set lake table lookuper for historical partition old-value fallback
+            if (lakeTableLookuper != null) {
+                kvTablet.setLakeTableLookuper(lakeTableLookuper, tableInfo.getPartitionKeys());
+            }
+
             logTablet.updateMinRetainOffset(restoreStartOffset);
             recoverKvTablet(restoreStartOffset, rowCount, autoIncIDRange);
         } catch (Exception e) {
@@ -1071,7 +1082,8 @@ public final class Replica {
             KvRecordBatch kvRecords,
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
-            int requiredAcks)
+            int requiredAcks,
+            @Nullable String partitionName)
             throws Exception {
         return inReadLock(
                 leaderIsrUpdateLock,
@@ -1089,7 +1101,8 @@ public final class Replica {
                             kv, "KvTablet for the replica to put kv records shouldn't be null.");
                     LogAppendInfo logAppendInfo;
                     try {
-                        logAppendInfo = kv.putAsLeader(kvRecords, targetColumns, mergeMode);
+                        logAppendInfo =
+                                kv.putAsLeader(kvRecords, targetColumns, mergeMode, partitionName);
                     } catch (IOException e) {
                         LOG.error("Error while putting records to {}", tableBucket, e);
                         fatalErrorHandler.onFatalError(e);

@@ -148,7 +148,8 @@ public class LakeCatalogDynamicLoader implements ServerReconfigurable, AutoClose
     }
 
     @Nullable
-    private static LakeCatalog createLakeCatalog(Configuration conf, PluginManager pluginManager) {
+    private static LakeStorage createLakeStorage(
+            Configuration conf, @Nullable PluginManager pluginManager) {
         if (!LakeCatalogContainer.isClusterDataLakeTableEnabled(conf)) {
             return null;
         }
@@ -160,16 +161,15 @@ public class LakeCatalogDynamicLoader implements ServerReconfigurable, AutoClose
         LakeStoragePlugin lakeStoragePlugin =
                 LakeStoragePluginSetUp.fromDataLakeFormat(dataLakeFormat.toString(), pluginManager);
         Map<String, String> lakeProperties = extractLakeProperties(conf);
-        LakeStorage lakeStorage =
-                lakeStoragePlugin.createLakeStorage(
-                        Configuration.fromMap(checkNotNull(lakeProperties)));
-        return lakeStorage.createLakeCatalog();
+        return lakeStoragePlugin.createLakeStorage(
+                Configuration.fromMap(checkNotNull(lakeProperties)));
     }
 
     /** A container for lake catalog. */
     public static class LakeCatalogContainer {
         private final boolean clusterDataLakeTableEnabled;
         private final @Nullable DataLakeFormat dataLakeFormat;
+        private final @Nullable LakeStorage lakeStorage;
         private final @Nullable LakeCatalog lakeCatalog;
         private final @Nullable Map<String, String> defaultTableLakeOptions;
 
@@ -179,8 +179,9 @@ public class LakeCatalogDynamicLoader implements ServerReconfigurable, AutoClose
                 boolean isCoordinator) {
             this.clusterDataLakeTableEnabled = isClusterDataLakeTableEnabled(configuration);
             this.dataLakeFormat = configuration.getOptional(DATALAKE_FORMAT).orElse(null);
+            this.lakeStorage = createLakeStorage(configuration, pluginManager);
             this.lakeCatalog =
-                    isCoordinator ? createLakeCatalog(configuration, pluginManager) : null;
+                    isCoordinator && lakeStorage != null ? lakeStorage.createLakeCatalog() : null;
             this.defaultTableLakeOptions =
                     LakeStorageUtils.generateDefaultTableLakeOptions(configuration);
             if (isCoordinator && clusterDataLakeTableEnabled == (lakeCatalog == null)) {
@@ -205,6 +206,11 @@ public class LakeCatalogDynamicLoader implements ServerReconfigurable, AutoClose
         @Nullable
         public DataLakeFormat getDataLakeFormat() {
             return dataLakeFormat;
+        }
+
+        @Nullable
+        public LakeStorage getLakeStorage() {
+            return lakeStorage;
         }
 
         @Nullable

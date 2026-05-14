@@ -25,12 +25,14 @@ import org.apache.fluss.exception.DeletionDisabledException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.SchemaNotExistException;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.memory.MemorySegmentPool;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -78,6 +80,8 @@ import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.BytesUtils;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
+import org.apache.fluss.utils.PartitionUtils;
+import org.apache.fluss.utils.types.Tuple2;
 
 import org.rocksdb.RateLimiter;
 import org.rocksdb.ReadOptions;
@@ -99,6 +103,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
 import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 
@@ -134,6 +139,14 @@ public final class KvTablet {
     private final AutoIncrementManager autoIncrementManager;
 
     private final SchemaGetter schemaGetter;
+
+    // whether this tablet belongs to a __historical__ partition
+    private final boolean isHistoricalPartition;
+
+    // Lake table lookuper for old-value fallback (historical partitions only)
+    @Nullable private LakeTableLookuper lakeTableLookuper;
+    // Partition keys for constructing ResolvedPartitionSpec during lake fallback
+    @Nullable private List<String> partitionKeys;
 
     // the changelog image mode for this tablet
     private final ChangelogImage changelogImage;
@@ -171,6 +184,8 @@ public final class KvTablet {
             @Nullable RocksDBStatistics rocksDBStatistics,
             AutoIncrementManager autoIncrementManager) {
         this.physicalPath = physicalPath;
+        this.isHistoricalPartition =
+                PartitionUtils.isHistoricalPartitionName(physicalPath.getPartitionName());
         this.tableBucket = tableBucket;
         this.logTablet = logTablet;
         this.kvTabletDir = kvTabletDir;
@@ -295,6 +310,19 @@ public final class KvTablet {
         return rocksDBStatistics;
     }
 
+    /**
+     * Sets the lake table lookuper for old-value fallback during historical partition writes. This
+     * must be called before the KvTablet is exposed to concurrent access.
+     *
+     * @param lakeTableLookuper the lookuper for fetching old values from lake storage
+     * @param partitionKeys the partition keys for constructing partition specs
+     */
+    public void setLakeTableLookuper(
+            @Nullable LakeTableLookuper lakeTableLookuper, @Nullable List<String> partitionKeys) {
+        this.lakeTableLookuper = lakeTableLookuper;
+        this.partitionKeys = partitionKeys;
+    }
+
     void setFlushedLogOffset(long flushedLogOffset) {
         this.flushedLogOffset = flushedLogOffset;
     }
@@ -344,7 +372,7 @@ public final class KvTablet {
      */
     public LogAppendInfo putAsLeader(KvRecordBatch kvRecords, @Nullable int[] targetColumns)
             throws Exception {
-        return putAsLeader(kvRecords, targetColumns, MergeMode.DEFAULT);
+        return putAsLeader(kvRecords, targetColumns, MergeMode.DEFAULT, null);
     }
 
     /**
@@ -369,7 +397,10 @@ public final class KvTablet {
      * @param mergeMode the merge mode (DEFAULT or OVERWRITE)
      */
     public LogAppendInfo putAsLeader(
-            KvRecordBatch kvRecords, @Nullable int[] targetColumns, MergeMode mergeMode)
+            KvRecordBatch kvRecords,
+            @Nullable int[] targetColumns,
+            MergeMode mergeMode,
+            @Nullable String partitionName)
             throws Exception {
         return inWriteLock(
                 kvLock,
@@ -417,7 +448,8 @@ public final class KvTablet {
                                 currentAutoIncrementUpdater,
                                 walBuilder,
                                 latestSchemaRow,
-                                logEndOffsetOfPrevBatch);
+                                logEndOffsetOfPrevBatch,
+                                partitionName);
 
                         // There will be a situation that these batches of kvRecordBatch have not
                         // generated any CDC logs, for example, when client attempts to delete
@@ -471,7 +503,8 @@ public final class KvTablet {
             AutoIncrementUpdater autoIncrementUpdater,
             WalBuilder walBuilder,
             PaddingRow latestSchemaRow,
-            long startLogOffset)
+            long startLogOffset,
+            @Nullable String partitionName)
             throws Exception {
         long logOffset = startLogOffset;
 
@@ -481,7 +514,11 @@ public final class KvTablet {
         ValueDecoder valueDecoder = new ValueDecoder(schemaGetter, kvFormat);
 
         for (KvRecord kvRecord : kvRecords.records(readContext)) {
-            byte[] keyBytes = BytesUtils.toArray(kvRecord.getKey());
+            byte[] rawKeyBytes = BytesUtils.toArray(kvRecord.getKey());
+            byte[] keyBytes =
+                    isHistoricalPartition
+                            ? CompositeKeyEncoder.encode(checkNotNull(partitionName), rawKeyBytes)
+                            : rawKeyBytes;
             KvPreWriteBuffer.Key key = KvPreWriteBuffer.Key.of(keyBytes);
             BinaryRow row = kvRecord.getRow();
             BinaryValue currentValue = row == null ? null : new BinaryValue(schemaIdOfNewData, row);
@@ -494,7 +531,8 @@ public final class KvTablet {
                                 valueDecoder,
                                 walBuilder,
                                 latestSchemaRow,
-                                logOffset);
+                                logOffset,
+                                partitionName);
             } else {
                 logOffset =
                         processUpsert(
@@ -505,7 +543,8 @@ public final class KvTablet {
                                 valueDecoder,
                                 walBuilder,
                                 latestSchemaRow,
-                                logOffset);
+                                logOffset,
+                                partitionName);
             }
         }
     }
@@ -516,7 +555,8 @@ public final class KvTablet {
             ValueDecoder valueDecoder,
             WalBuilder walBuilder,
             PaddingRow latestSchemaRow,
-            long logOffset)
+            long logOffset,
+            @Nullable String partitionName)
             throws Exception {
         DeleteBehavior deleteBehavior = currentMerger.deleteBehavior();
         if (deleteBehavior == DeleteBehavior.IGNORE) {
@@ -528,7 +568,7 @@ public final class KvTablet {
                             + "The table.delete.behavior is set to 'disable'.");
         }
 
-        byte[] oldValueBytes = getFromBufferOrKv(key);
+        byte[] oldValueBytes = getOldValue(key, partitionName);
         if (oldValueBytes == null) {
             LOG.debug(
                     "The specific key can't be found in kv tablet although the kv record is for deletion, "
@@ -555,7 +595,8 @@ public final class KvTablet {
             ValueDecoder valueDecoder,
             WalBuilder walBuilder,
             PaddingRow latestSchemaRow,
-            long logOffset)
+            long logOffset,
+            @Nullable String partitionName)
             throws Exception {
         // Optimization: IN WAL mode，when using DefaultRowMerger (full update, not partial update)
         // and there is no auto-increment column, we can skip fetching old value for better
@@ -567,7 +608,7 @@ public final class KvTablet {
             return applyUpdate(key, null, currentValue, walBuilder, latestSchemaRow, logOffset);
         }
 
-        byte[] oldValueBytes = getFromBufferOrKv(key);
+        byte[] oldValueBytes = getOldValue(key, partitionName);
         if (oldValueBytes == null) {
             BinaryValue valueToInsert = currentMerger.merge(null, currentValue);
             return applyInsert(
@@ -728,13 +769,47 @@ public final class KvTablet {
         return runnable -> inWriteLock(kvLock, runnable::run);
     }
 
-    // get from kv pre-write buffer first, if can't find, get from rocksdb
-    private byte[] getFromBufferOrKv(KvPreWriteBuffer.Key key) throws IOException {
+    /**
+     * Get old value for a key, checking prewrite buffer, RocksDB, and optionally lake storage.
+     *
+     * <p>Resolution chain: prewrite buffer → RocksDB → lake fallback (historical partition only).
+     */
+    private byte[] getOldValue(KvPreWriteBuffer.Key key, @Nullable String partitionName)
+            throws Exception {
+        // 1. prewrite buffer
         KvPreWriteBuffer.Value value = kvPreWriteBuffer.get(key);
-        if (value == null) {
-            return rocksDBKv.get(key.get());
+        if (value != null) {
+            return value.get();
         }
-        return value.get();
+        // 2. RocksDB
+        byte[] rocksResult = rocksDBKv.get(key.get());
+        if (rocksResult != null) {
+            return rocksResult;
+        }
+        // 3. lake fallback (only for historical partition)
+        if (!isHistoricalPartition || lakeTableLookuper == null || partitionName == null) {
+            return null;
+        }
+        return lookupFromLake(key.get(), partitionName);
+    }
+
+    @Nullable
+    private byte[] lookupFromLake(byte[] compositeKey, String partitionName) throws Exception {
+        // Decode composite key to get original key
+        Tuple2<String, byte[]> decoded = CompositeKeyEncoder.decode(compositeKey);
+        byte[] originalKey = decoded.f1;
+
+        // Build LookupContext with original partition spec
+        ResolvedPartitionSpec partitionSpec =
+                ResolvedPartitionSpec.fromPartitionName(
+                        checkNotNull(partitionKeys, "partitionKeys"), partitionName);
+        int bucketId = tableBucket.getBucket();
+        int schemaId = schemaGetter.getLatestSchemaInfo().getSchemaId();
+
+        LakeTableLookuper.LookupContext context =
+                new LakeTableLookuper.LookupContext(partitionSpec, bucketId, schemaId);
+
+        return lakeTableLookuper.lookup(originalKey, context);
     }
 
     public List<byte[]> multiGet(List<byte[]> keys) throws IOException {

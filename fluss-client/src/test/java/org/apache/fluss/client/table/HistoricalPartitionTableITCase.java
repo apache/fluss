@@ -175,6 +175,44 @@ class HistoricalPartitionTableITCase extends ClientToServerITCaseBase {
                 .hasMessageContaining("does not exist");
     }
 
+    @Test
+    void testPkTableWriteMultipleExpiredPartitions() throws Exception {
+        Schema schema = createDataLakePkTable();
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(PK_TABLE_PATH);
+
+        Table table = conn.getTable(PK_TABLE_PATH);
+        UpsertWriter upsertWriter = table.newUpsert().createWriter();
+
+        // Write same PK=0 to two different expired partitions.
+        // If composite key encoding is wrong, "2001" write would overwrite "2000"
+        // and generate -U/+U instead of two +I records.
+        upsertWriter.upsert(row(0, "from_2000", "2000"));
+        upsertWriter.upsert(row(0, "from_2001", "2001"));
+        upsertWriter.flush();
+
+        // Verify __historical__ partition was created
+        List<PartitionInfo> partitions = admin.listPartitionInfos(PK_TABLE_PATH).get();
+        Optional<PartitionInfo> historicalPartition =
+                partitions.stream()
+                        .filter(p -> HISTORICAL_PARTITION_VALUE.equals(p.getPartitionName()))
+                        .findFirst();
+        assertThat(historicalPartition).isPresent();
+
+        // Both should be inserts (+I), so 2 log records total
+        long historicalPartitionId = historicalPartition.get().getPartitionId();
+        int expectedRecords = 2;
+        List<GenericRow> scannedRows =
+                scanHistoricalPartition(table, historicalPartitionId, expectedRecords);
+        assertThat(scannedRows).hasSize(expectedRecords);
+
+        assertThatRow(scannedRows.get(0))
+                .withSchema(schema.getRowType())
+                .isEqualTo(row(0, "from_2000", "2000"));
+        assertThatRow(scannedRows.get(1))
+                .withSchema(schema.getRowType())
+                .isEqualTo(row(0, "from_2001", "2001"));
+    }
+
     // ---- Helper methods ----
 
     /**

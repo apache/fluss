@@ -503,6 +503,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 1,
                 Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
                 null,
+                null,
                 MergeMode.DEFAULT,
                 PUT_KV_VERSION,
                 future::complete);
@@ -516,6 +517,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         100,
                                         Collections.singletonMap(
                                                 tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
+                                        null,
                                         null,
                                         MergeMode.DEFAULT,
                                         PUT_KV_VERSION,
@@ -532,6 +534,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 20000,
                 1,
                 Collections.singletonMap(unknownTb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
+                null,
                 null,
                 MergeMode.DEFAULT,
                 PUT_KV_VERSION,
@@ -568,6 +571,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         tb,
                         genKvRecordBatchWithWriterId(
                                 data1, DATA1_KEY_TYPE, DATA1_ROW_TYPE, 100L, 0)),
+                null,
                 null,
                 MergeMode.DEFAULT,
                 PUT_KV_VERSION,
@@ -615,6 +619,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         genKvRecordBatchWithWriterId(
                                 data2, DATA1_KEY_TYPE, DATA1_ROW_TYPE, 100L, 3)),
                 null,
+                null,
                 MergeMode.DEFAULT,
                 PUT_KV_VERSION,
                 future::complete);
@@ -656,6 +661,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         tb,
                         genKvRecordBatchWithWriterId(
                                 data3, DATA1_KEY_TYPE, DATA1_ROW_TYPE, 100L, 1)),
+                null,
                 null,
                 MergeMode.DEFAULT,
                 PUT_KV_VERSION,
@@ -707,6 +713,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                     1,
                     Collections.singletonMap(tb, genKvRecordBatch(deleteList)),
                     null,
+                    null,
                     MergeMode.DEFAULT,
                     PUT_KV_VERSION,
                     future::complete);
@@ -719,6 +726,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 20000,
                 1,
                 Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
+                null,
                 null,
                 MergeMode.DEFAULT,
                 PUT_KV_VERSION,
@@ -781,6 +789,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 20000,
                 1,
                 Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
+                null,
                 null,
                 MergeMode.DEFAULT,
                 PUT_KV_VERSION,
@@ -1119,6 +1128,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 1,
                 Collections.singletonMap(tb, genKvRecordBatch(keyType, rowType, data1)),
                 null,
+                null,
                 MergeMode.DEFAULT,
                 PUT_KV_VERSION,
                 future::complete);
@@ -1199,6 +1209,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 20000,
                 1,
                 Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
+                null,
                 null,
                 MergeMode.DEFAULT,
                 PUT_KV_VERSION,
@@ -1442,6 +1453,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 -1,
                 Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
                 null,
+                null,
                 MergeMode.DEFAULT,
                 PUT_KV_VERSION,
                 future::complete);
@@ -1616,6 +1628,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                                             Collections.singletonList(
                                                                     Tuple2.of(key, value)))),
                                             null,
+                                            null,
                                             MergeMode.DEFAULT,
                                             PUT_KV_VERSION,
                                             future::complete);
@@ -1698,6 +1711,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 -1,
                 entriesPerBucket,
                 null,
+                null,
                 MergeMode.DEFAULT,
                 PUT_KV_VERSION,
                 writeResultForBuckets -> {
@@ -1737,6 +1751,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 300000,
                 -1,
                 entriesPerBucket,
+                null,
                 null,
                 MergeMode.DEFAULT,
                 PUT_KV_VERSION,
@@ -2164,6 +2179,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 -1,
                 kvRecordBatchPerBucket,
                 null,
+                null,
                 MergeMode.DEFAULT,
                 PUT_KV_VERSION,
                 writeFuture::complete);
@@ -2273,6 +2289,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 20000,
                 1,
                 Collections.singletonMap(tb, genKvRecordBatch(keyType, rowType, data)),
+                null,
                 null,
                 MergeMode.DEFAULT,
                 oldClientVersion,

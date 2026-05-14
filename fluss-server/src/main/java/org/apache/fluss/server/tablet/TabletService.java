@@ -119,6 +119,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLakeT
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLeaderAndIsrRequestData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyRemoteLogOffsetsData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifySnapshotOffsetData;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getPartitionNames;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getProduceLogData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getPutKvData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getStopReplicaData;
@@ -253,6 +254,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         authorizeTable(WRITE, request.getTableId());
 
         Map<TableBucket, KvRecordBatch> putKvData = getPutKvData(request);
+        Map<TableBucket, String> partitionNames = getPartitionNames(request);
         // Get mergeMode from request, default to DEFAULT if not set
         MergeMode mergeMode =
                 request.hasAggMode()
@@ -263,6 +265,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 request.getTimeoutMs(),
                 request.getAcks(),
                 putKvData,
+                partitionNames,
                 getTargetColumns(request),
                 mergeMode,
                 currentSession().getApiVersion(),

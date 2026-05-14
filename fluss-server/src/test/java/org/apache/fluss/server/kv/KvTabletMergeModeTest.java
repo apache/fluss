@@ -182,7 +182,7 @@ class KvTabletMergeModeTest {
                 kvRecordBatchFactory.ofRecords(
                         kvRecordFactory.ofRecord(
                                 "k1".getBytes(), new Object[] {1, 10L, 100, "Alice"}));
-        kvTablet.putAsLeader(batch1, null, MergeMode.DEFAULT);
+        kvTablet.putAsLeader(batch1, null, MergeMode.DEFAULT, null);
 
         long endOffset = logTablet.localLogEndOffset();
 
@@ -192,7 +192,7 @@ class KvTabletMergeModeTest {
                 kvRecordBatchFactory.ofRecords(
                         kvRecordFactory.ofRecord(
                                 "k1".getBytes(), new Object[] {1, 5L, 150, "Bob"}));
-        kvTablet.putAsLeader(batch2, null, MergeMode.DEFAULT);
+        kvTablet.putAsLeader(batch2, null, MergeMode.DEFAULT, null);
 
         // Verify CDC log shows aggregated values
         LogRecords actualLogRecords = readLogRecords(endOffset);
@@ -222,7 +222,7 @@ class KvTabletMergeModeTest {
                 kvRecordBatchFactory.ofRecords(
                         kvRecordFactory.ofRecord(
                                 "k1".getBytes(), new Object[] {1, 10L, 100, "Alice"}));
-        kvTablet.putAsLeader(batch1, null, MergeMode.DEFAULT);
+        kvTablet.putAsLeader(batch1, null, MergeMode.DEFAULT, null);
 
         long endOffset = logTablet.localLogEndOffset();
 
@@ -231,7 +231,7 @@ class KvTabletMergeModeTest {
         KvRecordBatch batch2 =
                 kvRecordBatchFactory.ofRecords(
                         kvRecordFactory.ofRecord("k1".getBytes(), new Object[] {1, 5L, 50, "Bob"}));
-        kvTablet.putAsLeader(batch2, null, MergeMode.OVERWRITE);
+        kvTablet.putAsLeader(batch2, null, MergeMode.OVERWRITE, null);
 
         // Verify CDC log shows directly replaced values (not aggregated)
         LogRecords actualLogRecords = readLogRecords(endOffset);
@@ -267,14 +267,14 @@ class KvTabletMergeModeTest {
                 kvRecordBatchFactory.ofRecords(
                         kvRecordFactory.ofRecord(
                                 "k1".getBytes(), new Object[] {1, 100L, 500, "Original"}));
-        kvTablet.putAsLeader(initialBatch, null, MergeMode.DEFAULT);
+        kvTablet.putAsLeader(initialBatch, null, MergeMode.DEFAULT, null);
 
         // Step 2: Simulate some aggregation operations
         KvRecordBatch updateBatch =
                 kvRecordBatchFactory.ofRecords(
                         kvRecordFactory.ofRecord(
                                 "k1".getBytes(), new Object[] {1, 50L, 600, "Updated"}));
-        kvTablet.putAsLeader(updateBatch, null, MergeMode.DEFAULT);
+        kvTablet.putAsLeader(updateBatch, null, MergeMode.DEFAULT, null);
 
         long beforeUndoOffset = logTablet.localLogEndOffset();
 
@@ -283,7 +283,7 @@ class KvTabletMergeModeTest {
                 kvRecordBatchFactory.ofRecords(
                         kvRecordFactory.ofRecord(
                                 "k1".getBytes(), new Object[] {1, 100L, 500, "Original"}));
-        kvTablet.putAsLeader(undoBatch, null, MergeMode.OVERWRITE);
+        kvTablet.putAsLeader(undoBatch, null, MergeMode.OVERWRITE, null);
 
         // Verify the undo operation produced correct CDC log
         LogRecords actualLogRecords = readLogRecords(beforeUndoOffset);
@@ -310,7 +310,7 @@ class KvTabletMergeModeTest {
                 kvRecordBatchFactory.ofRecords(
                         kvRecordFactory.ofRecord(
                                 "k1".getBytes(), new Object[] {1, 10L, 100, "Alice"}));
-        kvTablet.putAsLeader(batch, null, MergeMode.OVERWRITE);
+        kvTablet.putAsLeader(batch, null, MergeMode.OVERWRITE, null);
 
         LogRecords actualLogRecords = readLogRecords(0);
         MemoryLogRecords expectedLogs =
@@ -332,14 +332,14 @@ class KvTabletMergeModeTest {
                 kvRecordBatchFactory.ofRecords(
                         kvRecordFactory.ofRecord(
                                 "k1".getBytes(), new Object[] {1, 10L, 100, "Alice"}));
-        kvTablet.putAsLeader(batch1, null, MergeMode.DEFAULT);
+        kvTablet.putAsLeader(batch1, null, MergeMode.DEFAULT, null);
 
         long endOffset = logTablet.localLogEndOffset();
 
         // Delete with OVERWRITE mode
         KvRecordBatch deleteBatch =
                 kvRecordBatchFactory.ofRecords(kvRecordFactory.ofRecord("k1".getBytes(), null));
-        kvTablet.putAsLeader(deleteBatch, null, MergeMode.OVERWRITE);
+        kvTablet.putAsLeader(deleteBatch, null, MergeMode.OVERWRITE, null);
 
         // Verify DELETE is produced
         LogRecords actualLogRecords = readLogRecords(endOffset);
@@ -364,13 +364,13 @@ class KvTabletMergeModeTest {
                 kvRecordBatchFactory.ofRecords(
                         kvRecordFactory.ofRecord(
                                 "k1".getBytes(), new Object[] {1, 10L, 100, "v1"}));
-        kvTablet.putAsLeader(batch1, null, MergeMode.DEFAULT);
+        kvTablet.putAsLeader(batch1, null, MergeMode.DEFAULT, null);
 
         // 2. Update with DEFAULT (should aggregate)
         KvRecordBatch batch2 =
                 kvRecordBatchFactory.ofRecords(
                         kvRecordFactory.ofRecord("k1".getBytes(), new Object[] {1, 5L, 150, "v2"}));
-        kvTablet.putAsLeader(batch2, null, MergeMode.DEFAULT);
+        kvTablet.putAsLeader(batch2, null, MergeMode.DEFAULT, null);
 
         long afterDefaultOffset = logTablet.localLogEndOffset();
 
@@ -378,7 +378,7 @@ class KvTabletMergeModeTest {
         KvRecordBatch batch3 =
                 kvRecordBatchFactory.ofRecords(
                         kvRecordFactory.ofRecord("k1".getBytes(), new Object[] {1, 20L, 80, "v3"}));
-        kvTablet.putAsLeader(batch3, null, MergeMode.OVERWRITE);
+        kvTablet.putAsLeader(batch3, null, MergeMode.OVERWRITE, null);
 
         long afterOverwriteOffset = logTablet.localLogEndOffset();
 
@@ -387,7 +387,7 @@ class KvTabletMergeModeTest {
                 kvRecordBatchFactory.ofRecords(
                         kvRecordFactory.ofRecord(
                                 "k1".getBytes(), new Object[] {1, 10L, 200, "v4"}));
-        kvTablet.putAsLeader(batch4, null, MergeMode.DEFAULT);
+        kvTablet.putAsLeader(batch4, null, MergeMode.DEFAULT, null);
 
         // Verify the final aggregation is based on overwritten value
         LogRecords actualLogRecords = readLogRecords(afterOverwriteOffset);
@@ -415,7 +415,7 @@ class KvTabletMergeModeTest {
                 kvRecordBatchFactory.ofRecords(
                         kvRecordFactory.ofRecord(
                                 "k1".getBytes(), new Object[] {1, 10L, 100, "Alice"}));
-        kvTablet.putAsLeader(batch1, null, MergeMode.DEFAULT);
+        kvTablet.putAsLeader(batch1, null, MergeMode.DEFAULT, null);
 
         long endOffset = logTablet.localLogEndOffset();
 
@@ -425,7 +425,7 @@ class KvTabletMergeModeTest {
                 kvRecordBatchFactory.ofRecords(
                         kvRecordFactory.ofRecord(
                                 "k1".getBytes(), new Object[] {1, 5L, null, null}));
-        kvTablet.putAsLeader(batch2, targetColumns, MergeMode.OVERWRITE);
+        kvTablet.putAsLeader(batch2, targetColumns, MergeMode.OVERWRITE, null);
 
         // Verify partial update with OVERWRITE: count should be replaced (not aggregated)
         LogRecords actualLogRecords = readLogRecords(endOffset);
@@ -456,7 +456,7 @@ class KvTabletMergeModeTest {
                         kvRecordFactory.ofRecord(
                                 "k2".getBytes(), new Object[] {2, 20L, 200, "Bob"}));
         KvRecordBatch batch1 = kvRecordBatchFactory.ofRecords(initialRecords);
-        kvTablet.putAsLeader(batch1, null, MergeMode.DEFAULT);
+        kvTablet.putAsLeader(batch1, null, MergeMode.DEFAULT, null);
 
         long endOffset = logTablet.localLogEndOffset();
 
@@ -468,7 +468,7 @@ class KvTabletMergeModeTest {
                         kvRecordFactory.ofRecord(
                                 "k2".getBytes(), new Object[] {2, 8L, 80, "Bob2"}));
         KvRecordBatch batch2 = kvRecordBatchFactory.ofRecords(overwriteRecords);
-        kvTablet.putAsLeader(batch2, null, MergeMode.OVERWRITE);
+        kvTablet.putAsLeader(batch2, null, MergeMode.OVERWRITE, null);
 
         // Verify both keys are overwritten (not aggregated)
         LogRecords actualLogRecords = readLogRecords(endOffset);

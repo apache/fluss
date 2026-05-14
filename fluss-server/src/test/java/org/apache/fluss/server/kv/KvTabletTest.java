@@ -23,6 +23,7 @@ import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.InvalidTargetColumnException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.memory.TestingMemorySegmentPool;
 import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.KvFormat;
@@ -50,6 +51,7 @@ import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.record.bytesview.MultiBytesView;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.encode.ValueEncoder;
+import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
 import org.apache.fluss.server.kv.autoinc.TestingSequenceGeneratorFactory;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Key;
@@ -1994,5 +1996,111 @@ class KvTabletTest {
 
         assertThat(count1).isEqualTo(3);
         assertThat(count2).isEqualTo(3);
+    }
+
+    @Test
+    void testLakeFallbackOldValueLookup() throws Exception {
+        // Create a KvTablet for a __historical__ partition
+        TablePath tablePath = TablePath.of("testDb", "t1");
+        PhysicalTablePath historicalPath = PhysicalTablePath.of(tablePath, "__historical__");
+        schemaGetter = new TestingSchemaGetter(new SchemaInfo(DATA1_SCHEMA_PK, schemaId));
+        logTablet = createLogTablet(tempLogDir, 0L, historicalPath);
+        TableBucket tableBucket = logTablet.getTableBucket();
+        kvTablet =
+                createKvTablet(
+                        historicalPath,
+                        tableBucket,
+                        logTablet,
+                        tmpKvDir,
+                        schemaGetter,
+                        new HashMap<>());
+
+        // The value that the lake lookuper will return for key "k1" in partition "2000"
+        BinaryRow lakeRow = compactedRow(baseRowType, new Object[] {1, "from_lake"});
+        byte[] lakeValueBytes = ValueEncoder.encodeValue(schemaId, lakeRow);
+
+        // Encode the composite key for "k1" in partition "2000" so the lookuper can match
+        byte[] rawKey = "k1".getBytes();
+
+        // Set up a mock LakeTableLookuper:
+        // - returns lakeValueBytes for rawKey in partition "2000"
+        // - returns null for all other keys (not found in lake)
+        LakeTableLookuper mockLookuper =
+                new LakeTableLookuper() {
+                    @Override
+                    public byte[] lookup(byte[] key, LookupContext context) {
+                        if (Arrays.equals(key, rawKey)) {
+                            return lakeValueBytes;
+                        }
+                        return null;
+                    }
+
+                    @Override
+                    public void close() {}
+                };
+        kvTablet.setLakeTableLookuper(mockLookuper, Collections.singletonList("dt"));
+
+        // Case 1: upsert key "k1" with partitionName "2000"
+        // Local (buffer + RocksDB) miss, lake hit → should produce UPDATE_BEFORE + UPDATE_AFTER
+        KvRecordBatch kvRecordBatch =
+                kvRecordBatchFactory.ofRecords(
+                        Collections.singletonList(
+                                kvRecordFactory.ofRecord(
+                                        "k1".getBytes(), new Object[] {1, "new_value"})));
+        kvTablet.putAsLeader(kvRecordBatch, null, MergeMode.DEFAULT, "2000");
+
+        LogRecords logRecords = readLogRecords();
+        List<MemoryLogRecords> expectedLogs =
+                Collections.singletonList(
+                        logRecords(
+                                0,
+                                Arrays.asList(ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER),
+                                Arrays.asList(
+                                        new Object[] {1, "from_lake"},
+                                        new Object[] {1, "new_value"})));
+        checkEqual(logRecords, expectedLogs);
+
+        long endOffset = logTablet.localLogEndOffset();
+
+        // Case 2: upsert key "k2" with partitionName "2000"
+        // Local miss + lake miss → should produce INSERT
+        KvRecordBatch kvRecordBatch2 =
+                kvRecordBatchFactory.ofRecords(
+                        Collections.singletonList(
+                                kvRecordFactory.ofRecord(
+                                        "k2".getBytes(), new Object[] {2, "value2"})));
+        kvTablet.putAsLeader(kvRecordBatch2, null, MergeMode.DEFAULT, "2000");
+
+        LogRecords logRecords2 = readLogRecords(endOffset);
+        List<MemoryLogRecords> expectedLogs2 =
+                Collections.singletonList(
+                        logRecords(
+                                endOffset,
+                                Collections.singletonList(ChangeType.INSERT),
+                                Collections.singletonList(new Object[] {2, "value2"})));
+        checkEqual(logRecords2, expectedLogs2);
+
+        endOffset = logTablet.localLogEndOffset();
+
+        // Case 3: upsert key "k1" again with partitionName "2000"
+        // Now local HIT (from case 1 write) → should produce UPDATE_BEFORE + UPDATE_AFTER
+        // without calling lake lookuper
+        KvRecordBatch kvRecordBatch3 =
+                kvRecordBatchFactory.ofRecords(
+                        Collections.singletonList(
+                                kvRecordFactory.ofRecord(
+                                        "k1".getBytes(), new Object[] {1, "updated"})));
+        kvTablet.putAsLeader(kvRecordBatch3, null, MergeMode.DEFAULT, "2000");
+
+        LogRecords logRecords3 = readLogRecords(endOffset);
+        List<MemoryLogRecords> expectedLogs3 =
+                Collections.singletonList(
+                        logRecords(
+                                endOffset,
+                                Arrays.asList(ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER),
+                                Arrays.asList(
+                                        new Object[] {1, "new_value"},
+                                        new Object[] {1, "updated"})));
+        checkEqual(logRecords3, expectedLogs3);
     }
 }

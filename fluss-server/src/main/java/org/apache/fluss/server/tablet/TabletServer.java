@@ -292,7 +292,8 @@ public class TabletServer extends ServerBase {
                             scannerManager,
                             clock,
                             ioExecutor,
-                            localDiskManager);
+                            localDiskManager,
+                            lakeCatalogDynamicLoader);
             replicaManager.startup();
 
             // Register DefaultSnapshotContext for dynamic kv.snapshot.interval

@@ -28,6 +28,7 @@ import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
 import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
@@ -86,6 +87,26 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
         public LakeSource<?> createLakeSource(TablePath tablePath) {
             throw new UnsupportedOperationException("Not implemented");
         }
+
+        @Override
+        public LakeTableLookuper createLakeTableLookuper(TablePath tablePath) {
+            return new NullLakeTableLookuper();
+        }
+    }
+
+    /**
+     * A LakeTableLookuper that always returns null (key not found). Used to verify wiring without
+     * requiring a real lake storage environment.
+     */
+    private static class NullLakeTableLookuper implements LakeTableLookuper {
+        @Override
+        @Nullable
+        public byte[] lookup(byte[] key, LookupContext context) {
+            return null;
+        }
+
+        @Override
+        public void close() {}
     }
 
     /** Paimon implementation of LakeCatalog for testing purpose. */

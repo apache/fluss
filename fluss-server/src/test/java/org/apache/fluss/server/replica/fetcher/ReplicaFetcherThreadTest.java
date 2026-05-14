@@ -593,7 +593,8 @@ public class ReplicaFetcherThreadTest {
                     new ScannerManager(conf, scheduler),
                     clock,
                     ioExecutor,
-                    localDiskManager);
+                    localDiskManager,
+                    null);
         }
 
         @Override
