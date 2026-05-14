@@ -23,45 +23,68 @@ import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
-/** An implementation of {@link KeyEncoder} to follow Hudi's encoding strategy. */
+/**
+ * An implementation of {@link KeyEncoder} to follow Hudi's encoding strategy.
+ *
+ * <p>The encoded bytes are a 4-byte big-endian representation of {@code
+ * List<String>.hashCode()} over the stringified key fields, which matches the way
+ * Hudi's {@code BucketIdentifier} hashes a record key. Null fields are replaced by
+ * {@link #NULL_RECORDKEY_PLACEHOLDER} so that an explicit null and the literal
+ * string {@code "null"} no longer collide in the hash space.
+ */
 public class HudiKeyEncoder implements KeyEncoder {
+
+    /**
+     * Placeholder used to represent a {@code null} key field when computing the
+     * record-key hash. It is intentionally aligned with Hudi's
+     * {@code KeyGenUtils.NULL_RECORDKEY_PLACEHOLDER} so that the resulting bucket id
+     * stays identical to what Hudi would compute on its side.
+     */
+    public static final String NULL_RECORDKEY_PLACEHOLDER = "__null__";
 
     private final InternalRow.FieldGetter[] fieldGetters;
 
-    private final HudiBinaryRowWriter.FieldWriter[] fieldEncoders;
-
     public HudiKeyEncoder(RowType rowType, List<String> keys) {
-        // for get fields from fluss internal row
+        // for getting key fields out of fluss internal row
         fieldGetters = new InternalRow.FieldGetter[keys.size()];
-        // for encode fields into hudi
-        fieldEncoders = new HudiBinaryRowWriter.FieldWriter[keys.size()];
         for (int i = 0; i < keys.size(); i++) {
             int keyIndex = rowType.getFieldIndex(keys.get(i));
             DataType keyDataType = rowType.getTypeAt(keyIndex);
             fieldGetters[i] = InternalRow.createFieldGetter(keyDataType, keyIndex);
-            fieldEncoders[i] = HudiBinaryRowWriter.createFieldWriter(keyDataType);
         }
     }
 
     @Override
     public byte[] encodeKey(InternalRow row) {
-        List<String> values = new ArrayList<>();
-        // iterate all the fields of the row, and encode each field
-        for (int i = 0; i < fieldGetters.length; i++) {
-            Object value = fieldGetters[i].getFieldOrNull(row);
-            if (value instanceof BinaryString) {
-                values.add(((BinaryString) value).toString());
-            } else {
-                values.add(String.valueOf(value));
-            }
+        // Build the same string list that Hudi would build out of a record key, so the
+        // resulting List#hashCode() — and therefore the bucket id — match Hudi's own
+        // BucketIdentifier#getBucketId.
+        List<String> values = new ArrayList<>(fieldGetters.length);
+        for (InternalRow.FieldGetter fieldGetter : fieldGetters) {
+            Object value = fieldGetter.getFieldOrNull(row);
+            values.add(stringifyForRecordKey(value));
         }
-        int hashCode = Arrays.asList(values.toArray(new String[0])).hashCode();
+        int hashCode = values.hashCode();
 
-        return ByteBuffer.allocate(4).putInt(hashCode).array();
+        // 4-byte big-endian, decoded symmetrically by HudiBucketingFunction.
+        return new byte[] {
+            (byte) (hashCode >>> 24),
+            (byte) (hashCode >>> 16),
+            (byte) (hashCode >>> 8),
+            (byte) hashCode
+        };
+    }
+
+    private static String stringifyForRecordKey(Object value) {
+        if (value == null) {
+            return NULL_RECORDKEY_PLACEHOLDER;
+        }
+        if (value instanceof BinaryString) {
+            return value.toString();
+        }
+        return String.valueOf(value);
     }
 }

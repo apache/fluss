@@ -36,7 +36,9 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
+import static org.apache.fluss.row.encode.hudi.HudiKeyEncoder.NULL_RECORDKEY_PLACEHOLDER;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Unit test for {@link HudiBucketingFunction}. */
 class HudiBucketingFunctionTest {
@@ -254,6 +256,88 @@ class HudiBucketingFunctionTest {
         int ourBucket = hudiBucketingFunction.bucketing(ourEncodedKey, bucketNum);
 
         assertThat(ourBucket).isEqualTo(hudiBucket);
+    }
+
+    @Test
+    void testNullFieldUsesPlaceholder() {
+        int bucketNum = 10;
+        String key = "name";
+
+        RowType rowType =
+                RowType.of(
+                        new DataType[] {DataTypes.STRING().copy(true)}, new String[] {key});
+
+        // a row with an explicit null on the bucket key column
+        GenericRow row = GenericRow.of((Object) null);
+        HudiKeyEncoder encoder = new HudiKeyEncoder(rowType, Collections.singletonList(key));
+
+        // Encoded bytes must hash the placeholder, NOT the literal "null" string.
+        byte[] ourEncodedKey = encoder.encodeKey(row);
+        byte[] placeholderBytes = toBytes(new String[] {NULL_RECORDKEY_PLACEHOLDER});
+        byte[] javaNullLiteralBytes = toBytes(new String[] {"null"});
+
+        assertThat(ourEncodedKey).isEqualTo(placeholderBytes);
+        assertThat(ourEncodedKey).isNotEqualTo(javaNullLiteralBytes);
+
+        int hudiBucket =
+                BucketIdentifier.getBucketId(NULL_RECORDKEY_PLACEHOLDER, key, bucketNum);
+        int ourBucket = new HudiBucketingFunction().bucketing(ourEncodedKey, bucketNum);
+        assertThat(ourBucket).isEqualTo(hudiBucket);
+    }
+
+    @Test
+    void testNullFieldDoesNotCollideWithLiteralNullString() {
+        // The literal string "null" must not produce the same encoded bytes as a real
+        // null value — a regression test for the previous String.valueOf(null) behavior.
+        String key = "name";
+        RowType rowType =
+                RowType.of(
+                        new DataType[] {DataTypes.STRING().copy(true)}, new String[] {key});
+
+        HudiKeyEncoder encoder = new HudiKeyEncoder(rowType, Collections.singletonList(key));
+
+        byte[] encodedNull = encoder.encodeKey(GenericRow.of((Object) null));
+        byte[] encodedLiteralNull =
+                encoder.encodeKey(GenericRow.of(BinaryString.fromString("null")));
+
+        assertThat(encodedNull).isNotEqualTo(encodedLiteralNull);
+    }
+
+    @Test
+    void testBucketingRejectsInvalidBucketKey() {
+        HudiBucketingFunction function = new HudiBucketingFunction();
+
+        assertThatThrownBy(() -> function.bucketing(null, 10))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must not be null");
+
+        // length 0 — wrong length
+        assertThatThrownBy(() -> function.bucketing(new byte[0], 10))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("exactly 4 bytes");
+
+        // length < 4 — used to throw BufferUnderflowException, now must be IAE
+        assertThatThrownBy(() -> function.bucketing(new byte[] {1, 2, 3}, 10))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("exactly 4 bytes");
+
+        // length > 4 — used to silently truncate, now must be IAE
+        assertThatThrownBy(() -> function.bucketing(new byte[] {1, 2, 3, 4, 5}, 10))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("exactly 4 bytes");
+    }
+
+    @Test
+    void testBucketingRejectsNonPositiveNumBuckets() {
+        HudiBucketingFunction function = new HudiBucketingFunction();
+        byte[] anyKey = new byte[] {0, 0, 0, 1};
+
+        assertThatThrownBy(() -> function.bucketing(anyKey, 0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must be positive");
+        assertThatThrownBy(() -> function.bucketing(anyKey, -1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must be positive");
     }
 
     private byte[] toBytes(String[] value) {
