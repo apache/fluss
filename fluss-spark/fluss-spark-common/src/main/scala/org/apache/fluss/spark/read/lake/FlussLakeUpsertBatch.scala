@@ -267,38 +267,18 @@ class FlussLakeUpsertBatch(
   }
 
   private def planFallbackPartitions(): Array[InputPartition] = {
-    // Fallback to pure Fluss kv reading when no lake snapshot exists
     val bucketOffsetsRetriever = new BucketOffsetsRetrieverImpl(admin, tablePath)
-    val buckets = (0 until tableInfo.getNumBuckets).toSeq
-
-    def createPartitions(
-        partitionId: Option[Long],
-        partitionName: String): Array[InputPartition] = {
-      val stoppingOffsets =
-        getBucketOffsets(stoppingOffsetsInitializer, partitionName, buckets, bucketOffsetsRetriever)
-
-      buckets.map {
-        bucketId =>
-          val tableBucket = partitionId match {
-            case Some(pid) => new TableBucket(tableInfo.getTableId, pid, bucketId)
-            case None => new TableBucket(tableInfo.getTableId, bucketId)
-          }
-          // Use FlussUpsertInputPartition for fallback (reads from Fluss kv snapshot)
-          FlussUpsertInputPartition(
-            tableBucket,
-            -1L, // no snapshot
-            LogScanner.EARLIEST_OFFSET,
-            stoppingOffsets(bucketId)
-          ): InputPartition
-      }.toArray
-    }
 
     if (tableInfo.isPartitioned) {
       partitionInfos.asScala.flatMap {
-        pi => createPartitions(Some(pi.getPartitionId), pi.getPartitionName)
+        pi =>
+          val partitionName = pi.getPartitionName
+          val kvSnapshots = admin.getLatestKvSnapshots(tablePath, partitionName).get()
+          createUpsertPartitions(partitionName, kvSnapshots, bucketOffsetsRetriever)
       }.toArray
     } else {
-      createPartitions(None, null)
+      val kvSnapshots = admin.getLatestKvSnapshots(tablePath).get()
+      createUpsertPartitions(null, kvSnapshots, bucketOffsetsRetriever)
     }
   }
 }

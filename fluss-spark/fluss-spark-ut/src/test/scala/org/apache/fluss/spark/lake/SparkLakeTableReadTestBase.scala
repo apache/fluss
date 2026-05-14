@@ -22,7 +22,7 @@ import org.apache.fluss.flink.tiering.LakeTieringJobBuilder
 import org.apache.fluss.flink.tiering.source.TieringSourceOptions
 import org.apache.fluss.metadata.{DataLakeFormat, TableBucket}
 import org.apache.fluss.spark.FlussSparkTestBase
-import org.apache.fluss.spark.read.FlussScan
+import org.apache.fluss.spark.read.{FlussLakeUpsertScan, FlussScan, FlussUpsertInputPartition}
 
 import org.apache.flink.api.common.RuntimeExecutionMode
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment
@@ -150,5 +150,18 @@ abstract class SparkLakeTableReadTestBase extends FlussSparkTestBase {
     assert(
       expected.exists(pushed.contains),
       s"Expected any of $expected in pushed predicates, got $pushed")
+  }
+
+  protected def lakeUpsertInputPartitions(df: DataFrame): Array[FlussUpsertInputPartition] = {
+    val scans =
+      df.queryExecution.executedPlan.collect {
+        case b: BatchScanExec => b.scan
+      } ++ df.queryExecution.optimizedPlan.collect {
+        case DataSourceV2ScanRelation(_, scan, _, _, _) => scan
+      }
+    scans
+      .collect { case s: FlussLakeUpsertScan => s }
+      .flatMap(_.toBatch.planInputPartitions().collect { case p: FlussUpsertInputPartition => p })
+      .toArray
   }
 }

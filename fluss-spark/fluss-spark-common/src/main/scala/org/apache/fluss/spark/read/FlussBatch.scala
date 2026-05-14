@@ -63,6 +63,40 @@ abstract class FlussBatch(
     }
   }
 
+  protected def createUpsertPartitions(
+      partitionName: String,
+      kvSnapshots: KvSnapshots,
+      bucketOffsetsRetriever: BucketOffsetsRetrieverImpl): Array[InputPartition] = {
+    val tableId = kvSnapshots.getTableId
+    val partitionId = kvSnapshots.getPartitionId
+    val bucketIds = kvSnapshots.getBucketIds
+    val bucketIdToLogOffset =
+      stoppingOffsetsInitializer.getBucketOffsets(partitionName, bucketIds, bucketOffsetsRetriever)
+    bucketIds.asScala
+      .map {
+        bucketId =>
+          val tableBucket = new TableBucket(tableId, partitionId, bucketId)
+          val snapshotIdOpt = kvSnapshots.getSnapshotId(bucketId)
+          val logStartingOffsetOpt = kvSnapshots.getLogOffset(bucketId)
+          val logEndingOffset = bucketIdToLogOffset.get(bucketId)
+
+          if (snapshotIdOpt.isPresent) {
+            assert(
+              logStartingOffsetOpt.isPresent,
+              "Log offset must be present when snapshot id is present")
+            FlussUpsertInputPartition(
+              tableBucket,
+              snapshotIdOpt.getAsLong,
+              logStartingOffsetOpt.getAsLong,
+              logEndingOffset)
+          } else {
+            FlussUpsertInputPartition(tableBucket, -1L, LogScanner.EARLIEST_OFFSET, logEndingOffset)
+          }
+      }
+      .map(_.asInstanceOf[InputPartition])
+      .toArray
+  }
+
   override def close(): Unit = {
     if (admin != null) {
       admin.close()
@@ -196,48 +230,6 @@ class FlussUpsertBatch(
   private val bucketOffsetsRetriever = new BucketOffsetsRetrieverImpl(admin, tablePath)
 
   override def planInputPartitions(): Array[InputPartition] = {
-    def createPartitions(partitionName: String, kvSnapshots: KvSnapshots): Array[InputPartition] = {
-      val tableId = kvSnapshots.getTableId
-      val partitionId = kvSnapshots.getPartitionId
-      val bucketIds = kvSnapshots.getBucketIds
-      val bucketIdToLogOffset =
-        stoppingOffsetsInitializer.getBucketOffsets(
-          partitionName,
-          bucketIds,
-          bucketOffsetsRetriever)
-      bucketIds.asScala
-        .map {
-          bucketId =>
-            val tableBucket = new TableBucket(tableId, partitionId, bucketId)
-            val snapshotIdOpt = kvSnapshots.getSnapshotId(bucketId)
-            val logStartingOffsetOpt = kvSnapshots.getLogOffset(bucketId)
-            val logEndingOffset = bucketIdToLogOffset.get(bucketId)
-
-            if (snapshotIdOpt.isPresent) {
-              assert(
-                logStartingOffsetOpt.isPresent,
-                "Log offset must be present when snapshot id is present")
-
-              // Create hybrid partition
-              FlussUpsertInputPartition(
-                tableBucket,
-                snapshotIdOpt.getAsLong,
-                logStartingOffsetOpt.getAsLong,
-                logEndingOffset
-              )
-            } else {
-              // No snapshot yet, only read log from beginning
-              FlussUpsertInputPartition(
-                tableBucket,
-                -1L,
-                LogScanner.EARLIEST_OFFSET,
-                logEndingOffset)
-            }
-        }
-        .map(_.asInstanceOf[InputPartition])
-        .toArray
-    }
-
     if (tableInfo.isPartitioned) {
       val matching =
         SparkPartitionPredicate.filterPartitions(partitionInfos.asScala.toSeq, partitionPredicate)
@@ -246,11 +238,11 @@ class FlussUpsertBatch(
           val partitionName = partitionInfo.getPartitionName
           val kvSnapshots =
             admin.getLatestKvSnapshots(tablePath, partitionName).get()
-          createPartitions(partitionName, kvSnapshots)
+          createUpsertPartitions(partitionName, kvSnapshots, bucketOffsetsRetriever)
       }.toArray
     } else {
       val kvSnapshots = admin.getLatestKvSnapshots(tablePath).get()
-      createPartitions(null, kvSnapshots)
+      createUpsertPartitions(null, kvSnapshots, bucketOffsetsRetriever)
     }
   }
 
