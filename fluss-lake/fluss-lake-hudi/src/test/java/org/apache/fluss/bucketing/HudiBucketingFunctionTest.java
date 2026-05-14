@@ -20,6 +20,7 @@ package org.apache.fluss.bucketing;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.row.encode.hudi.HudiKeyEncoder;
 import org.apache.fluss.types.DataType;
@@ -32,6 +33,7 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -338,6 +340,167 @@ class HudiBucketingFunctionTest {
         assertThatThrownBy(() -> function.bucketing(anyKey, -1))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must be positive");
+    }
+
+    @Test
+    void testCompositeBucketKeyMatchesHudiFieldValueRecordKey() {
+        // Two-field bucket key: Hudi expects record key in "f1:v1,f2:v2" form when its
+        // BucketIdentifier sees a ':' in the record key, then extracts ["v1","v2"] and
+        // hashes that List<String>. Fluss feeds the same ["v1","v2"] into List#hashCode().
+        int bucketNum = 16;
+        String f1 = "user_id";
+        String f2 = "region";
+        int idValue = 12345;
+        String regionValue = "cn-north";
+
+        RowType rowType =
+                RowType.of(
+                        new DataType[] {DataTypes.INT(), DataTypes.STRING()},
+                        new String[] {f1, f2});
+        GenericRow row = GenericRow.of(idValue, BinaryString.fromString(regionValue));
+        HudiKeyEncoder encoder = new HudiKeyEncoder(rowType, Arrays.asList(f1, f2));
+
+        byte[] ourEncodedKey = encoder.encodeKey(row);
+        byte[] expected =
+                toBytes(new String[] {String.valueOf(idValue), regionValue});
+        assertThat(ourEncodedKey).isEqualTo(expected);
+
+        // Compare against Hudi's List<String>-based overload to avoid Hudi's own
+        // recordKey-parsing path (which would split on ':' inside values like timestamps).
+        int hudiBucket =
+                BucketIdentifier.getBucketId(
+                        Arrays.asList(String.valueOf(idValue), regionValue), bucketNum);
+        int ourBucket = new HudiBucketingFunction().bucketing(ourEncodedKey, bucketNum);
+        assertThat(ourBucket).isEqualTo(hudiBucket);
+    }
+
+    @Test
+    void testCompositeBucketKeyWithNullFieldUsesPlaceholder() {
+        int bucketNum = 8;
+        String f1 = "user_id";
+        String f2 = "region";
+
+        RowType rowType =
+                RowType.of(
+                        new DataType[] {
+                            DataTypes.INT().copy(true), DataTypes.STRING().copy(true)
+                        },
+                        new String[] {f1, f2});
+        // f2 is null on purpose
+        GenericRow row = GenericRow.of(42, null);
+        HudiKeyEncoder encoder = new HudiKeyEncoder(rowType, Arrays.asList(f1, f2));
+
+        byte[] ourEncodedKey = encoder.encodeKey(row);
+        byte[] expected = toBytes(new String[] {"42", NULL_RECORDKEY_PLACEHOLDER});
+        assertThat(ourEncodedKey).isEqualTo(expected);
+
+        int hudiBucket =
+                BucketIdentifier.getBucketId(
+                        Arrays.asList("42", NULL_RECORDKEY_PLACEHOLDER), bucketNum);
+        int ourBucket = new HudiBucketingFunction().bucketing(ourEncodedKey, bucketNum);
+        assertThat(ourBucket).isEqualTo(hudiBucket);
+    }
+
+    @Test
+    void testBooleanAndIntegralTypes() {
+        int bucketNum = 10;
+        // BOOLEAN
+        assertSingleFieldRoundTrip(
+                DataTypes.BOOLEAN(),
+                true,
+                String.valueOf(true),
+                "flag",
+                bucketNum);
+        assertSingleFieldRoundTrip(
+                DataTypes.BOOLEAN(),
+                false,
+                String.valueOf(false),
+                "flag",
+                bucketNum);
+        // TINYINT / SMALLINT
+        assertSingleFieldRoundTrip(
+                DataTypes.TINYINT(), (byte) 7, "7", "b", bucketNum);
+        assertSingleFieldRoundTrip(
+                DataTypes.SMALLINT(), (short) 12345, "12345", "s", bucketNum);
+        // FLOAT (use a value whose Float.toString is stable across JVMs)
+        assertSingleFieldRoundTrip(
+                DataTypes.FLOAT(), 3.5f, Float.toString(3.5f), "f", bucketNum);
+    }
+
+    @Test
+    void testDateAndTimeTypes() {
+        int bucketNum = 10;
+        // DATE is stored as days-since-epoch int internally; record key is its String value.
+        int dateDays = 19852;
+        assertSingleFieldRoundTrip(
+                DataTypes.DATE(), dateDays, String.valueOf(dateDays), "d", bucketNum);
+        // TIME is stored as ms-of-day int.
+        int timeMillis = 12345678;
+        assertSingleFieldRoundTrip(
+                DataTypes.TIME(), timeMillis, String.valueOf(timeMillis), "t", bucketNum);
+    }
+
+    @Test
+    void testTimestampLtzType() throws IOException {
+        int bucketNum = 10;
+        TimestampLtz ts = TimestampLtz.fromInstant(Instant.ofEpochMilli(1700000000000L));
+        RowType rowType =
+                RowType.of(new DataType[] {DataTypes.TIMESTAMP_LTZ(6)}, new String[] {"ts"});
+        GenericRow row = GenericRow.of(ts);
+        HudiKeyEncoder encoder = new HudiKeyEncoder(rowType, Collections.singletonList("ts"));
+        byte[] enc = encoder.encodeKey(row);
+        byte[] expected = toBytes(new String[] {ts.toString()});
+        assertThat(enc).isEqualTo(expected);
+
+        int hudiBucket =
+                BucketIdentifier.getBucketId(
+                        Collections.singletonList(ts.toString()), bucketNum);
+        int ourBucket = new HudiBucketingFunction().bucketing(enc, bucketNum);
+        assertThat(ourBucket).isEqualTo(hudiBucket);
+    }
+
+    @Test
+    void testBucketingNumBucketsBoundaryValues() {
+        HudiBucketingFunction f = new HudiBucketingFunction();
+        // numBuckets == 1 => bucket id always 0
+        for (int sample : new int[] {0, 1, -1, Integer.MAX_VALUE, Integer.MIN_VALUE}) {
+            byte[] key = intToBytes(sample);
+            assertThat(f.bucketing(key, 1)).isEqualTo(0);
+        }
+        // numBuckets == Integer.MAX_VALUE: bucket id == hash & MAX_VALUE
+        int hash = Integer.MIN_VALUE; // stress sign-bit handling
+        byte[] key = intToBytes(hash);
+        int expected = (hash & Integer.MAX_VALUE) % Integer.MAX_VALUE;
+        assertThat(f.bucketing(key, Integer.MAX_VALUE)).isEqualTo(expected);
+        // bucket id must always be in [0, numBuckets)
+        assertThat(f.bucketing(key, 7))
+                .isGreaterThanOrEqualTo(0)
+                .isLessThan(7);
+    }
+
+    private void assertSingleFieldRoundTrip(
+            DataType dataType,
+            Object value,
+            String stringified,
+            String key,
+            int bucketNum) {
+        RowType rowType = RowType.of(new DataType[] {dataType}, new String[] {key});
+        GenericRow row = GenericRow.of(value);
+        HudiKeyEncoder encoder =
+                new HudiKeyEncoder(rowType, Collections.singletonList(key));
+        byte[] ourEncodedKey = encoder.encodeKey(row);
+        byte[] expected = toBytes(new String[] {stringified});
+        assertThat(ourEncodedKey).isEqualTo(expected);
+
+        int hudiBucket = BucketIdentifier.getBucketId(stringified, key, bucketNum);
+        int ourBucket = new HudiBucketingFunction().bucketing(ourEncodedKey, bucketNum);
+        assertThat(ourBucket).isEqualTo(hudiBucket);
+    }
+
+    private static byte[] intToBytes(int v) {
+        return new byte[] {
+            (byte) (v >>> 24), (byte) (v >>> 16), (byte) (v >>> 8), (byte) v
+        };
     }
 
     private byte[] toBytes(String[] value) {
