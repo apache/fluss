@@ -176,18 +176,26 @@ public class WriterClient {
 
             TableInfo tableInfo = record.getTableInfo();
             PhysicalTablePath physicalTablePath = record.getPhysicalTablePath();
-            dynamicPartitionCreator.checkAndCreatePartitionAsync(
-                    physicalTablePath,
-                    tableInfo.getPartitionKeys(),
-                    tableInfo.getTableConfig().getAutoPartitionStrategy(),
-                    tableInfo.getTableConfig().isDataLakeEnabled());
+
+            // Returns the actual path to write to. For expired partitions, this may be
+            // redirected to the __historical__ partition.
+            PhysicalTablePath actualPath =
+                    dynamicPartitionCreator.checkAndCreatePartitionAsync(
+                            physicalTablePath,
+                            tableInfo.getPartitionKeys(),
+                            tableInfo.getTableConfig().getAutoPartitionStrategy(),
+                            tableInfo.getTableConfig().isDataLakeEnabled());
+
+            // Redirect the record if the actual path differs (expired partition redirect).
+            if (!actualPath.equals(physicalTablePath)) {
+                record = record.withPhysicalTablePath(actualPath);
+            }
 
             // maybe create bucket assigner.
             Cluster cluster = metadataUpdater.getCluster();
             BucketAssigner bucketAssigner =
                     bucketAssignerMap.computeIfAbsent(
-                            physicalTablePath,
-                            k -> createBucketAssigner(tableInfo, physicalTablePath, conf));
+                            actualPath, k -> createBucketAssigner(tableInfo, actualPath, conf));
 
             // Append the record to the accumulator.
             int bucketId = bucketAssigner.assignBucket(record.getBucketKey(), cluster);

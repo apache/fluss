@@ -36,6 +36,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
 
 import static org.apache.fluss.utils.ExceptionUtils.stripCompletionException;
@@ -56,6 +57,10 @@ public class DynamicPartitionCreator {
 
     private final Set<PhysicalTablePath> inflightPartitionsToCreate = ConcurrentHashMap.newKeySet();
 
+    /** Cache of expired partition paths to their historical partition redirect targets. */
+    private final ConcurrentMap<PhysicalTablePath, PhysicalTablePath> expiredPartitionRedirects =
+            new ConcurrentHashMap<>();
+
     public DynamicPartitionCreator(
             MetadataUpdater metadataUpdater,
             Admin admin,
@@ -67,7 +72,14 @@ public class DynamicPartitionCreator {
         this.fatalErrorHandler = fatalErrorHandler;
     }
 
-    public void checkAndCreatePartitionAsync(
+    /**
+     * Checks whether the partition exists and creates it if needed. For expired partitions on
+     * data-lake-enabled tables, the write is redirected to the {@code __historical__} partition.
+     *
+     * @return the actual {@link PhysicalTablePath} to write to. This may differ from the input when
+     *     an expired partition is redirected to the historical partition.
+     */
+    public PhysicalTablePath checkAndCreatePartitionAsync(
             PhysicalTablePath physicalTablePath,
             List<String> partitionKeys,
             AutoPartitionStrategy autoPartitionStrategy,
@@ -75,7 +87,7 @@ public class DynamicPartitionCreator {
         String partitionName = physicalTablePath.getPartitionName();
         if (partitionName == null) {
             // no need to check and create partition
-            return;
+            return physicalTablePath;
         }
 
         Optional<Long> partitionIdOpt = metadataUpdater.getPartitionId(physicalTablePath);
@@ -86,17 +98,34 @@ public class DynamicPartitionCreator {
                 // if the partition is already in inflightPartitionsToCreate, we should skip
                 // creating it.
                 LOG.debug("Partition {} is already being created, skipping.", physicalTablePath);
-            } else if (forceCheckPartitionExist(physicalTablePath)) {
+                return physicalTablePath;
+            }
+            // Fast path: check redirect cache before server roundtrip.
+            PhysicalTablePath cachedRedirect = expiredPartitionRedirects.get(physicalTablePath);
+            if (cachedRedirect != null) {
+                return cachedRedirect;
+            }
+            if (forceCheckPartitionExist(physicalTablePath)) {
                 // if the partition exists, we should skip creating it.
                 LOG.debug("Partition {} already exists, skipping.", physicalTablePath);
-            } else if (isExpiredPartition(
+                return physicalTablePath;
+            }
+            if (isExpiredPartition(
                     partitionName, partitionKeys, autoPartitionStrategy, isDataLakeEnabled)) {
                 // Expired partition detected: create __historical__ partition instead.
                 // This bypasses dynamicPartitionEnabled — historical partition creation
                 // is always allowed for data-lake-enabled auto-partitioned tables.
                 createHistoricalPartitionIfNeeded(
                         physicalTablePath, partitionKeys, autoPartitionStrategy);
-            } else if (dynamicPartitionEnabled) {
+                String historicalName =
+                        buildHistoricalPartitionName(
+                                partitionName, partitionKeys, autoPartitionStrategy);
+                PhysicalTablePath historicalPath =
+                        PhysicalTablePath.of(physicalTablePath.getTablePath(), historicalName);
+                expiredPartitionRedirects.put(physicalTablePath, historicalPath);
+                return historicalPath;
+            }
+            if (dynamicPartitionEnabled) {
                 // Validate early, before touching any state.
                 ResolvedPartitionSpec resolvedPartitionSpec =
                         ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName);
@@ -118,11 +147,12 @@ public class DynamicPartitionCreator {
                     LOG.debug(
                             "Partition {} is already being created, skipping.", physicalTablePath);
                 }
-            } else {
-                throw new PartitionNotExistException(
-                        String.format("Table partition '%s' does not exist.", physicalTablePath));
+                return physicalTablePath;
             }
+            throw new PartitionNotExistException(
+                    String.format("Table partition '%s' does not exist.", physicalTablePath));
         }
+        return physicalTablePath;
     }
 
     private boolean forceCheckPartitionExist(PhysicalTablePath physicalTablePath) {

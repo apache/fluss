@@ -301,4 +301,24 @@ public final class WriteRecord {
     public int getSchemaId() {
         return tableInfo.getSchemaId();
     }
+
+    /**
+     * Creates a copy of this record with a different physical table path. Used for redirecting
+     * expired partition writes to the historical partition.
+     */
+    WriteRecord withPhysicalTablePath(PhysicalTablePath newPath) {
+        if (newPath.equals(this.physicalTablePath)) {
+            return this;
+        }
+        return new WriteRecord(
+                this.tableInfo,
+                newPath,
+                this.key,
+                this.bucketKey,
+                this.row,
+                this.writeFormat,
+                this.targetColumns,
+                this.estimatedSizeInBytes,
+                this.mergeMode);
+    }
 }
