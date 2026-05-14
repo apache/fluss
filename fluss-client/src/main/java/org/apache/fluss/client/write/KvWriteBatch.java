@@ -36,6 +36,7 @@ import javax.annotation.concurrent.NotThreadSafe;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -53,6 +54,7 @@ public class KvWriteBatch extends WriteBatch {
     private final @Nullable int[] targetColumns;
     private final int schemaId;
     private final MergeMode mergeMode;
+    private final @Nullable String originalPartitionName;
 
     public KvWriteBatch(
             int bucketId,
@@ -63,6 +65,7 @@ public class KvWriteBatch extends WriteBatch {
             AbstractPagedOutputView outputView,
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
+            @Nullable String originalPartitionName,
             long createdMs) {
         super(bucketId, physicalTablePath, createdMs);
         this.outputView = outputView;
@@ -71,6 +74,7 @@ public class KvWriteBatch extends WriteBatch {
         this.targetColumns = targetColumns;
         this.schemaId = schemaId;
         this.mergeMode = mergeMode;
+        this.originalPartitionName = originalPartitionName;
     }
 
     @Override
@@ -108,6 +112,12 @@ public class KvWriteBatch extends WriteBatch {
                             this.mergeMode, writeRecord.getMergeMode()));
         }
 
+        // Records with different original partition names must go to separate batches
+        // because partition_name is a per-request field on PbPutKvReqForBucket.
+        if (!Objects.equals(this.originalPartitionName, writeRecord.getOriginalPartitionName())) {
+            return false;
+        }
+
         byte[] key = writeRecord.getKey();
         checkNotNull(key, "key must be not null for kv record");
         checkNotNull(callback, "write callback must be not null");
@@ -129,6 +139,12 @@ public class KvWriteBatch extends WriteBatch {
 
     public MergeMode getMergeMode() {
         return mergeMode;
+    }
+
+    /** Returns the original partition name before redirect, null if not redirected. */
+    @Nullable
+    public String getOriginalPartitionName() {
+        return originalPartitionName;
     }
 
     @Override

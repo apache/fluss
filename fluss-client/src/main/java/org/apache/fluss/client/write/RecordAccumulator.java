@@ -628,6 +628,7 @@ public final class RecordAccumulator {
                         outputView,
                         writeRecord.getTargetColumns(),
                         writeRecord.getMergeMode(),
+                        writeRecord.getOriginalPartitionName(),
                         clock.milliseconds());
 
             case ARROW_LOG:

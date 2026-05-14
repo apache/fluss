@@ -88,7 +88,8 @@ public final class WriteRecord {
                 writeFormat,
                 targetColumns,
                 estimatedSizeInBytes,
-                mergeMode);
+                mergeMode,
+                null);
     }
 
     /** Create a write record for delete operation and partial-delete update. */
@@ -131,7 +132,8 @@ public final class WriteRecord {
                 writeFormat,
                 targetColumns,
                 estimatedSizeInBytes,
-                mergeMode);
+                mergeMode,
+                null);
     }
 
     /** Create a write record for append operation for indexed format. */
@@ -152,7 +154,8 @@ public final class WriteRecord {
                 WriteFormat.INDEXED_LOG,
                 null,
                 estimatedSizeInBytes,
-                MergeMode.DEFAULT);
+                MergeMode.DEFAULT,
+                null);
     }
 
     /** Creates a write record for append operation for Arrow format. */
@@ -174,7 +177,8 @@ public final class WriteRecord {
                 WriteFormat.ARROW_LOG,
                 null,
                 estimatedSizeInBytes,
-                MergeMode.DEFAULT);
+                MergeMode.DEFAULT,
+                null);
     }
 
     /** Creates a write record for append operation for Compacted format. */
@@ -195,7 +199,8 @@ public final class WriteRecord {
                 WriteFormat.COMPACTED_LOG,
                 null,
                 estimatedSizeInBytes,
-                MergeMode.DEFAULT);
+                MergeMode.DEFAULT,
+                null);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -222,6 +227,9 @@ public final class WriteRecord {
      */
     private final MergeMode mergeMode;
 
+    /** The original partition name before redirect, null if not redirected. */
+    private final @Nullable String originalPartitionName;
+
     private WriteRecord(
             TableInfo tableInfo,
             PhysicalTablePath physicalTablePath,
@@ -231,7 +239,8 @@ public final class WriteRecord {
             WriteFormat writeFormat,
             @Nullable int[] targetColumns,
             int estimatedSizeInBytes,
-            MergeMode mergeMode) {
+            MergeMode mergeMode,
+            @Nullable String originalPartitionName) {
         this.tableInfo = tableInfo;
         this.physicalTablePath = physicalTablePath;
         this.key = key;
@@ -241,6 +250,7 @@ public final class WriteRecord {
         this.targetColumns = targetColumns;
         this.estimatedSizeInBytes = estimatedSizeInBytes;
         this.mergeMode = mergeMode;
+        this.originalPartitionName = originalPartitionName;
     }
 
     public PhysicalTablePath getPhysicalTablePath() {
@@ -281,6 +291,11 @@ public final class WriteRecord {
         return mergeMode;
     }
 
+    /** Returns the original partition name before redirect, null if not redirected. */
+    public @Nullable String getOriginalPartitionName() {
+        return originalPartitionName;
+    }
+
     /**
      * Get the estimated size in bytes of the record with batch header.
      *
@@ -319,6 +334,7 @@ public final class WriteRecord {
                 this.writeFormat,
                 this.targetColumns,
                 this.estimatedSizeInBytes,
-                this.mergeMode);
+                this.mergeMode,
+                this.physicalTablePath.getPartitionName());
     }
 }

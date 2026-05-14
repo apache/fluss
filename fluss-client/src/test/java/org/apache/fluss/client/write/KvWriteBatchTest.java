@@ -229,6 +229,7 @@ class KvWriteBatchTest {
                 outputView,
                 null,
                 MergeMode.DEFAULT,
+                null,
                 System.currentTimeMillis());
     }
 
@@ -324,6 +325,7 @@ class KvWriteBatchTest {
                 outputView,
                 null,
                 mergeMode,
+                null,
                 System.currentTimeMillis());
     }
 

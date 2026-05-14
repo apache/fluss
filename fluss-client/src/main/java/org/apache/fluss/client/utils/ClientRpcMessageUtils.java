@@ -185,12 +185,19 @@ public class ClientRpcMessageUtils {
         readyWriteBatches.forEach(
                 readyBatch -> {
                     TableBucket tableBucket = readyBatch.tableBucket();
+                    KvWriteBatch kvBatch = (KvWriteBatch) readyBatch.writeBatch();
                     PbPutKvReqForBucket pbPutKvReqForBucket =
                             request.addBucketsReq()
                                     .setBucketId(tableBucket.getBucket())
-                                    .setRecordsBytesView(readyBatch.writeBatch().build());
+                                    .setRecordsBytesView(kvBatch.build());
                     if (tableBucket.getPartitionId() != null) {
                         pbPutKvReqForBucket.setPartitionId(tableBucket.getPartitionId());
+                    }
+                    // Set partition_name for historical partition writes.
+                    // Server uses this for CompositeKeyEncoder key prefix.
+                    String partitionName = kvBatch.getOriginalPartitionName();
+                    if (partitionName != null) {
+                        pbPutKvReqForBucket.setPartitionName(partitionName);
                     }
                 });
         return request;
