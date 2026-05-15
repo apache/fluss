@@ -20,6 +20,7 @@ package org.apache.fluss.server.log;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.CorruptRecordException;
 import org.apache.fluss.exception.DuplicateSequenceException;
 import org.apache.fluss.exception.FlussRuntimeException;
@@ -143,6 +144,7 @@ public final class LogTablet {
             WriterStateManager writerStateManager,
             LogFormat logFormat,
             int tieredLogLocalSegments,
+            long logTtlMs,
             boolean isChangelog,
             Clock clock) {
         this.dataDir = dataDir;
@@ -154,7 +156,7 @@ public final class LogTablet {
                 (int) conf.get(ConfigOptions.WRITER_ID_EXPIRATION_CHECK_INTERVAL).toMillis();
         this.writerStateManager = writerStateManager;
         this.highWatermarkMetadata = new LogOffsetMetadata(0L);
-        this.logTtlMs = conf.get(ConfigOptions.TABLE_LOG_TTL).toMillis();
+        this.logTtlMs = logTtlMs;
 
         this.scheduler = scheduler;
         // scheduler the writer expiration interval check.
@@ -314,6 +316,7 @@ public final class LogTablet {
             Scheduler scheduler,
             LogFormat logFormat,
             int tieredLogLocalSegments,
+            long logTtlMs,
             boolean isChangelog,
             Clock clock,
             boolean isCleanShutdown)
@@ -362,8 +365,42 @@ public final class LogTablet {
                 writerStateManager,
                 logFormat,
                 tieredLogLocalSegments,
+                logTtlMs,
                 isChangelog,
                 clock);
+    }
+
+    /**
+     * Same as {@link #create(PhysicalTablePath, File, Configuration, TabletServerMetricGroup, long,
+     * Scheduler, LogFormat, int, long, boolean, Clock, boolean)} using the default {@link
+     * ConfigOptions#TABLE_LOG_TTL} when no table properties are configured.
+     */
+    public static LogTablet create(
+            PhysicalTablePath tablePath,
+            File tabletDir,
+            Configuration conf,
+            TabletServerMetricGroup serverMetricGroup,
+            long recoveryPoint,
+            Scheduler scheduler,
+            LogFormat logFormat,
+            int tieredLogLocalSegments,
+            boolean isChangelog,
+            Clock clock,
+            boolean isCleanShutdown)
+            throws Exception {
+        return create(
+                tablePath,
+                tabletDir,
+                conf,
+                serverMetricGroup,
+                recoveryPoint,
+                scheduler,
+                logFormat,
+                tieredLogLocalSegments,
+                new TableConfig(new Configuration()).getLogTTLMs(),
+                isChangelog,
+                clock,
+                isCleanShutdown);
     }
 
     /** Register metrics for this log tablet in the metric group. */
