@@ -484,6 +484,9 @@
                                         <exclude>org.apache.fluss.flink.tiering.FlussLakeTieringEntrypoint</exclude>
                                         <exclude>org.apache.fluss.flink.tiering.FlussLakeTiering</exclude>
                                         <!-- end exclude for flink tiering service -->
+                                        <exclude>
+                                            org.apache.fluss.flink.functions.bitmap.AbstractRbAggFunction
+                                        </exclude>
                                         <!-- exclude flink compatibility class for catalogs -->
                                         <exclude>org.apache.flink.table.catalog.*</exclude>
                                     </excludes>
