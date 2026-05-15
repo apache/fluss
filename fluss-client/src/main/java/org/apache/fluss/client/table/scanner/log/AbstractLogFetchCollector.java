@@ -85,7 +85,11 @@ abstract class AbstractLogFetchCollector<T, R> {
 
                     if (!completedFetch.isInitialized()) {
                         try {
-                            logFetchBuffer.setNextInLineFetch(initialize(completedFetch));
+                            CompletedFetch initialized = initialize(completedFetch);
+                            logFetchBuffer.setNextInLineFetch(initialized);
+                            if (initialized == null) {
+                                completedFetch.drain();
+                            }
                         } catch (Exception e) {
                             // Remove a completedFetch upon a parse with exception if
                             // (1) it contains no records, and
