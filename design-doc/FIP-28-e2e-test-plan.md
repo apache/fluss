@@ -92,6 +92,9 @@ WITH (
    - `(dt='2026-05-01', id=2, name='Bob', amount=50.0)` — 插入新 key
 3. 写入过期分区的 delete：
    - 删除 `(dt='2026-05-01', id=1)`
+4. 连续写入两次同 key 的 upsert（不等待 flush），验证 old-value 来自 prewrite buffer：
+   - `(dt='2026-05-01', id=3, name='V1', amount=10.0)`
+   - `(dt='2026-05-01', id=3, name='V2', amount=20.0)`
 
 **验证**:
 
@@ -100,6 +103,7 @@ WITH (
   - id=1 的 upsert 产生 `UPDATE_BEFORE(amount=100.0)` + `UPDATE_AFTER(amount=200.0)`（old-value 从 lake 获取）
   - id=2 的 insert 产生 `INSERT(name='Bob', amount=50.0)`
   - id=1 的 delete 产生 `DELETE(name='Alice', amount=200.0)`
+  - id=3 的第二次 upsert 产生 `UPDATE_BEFORE(name='V1', amount=10.0)` + `UPDATE_AFTER(name='V2', amount=20.0)`（old-value 从 prewrite buffer 获取）
 - composite key 隔离正确：不同 original partition 的相同 id 不会碰撞
 
 ### 场景 2: 基本功能 — Log 表写入过期分区
@@ -133,6 +137,22 @@ WITH (
 - 步骤 2: 返回正确值（lake fallback）
 - 步骤 4: 返回最新值（local-first，不依赖 tiering）
 - `lookup(dt='2026-05-01', id=999)` → 返回 null
+
+#### 场景 3a: Lookup 触发 `__historical__` 创建
+
+**目的**: 验证 lookup 路径也能触发 `__historical__` 的自动创建（设计文档 A.1: "regardless of whether the operation is a write or a lookup"）。
+
+**前提**: `__historical__` 尚未创建（使用独立的表，或确保在场景 1 之前执行）。
+
+**步骤**:
+
+1. 准备 lake 中的数据（同场景 1 步骤 1）
+2. 不先写入，直接执行 lookup：`lookup(dt='2026-05-01', id=1)`
+
+**验证**:
+
+- `__historical__` 被 lookup 路径自动创建
+- lookup 返回正确值（lake fallback）
 
 ### 场景 4: 多过期分区写入同一 `__historical__` — Composite Key 隔离
 
@@ -176,23 +196,24 @@ WITH (
 
 **验证**:
 
-- 实时分区写入延迟保持稳定，不随过期分区写入量增加而劣化
+- 混入过期分区数据后，实时分区 p99 写入延迟相对于纯实时基准的劣化 < 10%
 - 过期分区写入可以慢，但最终全部写入 `__historical__` 成功
 - Sink 算子不出现由过期分区写入引起的反压
+- Flink checkpoint 在混合写入期间正常完成，不因历史 batch 的 slow ACK 导致 checkpoint timeout
 
-**隔离机制（设计文档 C.4）**:
+**隔离机制 — "历史路径最多占 1/10 总资源"原则（设计文档 C.2, C.4）**:
 
 ```
-客户端侧（C.4.1 checkpoint flush 隔离）:
-├── RecordAccumulator: 实时/历史 batch 各自独立的 Deque
-├── append(): 微秒级 memcpy，不等 ACK，不阻塞
-├── Sender: 异步发送，不等 ACK 就处理下一个 batch
-└── checkpoint flush: 只等待实时 batch ACK，不等历史 batch
-    → checkpoint 耗时不受历史写入的 lake I/O 延迟影响
+客户端侧（C.4.1 historical in-flight cap）:
+├── Sender: historicalWriteInFlightCap = maxInFlight / 10
+│   → 历史 in-flight 达到 cap 时跳过，继续发送实时 batch
+├── 内存: 历史 in-flight 内存 ≤ cap × batchSize，自然有界
+└── flush: 等待所有 batch ACK（包括历史），但 cap 限制了等待量
 
-服务端侧（C.2 ioExecutor）:
-├── 历史写入提交到 ioExecutor，RPC 线程立即释放
-└── callback 在 ioExecutor 线程上调用，不阻塞 RPC 线程
+服务端侧:
+├── 历史 request queue（C.3）: 默认 ~1/10 总 request queue，满时返回 THROTTLED
+├── ioExecutor（C.2）: 历史专用线程池，实时路径不使用，无资源竞争
+└── 历史写入提交到 ioExecutor，RPC 线程立即释放
 ```
 
 ### 场景 6: 隔离性 — 同一 Pipeline 中过期分区 Lookup 不影响实时分区 Lookup 延迟
@@ -208,20 +229,20 @@ WITH (
 
 **验证**:
 
-- 实时分区 key 的 lookup 延迟保持稳定
+- 混入过期分区 key 后，实时分区 key 的 p99 lookup 延迟相对于纯实时基准的劣化 < 10%
 - 过期分区 key 的 lookup 可以慢（lake fallback），但不阻塞同一 LookupSender 中实时 key 的返回
-- 隔离机制（C.4.2）：LookupSender 中实时/历史使用独立的 inflight 信号量，历史 permit 占满时实时 lookup 不受影响
+- 隔离机制（C.4.2）：LookupSender 拆分 inflight 信号量，历史 permit = 总量的 1/10，历史 permit 占满时实时 lookup 不受影响
 
 ---
 
 ### 场景 7: Flow Control — 过期分区 throttle 不影响实时分区
 
-**目的**: 极端场景 — ioExecutor 被过期分区操作打满时，throttle 只影响过期分区的写入，实时分区写入完全不受影响。
+**目的**: 极端场景 — 历史 request queue 被过期分区操作打满时，throttle 只影响过期分区的写入，实时分区写入完全不受影响。
 
 **步骤**:
 
-1. 配置较小的 ioExecutor（如 2 线程、队列 10）
-2. 在同一个 Flink 作业中，混合大量过期分区数据和少量实时数据，制造 ioExecutor 过载
+1. 配置较小的历史 request queue（如容量 10）和较小的 ioExecutor（如 2 线程）
+2. 在同一个 Flink 作业中，混合大量过期分区数据和少量实时数据，制造历史 request queue 过载
 3. 观察实时分区写入
 
 **验证**:
@@ -282,25 +303,26 @@ WITH (
 - 如果 cleanup 时有并发 lookup → reference counting 协调，lookup 不会读到已关闭的 RocksDB
 - cleanup 完成后 → 后续 lookup fall through 到 lake → 返回正确值
 
+**实现提示**:
+
+- 可通过注入测试钩子（如在 cleanup re-check 前添加可控延迟/latch）来拉大时间窗口，确保并发操作能在 cleanup 过程中执行
+- 或使用小数据量 + 短 tiering 间隔，反复触发 cleanup，同时持续进行 lookup/write，通过统计验证无异常
+
 ---
 
 ### 场景 11: 边界场景 — `dynamicPartitionEnabled = false`
 
+**目的**: 验证 `__historical__` 作为系统分区不受 `dynamicPartitionEnabled` 配置限制。
+
 **步骤**:
 
-1. 创建表时 `'table.auto-partition.enabled' = 'false'` 或等效关闭动态分区
-2. 手动创建几个分区，然后手动删除一个（模拟过期）
-3. ... 实际上此场景下过期谓词的条件 1 要求表必须是 auto-partitioned，所以过期谓词直接返回 false
-
-**替代测试**:
-
-1. 创建 auto-partitioned 表，但设置 `'dynamic.partition.enabled' = 'false'`（如果此配置存在）
-2. 向过期分区写入
-3. 确认 `__historical__` 仍能被创建（系统分区创建绕过此配置）
+1. 创建 auto-partitioned + lake-enabled 的 PK 表，设置 `'table.auto-partition.dynamic-partition.enabled' = 'false'`
+2. 向过期分区写入数据
 
 **验证**:
 
-- `__historical__` 创建不受 `dynamicPartitionEnabled` 限制
+- `__historical__` 分区被成功创建（系统分区创建绕过 `dynamicPartitionEnabled`）
+- 写入成功，数据出现在 `__historical__` 中
 
 ### 场景 12: 边界场景 — 非过期分区的错误处理
 
@@ -336,8 +358,8 @@ WITH (
 | 场景 | 关注指标 | 预期 |
 |---|---|---|
 | 仅实时分区写入（基准） | p99 延迟 | 作为基准值 |
-| 混入 10% 过期分区数据 | 实时分区 p99 延迟 | 接近基准，无显著劣化 |
-| 混入 50% 过期分区数据 | 实时分区 p99 延迟 | 接近基准，无显著劣化 |
+| 混入 10% 过期分区数据 | 实时分区 p99 延迟 | 相对基准劣化 < 10% |
+| 混入 50% 过期分区数据 | 实时分区 p99 延迟 | 相对基准劣化 < 10% |
 | ioExecutor 队列接近满 | 实时分区 p99 延迟 | 不受影响 |
 
 过期分区的写入延迟不需要关注，可以慢。
@@ -347,7 +369,7 @@ WITH (
 | 场景 | 关注指标 | 预期 |
 |---|---|---|
 | 仅实时分区 lookup（基准） | p99 延迟 | 作为基准值 (< 1ms 级别) |
-| 混入过期分区 key 的 lookup | 实时分区 key 的 p99 延迟 | 接近基准 |
+| 混入过期分区 key 的 lookup | 实时分区 key 的 p99 延迟 | 相对基准劣化 < 10% |
 
 过期分区 lookup 延迟（lake fallback）不需要关注。
 
@@ -355,9 +377,10 @@ WITH (
 
 | 场景 | 关注指标 |
 |---|---|
-| `__historical__` 有少量数据 (< 1000 条) | recovery < 数秒 |
-| `__historical__` 有中量数据 (~100K 条) | recovery 时间与 WAL 大小成正比 |
+| 不同数据量（1K / 10K / 100K 条） | recovery 时间与 WAL replay 数据量成线性关系 |
 | recovery 期间当前分区可用性 | 当前分区不受影响 |
+
+验证方式：测量不同数据量下的 recovery 时间，确认线性关系，无异常瓶颈。
 
 ---
 
@@ -393,13 +416,14 @@ WITH (
 
 ```
 基本功能:
-[ ] 场景 1: PK 表写入过期分区 — upsert + delete + changelog 验证
+[ ] 场景 1: PK 表写入过期分区 — upsert + delete + changelog 验证（含 prewrite buffer old-value 路径）
 [ ] 场景 2: Log 表写入过期分区 — redirect + 消费验证
 [ ] 场景 3: 过期分区 Lookup — lake fallback + local-first
+[ ] 场景 3a: Lookup 触发 __historical__ 创建
 [ ] 场景 4: 多过期分区 composite key 隔离
 
-隔离性（同一 Pipeline 验证，只关注实时分区延迟）:
-[ ] 场景 5: 过期分区写入不影响实时分区写入延迟
+隔离性（同一 Pipeline 验证，实时分区 p99 劣化 < 10%）:
+[ ] 场景 5: 过期分区写入不影响实时分区写入延迟 + checkpoint 正常完成
 [ ] 场景 6: 过期分区 Lookup 不影响实时分区 Lookup 延迟
 [ ] 场景 7: Flow Control — throttle 只影响过期分区
 
@@ -414,7 +438,7 @@ Recovery & Cleanup:
 [ ] 场景 13: __historical__ 名称保留
 
 性能基准:
-[ ] 混合写入时实时分区延迟对比（0% / 10% / 50% 过期）
-[ ] 混合 Lookup 时实时分区延迟对比
-[ ] Recovery 时间评估
+[ ] 混合写入时实时分区延迟对比（0% / 10% / 50% 过期，p99 劣化 < 10%）
+[ ] 混合 Lookup 时实时分区延迟对比（p99 劣化 < 10%）
+[ ] Recovery 时间线性关系验证
 ```

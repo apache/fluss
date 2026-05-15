@@ -415,11 +415,21 @@ The Paimon-specific implementation uses Paimon's `LocalTableQuery` for efficient
 3. If found, wrap Paimon result as Fluss `InternalRow` via `PaimonRowAsFlussRow` adapter
 4. Encode value using `CompactedRowEncoder` + `ValueEncoder.encodeValue(binaryRow)`
 
-### C. Performance Isolation: Thread Isolation between Real-time and Historical Paths
+### C. Performance Isolation between Real-time and Historical Paths
 
-Historical partition operations (both writes and lookups) involve lake I/O with unpredictable latency. Without isolation, these slow operations would block the RPC threads that also serve real-time partition reads and writes.
+Historical partition operations involve lake I/O with unpredictable latency. Without isolation, these slow operations would block resources shared with real-time paths. Current Fluss write path is fully synchronous on the RPC thread: `TabletService.putKv()` → `ReplicaManager.putRecordsToKv()` → `putToLocalKv()` → `KvTablet.putAsLeader()`. If a historical PK write needs lake old-value lookup on the RPC thread, it blocks not only other writes but all RPC processing on that thread.
 
-Current Fluss write path is fully synchronous on the RPC thread: `TabletService.putKv()` → `ReplicaManager.putRecordsToKv()` → `putToLocalKv()` → `KvTablet.putAsLeader()`. If a historical PK write needs lake old-value lookup on the RPC thread, it blocks not only other writes but all RPC processing (reads, heartbeats, etc.) on that thread.
+The isolation strategy has two layers:
+
+- **Server-side** (C.2, C.3): Historical operations are offloaded from RPC threads to a dedicated `ioExecutor`. Since real-time paths never use `ioExecutor`, there is no resource contention — full thread and queue capacity is available for historical operations.
+- **Client-side** (C.4): Real-time and historical paths share the same `Sender` thread, memory pool, and `LookupSender`. To prevent historical slowness from propagating to real-time paths, historical operations are capped at approximately **1/10 of shared client resources**. The 1/10 ratio is configurable and reflects the expectation that late-arriving data is typically a small fraction of total throughput.
+
+| Layer | Resource | Historical Cap | Mechanism |
+|---|---|---|---|
+| Server | `ioExecutor` thread pool | No cap needed — dedicated to historical (C.2) | Real-time paths never use ioExecutor |
+| Server | Historical request queue | ~1/10 of total server request queue (C.3) | Exceeds queue size → `HISTORICAL_PARTITION_THROTTLED` |
+| Client | Write in-flight requests | ~1/10 of `maxInFlight` (C.4.1) | Sender skips historical batches when cap reached |
+| Client | Lookup inflight permits | ~1/10 of `maxLookupInflight` (C.4.2) | Separate historical semaphore |
 
 #### C.1 Client-side: Batching Constraints
 
@@ -460,55 +470,54 @@ Lookups do not require ordering and can execute concurrently regardless of bucke
 
 #### C.3 Server-side: Flow Control
 
-The `ioExecutor` uses a bounded queue as a natural flow control mechanism. Historical writes and lake lookups share the same queue, which provides a unified bound on total lake I/O concurrency per server.
+The server maintains a bounded request queue for historical operations. The default queue size is ~1/10 of the total server request queue capacity, ensuring historical requests do not crowd out real-time request processing resources. The queue size is configurable.
 
-When the queue is full, the server rejects the request with a `HISTORICAL_PARTITION_THROTTLED` error code. Client receives this error and performs backoff retry using the existing client retry mechanism — no historical-partition-specific retry logic is needed.
+When the historical request queue is full, the server rejects the request with a `HISTORICAL_PARTITION_THROTTLED` error code. Client receives this error and performs backoff retry using the existing client retry mechanism — no historical-partition-specific retry logic is needed.
 
-Queue size rationale: the upper bound of useful queue capacity is constrained by request timeout — requests that wait too long in the queue will time out before execution, wasting resources. The default queue capacity is configurable; the final value needs to be determined by benchmarking actual lake I/O latency. The formula for tuning: `queue_size = thread_count × (max_acceptable_wait / avg_lake_io_latency)`.
+Historical requests accepted into the queue are dispatched to the `ioExecutor` for processing. The `ioExecutor` threads and the request queue are independent concerns: the queue bounds how many historical requests are admitted, while the `ioExecutor` determines how many are processed concurrently.
 
-#### C.4 Client-side: Resource Isolation between Real-time and Historical Paths
+#### C.4 Client-side: Historical Resource Cap
 
-Server-side isolation (C.2, C.3) ensures that historical lake I/O does not block RPC threads. However, the client-side also has shared resources that can propagate historical path slowness to real-time paths if not properly isolated.
+The client caps historical operations at ~1/10 of total shared resources. This bounds the impact of historical writes/lookups on real-time paths without requiring complex per-resource analysis.
 
-##### C.4.1 Write path: checkpoint flush 不等待历史 batch
+##### C.4.1 Write path: historical in-flight cap
 
-**Problem**: Flink checkpoint 时，Sink 调用 `flush()` 等待所有 in-flight batch 完成。历史 batch 的 ACK 慢（服务端 lake old-value lookup），会拖慢 checkpoint 甚至导致超时，影响整个作业。
-
-**Why append is not the problem**: `RecordAccumulator.append()` 本身只是微秒级的 memcpy 操作，不等待 ACK。历史 batch 的内存占用 = `发送速率 × ACK 延迟`，在典型场景下远小于 buffer pool 总量（< 5%），不会导致内存池耗尽。而且 Flink 算子是单线程处理 record 的，无法在 append 层面选择性阻塞历史记录而不影响实时记录。
-
-**Solution**: checkpoint flush 只等待实时 batch 完成，不等待历史 batch：
+`Sender` limits the number of concurrent in-flight historical write requests:
 
 ```text
-Sink.snapshotState() / flush():
-  1. flush 所有实时 batch → 等待 ACK 完成（毫秒级，与当前行为一致）
-  2. 历史 batch → 不等待，继续在后台异步处理
+historicalWriteInFlightCap = maxInFlight / 10
+
+Sender.runOnce():
+  for each ready batch:
+    if batch.isHistorical() and historicalInFlight >= historicalWriteInFlightCap:
+      skip  // will retry in next Sender iteration
+    else:
+      send(batch)
+      if historical: historicalInFlight++
+  on ACK callback:
+    if historical: historicalInFlight--
 ```
 
-**Correctness**: 历史 batch 不参与 checkpoint 不影响正确性：
-- 失败恢复时，source 从 checkpoint offset 重放，相同的历史记录会被重新发送到 `__historical__`。
-- PK 表 upsert 天然幂等，重放结果与原始写入一致。
-- Log 表可能产生少量重复，但 `__historical__` 本身是 best-effort late-data append path（见 A.2），在设计语义范围内。
+Effects:
+- At most `historicalWriteInFlightCap` historical batches are in-flight at any time. Real-time batches are never blocked — when the cap is reached, Sender skips historical batches and continues processing real-time batches.
+- **Memory**: historical in-flight memory ≤ `cap × batchSize`, naturally bounded at ~1/10 of total in-flight memory.
+- **Flush**: `flush()` must wait for all in-flight batches to ACK, including historical. With the cap, flush waits for at most `historicalWriteInFlightCap` slow ACKs. Given historical ACK latency ≈ 10–100ms (lake I/O), this adds at most hundreds of milliseconds — well within checkpoint timeout.
 
-**Effect**: checkpoint 耗时完全由实时 batch 决定，不受历史写入的 lake I/O 延迟影响。
+##### C.4.2 Lookup path: historical permit cap
 
-##### C.4.2 Lookup path: separate inflight permits
-
-**Problem**: `LookupSender` uses a single `Semaphore(maxInflightRequests)` (default 128) for all lookup requests. Historical lookups receive slow responses (lake fallback). If historical lookups occupy all permits, the sender thread blocks at `acquire()`, and no real-time lookups can be sent — real-time lookup latency degrades from sub-millisecond to seconds.
-
-**Solution**: Split the single `maxInFlightRequestsSemaphore` into two independent semaphores:
+`LookupSender` splits the single inflight semaphore into two independent semaphores following the 1/10 ratio:
 
 ```text
-realtimeLookupSemaphore   = new Semaphore(realtimeLookupPermits)    // e.g., 96
-historicalLookupSemaphore = new Semaphore(historicalLookupPermits)  // e.g., 32
+realtimeLookupSemaphore   = new Semaphore(maxLookupInflight * 9 / 10)  // e.g., 116
+historicalLookupSemaphore = new Semaphore(maxLookupInflight / 10)      // e.g., 12
 ```
 
-`LookupSender` determines the lookup type (real-time vs. historical) when sending each batch and acquires the corresponding semaphore:
+`LookupSender` acquires the corresponding semaphore based on lookup type:
 - Real-time lookup → `realtimeLookupSemaphore.acquire()` — only competes with other real-time lookups.
 - Historical lookup → `historicalLookupSemaphore.acquire()` — only competes with other historical lookups.
 
-Effect:
-- Even if all 32 historical permits are occupied by slow lake fallback requests, real-time lookups still have 96 permits available.
-- Real-time lookup latency is completely unaffected by historical lookup volume or response latency.
+Effects:
+- Even if all historical permits are occupied by slow lake fallback requests, real-time lookups still have ~116 permits available.
 - When historical permits are exhausted, the sender thread skips historical batches and continues processing real-time batches — historical lookups are retried in subsequent iterations.
 
 ## Compatibility, Deprecation, and Migration Plan

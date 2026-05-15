@@ -9,15 +9,15 @@ Layer 0 (无依赖):    PR 1
 Layer 1 (依赖 PR1):  PR 2, PR 3, PR 4, PR 5  (可并行)
 Layer 2:             PR 6  (← PR 2)
                      PR 7a (← PR 2)
-Layer 3:             PR 7b (← PR 7a; PR 3, PR 4, PR 5 通过传递依赖)
-Layer 4:             PR 8  (← PR 7b)
+Layer 3:             PR 7b (← PR 7a, PR 5)
+Layer 4:             PR 7c (← PR 7b, PR 3)
                      PR 9  (← PR 7b)
-Layer 5:             PR 10 (← all)
+Layer 5:             PR 8  (← PR 7c)
+Layer 6:             PR 10 (← all)
 ```
 
-**关键路径**（二选一，取决于实际开发耗时）:
-- 路径 A: PR 1 → PR 5 → PR 7b → PR 8 → PR 10
-- 路径 B: PR 1 → PR 2 → PR 7a → PR 7b → PR 8 → PR 10
+**关键路径**:
+- PR 1 → PR 2 → PR 7a → PR 7b → PR 7c → PR 8 → PR 10
 
 ---
 
@@ -261,7 +261,6 @@ cleanup 完成后 → 后续 lookup 看到 null handle → fall through 到 lake
 | fluss-client | `fluss-client/src/main/java/org/apache/fluss/client/write/RecordAccumulator.java` | 实时和 `__historical__` 分离 batch |
 | fluss-client | `fluss-client/src/main/java/org/apache/fluss/client/write/Sender.java` | 确保历史 batch 作为独立 request 发送 |
 | fluss-client | bucket assigner 相关类 | `__historical__` 分区的 bucket 计算复用 sticky / bucket-key 策略 |
-| fluss-client | Flink Sink flush 相关逻辑 | checkpoint flush 只等待实时 batch，不等待历史 batch |
 
 ### RecordAccumulator 改动边界
 
@@ -272,24 +271,6 @@ cleanup 完成后 → 后续 lookup 看到 null handle → fall through 到 lake
 - 只需确保 `__historical__` 作为独立的 `PhysicalTablePath` 与实时分区的 batch 分开即可
 
 > PR 7a 会在此基础上增加 PK 历史写入所需的 per-original-partition batch 拆分。
-
-### Checkpoint flush 隔离（对应设计文档 C.4.1）
-
-Flink checkpoint 时 Sink 调用 `flush()` 等待所有 in-flight batch 完成。历史 batch ACK 慢（lake I/O），会拖慢 checkpoint。
-
-解决方案：checkpoint flush 只等待实时 batch，不等待历史 batch。
-
-```
-Sink.snapshotState() / flush():
-  1. flush 所有实时 batch → 等待 ACK 完成（毫秒级）
-  2. 历史 batch → 不等待，继续在后台异步处理
-```
-
-正确性保证：
-- 失败恢复时 source 从 checkpoint offset 重放，历史记录被重新发送
-- PK 表 upsert 幂等，Log 表在 best-effort 语义范围内允许少量重复
-
-> **注意**：`append()` 本身是微秒级 memcpy，不等 ACK。历史 batch 的内存占用 = 发送速率 × ACK 延迟，典型场景下 < buffer 总量的 5%，不会导致内存池耗尽。
 
 ### 关键行为
 
@@ -303,13 +284,12 @@ Sink.snapshotState() / flush():
 - 下游 consumer 从 `__historical__` 消费数据 → 能从 row 中还原原始分区名
 - 同时写入实时分区和过期分区 → batch 分离 → 互不影响
 - 非过期分区不存在 → 仍抛 `PartitionNotExistException`
-- **隔离性**: checkpoint flush 只等待实时 batch，历史 batch 不阻塞 checkpoint
 
 ### 验收标准
 
 - Log 表过期分区写入完全兼容现有 producer/consumer 协议
 - 实时写入路径不受任何影响
-- checkpoint 耗时不受历史 batch ACK 延迟影响
+- `flush()` 等待所有 batch（包括历史）完成
 
 ---
 
@@ -359,42 +339,93 @@ PK 历史写入需要额外的 per-original-partition 维度：
 
 ---
 
-## PR 7b: 服务端 PK 历史写入管道
+## PR 7b: 服务端 composite key encoding for historical PK writes
 
-**目标**: 服务端接收到 PK 历史写入后，正确执行 composite key 编码、写入 historical RocksDB、从 lake fallback 获取 old-value 并生成正确 changelog。
+**目标**: 服务端读取客户端发送的 `partition_name`，使用 `CompositeKeyEncoder` 对 key 加上分区前缀，实现不同过期分区在同一 `__historical__` RocksDB 中的 key 隔离。
 
-**对应设计文档章节**: A.3.1 (server-side), C.2
+**对应设计文档章节**: A.3.1 (server-side step 3-4), A.3.2
 
-**前置依赖**: PR 3, PR 4, PR 5, PR 7a
+**前置依赖**: PR 7a（客户端发送 `partition_name`）, PR 5（`CompositeKeyEncoder`）
 
 ### 改动范围
 
 | 模块 | 文件 | 改动内容 |
 |---|---|---|
-| fluss-server | `fluss-server/src/main/java/org/apache/fluss/server/kv/KvTablet.java` | `__historical__` 写入管道：提取 original partition → composite key → 写入 prewrite buffer / historical RocksDB |
-| fluss-server | `fluss-server/src/main/java/org/apache/fluss/server/kv/KvTablet.java` | Old-value resolution chain：prewrite buffer → historical RocksDB → lake fallback |
-| fluss-server | `fluss-server/src/main/java/org/apache/fluss/server/replica/ReplicaManager.java` | historical write 分发到 ioExecutor per-bucket serial executor |
+| fluss-server | `ServerRpcMessageUtils.java` | 新增 `getPartitionNames()` 从 `PutKvRequest` 提取 `partition_name` |
+| fluss-server | `TabletService.java` | 调用 `getPartitionNames()` 并传递给 `ReplicaManager` |
+| fluss-server | `ReplicaManager.java` | `putRecordsToKv()` / `putToLocalKv()` 透传 `partitionNames` |
+| fluss-server | `Replica.java` | `putRecordsToLeader()` 增加 `@Nullable String partitionName` 参数 |
+| fluss-server | `KvTablet.java` | 新增 `isHistoricalPartition` 字段；`putAsLeader()` / `processKvRecords()` 中基于该字段应用 `CompositeKeyEncoder` |
+| fluss-client | `HistoricalPartitionTableITCase.java` | 新增多分区隔离测试 |
+
+### 核心逻辑
+
+KvTablet 构造时通过 `PartitionUtils.isHistoricalPartitionName()` 判断自身是否属于历史分区，存储为 `isHistoricalPartition` 字段。在 `processKvRecords()` 中：
+
+```java
+byte[] keyBytes =
+        isHistoricalPartition
+                ? CompositeKeyEncoder.encode(partitionName, rawKeyBytes)
+                : rawKeyBytes;
+```
+
+composite key 用于 pre-write buffer 和 RocksDB 的所有操作（lookup、insert、update、delete），下游方法无需改动。
+
+### 不在本 PR 范围
+
+- lake fallback old-value lookup（PR 7c）
+
+### 测试要求
+
+- 不同 original partition 的 PK write 在 `__historical__` 中 key 不碰撞
+- PK insert 到过期分区（无旧值）→ changelog `INSERT` 正确
+- 同一 PK 写入同一过期分区 → 正常 upsert（`UPDATE_BEFORE + UPDATE_AFTER`）
+- 实时路径完全不受影响
+
+### 验收标准
+
+- composite key 隔离不同 original partition 的 key space
+- `isHistoricalPartition` 判断基于 tablet 自身身份，语义明确
+- 方法签名变更对实时路径透明（传 null）
+
+---
+
+## PR 7c: 服务端 lake fallback old-value lookup for historical PK writes
+
+**目标**: 历史 PK 写入时，当 prewrite buffer 和 RocksDB 中都没有 old-value 时，fallback 到 lake（`LakeTableLookuper`）获取旧值，生成正确的 changelog。
+
+**对应设计文档章节**: A.3.1 (server-side old-value resolution), B.3
+
+**前置依赖**: PR 7b（composite key encoding）, PR 3（`LakeTableLookuper` SPI + Paimon 实现）
+
+### 改动范围
+
+| 模块 | 文件 | 改动内容 |
+|---|---|---|
+| fluss-server | `KvTablet.java` | Old-value resolution chain 扩展：prewrite buffer → RocksDB → lake fallback |
+| fluss-server | `Replica.java` 或 `ReplicaManager.java` | 初始化和管理 `LakeTableLookuper` 实例 |
 
 ### Old-value resolution chain
 
 ```
-1. prewrite buffer (composite key lookup)
-2. historical RocksDB (composite key lookup)
-3. lake fallback (LakeTableLookuper: original partition + original key)
+1. prewrite buffer (composite key lookup)  → 命中则使用
+2. historical RocksDB (composite key lookup) → 命中则使用
+3. lake fallback (LakeTableLookuper: original partition + original key) → 命中则使用，否则视为新 INSERT
 ```
+
+lake fallback 时需要将 composite key 解码回 original partition name + original key，用于 `LakeTableLookuper` 查询。
 
 ### 测试要求
 
-- PK upsert 到过期分区 → composite key 写入正确 → old-value 从 lake 获取 → changelog `UPDATE_BEFORE + UPDATE_AFTER` 正确
+- PK upsert 到过期分区 → old-value 从 lake 获取 → changelog `UPDATE_BEFORE + UPDATE_AFTER` 正确
 - PK insert 到过期分区（lake 无旧值）→ changelog `INSERT` 正确
 - key-only delete 到过期分区 → 通过 `partition_name` 路由正确
-- 不同 original partition 的 PK write 在 `__historical__` 中 key 不碰撞
 
 ### 验收标准
 
 - PK 历史写入生成的 changelog 与正常分区行为一致
-- composite key 隔离不同 original partition 的 key space
-- 写入通过 per-bucket serial executor 串行，保证顺序
+- lake fallback 仅在 local（buffer + RocksDB）miss 时触发
+- `LakeTableLookuper` 异常不影响实时路径
 
 ---
 
@@ -404,7 +435,7 @@ PK 历史写入需要额外的 per-original-partition 维度：
 
 **对应设计文档章节**: B.1, B.2, C.4.2
 
-**前置依赖**: PR 7b（PR 3/4/5 通过 PR 7b 传递；需要先有 historical write 才能完整测试 local-first lookup）
+**前置依赖**: PR 7c（需要 lake fallback old-value lookup 才能完整测试 local-first lookup 语义）
 
 ### 改动范围
 
@@ -478,7 +509,7 @@ Historical lookup batch key = (__historical__ bucket, original partition name)
 
 **对应设计文档章节**: A.3.3, A.3.4
 
-**前置依赖**: PR 7b（PR 4/5 通过 PR 7b 传递；cleanup 使用 PR 4 的 per-bucket serial executor，recovery 使用 PR 5 的 historical RocksDB）
+**前置依赖**: PR 7b（cleanup 使用 PR 4 的 per-bucket serial executor，recovery 使用 PR 5 的 historical RocksDB）
 
 ### 改动范围
 
@@ -538,7 +569,7 @@ Historical lookup batch key = (__historical__ bucket, original partition name)
 
 **对应设计文档章节**: Test Plan
 
-**前置依赖**: PR 1–9 全部
+**前置依赖**: PR 1–9 全部（含 PR 7c）
 
 ### 测试场景
 
