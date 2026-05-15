@@ -498,6 +498,19 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
     }
   }
 
+  test("Spark Read: partition pushdown — INT partition with range predicate") {
+    withTable("t") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t (id BIGINT, pt INT)
+             |PARTITIONED BY (pt)""".stripMargin)
+      sql(s"INSERT INTO $DEFAULT_DATABASE.t VALUES (1, 2), (2, 10)")
+
+      val query = sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE pt > 2 ORDER BY id")
+      checkAnswer(query, Row(2L, 10) :: Nil)
+      assert(partitionPredicate(query).isDefined)
+    }
+  }
+
   test("Spark Read: scan description surfaces partition filter when pushed") {
     withPartitionedTable {
       val withPart = sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01'")

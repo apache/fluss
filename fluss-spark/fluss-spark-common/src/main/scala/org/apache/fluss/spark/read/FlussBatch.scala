@@ -119,7 +119,10 @@ class FlussAppendBatch(
 
     if (tableInfo.isPartitioned) {
       val matching =
-        SparkPartitionPredicate.filterPartitions(partitionInfos.asScala.toSeq, partitionPredicate)
+        SparkPartitionPredicate.filterPartitions(
+          tableInfo,
+          partitionInfos.asScala.toSeq,
+          partitionPredicate)
       matching
         .map {
           partitionInfo =>
@@ -240,7 +243,10 @@ class FlussUpsertBatch(
 
     if (tableInfo.isPartitioned) {
       val matching =
-        SparkPartitionPredicate.filterPartitions(partitionInfos.asScala.toSeq, partitionPredicate)
+        SparkPartitionPredicate.filterPartitions(
+          tableInfo,
+          partitionInfos.asScala.toSeq,
+          partitionPredicate)
       matching.flatMap {
         partitionInfo =>
           val partitionName = partitionInfo.getPartitionName

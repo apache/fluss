@@ -104,7 +104,6 @@ import static org.apache.fluss.flink.utils.LakeSourceUtils.createLakeSource;
 import static org.apache.fluss.flink.utils.PredicateConverter.convertToFlussPredicate;
 import static org.apache.fluss.flink.utils.PushdownUtils.ValueConversion.FLINK_INTERNAL_VALUE;
 import static org.apache.fluss.flink.utils.PushdownUtils.extractFieldEquals;
-import static org.apache.fluss.flink.utils.StringifyPredicateVisitor.stringifyPartitionPredicate;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Flink table source to scan Fluss data. */
@@ -627,8 +626,7 @@ public class FlinkTableSource
                     } else {
                         acceptedFilters.add(filter);
                     }
-                    // Convert literals in the predicate to partition string
-                    converted.add(stringifyPartitionPredicate(p));
+                    converted.add(p);
                 } else {
                     remainingFilters.add(filter);
                 }

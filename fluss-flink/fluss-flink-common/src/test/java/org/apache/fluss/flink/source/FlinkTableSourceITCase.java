@@ -1757,6 +1757,32 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     }
 
     @Test
+    void testReadPartitionPushDownWithIntPartitionRangePredicate() throws Exception {
+        tEnv.executeSql(
+                "create table int_partitioned_table"
+                        + " (a int not null, b varchar, pt int, primary key (a, pt) NOT ENFORCED) partitioned by (pt) ");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "int_partitioned_table");
+        tEnv.executeSql("alter table int_partitioned_table add partition (pt=2)");
+        tEnv.executeSql("alter table int_partitioned_table add partition (pt=10)");
+
+        List<InternalRow> rows = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            rows.add(row(i, "v" + i, 2));
+            rows.add(row(i, "v" + i, 10));
+        }
+        writeRows(conn, tablePath, rows, false);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
+
+        List<String> expected = new ArrayList<>();
+        for (int i = 0; i < 3; i++) {
+            expected.add(String.format("+I[%d, v%d, 10]", i, i));
+        }
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from int_partitioned_table where pt > 2").collect();
+        assertResultsIgnoreOrder(rowIter, expected, true);
+    }
+
+    @Test
     void testStreamingReadPartitionPushDownWithInExpr() throws Exception {
 
         tEnv.executeSql(

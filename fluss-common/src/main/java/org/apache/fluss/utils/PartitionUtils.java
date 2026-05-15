@@ -22,11 +22,14 @@ import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypeRoot;
+import org.apache.fluss.types.RowType;
 
 import java.time.Instant;
 import java.time.ZonedDateTime;
@@ -344,5 +347,29 @@ public class PartitionUtils {
                 throw new IllegalArgumentException("Unsupported DataTypeRoot: " + type);
         }
         return stringPartitionKey;
+    }
+
+    /** Projects {@code tableInfo}'s row type down to its partition key columns, in key order. */
+    public static RowType partitionRowType(TableInfo tableInfo) {
+        RowType schema = tableInfo.getRowType();
+        List<String> fieldNames = schema.getFieldNames();
+        int[] indexes =
+                tableInfo.getPartitionKeys().stream().mapToInt(fieldNames::indexOf).toArray();
+        return schema.project(indexes);
+    }
+
+    /**
+     * Builds a row of typed partition values by parsing each string with {@link
+     * #parseValueOfType(String, DataTypeRoot)} for the column at that ordinal in {@code
+     * partitionRowType}.
+     */
+    public static GenericRow toPartitionRow(
+            List<String> partitionValues, RowType partitionRowType) {
+        GenericRow row = new GenericRow(partitionValues.size());
+        for (int i = 0; i < partitionValues.size(); i++) {
+            DataTypeRoot type = partitionRowType.getTypeAt(i).getTypeRoot();
+            row.setField(i, parseValueOfType(partitionValues.get(i), type));
+        }
+        return row;
     }
 }
