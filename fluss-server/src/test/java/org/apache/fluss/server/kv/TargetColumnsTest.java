@@ -36,13 +36,10 @@ class TargetColumnsTest {
                     .build();
 
     @Test
-    void specifiesAllSchemaFieldIndexes_whenSubset_returnsFalse() {
+    void testTargetColumns() {
         assertThat(TargetColumns.specifiesAllSchemaFieldIndexes(TWO_COL_SCHEMA, new int[] {0}))
                 .isFalse();
-    }
 
-    @Test
-    void specifiesAllSchemaFieldIndexes_whenAllColumnsListed_returnsTrue() {
         assertThat(TargetColumns.specifiesAllSchemaFieldIndexes(TWO_COL_SCHEMA, new int[] {0, 1}))
                 .isTrue();
         assertThat(TargetColumns.specifiesAllSchemaFieldIndexes(TWO_COL_SCHEMA, new int[] {1, 0}))
@@ -51,23 +48,14 @@ class TargetColumnsTest {
                         TargetColumns.specifiesAllSchemaFieldIndexes(
                                 TWO_COL_SCHEMA, new int[] {0, 1, 0}))
                 .isTrue();
-    }
 
-    @Test
-    void specifiesAllSchemaFieldIndexes_whenOutOfRange_returnsFalse() {
         assertThat(TargetColumns.specifiesAllSchemaFieldIndexes(TWO_COL_SCHEMA, new int[] {0, 2}))
                 .isFalse();
-    }
 
-    @Test
-    void specifiesAllSchemaFieldIndexes_nullTargetColumnsThrows() {
         assertThatThrownBy(() -> TargetColumns.specifiesAllSchemaFieldIndexes(TWO_COL_SCHEMA, null))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessageContaining("targetColumns");
-    }
 
-    @Test
-    void specifiesAllSchemaFieldIndexes_threeColumnSchema() {
         Schema threeCols =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
@@ -79,10 +67,7 @@ class TargetColumnsTest {
                 .isFalse();
         assertThat(TargetColumns.specifiesAllSchemaFieldIndexes(threeCols, new int[] {2, 0, 1, 2}))
                 .isTrue();
-    }
 
-    @Test
-    void specifiesAllSchemaFieldIndexes_nullSchemaThrows() {
         assertThatThrownBy(() -> TargetColumns.specifiesAllSchemaFieldIndexes(null, new int[] {0}))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessageContaining("schema");
