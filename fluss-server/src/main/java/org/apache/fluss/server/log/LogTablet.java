@@ -370,12 +370,9 @@ public final class LogTablet {
                 clock);
     }
 
-    /**
-     * Same as {@link #create(PhysicalTablePath, File, Configuration, TabletServerMetricGroup, long,
-     * Scheduler, LogFormat, int, long, boolean, Clock, boolean)} using the default {@link
-     * ConfigOptions#TABLE_LOG_TTL} when no table properties are configured.
-     */
+    @VisibleForTesting
     public static LogTablet create(
+            File dataDir,
             PhysicalTablePath tablePath,
             File tabletDir,
             Configuration conf,
@@ -389,6 +386,7 @@ public final class LogTablet {
             boolean isCleanShutdown)
             throws Exception {
         return create(
+                dataDir,
                 tablePath,
                 tabletDir,
                 conf,
