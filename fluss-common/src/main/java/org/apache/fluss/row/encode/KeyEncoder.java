@@ -77,6 +77,14 @@ public interface KeyEncoder {
         Optional<Integer> optKvFormatVersion = tableConfig.getKvFormatVersion();
         DataLakeFormat dataLakeFormat = tableConfig.getDataLakeFormat().orElse(null);
         int kvFormatVersion = optKvFormatVersion.orElse(1);
+
+        // Hudi's HudiKeyEncoder is lossy (4-byte hash); it must NOT be used for
+        // primary key encoding because different keys with the same List#hashCode
+        // would collide. Use CompactedKeyEncoder instead.
+        if (dataLakeFormat == DataLakeFormat.HUDI) {
+            return CompactedKeyEncoder.createKeyEncoder(rowType, keyFields);
+        }
+
         if (kvFormatVersion == 1) {
             return of(rowType, keyFields, dataLakeFormat);
         }
