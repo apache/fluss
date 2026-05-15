@@ -120,7 +120,7 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
       val partitions = lakeUpsertInputPartitions(df)
       assert(
         partitions.exists(_.snapshotId >= 0),
-        s"Expected at least one fallback partition with snapshotId >= 0, got: ${partitions.mkString(", ")}")
+        s"Expected at least one hybrid partition with snapshotId >= 0, got: ${partitions.mkString(", ")}")
       checkAnswer(
         df,
         Row(1, "alice", 90) :: Row(2, "bob_updated", 100) ::
@@ -160,7 +160,7 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
       val partitions = lakeUpsertInputPartitions(df)
       assert(
         partitions.exists(_.snapshotId >= 0),
-        s"Expected at least one fallback partition with snapshotId >= 0, got: ${partitions.mkString(", ")}")
+        s"Expected at least one hybrid partition with snapshotId >= 0, got: ${partitions.mkString(", ")}")
       checkAnswer(
         df,
         Row(1, "alice", 90, "2026-01-01") ::
