@@ -50,7 +50,6 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
-import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Lists;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.ExceptionUtils;
@@ -564,7 +563,11 @@ public class FlinkSourceEnumerator
                             .filter(
                                     partition ->
                                             partitionFilters.test(
-                                                    toInternalRow(partition, partitionRowType)))
+                                                    PartitionUtils.toPartitionRow(
+                                                            partition
+                                                                    .getResolvedPartitionSpec()
+                                                                    .getPartitionValues(),
+                                                            partitionRowType)))
                             .collect(Collectors.toList());
 
             int filteredSize = filteredPartitionInfos.size();
@@ -585,12 +588,6 @@ public class FlinkSourceEnumerator
             }
             return filteredPartitionInfos;
         }
-    }
-
-    private static InternalRow toInternalRow(
-            PartitionInfo partitionInfo, RowType partitionRowType) {
-        return PartitionUtils.toPartitionRow(
-                partitionInfo.getResolvedPartitionSpec().getPartitionValues(), partitionRowType);
     }
 
     /** Init the splits for Fluss. */
