@@ -21,6 +21,8 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 
+import javax.annotation.Nullable;
+
 import java.util.concurrent.CompletableFuture;
 
 /** Abstract Class to represent a lookup operation. */
@@ -30,12 +32,33 @@ public abstract class AbstractLookupQuery<T> {
     private final TablePath tablePath;
     private final TableBucket tableBucket;
     private final byte[] key;
+
+    /** Whether this lookup targets a historical partition (lake fallback path). */
+    private final boolean historical;
+
+    /**
+     * The original partition name for historical partition lookups, null for realtime lookups. Used
+     * for composite key encoding and lake fallback on the server side.
+     */
+    @Nullable private final String partitionName;
+
     private int retries;
 
     public AbstractLookupQuery(TablePath tablePath, TableBucket tableBucket, byte[] key) {
+        this(tablePath, tableBucket, key, false, null);
+    }
+
+    public AbstractLookupQuery(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            byte[] key,
+            boolean historical,
+            @Nullable String partitionName) {
         this.tablePath = tablePath;
         this.tableBucket = tableBucket;
         this.key = key;
+        this.historical = historical;
+        this.partitionName = partitionName;
         this.retries = 0;
     }
 
@@ -53,6 +76,16 @@ public abstract class AbstractLookupQuery<T> {
 
     public int retries() {
         return retries;
+    }
+
+    @Nullable
+    public String partitionName() {
+        return partitionName;
+    }
+
+    /** Returns true if this lookup targets a historical partition. */
+    public boolean isHistorical() {
+        return historical;
     }
 
     public void incrementRetries() {

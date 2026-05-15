@@ -28,6 +28,7 @@ import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.time.Duration;
@@ -66,11 +67,15 @@ public class LookupClient {
         this.lookupQueue = new LookupQueue(conf);
         this.lookupSenderThreadPool = createThreadPool();
         short acks = configureAcks(conf);
+        int totalInflight = conf.getInt(ConfigOptions.CLIENT_LOOKUP_MAX_INFLIGHT_SIZE);
+        double historicalRatio = conf.get(ConfigOptions.CLIENT_LOOKUP_HISTORICAL_INFLIGHT_RATIO);
+        int historicalInflight = Math.max(1, (int) (totalInflight * historicalRatio));
         this.lookupSender =
                 new LookupSender(
                         metadataUpdater,
                         lookupQueue,
-                        conf.getInt(ConfigOptions.CLIENT_LOOKUP_MAX_INFLIGHT_SIZE),
+                        totalInflight,
+                        historicalInflight,
                         conf.getInt(ConfigOptions.CLIENT_LOOKUP_MAX_RETRIES),
                         acks,
                         (int) conf.get(ConfigOptions.CLIENT_REQUEST_TIMEOUT).toMillis());
@@ -100,7 +105,29 @@ public class LookupClient {
             TableBucket tableBucket,
             byte[] keyBytes,
             boolean insertIfNotExists) {
-        LookupQuery lookup = new LookupQuery(tablePath, tableBucket, keyBytes, insertIfNotExists);
+        return lookup(tablePath, tableBucket, keyBytes, insertIfNotExists, null);
+    }
+
+    /**
+     * Lookup with an optional partition name for historical partition lookups.
+     *
+     * @param partitionName the original partition name for historical lookups, null for realtime
+     */
+    public CompletableFuture<byte[]> lookup(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            byte[] keyBytes,
+            boolean insertIfNotExists,
+            @Nullable String partitionName) {
+        boolean historical = partitionName != null;
+        LookupQuery lookup =
+                new LookupQuery(
+                        tablePath,
+                        tableBucket,
+                        keyBytes,
+                        insertIfNotExists,
+                        historical,
+                        partitionName);
         lookupQueue.appendLookup(lookup);
         return lookup.future();
     }

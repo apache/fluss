@@ -1132,6 +1132,30 @@ public class ServerRpcMessageUtils {
         return lookupEntryData;
     }
 
+    /**
+     * Extracts partition_name per bucket from a LookupRequest. Returns null if no bucket has
+     * partition_name set.
+     */
+    @Nullable
+    public static Map<TableBucket, String> getLookupPartitionNames(LookupRequest lookupRequest) {
+        long tableId = lookupRequest.getTableId();
+        Map<TableBucket, String> partitionNames = null;
+        for (PbLookupReqForBucket req : lookupRequest.getBucketsReqsList()) {
+            if (req.hasPartitionName()) {
+                if (partitionNames == null) {
+                    partitionNames = new HashMap<>();
+                }
+                TableBucket tb =
+                        new TableBucket(
+                                tableId,
+                                req.hasPartitionId() ? req.getPartitionId() : null,
+                                req.getBucketId());
+                partitionNames.put(tb, req.getPartitionName());
+            }
+        }
+        return partitionNames;
+    }
+
     public static Map<TableBucket, List<byte[]>> toPrefixLookupData(
             PrefixLookupRequest prefixLookupRequest) {
         long tableId = prefixLookupRequest.getTableId();

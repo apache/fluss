@@ -21,6 +21,8 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metadata.TableBucket;
 
+import javax.annotation.Nullable;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -31,10 +33,21 @@ public class LookupBatch {
     /** The table bucket that the lookup operations should fall into. */
     private final TableBucket tableBucket;
 
+    /**
+     * The original partition name for historical partition lookups, null for realtime lookups. Set
+     * in the RPC request so the server can use it for lake fallback.
+     */
+    @Nullable private final String partitionName;
+
     private final List<LookupQuery> lookups;
 
     public LookupBatch(TableBucket tableBucket) {
+        this(tableBucket, null);
+    }
+
+    public LookupBatch(TableBucket tableBucket, @Nullable String partitionName) {
         this.tableBucket = tableBucket;
+        this.partitionName = partitionName;
         this.lookups = new ArrayList<>();
     }
 
@@ -48,6 +61,11 @@ public class LookupBatch {
 
     public TableBucket tableBucket() {
         return tableBucket;
+    }
+
+    @Nullable
+    public String partitionName() {
+        return partitionName;
     }
 
     /** Complete the lookup operations using given values . */

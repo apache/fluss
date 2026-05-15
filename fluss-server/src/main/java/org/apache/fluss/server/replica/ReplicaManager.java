@@ -45,6 +45,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.KeyRecordBatch;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
@@ -732,7 +733,12 @@ public class ReplicaManager implements ServerReconfigurable {
 
         for (Map.Entry<TableBucket, KvRecordBatch> entry : entriesPerBucket.entrySet()) {
             TableBucket tb = entry.getKey();
-            KvRecordBatch batch = entry.getValue();
+            // Defensive copy: the KvRecordBatch references the network ByteBuf via lazy
+            // parsing (zero-copy). The ByteBuf is released by RequestProcessor.finally
+            // after this method returns, but historical writes execute asynchronously on
+            // a background thread. Without this copy, the async task would read freed
+            // off-heap memory, causing IndexOutOfBoundsException.
+            KvRecordBatch batch = ((DefaultKvRecordBatch) entry.getValue()).copyToHeap();
             historicalPartitionHandler.submitWrite(
                     tb,
                     () -> {
@@ -811,6 +817,7 @@ public class ReplicaManager implements ServerReconfigurable {
     protected void lookup(TableBucket tableBucket, byte[] key, Consumer<byte[]> responseCallback) {
         lookups(
                 Collections.singletonMap(tableBucket, Collections.singletonList(key)),
+                null,
                 ApiKeys.LOOKUP.highestSupportedVersion,
                 multiLookupResponseCallBack -> {
                     LookupResultForBucket result = multiLookupResponseCallBack.get(tableBucket);
@@ -826,27 +833,30 @@ public class ReplicaManager implements ServerReconfigurable {
 
     public void lookups(
             Map<TableBucket, List<byte[]>> entriesPerBucket,
+            @Nullable Map<TableBucket, String> partitionNames,
             short apiVersion,
             Consumer<Map<TableBucket, LookupResultForBucket>> responseCallback) {
-        lookups(false, null, null, entriesPerBucket, apiVersion, responseCallback);
+        lookups(false, null, null, entriesPerBucket, partitionNames, apiVersion, responseCallback);
     }
 
     /**
      * Lookup with multi key from leader replica of the buckets.
      *
      * @param apiVersion the client API version for backward compatibility validation
+     * @param partitionNames per-bucket partition names for historical lookups, null if none
      */
     public void lookups(
             boolean insertIfNotExists,
             @Nullable Integer timeoutMs,
             @Nullable Integer requiredAcks,
             Map<TableBucket, List<byte[]>> entriesPerBucket,
+            @Nullable Map<TableBucket, String> partitionNames,
             short apiVersion,
             Consumer<Map<TableBucket, LookupResultForBucket>> responseCallback) {
         // TODO: support async historical path for insertIfNotExists (lookup-with-insert)
         if (insertIfNotExists) {
             Map<TableBucket, LookupResultForBucket> lookupResultForBucketMap =
-                    processLookupsSync(entriesPerBucket, apiVersion);
+                    processLookupsSync(entriesPerBucket, partitionNames, apiVersion);
             // Lookup-with-insert-if-not-exists flow:
             // 1. Initial lookup may find some keys missing
             // 2. For missing keys, we call putKv to insert them
@@ -898,7 +908,8 @@ public class ReplicaManager implements ServerReconfigurable {
         // buckets, so we check any one bucket to determine the request type.
         if (!isHistoricalRequest(entriesPerBucket.keySet())) {
             // Realtime path: synchronous processing on the RPC thread
-            responseCallback.accept(processLookupsSync(entriesPerBucket, apiVersion));
+            responseCallback.accept(
+                    processLookupsSync(entriesPerBucket, partitionNames, apiVersion));
             return;
         }
 
@@ -921,7 +932,10 @@ public class ReplicaManager implements ServerReconfigurable {
             historicalPartitionHandler.submitLookup(
                     () -> {
                         results.putAll(
-                                processLookupsSync(Collections.singletonMap(tb, keys), apiVersion));
+                                processLookupsSync(
+                                        Collections.singletonMap(tb, keys),
+                                        partitionNames,
+                                        apiVersion));
                         if (pendingCount.decrementAndGet() == 0) {
                             historicalPartitionHandler.release();
                             responseCallback.accept(results);
@@ -933,9 +947,13 @@ public class ReplicaManager implements ServerReconfigurable {
     /**
      * Process lookups synchronously for the given entries. This is extracted as a helper so it can
      * be reused by both the synchronous realtime path and the async historical path.
+     *
+     * @param partitionNames per-bucket partition names for historical lookups, null if none
      */
     private Map<TableBucket, LookupResultForBucket> processLookupsSync(
-            Map<TableBucket, List<byte[]>> entriesPerBucket, short apiVersion) {
+            Map<TableBucket, List<byte[]>> entriesPerBucket,
+            @Nullable Map<TableBucket, String> partitionNames,
+            short apiVersion) {
         Map<TableBucket, LookupResultForBucket> lookupResultForBucketMap = new HashMap<>();
         long startTime = System.currentTimeMillis();
         TableMetricGroup tableMetrics = null;
@@ -946,8 +964,11 @@ public class ReplicaManager implements ServerReconfigurable {
                 validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalLookupRequests().inc();
+                String partitionName = partitionNames != null ? partitionNames.get(tb) : null;
                 lookupResultForBucketMap.put(
-                        tb, new LookupResultForBucket(tb, replica.lookups(entry.getValue())));
+                        tb,
+                        new LookupResultForBucket(
+                                tb, replica.lookups(entry.getValue(), partitionName)));
             } catch (Exception e) {
                 if (isUnexpectedException(e)) {
                     LOG.error("Error lookup from local kv on replica {}", tb, e);

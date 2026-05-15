@@ -812,6 +812,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
         makeLogTableAsLeader(tb2.getBucket());
         replicaManager.lookups(
                 Collections.singletonMap(tb2, Collections.singletonList(key1Bytes)),
+                null,
                 LOOKUP_KV_VERSION,
                 (lookupResultForBuckets) -> {
                     LookupResultForBucket lookupResultForBucket = lookupResultForBuckets.get(tb2);
@@ -1048,7 +1049,8 @@ class ReplicaManagerTest extends ReplicaTestBase {
         // Insert missing keys across buckets
         CompletableFuture<Map<TableBucket, LookupResultForBucket>> future =
                 new CompletableFuture<>();
-        replicaManager.lookups(true, 20000, 1, requestMap, LOOKUP_KV_VERSION, future::complete);
+        replicaManager.lookups(
+                true, 20000, 1, requestMap, null, LOOKUP_KV_VERSION, future::complete);
         Map<TableBucket, LookupResultForBucket> inserted = future.get(5, TimeUnit.SECONDS);
 
         byte[] value0 = inserted.get(tb0).lookupValues().get(0);
@@ -1068,6 +1070,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 20000,
                 1,
                 Collections.singletonMap(tb, keys),
+                null,
                 LOOKUP_KV_VERSION,
                 future::complete);
         LookupResultForBucket result = future.get(5, TimeUnit.SECONDS).get(tb);
@@ -2306,6 +2309,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 new CompletableFuture<>();
         replicaManager.lookups(
                 Collections.singletonMap(tb, Collections.singletonList(keyBytes)),
+                null,
                 oldClientVersion,
                 lookupFuture::complete);
         LookupResultForBucket lookupResult = lookupFuture.get().get(tb);

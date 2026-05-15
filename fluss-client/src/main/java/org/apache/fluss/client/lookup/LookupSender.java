@@ -73,7 +73,11 @@ class LookupSender implements Runnable {
 
     private final LookupQueue lookupQueue;
 
-    private final Semaphore maxInFlightReuqestsSemaphore;
+    /** Semaphore for realtime (non-historical) lookup inflight requests. */
+    private final Semaphore realtimeMaxInFlightReuqestsSemaphore;
+
+    /** Semaphore for historical partition lookup inflight requests. */
+    private final Semaphore historicalMaxInFlightReuqestsSemaphore;
 
     private final int maxRetries;
 
@@ -85,12 +89,15 @@ class LookupSender implements Runnable {
             MetadataUpdater metadataUpdater,
             LookupQueue lookupQueue,
             int maxFlightRequests,
+            int historicalFlightRequests,
             int maxRetries,
             short acks,
             int maxRequestTimeoutMs) {
         this.metadataUpdater = metadataUpdater;
         this.lookupQueue = lookupQueue;
-        this.maxInFlightReuqestsSemaphore = new Semaphore(maxFlightRequests);
+        this.realtimeMaxInFlightReuqestsSemaphore =
+                new Semaphore(maxFlightRequests - historicalFlightRequests);
+        this.historicalMaxInFlightReuqestsSemaphore = new Semaphore(historicalFlightRequests);
         this.maxRetries = maxRetries;
         this.running = true;
         this.acks = acks;
@@ -138,21 +145,45 @@ class LookupSender implements Runnable {
         if (lookups.isEmpty()) {
             return;
         }
+
+        // Split lookups into realtime and historical to use separate semaphores,
+        // ensuring slow lake I/O lookups don't starve realtime lookups.
+        List<AbstractLookupQuery<?>> realtimeLookups = new ArrayList<>();
+        List<AbstractLookupQuery<?>> historicalLookups = new ArrayList<>();
+        for (AbstractLookupQuery<?> lookup : lookups) {
+            if (lookup.isHistorical()) {
+                historicalLookups.add(lookup);
+            } else {
+                realtimeLookups.add(lookup);
+            }
+        }
+
         // group by <leader, lookup type> to lookup batches
-        Map<Tuple2<Integer, LookupType>, List<AbstractLookupQuery<?>>> lookupBatches =
-                groupByLeaderAndType(lookups);
+        Map<Tuple2<Integer, LookupType>, List<AbstractLookupQuery<?>>> realtimeBatches =
+                groupByLeaderAndType(realtimeLookups);
+
+        List<Map<Tuple2<Integer, LookupType>, List<AbstractLookupQuery<?>>>> historicalBatchGroups =
+                groupHistoricalByPartitionAndLeader(historicalLookups);
 
         // if no lookup batches, sleep a bit to avoid busy loop. This case will happen when there is
         // no leader for all the lookup request in queue.
-        if (lookupBatches.isEmpty() && !lookupQueue.hasUnDrained()) {
+        if (realtimeBatches.isEmpty()
+                && historicalBatchGroups.isEmpty()
+                && !lookupQueue.hasUnDrained()) {
             // TODO: may use wait/notify mechanism to avoid active sleep, and use a dynamic sleep
             // time based on the request waited time.
             Thread.sleep(100);
         }
 
-        // now, send the batches
-        lookupBatches.forEach(
-                (destAndType, batch) -> sendLookups(destAndType.f0, destAndType.f1, batch));
+        // now, send the batches with their respective semaphores
+        realtimeBatches.forEach(
+                (destAndType, batch) -> sendLookups(destAndType.f0, destAndType.f1, batch, false));
+        for (Map<Tuple2<Integer, LookupType>, List<AbstractLookupQuery<?>>> batches :
+                historicalBatchGroups) {
+            batches.forEach(
+                    (destAndType, batch) ->
+                            sendLookups(destAndType.f0, destAndType.f1, batch, true));
+        }
     }
 
     private Map<Tuple2<Integer, LookupType>, List<AbstractLookupQuery<?>>> groupByLeaderAndType(
@@ -182,13 +213,43 @@ class LookupSender implements Runnable {
         return lookupBatchesByLeader;
     }
 
+    /**
+     * Groups historical lookups by partitionName first, then by &lt;leader, type&gt;. Different
+     * expired partitions (e.g., "2000", "2001") may redirect to the same __historical__ bucket.
+     * Grouping by partitionName ensures each RPC request carries the correct partition_name for
+     * composite key encoding on the server.
+     */
+    private List<Map<Tuple2<Integer, LookupType>, List<AbstractLookupQuery<?>>>>
+            groupHistoricalByPartitionAndLeader(List<AbstractLookupQuery<?>> historicalLookups) {
+        List<Map<Tuple2<Integer, LookupType>, List<AbstractLookupQuery<?>>>> result =
+                new ArrayList<>();
+        if (historicalLookups.isEmpty()) {
+            return result;
+        }
+        Map<String, List<AbstractLookupQuery<?>>> byPartition = new HashMap<>();
+        for (AbstractLookupQuery<?> lookup : historicalLookups) {
+            byPartition.computeIfAbsent(lookup.partitionName(), k -> new ArrayList<>()).add(lookup);
+        }
+        for (List<AbstractLookupQuery<?>> partitionLookups : byPartition.values()) {
+            Map<Tuple2<Integer, LookupType>, List<AbstractLookupQuery<?>>> batches =
+                    groupByLeaderAndType(partitionLookups);
+            if (!batches.isEmpty()) {
+                result.add(batches);
+            }
+        }
+        return result;
+    }
+
     @VisibleForTesting
     void sendLookups(
-            int destination, LookupType lookupType, List<AbstractLookupQuery<?>> lookupBatches) {
+            int destination,
+            LookupType lookupType,
+            List<AbstractLookupQuery<?>> lookupBatches,
+            boolean historical) {
         if (lookupType == LookupType.LOOKUP) {
-            sendLookupRequest(destination, lookupBatches, false);
+            sendLookupRequest(destination, lookupBatches, false, historical);
         } else if (lookupType == LookupType.LOOKUP_WITH_INSERT_IF_NOT_EXISTS) {
-            sendLookupRequest(destination, lookupBatches, true);
+            sendLookupRequest(destination, lookupBatches, true, historical);
         } else if (lookupType == LookupType.PREFIX_LOOKUP) {
             sendPrefixLookupRequest(destination, lookupBatches);
         } else {
@@ -197,7 +258,10 @@ class LookupSender implements Runnable {
     }
 
     private void sendLookupRequest(
-            int destination, List<AbstractLookupQuery<?>> lookups, boolean insertIfNotExists) {
+            int destination,
+            List<AbstractLookupQuery<?>> lookups,
+            boolean insertIfNotExists,
+            boolean historical) {
         // table id -> (bucket -> lookups)
         Map<Long, Map<TableBucket, LookupBatch>> lookupByTableId = new HashMap<>();
         for (AbstractLookupQuery<?> abstractLookupQuery : lookups) {
@@ -206,7 +270,7 @@ class LookupSender implements Runnable {
             long tableId = tb.getTableId();
             lookupByTableId
                     .computeIfAbsent(tableId, k -> new HashMap<>())
-                    .computeIfAbsent(tb, k -> new LookupBatch(tb))
+                    .computeIfAbsent(tb, k -> new LookupBatch(tb, lookup.partitionName()))
                     .addLookup(lookup);
         }
 
@@ -236,7 +300,8 @@ class LookupSender implements Runnable {
                                         acks,
                                         maxRequestTimeoutMs),
                                 tableId,
-                                lookupsByBucket));
+                                lookupsByBucket,
+                                historical));
     }
 
     private void sendPrefixLookupRequest(
@@ -282,9 +347,14 @@ class LookupSender implements Runnable {
             TabletServerGateway gateway,
             LookupRequest lookupRequest,
             long tableId,
-            Map<TableBucket, LookupBatch> lookupsByBucket) {
+            Map<TableBucket, LookupBatch> lookupsByBucket,
+            boolean historical) {
+        Semaphore semaphore =
+                historical
+                        ? historicalMaxInFlightReuqestsSemaphore
+                        : realtimeMaxInFlightReuqestsSemaphore;
         try {
-            maxInFlightReuqestsSemaphore.acquire();
+            semaphore.acquire();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new FlussRuntimeException("interrupted:", e);
@@ -296,7 +366,7 @@ class LookupSender implements Runnable {
                                 handleLookupResponse(
                                         tableId, destination, lookupResponse, lookupsByBucket);
                             } finally {
-                                maxInFlightReuqestsSemaphore.release();
+                                semaphore.release();
                             }
                         })
                 .exceptionally(
@@ -305,7 +375,7 @@ class LookupSender implements Runnable {
                                 handleLookupRequestException(e, destination, lookupsByBucket);
                                 return null;
                             } finally {
-                                maxInFlightReuqestsSemaphore.release();
+                                semaphore.release();
                             }
                         });
     }
@@ -317,7 +387,8 @@ class LookupSender implements Runnable {
             long tableId,
             Map<TableBucket, PrefixLookupBatch> lookupsByBucket) {
         try {
-            maxInFlightReuqestsSemaphore.acquire();
+            // Prefix lookups are always realtime
+            realtimeMaxInFlightReuqestsSemaphore.acquire();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new FlussRuntimeException("interrupted:", e);
@@ -332,7 +403,7 @@ class LookupSender implements Runnable {
                                         prefixLookupResponse,
                                         lookupsByBucket);
                             } finally {
-                                maxInFlightReuqestsSemaphore.release();
+                                realtimeMaxInFlightReuqestsSemaphore.release();
                             }
                         })
                 .exceptionally(
@@ -341,7 +412,7 @@ class LookupSender implements Runnable {
                                 handlePrefixLookupException(e, destination, lookupsByBucket);
                                 return null;
                             } finally {
-                                maxInFlightReuqestsSemaphore.release();
+                                realtimeMaxInFlightReuqestsSemaphore.release();
                             }
                         });
     }

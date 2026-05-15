@@ -99,6 +99,7 @@ public class LookupSenderTest {
                         metadataUpdater,
                         lookupQueue,
                         MAX_INFLIGHT_REQUESTS,
+                        Math.max(1, (int) (MAX_INFLIGHT_REQUESTS * 0.1)),
                         MAX_RETRIES,
                         (short) -1,
                         1000);

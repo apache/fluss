@@ -234,6 +234,33 @@ class HistoricalPartitionPaimonITCase extends FlinkPaimonTieringTestBase {
                         String.format("+I[999, brand_new, %s]", p1));
 
         assertResultsIgnoreOrder(rowIter, changelogRows, true);
+
+        // Phase 4: Lookup by key from expired partitions via Flink SQL temporal join.
+        // The lookup goes through PrimaryKeyLookuper → __historical__ partition → server
+        // lake fallback, returning the latest values written in Phase 3.
+        streamTEnv.executeSql(
+                String.format(
+                        "CREATE TEMPORARY VIEW lookup_src AS "
+                                + "SELECT a, CAST(c AS STRING) AS c, PROCTIME() AS proc FROM ("
+                                + "  VALUES (1, '%s'), (1, '%s'), (999, '%s')"
+                                + ") AS t(a, c)",
+                        p1, p2, p1));
+
+        CloseableIterator<Row> lookupIter =
+                streamTEnv
+                        .executeSql(
+                                "SELECT src.a, h.b, src.c FROM lookup_src src "
+                                        + "JOIN pk_lake_fallback"
+                                        + " FOR SYSTEM_TIME AS OF src.proc AS h "
+                                        + "ON src.a = h.a AND src.c = h.c")
+                        .collect();
+
+        List<String> lookupExpected =
+                Arrays.asList(
+                        String.format("+I[1, new_p1, %s]", p1),
+                        String.format("+I[1, new_p2, %s]", p2),
+                        String.format("+I[999, brand_new, %s]", p1));
+        assertResultsIgnoreOrder(lookupIter, lookupExpected, true);
     }
 
     // ---- Helper methods ----

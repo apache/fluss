@@ -96,6 +96,7 @@ import javax.annotation.concurrent.ThreadSafe;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -818,6 +819,37 @@ public final class KvTablet {
                 () -> {
                     rocksDBKv.checkIfRocksDBClosed();
                     return rocksDBKv.multiGet(keys);
+                });
+    }
+
+    /**
+     * Multi-get keys from the kv tablet with historical partition support.
+     *
+     * <p>For historical partitions, the key is encoded with partition prefix (composite key) and
+     * the lookup chain is: prewrite buffer → RocksDB → lake fallback. For non-historical
+     * partitions, the lookup goes directly to RocksDB.
+     *
+     * @param keys the original key bytes (without composite encoding)
+     * @param partitionName the original partition name for composite key encoding and lake lookup,
+     *     null for non-historical lookups
+     */
+    public List<byte[]> multiGet(List<byte[]> keys, @Nullable String partitionName)
+            throws Exception {
+        return inReadLock(
+                kvLock,
+                () -> {
+                    rocksDBKv.checkIfRocksDBClosed();
+                    if (!isHistoricalPartition) {
+                        return rocksDBKv.multiGet(keys);
+                    }
+                    List<byte[]> results = new ArrayList<>(keys.size());
+                    for (byte[] key : keys) {
+                        byte[] compositeKey = CompositeKeyEncoder.encode(partitionName, key);
+                        byte[] value =
+                                getOldValue(KvPreWriteBuffer.Key.of(compositeKey), partitionName);
+                        results.add(value);
+                    }
+                    return results;
                 });
     }
 

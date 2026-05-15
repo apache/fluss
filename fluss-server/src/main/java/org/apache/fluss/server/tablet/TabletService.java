@@ -115,6 +115,7 @@ import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COO
 import static org.apache.fluss.server.log.FetchParams.DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getFetchLogData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getListOffsetsData;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getLookupPartitionNames;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLakeTableOffset;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLeaderAndIsrRequestData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyRemoteLogOffsetsData;
@@ -276,6 +277,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
         Map<TableBucket, List<byte[]>> lookupData = toLookupData(request);
+        Map<TableBucket, String> partitionNames = getLookupPartitionNames(request);
         Map<TableBucket, LookupResultForBucket> errorResponseMap = new HashMap<>();
         CompletableFuture<LookupResponse> response = new CompletableFuture<>();
 
@@ -286,6 +288,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                     request.getTimeoutMs(),
                     request.getAcks(),
                     lookupData,
+                    partitionNames,
                     currentSession().getApiVersion(),
                     value -> response.complete(makeLookupResponse(value, errorResponseMap)));
         } else {
@@ -297,6 +300,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             }
             replicaManager.lookups(
                     lookupData,
+                    partitionNames,
                     currentSession().getApiVersion(),
                     value -> response.complete(makeLookupResponse(value, errorResponseMap)));
         }

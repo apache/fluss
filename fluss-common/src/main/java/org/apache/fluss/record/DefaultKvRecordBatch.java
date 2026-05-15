@@ -269,6 +269,18 @@ public class DefaultKvRecordBatch implements KvRecordBatch {
         }
     }
 
+    /**
+     * Creates a heap-backed copy of this batch. This is necessary when the original batch
+     * references off-heap memory (e.g., a Netty ByteBuf via lazy parsing) that may be released
+     * before the batch is fully consumed by asynchronous processing.
+     */
+    public DefaultKvRecordBatch copyToHeap() {
+        int size = sizeInBytes();
+        byte[] bytes = new byte[size];
+        segment.get(position, bytes, 0, size);
+        return pointToBytes(bytes);
+    }
+
     /** Make a {@link DefaultKvRecordBatch} instance from the given bytes. */
     public static DefaultKvRecordBatch pointToBytes(byte[] bytes) {
         return pointToBytes(bytes, 0);

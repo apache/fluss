@@ -1334,6 +1334,18 @@ public class ConfigOptions {
                             "Setting a value greater than zero will cause the client to resend any lookup request "
                                     + "that fails with a potentially transient error.");
 
+    public static final ConfigOption<Double> CLIENT_LOOKUP_HISTORICAL_INFLIGHT_RATIO =
+            key("client.lookup.historical-inflight-ratio")
+                    .doubleType()
+                    .defaultValue(0.1)
+                    .withDescription(
+                            "The ratio of max inflight lookup requests reserved for "
+                                    + "historical partition lookups. This isolates slow lake "
+                                    + "fallback lookups from real-time lookups. "
+                                    + "For example, with max-inflight-requests=128 and ratio=0.1, "
+                                    + "13 permits are reserved for historical lookups and 115 "
+                                    + "for real-time.");
+
     public static final ConfigOption<Integer> CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM =
             key("client.scanner.remote-log.prefetch-num")
                     .intType()

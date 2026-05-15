@@ -1312,6 +1312,19 @@ public final class Replica {
     }
 
     public List<byte[]> lookups(List<byte[]> keys) {
+        return lookups(keys, null);
+    }
+
+    /**
+     * Lookup keys from the leader replica.
+     *
+     * <p>For historical partitions, the KvTablet internally uses the composite key encoding and
+     * lake fallback chain (prewrite buffer → RocksDB → lake). For non-historical partitions, the
+     * lookup goes directly to RocksDB.
+     *
+     * @param partitionName the original partition name for historical lookups, null for realtime
+     */
+    public List<byte[]> lookups(List<byte[]> keys, @Nullable String partitionName) {
         if (!isKvTable()) {
             throw new NonPrimaryKeyTableException(
                     "the primary key table not exists for " + tableBucket);
@@ -1328,8 +1341,8 @@ public final class Replica {
                         }
                         checkNotNull(
                                 kvTablet, "KvTablet for the replica to get key shouldn't be null.");
-                        return kvTablet.multiGet(keys);
-                    } catch (IOException e) {
+                        return kvTablet.multiGet(keys, partitionName);
+                    } catch (Exception e) {
                         String errorMsg =
                                 String.format(
                                         "Failed to lookup from local kv for table bucket %s, the cause is: %s",

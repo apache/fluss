@@ -70,7 +70,11 @@ public class FlussTable implements Table {
     @Override
     public Lookup newLookup() {
         return new TableLookup(
-                tableInfo, schemaGetter, conn.getMetadataUpdater(), conn.getOrCreateLookupClient());
+                tableInfo,
+                schemaGetter,
+                conn.getMetadataUpdater(),
+                conn.getOrCreateLookupClient(),
+                conn.getAdmin());
     }
 
     @Override

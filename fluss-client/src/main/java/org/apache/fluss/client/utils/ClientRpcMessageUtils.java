@@ -223,6 +223,11 @@ public class ClientRpcMessageUtils {
                     if (tb.getPartitionId() != null) {
                         pbLookupReqForBucket.setPartitionId(tb.getPartitionId());
                     }
+                    // Set partition_name for historical partition lookups.
+                    // Server uses this for composite key encoding and lake fallback.
+                    if (batch.partitionName() != null) {
+                        pbLookupReqForBucket.setPartitionName(batch.partitionName());
+                    }
                     batch.lookups().forEach(get -> pbLookupReqForBucket.addKey(get.key()));
                 });
         return request;

@@ -18,6 +18,8 @@
 package org.apache.fluss.client.table;
 
 import org.apache.fluss.client.admin.ClientToServerITCaseBase;
+import org.apache.fluss.client.lookup.LookupResult;
+import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
@@ -32,6 +34,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -41,6 +44,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
@@ -49,9 +53,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Integration tests for writing to expired partitions on data-lake-enabled tables. Verifies that
- * expired partition writes are redirected to the {@code __historical__} partition for both log
- * tables and primary key tables.
+ * Integration tests for writing to and looking up from expired partitions on data-lake-enabled
+ * tables. Verifies that expired partition writes and lookups are redirected to the {@code
+ * __historical__} partition for both log tables and primary key tables.
  */
 class HistoricalPartitionTableITCase extends ClientToServerITCaseBase {
 
@@ -158,6 +162,21 @@ class HistoricalPartitionTableITCase extends ClientToServerITCaseBase {
                     .withSchema(schema.getRowType())
                     .isEqualTo(row(i, "updated" + i, "2000"));
         }
+
+        // Lookup from the expired partition — should find the latest (updated) values
+        Lookuper lookuper = table.newLookup().createLookuper();
+        for (int i = 0; i < numRecords; i++) {
+            LookupResult result = lookuper.lookup(row(i, "2000")).get();
+            InternalRow lookupRow = result.getSingletonRow();
+            assertThat(lookupRow).isNotNull();
+            assertThatRow(lookupRow)
+                    .withSchema(schema.getRowType())
+                    .isEqualTo(row(i, "updated" + i, "2000"));
+        }
+
+        // Lookup non-existent key in expired partition → should return null
+        LookupResult nonExistent = lookuper.lookup(row(999, "2000")).get();
+        assertThat(nonExistent.getSingletonRow()).isNull();
     }
 
     @Test
@@ -173,6 +192,11 @@ class HistoricalPartitionTableITCase extends ClientToServerITCaseBase {
                 .rootCause()
                 .isInstanceOf(PartitionNotExistException.class)
                 .hasMessageContaining("does not exist");
+
+        // Lookup from a non-expired, non-existent partition → should return empty result
+        Lookuper lookuper = table.newLookup().createLookuper();
+        LookupResult result = lookuper.lookup(row(1, "9000")).get();
+        assertThat(result.getSingletonRow()).isNull();
     }
 
     @Test
@@ -209,6 +233,28 @@ class HistoricalPartitionTableITCase extends ClientToServerITCaseBase {
                 .withSchema(schema.getRowType())
                 .isEqualTo(row(0, "from_2000", "2000"));
         assertThatRow(scannedRows.get(1))
+                .withSchema(schema.getRowType())
+                .isEqualTo(row(0, "from_2001", "2001"));
+
+        // Issue concurrent lookups for different expired partitions to exercise
+        // the partitionName-based grouping in LookupSender. PK=0 with partition
+        // "2000" and "2001" both redirect to the same __historical__ bucket.
+        // Without proper partitionName grouping, the composite key encoding on
+        // the server would use the wrong partition name for one of them.
+        Lookuper lookuper = table.newLookup().createLookuper();
+
+        CompletableFuture<LookupResult> future2000 = lookuper.lookup(row(0, "2000"));
+        CompletableFuture<LookupResult> future2001 = lookuper.lookup(row(0, "2001"));
+
+        InternalRow row2000 = future2000.get().getSingletonRow();
+        assertThat(row2000).isNotNull();
+        assertThatRow(row2000)
+                .withSchema(schema.getRowType())
+                .isEqualTo(row(0, "from_2000", "2000"));
+
+        InternalRow row2001 = future2001.get().getSingletonRow();
+        assertThat(row2001).isNotNull();
+        assertThatRow(row2001)
                 .withSchema(schema.getRowType())
                 .isEqualTo(row(0, "from_2001", "2001"));
     }
