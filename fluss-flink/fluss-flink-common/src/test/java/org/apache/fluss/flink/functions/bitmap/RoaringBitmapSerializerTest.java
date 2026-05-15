@@ -147,4 +147,32 @@ class RoaringBitmapSerializerTest {
         assertThat(RoaringBitmapTypeInfo.INSTANCE.getArity()).isEqualTo(1);
         assertThat(RoaringBitmapTypeInfo.INSTANCE.getTotalFields()).isEqualTo(1);
     }
+
+    @Test
+    void testTypeInfoIsNotBasicType() {
+        assertThat(RoaringBitmapTypeInfo.INSTANCE.isBasicType()).isFalse();
+    }
+
+    @Test
+    void testTypeInfoIsNotTupleType() {
+        assertThat(RoaringBitmapTypeInfo.INSTANCE.isTupleType()).isFalse();
+    }
+
+    @Test
+    void testTypeInfoToString() {
+        assertThat(RoaringBitmapTypeInfo.INSTANCE.toString()).isEqualTo("RoaringBitmapTypeInfo");
+    }
+
+    @Test
+    void testTypeInfoHashCode() {
+        assertThat(RoaringBitmapTypeInfo.INSTANCE.hashCode())
+                .isEqualTo(RoaringBitmapTypeInfo.INSTANCE.hashCode());
+    }
+
+    @Test
+    void testTypeInfoCanEqual() {
+        assertThat(RoaringBitmapTypeInfo.INSTANCE.canEqual(RoaringBitmapTypeInfo.INSTANCE))
+                .isTrue();
+        assertThat(RoaringBitmapTypeInfo.INSTANCE.canEqual("other")).isFalse();
+    }
 }
