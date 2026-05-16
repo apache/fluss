@@ -498,15 +498,38 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
     }
   }
 
-  test("Spark Read: partition pushdown — INT partition with range predicate") {
+  test("Spark Read: partition pushdown — all supported types") {
     withTable("t") {
       sql(s"""
-             |CREATE TABLE $DEFAULT_DATABASE.t (id BIGINT, pt INT)
-             |PARTITIONED BY (pt)""".stripMargin)
-      sql(s"INSERT INTO $DEFAULT_DATABASE.t VALUES (1, 2), (2, 10)")
+             |CREATE TABLE $DEFAULT_DATABASE.t (
+             |  id INT,
+             |  p_bool BOOLEAN, p_int_eq INT, p_int_range INT,
+             |  p_bigint BIGINT, p_float FLOAT, p_double DOUBLE,
+             |  p_string STRING, p_binary BINARY,
+             |  p_date DATE, p_ts TIMESTAMP, p_ts_ntz TIMESTAMP_NTZ)
+             |PARTITIONED BY (
+             |  p_bool, p_int_eq, p_int_range, p_bigint, p_float, p_double,
+             |  p_string, p_binary, p_date, p_ts, p_ts_ntz)""".stripMargin)
+      sql(s"""INSERT INTO $DEFAULT_DATABASE.t VALUES
+             |(1, false, 10, 10, 99999L, CAST(12.5 AS FLOAT), 7.88, 'hello',
+             |  CAST('Hi' AS BINARY), DATE '2026-01-01',
+             |  TIMESTAMP '2026-01-01 12:00:00', TIMESTAMP_NTZ '2026-01-01 12:00:00'),
+             |(2, true, 11, 2, 99998L, CAST(13.5 AS FLOAT), 8.88, 'world',
+             |  CAST('Bye' AS BINARY), DATE '2026-01-02',
+             |  TIMESTAMP '2026-01-02 12:00:00', TIMESTAMP_NTZ '2026-01-02 12:00:00')
+             |""".stripMargin)
 
-      val query = sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE pt > 2 ORDER BY id")
-      checkAnswer(query, Row(2L, 10) :: Nil)
+      val query = sql(s"""
+                         |SELECT id FROM $DEFAULT_DATABASE.t WHERE
+                         |  p_bool = false AND p_int_eq = 10 AND p_int_range > 2
+                         |  AND p_bigint = 99999L
+                         |  AND p_float = CAST(12.5 AS FLOAT) AND p_double = 7.88
+                         |  AND p_string = 'hello' AND p_binary = CAST('Hi' AS BINARY)
+                         |  AND p_date = DATE '2026-01-01'
+                         |  AND p_ts = TIMESTAMP '2026-01-01 12:00:00'
+                         |  AND p_ts_ntz = TIMESTAMP_NTZ '2026-01-01 12:00:00'
+                         |""".stripMargin)
+      checkAnswer(query, Row(1) :: Nil)
       assert(partitionPredicate(query).isDefined)
     }
   }
