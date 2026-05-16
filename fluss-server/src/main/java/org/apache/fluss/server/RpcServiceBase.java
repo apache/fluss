@@ -434,7 +434,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             throw new KvSnapshotNotExistException(
                     String.format(
                             "Failed to get kv snapshot metadata for table bucket %s and snapshot id %s. Error: %s",
-                            tableBucket, snapshotId, e.getMessage()));
+                            tableBucket, snapshotId, e.getMessage()),
+                    e);
         }
     }
 
@@ -456,7 +457,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                             remoteFileSystem.getUri().getScheme(), securityToken));
         } catch (Exception e) {
             throw new SecurityTokenException(
-                    "Failed to get file access security token: " + e.getMessage());
+                    "Failed to get file access security token: " + e.getMessage(), e);
         }
     }
 
