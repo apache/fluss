@@ -267,6 +267,8 @@ class KvReplicaRestoreITCase {
         assertThat(newLeaderReplica.getRowCount()).isEqualTo(recordCount);
     }
 
+    // ---- Helper methods ----
+
     private static Configuration initConfig() {
         Configuration conf = new Configuration();
         conf.setInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 3);
@@ -276,7 +278,6 @@ class KvReplicaRestoreITCase {
         conf.set(ConfigOptions.KV_WRITE_BUFFER_SIZE, MemorySize.parse("1b"));
         // set a shorter max lag time
         conf.set(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME, Duration.ofSeconds(5));
-
         return conf;
     }
 

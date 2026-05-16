@@ -68,6 +68,9 @@ public class KvRecoverHelper {
     private final LogFormat logFormat;
     private final RemoteLogFetcher remoteLogFetcher;
 
+    private final boolean isHistoricalPartition;
+    @Nullable private final List<String> partitionKeys;
+
     // will be initialized when first encounter a log record during recovering from log
     private Integer currentSchemaId;
     private RowType currentRowType;
@@ -77,6 +80,9 @@ public class KvRecoverHelper {
     private final SchemaGetter schemaGetter;
 
     private InternalRow.FieldGetter[] currentFieldGetters;
+
+    // Lazily initialized: index of the partition column in the row type (for historical recovery)
+    private int partitionColumnIndex = -1;
 
     public KvRecoverHelper(
             KvTablet kvTablet,
@@ -88,7 +94,9 @@ public class KvRecoverHelper {
             KvFormat kvFormat,
             LogFormat logFormat,
             SchemaGetter schemaGetter,
-            RemoteLogFetcher remoteLogFetcher) {
+            RemoteLogFetcher remoteLogFetcher,
+            boolean isHistoricalPartition,
+            @Nullable List<String> partitionKeys) {
         this.kvTablet = kvTablet;
         this.logTablet = logTablet;
         this.recoverPointOffset = recoverPointOffset;
@@ -99,6 +107,8 @@ public class KvRecoverHelper {
         this.logFormat = logFormat;
         this.schemaGetter = schemaGetter;
         this.remoteLogFetcher = remoteLogFetcher;
+        this.isHistoricalPartition = isHistoricalPartition;
+        this.partitionKeys = partitionKeys;
     }
 
     public void recover() throws Exception {
@@ -263,6 +273,14 @@ public class KvRecoverHelper {
                 if (changeType != ChangeType.UPDATE_BEFORE) {
                     InternalRow logRow = logRecord.getRow();
                     byte[] key = keyEncoder.encodeKey(logRow);
+
+                    // Historical partition: encode as composite key with partition name prefix
+                    // to match the key format used by KvTablet.processKvRecords().
+                    if (isHistoricalPartition && partitionColumnIndex >= 0) {
+                        String partitionName = logRow.getString(partitionColumnIndex).toString();
+                        key = CompositeKeyEncoder.encode(partitionName, key);
+                    }
+
                     byte[] value = null;
                     if (changeType != ChangeType.DELETE) {
                         // the log row format may not compatible with kv row format,
@@ -335,6 +353,22 @@ public class KvRecoverHelper {
         currentFieldGetters = new InternalRow.FieldGetter[currentRowType.getFieldCount()];
         for (int i = 0; i < currentRowType.getFieldCount(); i++) {
             currentFieldGetters[i] = InternalRow.createFieldGetter(currentRowType.getTypeAt(i), i);
+        }
+
+        // For historical partitions, resolve the partition column index so we can
+        // extract the partition name from each log row for composite key encoding.
+        if (isHistoricalPartition && partitionKeys != null && !partitionKeys.isEmpty()) {
+            // Currently only single partition column is supported.
+            String partitionColumn = partitionKeys.get(0);
+            List<String> fieldNames = currentRowType.getFieldNames();
+            partitionColumnIndex = fieldNames.indexOf(partitionColumn);
+            if (partitionColumnIndex < 0) {
+                throw new IllegalStateException(
+                        "Partition column '"
+                                + partitionColumn
+                                + "' not found in row type: "
+                                + currentRowType);
+            }
         }
     }
 

@@ -297,6 +297,11 @@ public final class KvTablet {
         return physicalPath.getPartitionName();
     }
 
+    /** Returns true if this tablet belongs to a __historical__ partition. */
+    public boolean isHistoricalPartition() {
+        return isHistoricalPartition;
+    }
+
     public File getKvTabletDir() {
         return kvTabletDir;
     }

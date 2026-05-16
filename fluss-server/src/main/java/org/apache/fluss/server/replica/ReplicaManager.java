@@ -1270,10 +1270,13 @@ public class ReplicaManager implements ServerReconfigurable {
                 // register replica to remote log manager first.
                 remoteLogManager.registerReplica(replica);
 
-                replica.makeLeader(data);
+                // Sync lake table snapshot from ZK before makeLeader so that
+                // initKvTablet can read the up-to-date lakeLogEndOffset for
+                // historical partition recovery (determines WAL replay start offset).
                 if (replica.isDataLakeEnabled()) {
                     updateWithLakeTableSnapshot(replica);
                 }
+                replica.makeLeader(data);
 
                 // start the remote log tiering tasks for leaders
                 remoteLogManager.startLogTiering(replica);

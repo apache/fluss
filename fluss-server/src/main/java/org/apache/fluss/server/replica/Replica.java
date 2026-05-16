@@ -107,6 +107,7 @@ import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
+import org.apache.fluss.utils.PartitionUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -717,8 +718,11 @@ public final class Replica {
                         e);
             }
         }
-        // start periodic kv snapshot
-        startPeriodicKvSnapshot(snapshotUsed.orElse(null));
+        // Historical partitions: RocksDB can be dropped at any time (cleanup after tiering),
+        // recovery replays WAL from tiered offset. No snapshot needed — skip entirely.
+        if (!PartitionUtils.isHistoricalPartitionName(physicalPath.getPartitionName())) {
+            startPeriodicKvSnapshot(snapshotUsed.orElse(null));
+        }
     }
 
     private void dropKv() {
@@ -771,11 +775,39 @@ public final class Replica {
 
         // get the offset from which, we should restore from. default is 0
         long restoreStartOffset = 0;
-        Optional<CompletedSnapshot> optCompletedSnapshot = getLatestSnapshot(tableBucket);
+        boolean isHistorical =
+                PartitionUtils.isHistoricalPartitionName(physicalPath.getPartitionName());
+        Optional<CompletedSnapshot> optCompletedSnapshot =
+                isHistorical ? Optional.empty() : getLatestSnapshot(tableBucket);
         try {
             Long rowCount;
             AutoIncIDRange autoIncIDRange;
-            if (optCompletedSnapshot.isPresent()) {
+            if (isHistorical) {
+                // Historical partition: always start from clean RocksDB, no snapshot.
+                // Per FIP-28 A.3.4: historical RocksDB is non-persistent, recovery
+                // replays WAL from tiered offset.
+                LOG.info(
+                        "Historical partition {} — skipping snapshot, creating fresh RocksDB.",
+                        tableBucket);
+                kvTablet =
+                        kvManager.getOrCreateKv(
+                                physicalPath,
+                                tableBucket,
+                                logTablet,
+                                tableConfig.getKvFormat(),
+                                schemaGetter,
+                                tableConfig,
+                                arrowCompressionInfo);
+
+                // Use tiered offset as recovery start to minimize replay volume.
+                long tieredOffset = logTablet.getLakeLogEndOffset();
+                if (tieredOffset > 0) {
+                    restoreStartOffset = tieredOffset;
+                }
+                // Historical partition doesn't track row count or auto-increment range.
+                rowCount = null;
+                autoIncIDRange = null;
+            } else if (optCompletedSnapshot.isPresent()) {
                 LOG.info(
                         "Use snapshot {} to restore kv tablet for {} of table {}.",
                         optCompletedSnapshot.get(),
@@ -916,6 +948,8 @@ public final class Replica {
                     new RemoteLogFetcher(remoteLogManager, tableBucket, logTablet.getLogDir());
 
             try {
+                boolean isHistorical = kvTablet.isHistoricalPartition();
+                List<String> partitionKeys = isHistorical ? tableInfo.getPartitionKeys() : null;
                 KvRecoverHelper kvRecoverHelper =
                         new KvRecoverHelper(
                                 kvTablet,
@@ -927,7 +961,9 @@ public final class Replica {
                                 tableConfig.getKvFormat(),
                                 tableConfig.getLogFormat(),
                                 schemaGetter,
-                                remoteLogFetcher);
+                                remoteLogFetcher,
+                                isHistorical,
+                                partitionKeys);
                 kvRecoverHelper.recover();
             } finally {
                 remoteLogFetcher.close();
