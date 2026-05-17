@@ -135,5 +135,6 @@ public class LanceLakeWriter implements LakeWriter<LanceWriteResult> {
         if (nonShadedAllocator != null) {
             nonShadedAllocator.close();
         }
+        allFragments.clear();
     }
 }
