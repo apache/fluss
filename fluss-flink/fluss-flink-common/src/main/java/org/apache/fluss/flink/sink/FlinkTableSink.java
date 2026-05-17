@@ -91,8 +91,13 @@ public class FlinkTableSink
      * The row type of data actually consumed by the sink. This may differ from {@link
      * #tableRowType} when the Flink planner sends computed columns (e.g., during UPDATE with tables
      * that have computed columns like {@code ptime AS PROCTIME()}).
+     *
+     * <p>Currently this is always equal to {@link #tableRowType} because no code path yet derives
+     * the full physical row type (including computed columns) at plan time. Extra columns are
+     * handled at runtime in {@link
+     * org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema#serialize}.
      */
-    private RowType consumedRowType;
+    private final RowType consumedRowType;
 
     private boolean appliedUpdates = false;
     @Nullable private GenericRow deleteRow;
@@ -275,7 +280,6 @@ public class FlinkTableSink
                         bucketKeys,
                         distributionMode,
                         producerId);
-        sink.consumedRowType = consumedRowType;
         sink.appliedUpdates = appliedUpdates;
         sink.deleteRow = deleteRow;
         return sink;

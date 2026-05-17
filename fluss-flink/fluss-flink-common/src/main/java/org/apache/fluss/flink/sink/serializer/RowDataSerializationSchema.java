@@ -180,6 +180,16 @@ public class RowDataSerializationSchema implements FlussSerializationSchema<RowD
         // Handle extra computed columns (e.g., PROCTIME()) that Flink may add during
         // UPDATE statements. These columns don't exist in the Fluss table schema and
         // need to be projected out. Lazily build a projection on first encounter.
+        //
+        // Assumption: Flink appends computed columns *after* all physical columns in
+        // the UPDATE row (i.e., physical columns occupy indices 0..expectedInputFieldCount-1).
+        // This holds for the row-level modification path used by UPDATE/DELETE today.
+        // A schema like (a INT, ptime AS PROCTIME(), b STRING) with a computed column
+        // in a non-trailing position is not yet supported and would silently produce
+        // incorrect results.  If that pattern needs to be handled, the proper fix is
+        // to source the full consumed row type (physical + computed, in definition order)
+        // at plan time and build a name-based projection in open() rather than an
+        // identity mapping here.
         if (row.getFieldCount() > expectedInputFieldCount) {
             if (inputProjection == null) {
                 int[] identityMapping = new int[expectedInputFieldCount];
