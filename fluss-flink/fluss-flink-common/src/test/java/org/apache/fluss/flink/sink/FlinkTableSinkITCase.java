@@ -552,7 +552,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         // partial delete
         org.apache.flink.table.api.Table changeLogTable =
                 tEnv.fromChangelogStream(
-                        env.fromData(
+                        env.fromCollection(
                                 Arrays.asList(
                                         Row.ofKind(
                                                 org.apache.flink.types.RowKind.INSERT,
@@ -706,7 +706,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         String sourceName = isPrimaryKeyTable ? "source_primary_key_table" : "source_log_table";
         org.apache.flink.table.api.Table cdcSourceData =
                 tEnv.fromChangelogStream(
-                        env.fromData(
+                        env.fromCollection(
                                 Arrays.asList(
                                         Row.ofKind(RowKind.INSERT, 1, 3501L, "Tim"),
                                         Row.ofKind(RowKind.DELETE, 1, 3501L, "Tim"),
@@ -1582,7 +1582,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         // Create a changelog stream with deletes that should be ignored
         org.apache.flink.table.api.Table changelogData =
                 tEnv.fromChangelogStream(
-                        env.fromData(
+                        env.fromCollection(
                                 Arrays.asList(
                                         Row.ofKind(RowKind.INSERT, 4, "test4"),
                                         Row.ofKind(RowKind.DELETE, 1, "test1"), // Should be ignored
