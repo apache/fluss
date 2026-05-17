@@ -52,6 +52,7 @@ import org.apache.arrow.vector.complex.FixedSizeListVector;
 import org.apache.arrow.vector.ipc.ArrowReader;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -515,9 +516,66 @@ class LanceTieringTest {
             // check name column
             assertThat(((VarCharVector) root.getVector(1)).getObject(i).toString())
                     .isEqualTo(expectRecord.getRow().getString(1).toString());
-            // For nested row, just verify that the struct vector is not null and has correct
+            // For nested row, just verify that the struct vector is not null and has
+            // correct
             // structure
             assertThat(root.getVector(2)).isNotNull();
         }
+    }
+
+    @Test
+    void testWriterCompleteAfterCloseReturnsEmptyFragments() throws Exception {
+        TablePath tablePath = TablePath.of("lance", "logTableCloseTest");
+        Map<String, String> customProperties = new HashMap<>();
+        LanceConfig config =
+                LanceConfig.from(
+                        configuration.toMap(),
+                        customProperties,
+                        tablePath.getDatabaseName(),
+                        tablePath.getTableName());
+
+        List<Schema.Column> columns = new ArrayList<>();
+        columns.add(new Schema.Column("c1", DataTypes.INT()));
+        columns.add(new Schema.Column("c2", DataTypes.STRING()));
+        Schema schema = Schema.newBuilder().fromColumns(columns).build();
+        WriteParams params = LanceConfig.genWriteParamsFromConfig(config);
+        LanceDatasetAdapter.createDataset(
+                config.getDatasetUri(),
+                LanceArrowUtils.toArrowSchema(schema.getRowType(), customProperties),
+                params);
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .customProperties(customProperties)
+                        .build();
+        TableInfo tableInfo =
+                TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
+
+        LakeWriter<LanceWriteResult> lakeWriter = createLakeWriter(tablePath, 0, null, tableInfo);
+
+        GenericRow genericRow = new GenericRow(2);
+        genericRow.setField(0, 1);
+        genericRow.setField(1, BinaryString.fromString("v1"));
+        LogRecord logRecord =
+                new GenericRecord(
+                        0, System.currentTimeMillis(), ChangeType.APPEND_ONLY, genericRow);
+
+        lakeWriter.write(logRecord);
+        LanceWriteResult result1 = lakeWriter.complete();
+        assertThat(result1.commitMessage()).hasSize(1);
+
+        // We explicitly avoid using try-with-resources here because we need to
+        // test the behavior of the writer *after* it has been closed.
+        // Calling close() should clear the internal fragment list to prevent
+        // memory leaks and prevent stale data from being returned.
+        lakeWriter.close();
+
+        // Verify the fix: complete() after close() must return an empty list,
+        // proving that the stale fragments were successfully cleared.
+        LanceWriteResult result2 = lakeWriter.complete();
+        assertThat(result2.commitMessage()).isEmpty();
     }
 }
