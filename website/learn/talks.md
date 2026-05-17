@@ -8,6 +8,24 @@ Talks and presentations about Apache Fluss from conferences, meetups, and commun
 
 ---
 
+### Lake, Stream, and Everything In Between: Apache Fluss and the Streaming Lakehouse
+**Mehul Batra** • OpenXdata 2026 • April 2026
+
+A walkthrough of Apache Fluss as table-first columnar streaming storage, covering union reads across streaming and lakehouse layers, zero-ETL integration with open table formats (Iceberg), and the architectural shift from Lambda to Kappa patterns for real-time analytics in the AI era.
+
+[📹 Watch on YouTube](https://youtu.be/idy-B3nKGmA?si=VJ3wHp30RKOxeBoO)
+
+---
+
+### Open by Design: Community as the Foundation of Open Source Data (Panel)
+**Yuxia Luo (Apache Fluss PPMC) with Ethan Guo, Tim Meehan, Prashant Singh & Shawn Chang** • OpenXdata 2026 • April 2026
+
+A cross-project panel on building resilient governance and lowering barriers to contribution in open source data communities, drawing on experience from Apache Fluss, Flink, Iceberg, Hudi, and Presto to discuss what sustainable, community-led development looks like in practice.
+
+[📹 Watch on YouTube](https://youtu.be/ZLGLl0I4rfY?si=_DBuj7NZQZ7aBpdK)
+
+---
+
 ### Fluss: A Streaming Storage for Real-Time Lakehouse
 **Jark Wu** • Carnegie Mellon Future Data Systems Seminar Series 2025 • December 2025
 
