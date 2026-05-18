@@ -420,8 +420,7 @@ public class FlinkTableSource
                         leaseContext);
 
         if (!streaming) {
-            // return a bounded source provide to make planner happy,
-            // but this should throw exception when used to create source
+            // return a bounded source provider for batch execution mode
             return new SourceProvider() {
                 @Override
                 public boolean isBounded() {
@@ -435,10 +434,6 @@ public class FlinkTableSource
                                 "Currently, Fluss table only supports "
                                         + modificationScanType
                                         + " statement with conditions on primary key.");
-                    }
-                    if (!isDataLakeEnabled) {
-                        throw new UnsupportedOperationException(
-                                "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
                     }
                     return source;
                 }

@@ -44,7 +44,8 @@ public class HybridSnapshotLogSplitState extends SourceSplitState {
                 hybridSnapshotLogSplit.getSnapshotId(),
                 recordsToSkip,
                 snapshotFinished,
-                nextOffset);
+                nextOffset,
+                hybridSnapshotLogSplit.getLogStoppingOffsetRaw());
     }
 
     public void setRecordsToSkip(long recordsToSkip) {

@@ -19,6 +19,8 @@ package org.apache.fluss.flink.source.split;
 
 import org.apache.fluss.metadata.TableBucket;
 
+import org.apache.flink.core.memory.DataOutputSerializer;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -57,6 +59,64 @@ class SourceSplitSerializerTest {
         serialized = serializer.serialize(split);
         deserializedSplit = serializer.deserialize(serializer.getVersion(), serialized);
         assertThat(deserializedSplit).isEqualTo(split);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testHybridSnapshotLogSplitSerdeWithStoppingOffset(boolean isPartitioned) throws Exception {
+        TableBucket bucket = isPartitioned ? partitionedTableBucket : tableBucket;
+        String partitionName = isPartitioned ? "2024" : null;
+
+        // test with explicit stopping offset
+        HybridSnapshotLogSplit split =
+                new HybridSnapshotLogSplit(bucket, partitionName, 100, 50L, 500L);
+        byte[] serialized = serializer.serialize(split);
+        SourceSplitBase deserializedSplit =
+                serializer.deserialize(serializer.getVersion(), serialized);
+        assertThat(deserializedSplit).isEqualTo(split);
+
+        // test with NO_STOPPING_OFFSET (default)
+        split = new HybridSnapshotLogSplit(bucket, partitionName, 100, 50L);
+        serialized = serializer.serialize(split);
+        deserializedSplit = serializer.deserialize(serializer.getVersion(), serialized);
+        assertThat(deserializedSplit).isEqualTo(split);
+        assertThat(((HybridSnapshotLogSplit) deserializedSplit).getLogStoppingOffset()).isEmpty();
+
+        // test with snapshot finished and stopping offset
+        split = new HybridSnapshotLogSplit(bucket, partitionName, 100, 3, true, 50L, 500L);
+        serialized = serializer.serialize(split);
+        deserializedSplit = serializer.deserialize(serializer.getVersion(), serialized);
+        assertThat(deserializedSplit).isEqualTo(split);
+        assertThat(((HybridSnapshotLogSplit) deserializedSplit).getLogStoppingOffset())
+                .hasValue(500L);
+    }
+
+    @Test
+    void testHybridSnapshotLogSplitV0BackwardCompat() throws Exception {
+        // Manually serialize in VERSION_0 format (without logStoppingOffset)
+        DataOutputSerializer out = new DataOutputSerializer(64);
+        out.writeByte(1); // HYBRID_SNAPSHOT_SPLIT_FLAG
+        // table bucket (tableId=1, no partition, bucketId=2)
+        out.writeLong(1L);
+        out.writeBoolean(false);
+        out.writeInt(2);
+        // snapshot fields
+        out.writeLong(100L); // snapshotId
+        out.writeLong(3L); // recordsToSkip
+        out.writeBoolean(true); // isSnapshotFinished
+        out.writeLong(50L); // logStartingOffset
+        byte[] v0Bytes = out.getCopyOfBuffer();
+
+        // Deserialize with VERSION_0
+        SourceSplitBase deserialized = serializer.deserialize(0, v0Bytes);
+        assertThat(deserialized).isInstanceOf(HybridSnapshotLogSplit.class);
+        HybridSnapshotLogSplit split = (HybridSnapshotLogSplit) deserialized;
+        assertThat(split.getSnapshotId()).isEqualTo(100L);
+        assertThat(split.recordsToSkip()).isEqualTo(3L);
+        assertThat(split.isSnapshotFinished()).isTrue();
+        assertThat(split.getLogStartingOffset()).isEqualTo(50L);
+        // logStoppingOffset should default to NO_STOPPING_OFFSET
+        assertThat(split.getLogStoppingOffset()).isEmpty();
     }
 
     @ParameterizedTest

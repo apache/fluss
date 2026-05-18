@@ -36,6 +36,8 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSplitBase> {
 
     private static final int VERSION_0 = 0;
+    /** Version 1 adds logStoppingOffset to HybridSnapshotLogSplit. */
+    private static final int VERSION_1 = 1;
 
     private static final ThreadLocal<DataOutputSerializer> SERIALIZER_CACHE =
             ThreadLocal.withInitial(() -> new DataOutputSerializer(64));
@@ -43,7 +45,7 @@ public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSp
     private static final byte HYBRID_SNAPSHOT_SPLIT_FLAG = 1;
     private static final byte LOG_SPLIT_FLAG = 2;
 
-    private static final int CURRENT_VERSION = VERSION_0;
+    private static final int CURRENT_VERSION = VERSION_1;
 
     @Nullable private final LakeSource<LakeSplit> lakeSource;
 
@@ -75,6 +77,8 @@ public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSp
                 out.writeBoolean(hybridSnapshotLogSplit.isSnapshotFinished());
                 // write log starting offset
                 out.writeLong(hybridSnapshotLogSplit.getLogStartingOffset());
+                // write log stopping offset (added in VERSION_1)
+                out.writeLong(hybridSnapshotLogSplit.getLogStoppingOffsetRaw());
             } else {
                 LogSplit logSplit = split.asLogSplit();
                 // write starting offset
@@ -111,7 +115,7 @@ public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSp
 
     @Override
     public SourceSplitBase deserialize(int version, byte[] serialized) throws IOException {
-        if (version != VERSION_0) {
+        if (version != VERSION_0 && version != VERSION_1) {
             throw new IOException("Unknown version " + version);
         }
         final DataInputDeserializer in = new DataInputDeserializer(serialized);
@@ -133,13 +137,18 @@ public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSp
             long recordsToSkip = in.readLong();
             boolean isSnapshotFinished = in.readBoolean();
             long logStartingOffset = in.readLong();
+            long logStoppingOffset =
+                    version >= VERSION_1
+                            ? in.readLong()
+                            : HybridSnapshotLogSplit.NO_STOPPING_OFFSET;
             return new HybridSnapshotLogSplit(
                     tableBucket,
                     partitionName,
                     snapshotId,
                     recordsToSkip,
                     isSnapshotFinished,
-                    logStartingOffset);
+                    logStartingOffset,
+                    logStoppingOffset);
         } else if (splitKind == LOG_SPLIT_FLAG) {
             long startingOffset = in.readLong();
             long stoppingOffset = in.readLong();

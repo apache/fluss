@@ -250,24 +250,29 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         // assign bucket offset dynamically
         TableBucket tableBucket = split.getTableBucket();
         boolean isEmptyLogSplit = false;
+
+        // Extract stopping offset from LogSplit or HybridSnapshotLogSplit
+        Optional<Long> stoppingOffsetOpt = Optional.empty();
         if (split instanceof LogSplit) {
-            LogSplit logSplit = split.asLogSplit();
-            Optional<Long> stoppingOffsetOpt = logSplit.getStoppingOffset();
-            if (stoppingOffsetOpt.isPresent()) {
-                Long stoppingOffset = stoppingOffsetOpt.get();
-                if (startingOffset >= stoppingOffset) {
-                    // is empty log splits as no log record can be fetched
-                    emptyLogSplits.add(split.splitId());
-                    isEmptyLogSplit = true;
-                } else if (stoppingOffset >= 0) {
-                    stoppingOffsets.put(tableBucket, stoppingOffset);
-                } else {
-                    // This should not happen.
-                    throw new FlinkRuntimeException(
-                            String.format(
-                                    "Invalid stopping offset %d for bucket %s",
-                                    stoppingOffset, tableBucket));
-                }
+            stoppingOffsetOpt = split.asLogSplit().getStoppingOffset();
+        } else if (split instanceof HybridSnapshotLogSplit) {
+            stoppingOffsetOpt = split.asHybridSnapshotLogSplit().getLogStoppingOffset();
+        }
+
+        if (stoppingOffsetOpt.isPresent()) {
+            Long stoppingOffset = stoppingOffsetOpt.get();
+            if (startingOffset >= stoppingOffset) {
+                // is empty log splits as no log record can be fetched
+                emptyLogSplits.add(split.splitId());
+                isEmptyLogSplit = true;
+            } else if (stoppingOffset >= 0) {
+                stoppingOffsets.put(tableBucket, stoppingOffset);
+            } else {
+                // This should not happen.
+                throw new FlinkRuntimeException(
+                        String.format(
+                                "Invalid stopping offset %d for bucket %s",
+                                stoppingOffset, tableBucket));
             }
         }
 
@@ -276,7 +281,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                     "Skip to read log for split {} since the split is empty with starting offset {}, stopping offset {}.",
                     split.splitId(),
                     startingOffset,
-                    split.asLogSplit().getStoppingOffset().get());
+                    stoppingOffsetOpt.get());
         } else {
             Long partitionId = tableBucket.getPartitionId();
             int bucket = tableBucket.getBucket();

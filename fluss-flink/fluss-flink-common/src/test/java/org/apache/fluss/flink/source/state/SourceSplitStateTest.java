@@ -94,4 +94,32 @@ class SourceSplitStateTest {
         assertThat(hybridSnapshotLogSplitState.toSourceSplit())
                 .isEqualTo(expectedHybridSnapshotLogSplit);
     }
+
+    @Test
+    void testHybridSnapshotLogSplitStateWithStoppingOffset() {
+        TableBucket tableBucket = new TableBucket(0, 0L, 0);
+
+        // verify stopping offset is preserved through state transitions
+        HybridSnapshotLogSplit hybridSnapshotLogSplit =
+                new HybridSnapshotLogSplit(tableBucket, "partition1", 1L, 100L, 1000L);
+        HybridSnapshotLogSplitState hybridSnapshotLogSplitState =
+                new HybridSnapshotLogSplitState(hybridSnapshotLogSplit);
+        assertThat(hybridSnapshotLogSplitState.toSourceSplit()).isEqualTo(hybridSnapshotLogSplit);
+
+        // set records to skip — stopping offset should be preserved
+        hybridSnapshotLogSplitState.setRecordsToSkip(200L);
+        HybridSnapshotLogSplit expectedSplit =
+                new HybridSnapshotLogSplit(tableBucket, "partition1", 1L, 200L, false, 100L, 1000L);
+        assertThat(hybridSnapshotLogSplitState.toSourceSplit()).isEqualTo(expectedSplit);
+
+        // set next offset (transitions to log phase) — stopping offset should be preserved
+        hybridSnapshotLogSplitState.setNextOffset(500L);
+        expectedSplit =
+                new HybridSnapshotLogSplit(tableBucket, "partition1", 1L, 200L, true, 500L, 1000L);
+        assertThat(hybridSnapshotLogSplitState.toSourceSplit()).isEqualTo(expectedSplit);
+        assertThat(
+                        ((HybridSnapshotLogSplit) hybridSnapshotLogSplitState.toSourceSplit())
+                                .getLogStoppingOffset())
+                .hasValue(1000L);
+    }
 }

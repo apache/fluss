@@ -977,6 +977,123 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         }
     }
 
+    @Test
+    void testBatchModeNonLakeLogTable() throws Throwable {
+        int numSubtasks = 3;
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .build();
+
+        TableDescriptor nonPkTableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(DEFAULT_BUCKET_NUM, "id")
+                        .build();
+
+        TablePath path = TablePath.of(DEFAULT_DB, "test-batch-log-table");
+        admin.createTable(path, nonPkTableDescriptor, true).get();
+        long tableId = admin.getTableInfo(path).get().getTableId();
+
+        // write some data so log segments exist
+        List<InternalRow> rows = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            rows.add(row(i, "v" + i));
+        }
+        writeRows(conn, path, rows, true);
+
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                new MockSplitEnumeratorContext<>(numSubtasks)) {
+            FlinkSourceEnumerator enumerator =
+                    new FlinkSourceEnumerator(
+                            path,
+                            flussConf,
+                            false,
+                            false,
+                            context,
+                            OffsetsInitializer.earliest(),
+                            DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                            false, // batch mode
+                            null,
+                            null,
+                            LeaseContext.DEFAULT,
+                            false);
+
+            enumerator.start();
+
+            for (int i = 0; i < numSubtasks; i++) {
+                registerReader(context, enumerator, i);
+            }
+
+            context.runNextOneTimeCallable();
+
+            Map<Integer, List<SourceSplitBase>> actualAssignment =
+                    getLastReadersAssignments(context);
+
+            // verify all splits are LogSplit with stopping offsets
+            for (List<SourceSplitBase> splits : actualAssignment.values()) {
+                for (SourceSplitBase split : splits) {
+                    assertThat(split).isInstanceOf(LogSplit.class);
+                    LogSplit logSplit = (LogSplit) split;
+                    // stopping offset should be present (>= 0)
+                    assertThat(logSplit.getStoppingOffset()).isPresent();
+                }
+            }
+
+            // verify no more splits is signaled
+            assertThat(context.getSplitsAssignmentSequence()).isNotEmpty();
+        }
+    }
+
+    @Test
+    void testBatchModeNonLakePkTable() throws Throwable {
+        long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numSubtasks = 3;
+        // write data and trigger snapshot
+        putRows(DEFAULT_TABLE_PATH, 10);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(DEFAULT_TABLE_PATH);
+
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                new MockSplitEnumeratorContext<>(numSubtasks)) {
+            FlinkSourceEnumerator enumerator =
+                    new FlinkSourceEnumerator(
+                            DEFAULT_TABLE_PATH,
+                            flussConf,
+                            true,
+                            false,
+                            context,
+                            OffsetsInitializer.full(),
+                            DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                            false, // batch mode
+                            null,
+                            null,
+                            LeaseContext.DEFAULT,
+                            false);
+
+            enumerator.start();
+
+            for (int i = 0; i < numSubtasks; i++) {
+                registerReader(context, enumerator, i);
+            }
+
+            context.runNextOneTimeCallable();
+
+            Map<Integer, List<SourceSplitBase>> actualAssignment =
+                    getLastReadersAssignments(context);
+
+            // verify splits are HybridSnapshotLogSplit with stopping offsets
+            for (List<SourceSplitBase> splits : actualAssignment.values()) {
+                for (SourceSplitBase split : splits) {
+                    assertThat(split).isInstanceOf(HybridSnapshotLogSplit.class);
+                    HybridSnapshotLogSplit hybridSplit = (HybridSnapshotLogSplit) split;
+                    // stopping offset should be present for batch mode
+                    assertThat(hybridSplit.getLogStoppingOffset()).isPresent();
+                }
+            }
+        }
+    }
+
     private LogSplit genLogSplit(long tableId, int bucketId) {
         return new LogSplit(new TableBucket(tableId, bucketId), null, -2L);
     }

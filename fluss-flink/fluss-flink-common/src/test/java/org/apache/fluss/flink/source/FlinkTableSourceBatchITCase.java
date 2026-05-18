@@ -242,16 +242,14 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
     }
 
     @Test
-    void testScanSingleRowFilterException() throws Exception {
+    void testScanWithPartialPrimaryKeyFilter() throws Exception {
         String tableName = prepareSourceTable(new String[] {"id", "name"}, null);
+        // query with partial primary key filter (id only, PK is (id, name))
+        // should work as a batch scan with filter
         String query = String.format("SELECT * FROM %s WHERE id = 1", tableName);
-
-        // doesn't have all condition for primary key, doesn't support to execute
-        assertThatThrownBy(() -> tEnv.explainSql(query))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessage(
-                        "Currently, Fluss only support queries on table with datalake enabled"
-                                + " or point queries on primary key when it's in batch execution mode.");
+        CloseableIterator<Row> collected = tEnv.executeSql(query).collect();
+        List<String> expected = Collections.singletonList("+I[1, address1, name1]");
+        assertResultsIgnoreOrder(collected, expected, true);
     }
 
     @Test
@@ -404,16 +402,13 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         List<String> expected = Collections.singletonList("+I[5]");
         assertThat(collected).isEqualTo(expected);
 
-        // test not push down grouping count.
-        assertThatThrownBy(
-                        () ->
-                                tEnv.explainSql(
-                                                String.format(
-                                                        "SELECT COUNT(*) FROM %s group by id",
-                                                        tableName))
-                                        .wait())
-                .hasMessageContaining(
-                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+        // test grouped count is not pushed down but still works via batch scan
+        String groupQuery = String.format("SELECT COUNT(*) FROM %s group by id", tableName);
+        assertThat(tEnv.explainSql(groupQuery)).doesNotContain("Count1AggFunction");
+        CloseableIterator<Row> groupedRows = tEnv.executeSql(groupQuery).collect();
+        List<String> groupedCollected = collectRowsWithTimeout(groupedRows, 5);
+        // each id has exactly 1 row, so each group count is 1
+        assertThat(groupedCollected).allMatch(row -> row.equals("+I[1]"));
     }
 
     @Test
@@ -452,16 +447,15 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         List<String> expected = Collections.singletonList(String.format("+I[%s]", expectedRows));
         assertThat(collected).isEqualTo(expected);
 
-        // test not push down grouping count.
-        assertThatThrownBy(
-                        () ->
-                                tEnv.explainSql(
-                                                String.format(
-                                                        "SELECT COUNT(*) FROM %s group by id",
-                                                        tableName))
-                                        .wait())
-                .hasMessageContaining(
-                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+        // test grouped count is not pushed down but still works via batch scan
+        String groupQuery = String.format("SELECT COUNT(*) FROM %s group by id", tableName);
+        assertThat(tEnv.explainSql(groupQuery)).doesNotContain("Count1AggFunction");
+        CloseableIterator<Row> groupedRows = tEnv.executeSql(groupQuery).collect();
+        int expectedGroupCount = partitionTable ? 2 : 1;
+        List<String> groupedCollected =
+                collectRowsWithTimeout(groupedRows, expectedRows / expectedGroupCount);
+        assertThat(groupedCollected)
+                .allMatch(row -> row.equals(String.format("+I[%s]", expectedGroupCount)));
     }
 
     private String prepareSourceTable(String[] keys, String partitionedKey) throws Exception {

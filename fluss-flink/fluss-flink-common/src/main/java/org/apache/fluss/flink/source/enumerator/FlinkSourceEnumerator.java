@@ -26,7 +26,6 @@ import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.client.initializer.OffsetsInitializer.BucketOffsetsRetriever;
 import org.apache.fluss.client.initializer.SnapshotOffsetsInitializer;
 import org.apache.fluss.client.metadata.KvSnapshots;
-import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.flink.FlinkConnectorOptions;
@@ -502,11 +501,142 @@ public class FlinkSourceEnumerator
                     },
                     this::handleSplitsAdd);
         } else {
-            throw new UnsupportedOperationException(
-                    String.format(
-                            "Batch only supports when table option '%s' is set to true.",
-                            ConfigOptions.TABLE_DATALAKE_ENABLED));
+            if (isPartitioned) {
+                context.callAsync(this::initBoundedPartitionedSplits, this::handleSplitsAdd);
+            } else {
+                context.callAsync(this::initBoundedNonPartitionedSplits, this::handleSplitsAdd);
+            }
         }
+    }
+
+    private List<SourceSplitBase> initBoundedNonPartitionedSplits() {
+        if (hasPrimaryKey && startingOffsetsInitializer instanceof SnapshotOffsetsInitializer) {
+            return getBoundedSnapshotAndLogSplits(getLatestKvSnapshotsAndRegister(null), null);
+        } else {
+            return getBoundedLogSplits(null, null);
+        }
+    }
+
+    private List<SourceSplitBase> initBoundedPartitionedSplits() {
+        List<PartitionInfo> partitionInfos;
+        try {
+            partitionInfos = applyPartitionFilter(flussAdmin.listPartitionInfos(tablePath).get());
+        } catch (Exception e) {
+            throw new FlinkRuntimeException(
+                    String.format("Failed to list partitions for %s", tablePath),
+                    ExceptionUtils.stripCompletionException(e));
+        }
+
+        List<SourceSplitBase> splits = new ArrayList<>();
+        for (PartitionInfo partitionInfo : partitionInfos) {
+            long partitionId = partitionInfo.getPartitionId();
+            String partitionName = partitionInfo.getPartitionName();
+            if (hasPrimaryKey && startingOffsetsInitializer instanceof SnapshotOffsetsInitializer) {
+                splits.addAll(
+                        getBoundedSnapshotAndLogSplits(
+                                getLatestKvSnapshotsAndRegister(partitionName), partitionName));
+            } else {
+                splits.addAll(getBoundedLogSplits(partitionId, partitionName));
+            }
+        }
+        return splits;
+    }
+
+    private List<SourceSplitBase> getBoundedLogSplits(
+            @Nullable Long partitionId, @Nullable String partitionName) {
+        List<SourceSplitBase> splits = new ArrayList<>();
+        List<Integer> bucketsNeedInitOffset = new ArrayList<>();
+        for (int bucketId = 0; bucketId < tableInfo.getNumBuckets(); bucketId++) {
+            TableBucket tableBucket =
+                    new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
+            if (ignoreTableBucket(tableBucket)) {
+                continue;
+            }
+            bucketsNeedInitOffset.add(bucketId);
+        }
+
+        if (!bucketsNeedInitOffset.isEmpty()) {
+            Map<Integer, Long> startingOffsets =
+                    startingOffsetsInitializer.getBucketOffsets(
+                            partitionName, bucketsNeedInitOffset, bucketOffsetsRetriever);
+            Map<Integer, Long> stoppingOffsets =
+                    stoppingOffsetsInitializer.getBucketOffsets(
+                            partitionName, bucketsNeedInitOffset, bucketOffsetsRetriever);
+            startingOffsets.forEach(
+                    (bucketId, startingOffset) ->
+                            splits.add(
+                                    new LogSplit(
+                                            new TableBucket(
+                                                    tableInfo.getTableId(), partitionId, bucketId),
+                                            partitionName,
+                                            startingOffset,
+                                            stoppingOffsets.getOrDefault(
+                                                    bucketId, LogSplit.NO_STOPPING_OFFSET))));
+        }
+        return splits;
+    }
+
+    private List<SourceSplitBase> getBoundedSnapshotAndLogSplits(
+            KvSnapshots snapshots, @Nullable String partitionName) {
+        long tableId = snapshots.getTableId();
+        Long partitionId = snapshots.getPartitionId();
+        List<SourceSplitBase> splits = new ArrayList<>();
+        List<Integer> bucketsNeedInitOffset = new ArrayList<>();
+
+        // Collect all bucket IDs for stopping offset retrieval
+        List<Integer> allBucketIds = new ArrayList<>();
+        for (Integer bucketId : snapshots.getBucketIds()) {
+            TableBucket tb = new TableBucket(tableId, partitionId, bucketId);
+            if (!ignoreTableBucket(tb)) {
+                allBucketIds.add(bucketId);
+            }
+        }
+
+        Map<Integer, Long> stoppingOffsets =
+                allBucketIds.isEmpty()
+                        ? Collections.emptyMap()
+                        : stoppingOffsetsInitializer.getBucketOffsets(
+                                partitionName, allBucketIds, bucketOffsetsRetriever);
+
+        for (Integer bucketId : allBucketIds) {
+            TableBucket tb = new TableBucket(tableId, partitionId, bucketId);
+            OptionalLong snapshotId = snapshots.getSnapshotId(bucketId);
+            long stoppingOffset =
+                    stoppingOffsets.getOrDefault(
+                            bucketId, HybridSnapshotLogSplit.NO_STOPPING_OFFSET);
+            if (snapshotId.isPresent()) {
+                OptionalLong logOffset = snapshots.getLogOffset(bucketId);
+                checkState(
+                        logOffset.isPresent(),
+                        "Log offset should be present if snapshot id is present.");
+                splits.add(
+                        new HybridSnapshotLogSplit(
+                                tb,
+                                partitionName,
+                                snapshotId.getAsLong(),
+                                logOffset.getAsLong(),
+                                stoppingOffset));
+            } else {
+                bucketsNeedInitOffset.add(bucketId);
+            }
+        }
+
+        if (!bucketsNeedInitOffset.isEmpty()) {
+            startingOffsetsInitializer
+                    .getBucketOffsets(partitionName, bucketsNeedInitOffset, bucketOffsetsRetriever)
+                    .forEach(
+                            (bucketId, startingOffset) ->
+                                    splits.add(
+                                            new LogSplit(
+                                                    new TableBucket(tableId, partitionId, bucketId),
+                                                    partitionName,
+                                                    startingOffset,
+                                                    stoppingOffsets.getOrDefault(
+                                                            bucketId,
+                                                            LogSplit.NO_STOPPING_OFFSET))));
+        }
+
+        return splits;
     }
 
     private void startInStreamModeForNonPartitionedTable() {
