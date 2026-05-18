@@ -127,6 +127,112 @@ abstract class SparkTieringLogTableTest extends SparkTieringTestBase with Loggin
       )
     }
   }
+
+  test("Spark Tiering: partitioned log table tier and read back") {
+    withTable("t_spark_tier_pt") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_spark_tier_pt (id INT, name STRING, dt STRING)
+             | PARTITIONED BY (dt)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_spark_tier_pt VALUES
+             |(1, "alpha", "2026-01-01"), (2, "beta", "2026-01-01"), (3, "gamma", "2026-01-02")
+             |""".stripMargin)
+
+      tierToLakeViaSpark("t_spark_tier_pt")
+
+      checkAnswer(
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.t_spark_tier_pt ORDER BY id"),
+        Row(1, "alpha", "2026-01-01") ::
+          Row(2, "beta", "2026-01-01") ::
+          Row(3, "gamma", "2026-01-02") :: Nil
+      )
+
+      checkAnswer(
+        sql(s"SELECT name, dt FROM $DEFAULT_DATABASE.t_spark_tier_pt ORDER BY name"),
+        Row("alpha", "2026-01-01") ::
+          Row("beta", "2026-01-01") ::
+          Row("gamma", "2026-01-02") :: Nil
+      )
+    }
+  }
+
+  test("Spark Tiering: partitioned log table union read (lake + log tail)") {
+    withTable("t_spark_union_pt") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_spark_union_pt (id INT, name STRING, dt STRING)
+             | PARTITIONED BY (dt)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_spark_union_pt VALUES
+             |(1, "alpha", "2026-01-01"), (2, "beta", "2026-01-01"), (3, "gamma", "2026-01-02")
+             |""".stripMargin)
+
+      tierToLakeViaSpark("t_spark_union_pt")
+
+      // Insert more data after tiering (log tail in existing and new partition)
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_spark_union_pt VALUES
+             |(4, "delta", "2026-01-01"), (5, "epsilon", "2026-01-03")
+             |""".stripMargin)
+
+      checkAnswer(
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.t_spark_union_pt ORDER BY id"),
+        Row(1, "alpha", "2026-01-01") ::
+          Row(2, "beta", "2026-01-01") ::
+          Row(3, "gamma", "2026-01-02") ::
+          Row(4, "delta", "2026-01-01") ::
+          Row(5, "epsilon", "2026-01-03") :: Nil
+      )
+    }
+  }
+
+  test("Spark Tiering: partitioned log table incremental tiering") {
+    withTable("t_spark_incr_pt") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_spark_incr_pt (id INT, name STRING, dt STRING)
+             | PARTITIONED BY (dt)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      // First batch: partition 2026-01-01
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_spark_incr_pt VALUES
+             |(1, "alpha", "2026-01-01"), (2, "beta", "2026-01-01")
+             |""".stripMargin)
+
+      tierToLakeViaSpark("t_spark_incr_pt")
+
+      // Second batch: partition 2026-01-02
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_spark_incr_pt VALUES
+             |(3, "gamma", "2026-01-02"), (4, "delta", "2026-01-02")
+             |""".stripMargin)
+
+      tierToLakeViaSpark("t_spark_incr_pt")
+
+      checkAnswer(
+        sql(s"SELECT * FROM $DEFAULT_DATABASE.t_spark_incr_pt ORDER BY id"),
+        Row(1, "alpha", "2026-01-01") ::
+          Row(2, "beta", "2026-01-01") ::
+          Row(3, "gamma", "2026-01-02") ::
+          Row(4, "delta", "2026-01-02") :: Nil
+      )
+    }
+  }
 }
 
 class SparkTieringPaimonLogTableTest extends SparkTieringLogTableTest {

@@ -25,6 +25,8 @@ import org.apache.spark.internal.Logging
 
 import java.time.Duration
 
+import scala.collection.JavaConverters._
+
 /**
  * Integration test for the Spark tiering pipeline on log tables.
  *
@@ -71,7 +73,17 @@ abstract class SparkTieringTestBase extends FlussSparkTestBase with Logging {
     val tableId = tableInfo.getTableId
     val numBuckets = tableInfo.getNumBuckets
 
-    val tableBuckets = (0 until numBuckets).map(new TableBucket(tableId, _)).toSet
+    val tableBuckets = if (tableInfo.isPartitioned) {
+      val partitionInfos = admin.listPartitionInfos(tableInfo.getTablePath).get()
+      partitionInfos.asScala.flatMap {
+        partitionInfo =>
+          (0 until numBuckets).map {
+            bucket => new TableBucket(tableId, partitionInfo.getPartitionId, bucket)
+          }
+      }.toSet
+    } else {
+      (0 until numBuckets).map(bucket => new TableBucket(tableId, bucket)).toSet
+    }
 
     val deadline = System.currentTimeMillis() + SYNC_TIMEOUT.toMillis
     val syncedBuckets = scala.collection.mutable.Set[TableBucket]()
