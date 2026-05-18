@@ -24,12 +24,26 @@ import org.apache.flink.core.memory.DataOutputSerializer;
 import org.junit.jupiter.api.Test;
 import org.roaringbitmap.RoaringBitmap;
 
+import java.util.Collections;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Unit tests for {@link RoaringBitmapSerializer} and {@link RoaringBitmapTypeInfo}. */
 class RoaringBitmapSerializerTest {
 
     private final RoaringBitmapSerializer serializer = RoaringBitmapSerializer.INSTANCE;
+
+    /** Minimal concrete implementation used only for testing AbstractRbAggFunction. */
+    private static final class TestRbAggFunction extends AbstractRbAggFunction {
+
+        public void accumulate(RoaringBitmap acc, Integer value) {
+            if (value != null) {
+                acc.add(value);
+            }
+        }
+    }
+
+    private final TestRbAggFunction aggFunction = new TestRbAggFunction();
 
     @Test
     void testCreateInstance() {
@@ -85,7 +99,6 @@ class RoaringBitmapSerializerTest {
         RoaringBitmap copy = serializer.copy(original);
 
         assertThat(copy).isEqualTo(original);
-        // Verify it is a deep copy
         copy.add(999);
         assertThat(original.contains(999)).isFalse();
     }
@@ -116,8 +129,6 @@ class RoaringBitmapSerializerTest {
     void testSnapshotConfiguration() {
         assertThat(serializer.snapshotConfiguration()).isNotNull();
     }
-
-    // RoaringBitmapTypeInfo tests
 
     @Test
     void testTypeInfoGetTypeClass() {
@@ -165,8 +176,7 @@ class RoaringBitmapSerializerTest {
 
     @Test
     void testTypeInfoHashCode() {
-        assertThat(RoaringBitmapTypeInfo.INSTANCE.hashCode())
-                .isEqualTo(RoaringBitmapTypeInfo.INSTANCE.hashCode());
+        assertThat(RoaringBitmapTypeInfo.INSTANCE.hashCode()).isNotZero();
     }
 
     @Test
@@ -174,5 +184,64 @@ class RoaringBitmapSerializerTest {
         assertThat(RoaringBitmapTypeInfo.INSTANCE.canEqual(RoaringBitmapTypeInfo.INSTANCE))
                 .isTrue();
         assertThat(RoaringBitmapTypeInfo.INSTANCE.canEqual("other")).isFalse();
+    }
+
+    @Test
+    void testAggCreateAccumulator() {
+        RoaringBitmap acc = aggFunction.createAccumulator();
+        assertThat(acc).isNotNull();
+        assertThat(acc.isEmpty()).isTrue();
+    }
+
+    @Test
+    void testAggGetValue() throws Exception {
+        RoaringBitmap acc = aggFunction.createAccumulator();
+        aggFunction.accumulate(acc, 1);
+        aggFunction.accumulate(acc, 2);
+
+        byte[] result = aggFunction.getValue(acc);
+
+        assertThat(result).isNotNull();
+        RoaringBitmap restored = BitmapUtils.fromBytes(result);
+        assertThat(restored).isNotNull();
+        assertThat(restored.getLongCardinality()).isEqualTo(2L);
+        assertThat(restored.contains(1)).isTrue();
+        assertThat(restored.contains(2)).isTrue();
+    }
+
+    @Test
+    void testAggGetValueNullOnEmpty() {
+        RoaringBitmap acc = aggFunction.createAccumulator();
+        assertThat(aggFunction.getValue(acc)).isNull();
+    }
+
+    @Test
+    void testAggMerge() {
+        RoaringBitmap acc1 = aggFunction.createAccumulator();
+        aggFunction.accumulate(acc1, 1);
+        aggFunction.accumulate(acc1, 2);
+
+        RoaringBitmap acc2 = aggFunction.createAccumulator();
+        aggFunction.accumulate(acc2, 3);
+
+        aggFunction.merge(acc1, Collections.singletonList(acc2));
+        assertThat(acc1.getLongCardinality()).isEqualTo(3L);
+        assertThat(acc1.contains(3)).isTrue();
+    }
+
+    @Test
+    void testAggResetAccumulator() {
+        RoaringBitmap acc = aggFunction.createAccumulator();
+        acc.add(1);
+        acc.add(2);
+
+        aggFunction.resetAccumulator(acc);
+
+        assertThat(acc.isEmpty()).isTrue();
+    }
+
+    @Test
+    void testAggGetAccumulatorType() {
+        assertThat(aggFunction.getAccumulatorType()).isInstanceOf(RoaringBitmapTypeInfo.class);
     }
 }

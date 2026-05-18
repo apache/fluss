@@ -24,6 +24,8 @@ import org.apache.flink.core.memory.DataInputView;
 import org.apache.flink.core.memory.DataOutputView;
 import org.roaringbitmap.RoaringBitmap;
 
+import javax.annotation.concurrent.ThreadSafe;
+
 import java.io.IOException;
 
 /**
@@ -33,6 +35,7 @@ import java.io.IOException;
  * checkpoint/savepoint behavior. Without a custom serializer, Flink falls back to Kryo which is
  * sensitive to internal class layout changes across RoaringBitmap library versions.
  */
+@ThreadSafe
 public final class RoaringBitmapSerializer extends TypeSerializerSingleton<RoaringBitmap> {
 
     public static final RoaringBitmapSerializer INSTANCE = new RoaringBitmapSerializer();
@@ -68,7 +71,6 @@ public final class RoaringBitmapSerializer extends TypeSerializerSingleton<Roari
 
     @Override
     public void serialize(RoaringBitmap record, DataOutputView target) throws IOException {
-        record.runOptimize();
         int size = record.serializedSizeInBytes();
         target.writeInt(size);
         byte[] bytes = BitmapUtils.toBytes(record);

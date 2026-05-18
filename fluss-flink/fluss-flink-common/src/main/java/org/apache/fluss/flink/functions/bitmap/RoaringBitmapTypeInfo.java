@@ -22,6 +22,8 @@ import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.roaringbitmap.RoaringBitmap;
 
+import javax.annotation.concurrent.ThreadSafe;
+
 import java.util.Objects;
 
 /**
@@ -30,6 +32,7 @@ import java.util.Objects;
  * <p>Provides the custom {@link RoaringBitmapSerializer} to Flink's type system, ensuring correct
  * checkpoint and savepoint behavior for bitmap aggregate function accumulators.
  */
+@ThreadSafe
 public final class RoaringBitmapTypeInfo extends TypeInformation<RoaringBitmap> {
 
     public static final RoaringBitmapTypeInfo INSTANCE = new RoaringBitmapTypeInfo();
@@ -80,7 +83,7 @@ public final class RoaringBitmapTypeInfo extends TypeInformation<RoaringBitmap> 
 
     @Override
     public boolean equals(Object obj) {
-        return obj instanceof RoaringBitmapTypeInfo;
+        return obj instanceof RoaringBitmapTypeInfo && ((RoaringBitmapTypeInfo) obj).canEqual(this);
     }
 
     @Override

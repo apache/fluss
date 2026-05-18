@@ -17,6 +17,8 @@
 
 package org.apache.fluss.flink.functions.bitmap;
 
+import org.apache.fluss.exception.FlussRuntimeException;
+
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.table.annotation.DataTypeHint;
 import org.apache.flink.table.annotation.FunctionHint;
@@ -44,7 +46,7 @@ abstract class AbstractRbAggFunction extends AggregateFunction<byte[], RoaringBi
         return new RoaringBitmap();
     }
 
-    /** Merges multiple accumulators — required for session window aggregation. */
+    /** Merges partial accumulators, required for two-phase aggregation in the Flink Table API. */
     public void merge(RoaringBitmap acc, Iterable<RoaringBitmap> it) {
         for (RoaringBitmap other : it) {
             if (other != null) {
@@ -66,7 +68,7 @@ abstract class AbstractRbAggFunction extends AggregateFunction<byte[], RoaringBi
         try {
             return BitmapUtils.toBytes(acc);
         } catch (IOException e) {
-            throw new RuntimeException("Failed to serialize bitmap accumulator.", e);
+            throw new FlussRuntimeException("Failed to serialize bitmap accumulator.", e);
         }
     }
 
