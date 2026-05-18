@@ -77,6 +77,17 @@ public final class DiskUsageMonitor {
                     serverId, locked, String.format("%.2f", lastUsageRatio * 100), e);
             return;
         }
+
+        if (LOG.isDebugEnabled()) {
+            LOG.debug(
+                    "[DISK-MONITOR-DEBUG] TabletServer {} disk usage: {}% | limit: {}% | "
+                            + "recover: {}% | locked: {}",
+                    serverId,
+                    String.format("%.4f", usage * 100),
+                    String.format("%.2f", writeLimitRatio * 100),
+                    String.format("%.2f", recoverThreshold * 100),
+                    locked);
+        }
         update(usage);
     }
 
