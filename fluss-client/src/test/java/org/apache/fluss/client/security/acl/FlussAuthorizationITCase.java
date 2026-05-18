@@ -1400,7 +1400,8 @@ public class FlussAuthorizationITCase {
 
     @Test
     void testInternalReplicationControlAuthorization() throws Exception {
-        // These RPCs are internal-only, so we test via direct gateway access
+        // These RPCs are internal-only and should reject all external sessions,
+        // regardless of permissions
         try (RpcClient rpcClient =
                 RpcClient.create(guestConf, TestingClientMetricGroup.newInstance())) {
 
@@ -1416,142 +1417,76 @@ public class FlussAuthorizationITCase {
                             rpcClient,
                             CoordinatorGateway.class);
 
-            // Test 1: notifyLeaderAndIsr without WRITE permission
+            // Test 1: notifyLeaderAndIsr should reject external sessions
             NotifyLeaderAndIsrRequest notifyRequest = new NotifyLeaderAndIsrRequest();
             notifyRequest.setCoordinatorEpoch(1);
             assertThatThrownBy(() -> guestTabletGateway.notifyLeaderAndIsr(notifyRequest).get())
                     .rootCause()
                     .isInstanceOf(AuthorizationException.class)
                     .hasMessageContaining(
-                            String.format(
-                                    "Principal %s have no authorization to operate WRITE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
-                                    guestPrincipal));
+                            "NotifyLeaderAndIsr is an internal RPC and cannot be called by external clients");
 
-            // Test 2: updateMetadata without WRITE permission
+            // Test 2: updateMetadata should reject external sessions
             UpdateMetadataRequest updateRequest = new UpdateMetadataRequest();
             updateRequest.setCoordinatorEpoch(1);
             assertThatThrownBy(() -> guestTabletGateway.updateMetadata(updateRequest).get())
                     .rootCause()
                     .isInstanceOf(AuthorizationException.class)
                     .hasMessageContaining(
-                            String.format(
-                                    "Principal %s have no authorization to operate WRITE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
-                                    guestPrincipal));
+                            "UpdateMetadata is an internal RPC and cannot be called by external clients");
 
-            // Test 3: stopReplica without WRITE permission
+            // Test 3: stopReplica should reject external sessions
             StopReplicaRequest stopRequest = new StopReplicaRequest();
             stopRequest.setCoordinatorEpoch(1);
             assertThatThrownBy(() -> guestTabletGateway.stopReplica(stopRequest).get())
                     .rootCause()
                     .isInstanceOf(AuthorizationException.class)
                     .hasMessageContaining(
-                            String.format(
-                                    "Principal %s have no authorization to operate WRITE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
-                                    guestPrincipal));
+                            "StopReplica is an internal RPC and cannot be called by external clients");
 
-            // Test 4: adjustIsr without WRITE permission
+            // Test 4: adjustIsr should reject external sessions
             AdjustIsrRequest adjustRequest = new AdjustIsrRequest();
             adjustRequest.setServerId(0);
             assertThatThrownBy(() -> guestCoordinatorGateway.adjustIsr(adjustRequest).get())
                     .rootCause()
                     .isInstanceOf(AuthorizationException.class)
                     .hasMessageContaining(
-                            String.format(
-                                    "Principal %s have no authorization to operate WRITE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
-                                    guestPrincipal));
+                            "AdjustIsr is an internal RPC and cannot be called by external clients");
         }
 
-        // Test 5: Grant CLUSTER/WRITE permission and verify operations succeed
-        List<AclBinding> aclBindings =
-                Collections.singletonList(
-                        new AclBinding(
-                                Resource.cluster(),
-                                new AccessControlEntry(
-                                        guestPrincipal,
-                                        "*",
-                                        OperationType.WRITE,
-                                        PermissionType.ALLOW)));
-        rootAdmin.createAcls(aclBindings).all().get();
-        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+        // Test 5: Even root user (super user) cannot call these RPCs from external sessions
+        try (RpcClient rootRpcClient =
+                RpcClient.create(
+                        FLUSS_CLUSTER_EXTENSION.getClientConfig("CLIENT"),
+                        TestingClientMetricGroup.newInstance())) {
 
-        try (RpcClient authorizedRpcClient =
-                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance())) {
-
-            TabletServerGateway authorizedTabletGateway =
+            TabletServerGateway rootTabletGateway =
                     GatewayClientProxy.createGatewayProxy(
                             () -> FLUSS_CLUSTER_EXTENSION.getTabletServerNodes("CLIENT").get(0),
-                            authorizedRpcClient,
+                            rootRpcClient,
                             TabletServerGateway.class);
 
-            CoordinatorGateway authorizedCoordinatorGateway =
-                    GatewayClientProxy.createGatewayProxy(
-                            () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("CLIENT"),
-                            authorizedRpcClient,
-                            CoordinatorGateway.class);
-
-            // Now with WRITE permission, operations should NOT throw AuthorizationException
-            // (they may fail for other reasons like invalid data, but not authorization)
-
-            NotifyLeaderAndIsrRequest authorizedNotifyRequest = new NotifyLeaderAndIsrRequest();
-            authorizedNotifyRequest.setCoordinatorEpoch(1);
-            Throwable notifyThrown =
-                    catchThrowable(
-                            () ->
-                                    authorizedTabletGateway
-                                            .notifyLeaderAndIsr(authorizedNotifyRequest)
-                                            .get());
-            if (notifyThrown != null) {
-                assertThat(notifyThrown).rootCause().isNotInstanceOf(AuthorizationException.class);
-            }
-
-            UpdateMetadataRequest authorizedUpdateRequest = new UpdateMetadataRequest();
-            authorizedUpdateRequest.setCoordinatorEpoch(1);
-            Throwable updateThrown =
-                    catchThrowable(
-                            () ->
-                                    authorizedTabletGateway
-                                            .updateMetadata(authorizedUpdateRequest)
-                                            .get());
-            if (updateThrown != null) {
-                assertThat(updateThrown).rootCause().isNotInstanceOf(AuthorizationException.class);
-            }
-
-            StopReplicaRequest authorizedStopRequest = new StopReplicaRequest();
-            authorizedStopRequest.setCoordinatorEpoch(1);
-            Throwable stopThrown =
-                    catchThrowable(
-                            () -> authorizedTabletGateway.stopReplica(authorizedStopRequest).get());
-            if (stopThrown != null) {
-                assertThat(stopThrown).rootCause().isNotInstanceOf(AuthorizationException.class);
-            }
-
-            AdjustIsrRequest authorizedAdjustRequest = new AdjustIsrRequest();
-            authorizedAdjustRequest.setServerId(0);
-            Throwable adjustThrown =
-                    catchThrowable(
-                            () ->
-                                    authorizedCoordinatorGateway
-                                            .adjustIsr(authorizedAdjustRequest)
-                                            .get());
-            if (adjustThrown != null) {
-                assertThat(adjustThrown).rootCause().isNotInstanceOf(AuthorizationException.class);
-            }
+            NotifyLeaderAndIsrRequest notifyRequest = new NotifyLeaderAndIsrRequest();
+            notifyRequest.setCoordinatorEpoch(1);
+            assertThatThrownBy(() -> rootTabletGateway.notifyLeaderAndIsr(notifyRequest).get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            "NotifyLeaderAndIsr is an internal RPC and cannot be called by external clients");
         }
 
-        // Test 6: Verify internal sessions bypass authorization
+        // Test 6: Verify internal sessions can call these RPCs
         TabletServerGateway internalTabletGateway =
                 GatewayClientProxy.createGatewayProxy(
                         () -> FLUSS_CLUSTER_EXTENSION.getTabletServerNodes("FLUSS").get(0),
                         FLUSS_CLUSTER_EXTENSION.getRpcClient(),
                         TabletServerGateway.class);
 
-        // Internal connection should NOT throw AuthorizationException
-        // (may fail for other reasons like invalid data, but not authorization)
+        // Internal connection should NOT throw "internal RPC" AuthorizationException
+        // (may fail for other reasons like invalid data, but not because it's external)
         NotifyLeaderAndIsrRequest internalNotifyRequest = new NotifyLeaderAndIsrRequest();
         internalNotifyRequest.setCoordinatorEpoch(1);
 
-        // The request will likely fail due to invalid data, but importantly
-        // it should NOT fail with AuthorizationException
         Throwable thrown =
                 catchThrowable(
                         () ->
@@ -1559,7 +1494,11 @@ public class FlussAuthorizationITCase {
                                         .notifyLeaderAndIsr(internalNotifyRequest)
                                         .get());
         if (thrown != null) {
-            assertThat(thrown).rootCause().isNotInstanceOf(AuthorizationException.class);
+            // Should not be the "internal RPC" error message
+            assertThat(thrown)
+                    .rootCause()
+                    .message()
+                    .doesNotContain("internal RPC and cannot be called by external clients");
         }
     }
 

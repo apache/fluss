@@ -27,6 +27,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.ApiException;
+import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
@@ -198,7 +199,6 @@ import static org.apache.fluss.config.ConfigOptions.CURRENT_KV_FORMAT_VERSION;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
-import static org.apache.fluss.security.acl.OperationType.WRITE;
 import static org.apache.fluss.server.coordinator.rebalance.goal.GoalUtils.getGoalByType;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.addTableOffsetsToResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.fromTablePath;
@@ -761,8 +761,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     }
 
     public CompletableFuture<AdjustIsrResponse> adjustIsr(AdjustIsrRequest request) {
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), WRITE, Resource.cluster());
+        // This is an internal-only RPC, reject all external sessions
+        if (!currentSession().isInternal()) {
+            return CompletableFuture.failedFuture(
+                    new AuthorizationException(
+                            "AdjustIsr is an internal RPC and cannot be called by external clients"));
         }
         CompletableFuture<AdjustIsrResponse> response = new CompletableFuture<>();
         eventManagerSupplier

@@ -348,8 +348,11 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<NotifyLeaderAndIsrResponse> notifyLeaderAndIsr(
             NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest) {
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), WRITE, Resource.cluster());
+        // This is an internal-only RPC, reject all external sessions
+        if (!currentSession().isInternal()) {
+            return CompletableFuture.failedFuture(
+                    new AuthorizationException(
+                            "NotifyLeaderAndIsr is an internal RPC and cannot be called by external clients"));
         }
         CompletableFuture<NotifyLeaderAndIsrResponse> response = new CompletableFuture<>();
         List<NotifyLeaderAndIsrData> notifyLeaderAndIsrRequestData =
@@ -376,8 +379,11 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<UpdateMetadataResponse> updateMetadata(UpdateMetadataRequest request) {
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), WRITE, Resource.cluster());
+        // This is an internal-only RPC, reject all external sessions
+        if (!currentSession().isInternal()) {
+            return CompletableFuture.failedFuture(
+                    new AuthorizationException(
+                            "UpdateMetadata is an internal RPC and cannot be called by external clients"));
         }
         int coordinatorEpoch =
                 request.hasCoordinatorEpoch()
@@ -391,8 +397,11 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<StopReplicaResponse> stopReplica(
             StopReplicaRequest stopReplicaRequest) {
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), WRITE, Resource.cluster());
+        // This is an internal-only RPC, reject all external sessions
+        if (!currentSession().isInternal()) {
+            return CompletableFuture.failedFuture(
+                    new AuthorizationException(
+                            "StopReplica is an internal RPC and cannot be called by external clients"));
         }
         CompletableFuture<StopReplicaResponse> response = new CompletableFuture<>();
         replicaManager.stopReplicas(
