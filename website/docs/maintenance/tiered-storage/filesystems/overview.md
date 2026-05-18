@@ -7,7 +7,7 @@ sidebar_position: 1
 # File Systems
 
 Fluss uses file systems as remote storage to store snapshots for Primary-Key Table and store tiered log segments for Log Table. These
-are some of the file systems that Fluss supports currently, including *local*, *hadoop*, *Aliyun OSS*, *Tencent Cloud COS*.
+are some of the file systems that Fluss supports currently, including *local*, *hadoop*, *Aliyun OSS*, *Tencent Cloud COS*, *JuiceFS*.
 
 The file system used for a particular file is determined by its URI scheme. For example, `file:///home/user/text.txt` refers to a file in the local file system,
 while `hdfs://namenode:50010/data/user/text.txt` is a file in a specific HDFS cluster.
@@ -41,5 +41,7 @@ The Fluss project supports the following file systems:
 - **[HuaweiCloud OBS](obs.md)** is supported by `fluss-fs-obs` and registered under the `obs://` URI scheme. Please make sure to [manually install the OBS plugin](obs.md#install-obs-plugin-manually).
 
 - **[Tencent Cloud COS](cos.md)** is supported by `fluss-fs-cos` and registered under the `cosn://` URI scheme. Please make sure to [manually install the COS plugin](cos.md#install-cos-plugin-manually).
+
+- **[JuiceFS](juicefs.md)** is supported by `fluss-fs-juicefs` and registered under the `jfs://` URI scheme. Please make sure to [manually install the JuiceFS plugin](juicefs.md#install-juicefs-plugin-manually).
 
 The implementation is based on [Hadoop Project](https://hadoop.apache.org/) but is self-contained with no dependency footprint.
