@@ -335,6 +335,28 @@ public class ConfigOptions {
                                     + "The default value is 10.")
                     .withDeprecatedKeys("coordinator.io-pool.size");
 
+    public static final ConfigOption<Double> SERVER_DATA_DISK_WRITE_LIMIT_RATIO =
+            key("server.data-disk.write-limit-ratio")
+                    .doubleType()
+                    .defaultValue(0.85)
+                    .withDescription(
+                            "Reject writes when the tablet server data disk usage exceeds this ratio. "
+                                    + "Writes resume after the usage drops below (ratio - 0.10). "
+                                    + "Set to 1.0 to disable the disk-usage protection entirely. "
+                                    + "The valid range is (0.0, 1.0].");
+
+    public static final ConfigOption<Duration> SERVER_DATA_DISK_CHECK_INTERVAL =
+            key("server.data-disk.check-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(30))
+                    .withDescription(
+                            "The interval at which the tablet server samples the local data disk "
+                                    + "usage for the write-protection state machine. A shorter interval "
+                                    + "narrows the time window during which writes can still flow in "
+                                    + "after the disk crosses the limit ratio, at the cost of slightly "
+                                    + "more frequent statvfs calls (which are in-memory and cheap). "
+                                    + "The default 30s is suitable for typical write workloads.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Coordinator Server
     // ------------------------------------------------------------------------

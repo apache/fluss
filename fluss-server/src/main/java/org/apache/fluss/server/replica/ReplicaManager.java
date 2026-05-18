@@ -106,6 +106,7 @@ import org.apache.fluss.server.replica.delay.DelayedTableBucketKey;
 import org.apache.fluss.server.replica.delay.DelayedWrite;
 import org.apache.fluss.server.replica.fetcher.InitialFetchStatus;
 import org.apache.fluss.server.replica.fetcher.ReplicaFetcherManager;
+import org.apache.fluss.server.storage.DiskUsageMonitor;
 import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -332,6 +333,7 @@ public class ReplicaManager implements ServerReconfigurable {
         this.ioExecutor = ioExecutor;
         this.minInSyncReplicas = conf.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER);
         this.scannerManager = checkNotNull(scannerManager, "scannerManager");
+
         registerMetrics();
     }
 
@@ -344,6 +346,9 @@ public class ReplicaManager implements ServerReconfigurable {
                 this::maybeShrinkIsr,
                 0L,
                 conf.get(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME).toMillis() / 2);
+
+        // Start periodic disk usage monitoring (initial + periodic sampling)
+        localDiskManager.startDiskUsageMonitor(scheduler);
     }
 
     public RemoteLogManager getRemoteLogManager() {
@@ -423,6 +428,11 @@ public class ReplicaManager implements ServerReconfigurable {
         physicalStorage.gauge(
                 MetricNames.SERVER_PHYSICAL_STORAGE_REMOTE_LOG_SIZE,
                 this::physicalStorageRemoteLogSize);
+
+        serverMetricGroup.gauge(
+                MetricNames.DISK_USAGE_RATIO, localDiskManager::getLastDiskUsageRatio);
+        serverMetricGroup.gauge(
+                MetricNames.DISK_WRITE_LOCKED, () -> localDiskManager.isDiskWriteLocked() ? 1 : 0);
     }
 
     @VisibleForTesting
@@ -592,6 +602,16 @@ public class ReplicaManager implements ServerReconfigurable {
         }
     }
 
+    @VisibleForTesting
+    public boolean isDiskWriteLocked() {
+        return localDiskManager.isDiskWriteLocked();
+    }
+
+    @VisibleForTesting
+    public DiskUsageMonitor getDiskUsageMonitor() {
+        return localDiskManager.getDiskUsageMonitor();
+    }
+
     /**
      * Append log records to leader replicas of the buckets, and wait for them to be replicated to
      * other replicas.
@@ -609,6 +629,7 @@ public class ReplicaManager implements ServerReconfigurable {
         if (isRequiredAcksInvalid(requiredAcks)) {
             throw new InvalidRequiredAcksException("Invalid required acks: " + requiredAcks);
         }
+        localDiskManager.ensureWritable();
 
         long startTime = System.currentTimeMillis();
         Map<TableBucket, ProduceLogResultForBucket> appendResult =
@@ -662,6 +683,7 @@ public class ReplicaManager implements ServerReconfigurable {
         if (isRequiredAcksInvalid(requiredAcks)) {
             throw new InvalidRequiredAcksException("Invalid required acks: " + requiredAcks);
         }
+        localDiskManager.ensureWritable();
 
         long startTime = System.currentTimeMillis();
         Map<TableBucket, PutKvResultForBucket> kvPutResult =

@@ -94,6 +94,10 @@ public class MetricNames {
     public static final String SERVER_PHYSICAL_STORAGE_LOCAL_SIZE = "localSize";
     public static final String SERVER_PHYSICAL_STORAGE_REMOTE_LOG_SIZE = "remoteLogSize";
 
+    // for tablet server data disk write protection
+    public static final String DISK_USAGE_RATIO = "diskUsageRatio";
+    public static final String DISK_WRITE_LOCKED = "diskWriteLocked";
+
     // --------------------------------------------------------------------------------------------
     // metrics for user
     // --------------------------------------------------------------------------------------------

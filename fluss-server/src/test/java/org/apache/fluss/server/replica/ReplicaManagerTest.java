@@ -21,6 +21,7 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.DiskWriteLockedException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
@@ -489,6 +490,66 @@ class ReplicaManagerTest extends ReplicaTestBase {
             assertMemoryRecordsEquals(
                     DATA1_ROW_TYPE, schemaGetter, records1, Collections.singletonList(DATA1));
         }
+    }
+
+    @Test
+    void testAppendRejectedWhenDiskLocked() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
+        makeLogTableAsLeader(tb.getBucket());
+
+        // simulate disk usage breaching the write-limit ratio (default 0.85)
+        replicaManager.getDiskUsageMonitor().update(0.95);
+        assertThat(replicaManager.isDiskWriteLocked()).isTrue();
+
+        assertThatThrownBy(
+                        () ->
+                                replicaManager.appendRecordsToLog(
+                                        20000,
+                                        1,
+                                        Collections.singletonMap(
+                                                tb, genMemoryLogRecordsByObject(DATA1)),
+                                        null,
+                                        (result) -> {}))
+                .isInstanceOf(DiskWriteLockedException.class)
+                .hasMessageContaining("data disk usage");
+
+        // recover when usage drops below (limit - 0.10) -> 0.75
+        replicaManager.getDiskUsageMonitor().update(0.50);
+        assertThat(replicaManager.isDiskWriteLocked()).isFalse();
+
+        CompletableFuture<List<ProduceLogResultForBucket>> future = new CompletableFuture<>();
+        replicaManager.appendRecordsToLog(
+                20000,
+                1,
+                Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
+                null,
+                future::complete);
+        assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 0, 10L));
+    }
+
+    @Test
+    void testPutKvRejectedWhenDiskLocked() {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb.getBucket());
+
+        replicaManager.getDiskUsageMonitor().update(0.99);
+        assertThat(replicaManager.isDiskWriteLocked()).isTrue();
+
+        assertThatThrownBy(
+                        () ->
+                                replicaManager.putRecordsToKv(
+                                        20000,
+                                        1,
+                                        Collections.singletonMap(
+                                                tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
+                                        null,
+                                        MergeMode.DEFAULT,
+                                        PUT_KV_VERSION,
+                                        (result) -> {}))
+                .isInstanceOf(DiskWriteLockedException.class);
+
+        // unlock for any subsequent tests on the shared replicaManager instance
+        replicaManager.getDiskUsageMonitor().update(0.10);
     }
 
     @Test

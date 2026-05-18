@@ -24,6 +24,7 @@ import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
+import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
@@ -36,7 +37,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.File;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
@@ -53,6 +56,7 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.within;
 
 /** Test for {@link DynamicConfigManager}. */
 public class DynamicConfigChangeTest {
@@ -550,6 +554,92 @@ public class DynamicConfigChangeTest {
                     .isInstanceOf(ConfigException.class)
                     .hasMessageContaining(
                             "'datalake.format' must be configured when 'datalake.enabled' is explicitly set to true.");
+        }
+    }
+
+    @Test
+    void testDynamicDiskWriteLimitRatioChange(@TempDir File tempDir) throws Exception {
+        File dataDir = new File(tempDir, "data-0");
+        assertThat(dataDir.mkdirs()).isTrue();
+
+        Configuration configuration = new Configuration();
+        configuration.setInt(ConfigOptions.TABLET_SERVER_ID, 0);
+        configuration.setString(ConfigOptions.DATA_DIR, dataDir.getAbsolutePath());
+        configuration.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 0.85);
+
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+
+        // Create LocalDiskManager and register it
+        try (LocalDiskManager localDiskManager = LocalDiskManager.create(configuration)) {
+            dynamicConfigManager.register(localDiskManager);
+            dynamicConfigManager.startup();
+
+            // Verify initial state
+            assertThat(localDiskManager.getDiskWriteLimitRatio()).isEqualTo(0.85);
+            assertThat(localDiskManager.getDiskUsageMonitor().getWriteLimitRatio()).isEqualTo(0.85);
+            assertThat(localDiskManager.getDiskUsageMonitor().getRecoverThreshold())
+                    .isEqualTo(0.75);
+
+            // Lower the limit to 0.70 via dynamic config
+            assertThatCode(
+                            () ->
+                                    dynamicConfigManager.alterConfigs(
+                                            Collections.singletonList(
+                                                    new AlterConfig(
+                                                            ConfigOptions
+                                                                    .SERVER_DATA_DISK_WRITE_LIMIT_RATIO
+                                                                    .key(),
+                                                            "0.70",
+                                                            AlterConfigOpType.SET))))
+                    .doesNotThrowAnyException();
+
+            // Verify the new ratio took effect immediately (reconfigure triggers runOnce)
+            assertThat(localDiskManager.getDiskWriteLimitRatio()).isEqualTo(0.70);
+            assertThat(localDiskManager.getDiskUsageMonitor().getWriteLimitRatio()).isEqualTo(0.70);
+            assertThat(localDiskManager.getDiskUsageMonitor().getRecoverThreshold())
+                    .isCloseTo(0.60, within(1e-9));
+
+            // Verify config was persisted to ZK
+            Map<String, String> zkConfig = zookeeperClient.fetchEntityConfig();
+            assertThat(zkConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key()))
+                    .isEqualTo("0.70");
+        }
+    }
+
+    @Test
+    void testPreventInvalidDiskWriteLimitRatio(@TempDir File tempDir) throws Exception {
+        File dataDir = new File(tempDir, "data-0");
+        assertThat(dataDir.mkdirs()).isTrue();
+
+        Configuration configuration = new Configuration();
+        configuration.setInt(ConfigOptions.TABLET_SERVER_ID, 0);
+        configuration.setString(ConfigOptions.DATA_DIR, dataDir.getAbsolutePath());
+        configuration.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 0.85);
+
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+
+        try (LocalDiskManager localDiskManager = LocalDiskManager.create(configuration)) {
+            dynamicConfigManager.register(localDiskManager);
+            dynamicConfigManager.startup();
+
+            // Try to set to invalid value 0.0 - should be rejected
+            assertThatThrownBy(
+                            () ->
+                                    dynamicConfigManager.alterConfigs(
+                                            Collections.singletonList(
+                                                    new AlterConfig(
+                                                            ConfigOptions
+                                                                    .SERVER_DATA_DISK_WRITE_LIMIT_RATIO
+                                                                    .key(),
+                                                            "0.0",
+                                                            AlterConfigOpType.SET))))
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining("must be within (0.0, 1.0]");
+
+            // Verify the ratio was NOT changed
+            assertThat(localDiskManager.getDiskWriteLimitRatio()).isEqualTo(0.85);
         }
     }
 }

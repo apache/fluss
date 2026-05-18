@@ -20,10 +20,14 @@ package org.apache.fluss.server.storage;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
+import org.apache.fluss.exception.ConfigException;
+import org.apache.fluss.exception.DiskWriteLockedException;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
+import org.apache.fluss.utils.concurrent.Scheduler;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -67,8 +71,12 @@ import java.util.UUID;
  * After that, the mutable state is limited to in-memory bucket counters and shutdown cleanup. The
  * public runtime APIs synchronize on the manager instance so directory lookups, counter updates,
  * and {@link #close()} observe a consistent view.
+ *
+ * <p>The disk usage write-protection state ({@link #isDiskWriteLocked()} / {@link
+ * #getLastDiskUsageRatio()}) is updated by the scheduler thread started via {@link
+ * #startDiskUsageMonitor(Scheduler)} and read by request handlers via {@code volatile} fields.
  */
-public final class LocalDiskManager implements Closeable {
+public final class LocalDiskManager implements Closeable, ServerReconfigurable {
 
     private static final Logger LOG = LoggerFactory.getLogger(LocalDiskManager.class);
 
@@ -85,6 +93,32 @@ public final class LocalDiskManager implements Closeable {
     private final Map<File, DirectoryLock> directoryLocks = new LinkedHashMap<>();
 
     // ------------------------------------------------------------------------
+    // Disk usage write protection
+    // ------------------------------------------------------------------------
+
+    private final long diskCheckIntervalMs;
+    private final DiskUsageMonitor diskUsageMonitor;
+
+    /**
+     * Configured high-water-mark ratio: writes are rejected once any single backing {@link
+     * java.nio.file.FileStore}'s usage ratio reaches this value. Writes resume after the usage
+     * drops below {@code diskWriteLimitRatio - 0.10} (the recover gap is owned by {@link
+     * DiskUsageMonitor}). This field is volatile because it can be changed at runtime via dynamic
+     * reconfiguration.
+     */
+    private volatile double diskWriteLimitRatio;
+
+    /**
+     * Whether the local tablet server is currently rejecting writes because the data disk usage has
+     * reached {@link #diskWriteLimitRatio}. Updated by the {@link DiskUsageMonitor} scheduler
+     * thread, read by append/put handlers.
+     */
+    private volatile boolean diskWriteLocked;
+
+    /** Last observed disk usage ratio in range {@code [0.0, 1.0]}. */
+    private volatile double lastDiskUsageRatio;
+
+    // ------------------------------------------------------------------------
     // Initialization
     // ------------------------------------------------------------------------
 
@@ -99,6 +133,33 @@ public final class LocalDiskManager implements Closeable {
             throw throwable;
         }
         this.dataDirs = Collections.unmodifiableList(initializedDataDirs);
+
+        this.diskWriteLimitRatio = conf.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO);
+        if (diskWriteLimitRatio <= 0.0 || diskWriteLimitRatio > 1.0) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "%s must be within (0.0, 1.0], but was %s",
+                            ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
+                            diskWriteLimitRatio));
+        }
+        this.diskCheckIntervalMs =
+                conf.get(ConfigOptions.SERVER_DATA_DISK_CHECK_INTERVAL).toMillis();
+        if (diskCheckIntervalMs <= 0L) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "%s must be a positive duration, but was %s ms",
+                            ConfigOptions.SERVER_DATA_DISK_CHECK_INTERVAL.key(),
+                            diskCheckIntervalMs));
+        }
+        this.diskUsageMonitor =
+                new DiskUsageMonitor(
+                        serverId,
+                        new DiskUsageCollector(this.dataDirs),
+                        diskWriteLimitRatio,
+                        (usage, locked) -> {
+                            this.lastDiskUsageRatio = usage;
+                            this.diskWriteLocked = locked;
+                        });
     }
 
     public static LocalDiskManager create(Configuration conf) throws IOException {
@@ -400,6 +461,101 @@ public final class LocalDiskManager implements Closeable {
 
     public List<File> dataDirs() {
         return dataDirs;
+    }
+
+    // ------------------------------------------------------------------------
+    // Disk usage write protection
+    // ------------------------------------------------------------------------
+
+    /**
+     * Schedules the periodic disk usage sampling on the given {@link Scheduler}. An immediate
+     * synchronous sample is performed first so that the write-lock state is meaningful before the
+     * first scheduled tick.
+     */
+    public void startDiskUsageMonitor(Scheduler scheduler) {
+        // initial sample to avoid an open window before the first scheduled run
+        diskUsageMonitor.runOnce();
+        scheduler.schedule(
+                "disk-usage-monitor",
+                diskUsageMonitor::runOnce,
+                diskCheckIntervalMs,
+                diskCheckIntervalMs);
+    }
+
+    /**
+     * @return whether write requests are currently being rejected due to disk pressure.
+     */
+    public boolean isDiskWriteLocked() {
+        return diskWriteLocked;
+    }
+
+    /**
+     * @return the most recent observed disk usage ratio in {@code [0.0, 1.0]}.
+     */
+    public double getLastDiskUsageRatio() {
+        return lastDiskUsageRatio;
+    }
+
+    /**
+     * @return the configured high-water-mark ratio that triggers the write lock.
+     */
+    public double getDiskWriteLimitRatio() {
+        return diskWriteLimitRatio;
+    }
+
+    /**
+     * Throws {@link DiskWriteLockedException} when the local data disk usage has crossed the
+     * configured write-limit ratio. Only client-driven writes ({@code appendLog} / {@code putKv})
+     * should call this; follower replication paths must bypass this check to preserve replica
+     * consistency.
+     */
+    public void ensureWritable() {
+        if (diskWriteLocked) {
+            throw new DiskWriteLockedException(serverId, lastDiskUsageRatio, diskWriteLimitRatio);
+        }
+    }
+
+    @VisibleForTesting
+    public DiskUsageMonitor getDiskUsageMonitor() {
+        return diskUsageMonitor;
+    }
+
+    // ------------------------------------------------------------------------
+    // ServerReconfigurable: dynamic write-limit-ratio update
+    // ------------------------------------------------------------------------
+
+    @Override
+    public void validate(Configuration newConfig) throws ConfigException {
+        double newRatio = newConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO);
+        if (newRatio <= 0.0 || newRatio > 1.0) {
+            throw new ConfigException(
+                    String.format(
+                            "Invalid %s: must be within (0.0, 1.0], but was %s",
+                            ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(), newRatio));
+        }
+    }
+
+    @Override
+    public void reconfigure(Configuration newConfig) {
+        double newRatio = newConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO);
+        if (Double.compare(newRatio, diskWriteLimitRatio) == 0) {
+            LOG.debug(
+                    "{} unchanged: {}",
+                    ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
+                    newRatio);
+            return;
+        }
+        double oldRatio = diskWriteLimitRatio;
+        diskWriteLimitRatio = newRatio;
+        diskUsageMonitor.updateWriteLimitRatio(newRatio);
+        // Trigger an immediate check so the new threshold takes effect without waiting
+        // for the next scheduled tick.
+        diskUsageMonitor.runOnce();
+        LOG.info(
+                "{} reconfigured: {} -> {} (immediate check triggered)",
+                ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
+                oldRatio,
+                newRatio);
     }
 
     /**
