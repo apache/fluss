@@ -43,6 +43,8 @@ trait FlussScan extends Scan {
 
   def partitionPredicate: Option[FlussPredicate] = None
 
+  def limit: Option[Int] = None
+
   protected def scanType: String
 
   override def readSchema(): StructType = {
@@ -54,9 +56,13 @@ trait FlussScan extends Scan {
     val withPushed =
       if (pushedSparkPredicates.isEmpty) base
       else s"$base [PushedPredicates: ${pushedSparkPredicates.mkString("[", ", ", "]")}]"
-    partitionPredicate match {
+    val withPartition = partitionPredicate match {
       case Some(p) => s"$withPushed [PartitionFilter: $p]"
       case None => withPushed
+    }
+    limit match {
+      case Some(l) => s"$withPartition [Limit: $l]"
+      case None => withPartition
     }
   }
 
@@ -72,6 +78,7 @@ case class FlussAppendScan(
     pushedPredicate: Option[FlussPredicate],
     override val partitionPredicate: Option[FlussPredicate],
     override val pushedSparkPredicates: Seq[Predicate],
+    override val limit: Option[Int],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussScan {
@@ -85,6 +92,7 @@ case class FlussAppendScan(
       readSchema,
       pushedPredicate,
       partitionPredicate,
+      limit,
       options,
       flussConfig)
   }
@@ -108,6 +116,7 @@ case class FlussLakeAppendScan(
     pushedPredicate: Option[FlussPredicate],
     override val partitionPredicate: Option[FlussPredicate],
     override val pushedSparkPredicates: Seq[Predicate],
+    override val limit: Option[Int],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussScan {
@@ -121,6 +130,7 @@ case class FlussLakeAppendScan(
       readSchema,
       pushedPredicate,
       partitionPredicate,
+      limit,
       options,
       flussConfig)
   }
@@ -142,6 +152,7 @@ case class FlussUpsertScan(
     tableInfo: TableInfo,
     requiredSchema: Option[StructType],
     override val partitionPredicate: Option[FlussPredicate],
+    override val limit: Option[Int],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussScan {
@@ -149,7 +160,14 @@ case class FlussUpsertScan(
   override protected val scanType: String = "Upsert"
 
   override def toBatch: Batch = {
-    new FlussUpsertBatch(tablePath, tableInfo, readSchema, partitionPredicate, options, flussConfig)
+    new FlussUpsertBatch(
+      tablePath,
+      tableInfo,
+      readSchema,
+      partitionPredicate,
+      limit,
+      options,
+      flussConfig)
   }
 
   override def toMicroBatchStream(checkpointLocation: String): MicroBatchStream = {
@@ -171,6 +189,7 @@ case class FlussLakeUpsertScan(
     pushedPredicate: Option[FlussPredicate],
     override val partitionPredicate: Option[FlussPredicate],
     override val pushedSparkPredicates: Seq[Predicate],
+    override val limit: Option[Int],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussScan {
@@ -184,6 +203,7 @@ case class FlussLakeUpsertScan(
       readSchema,
       pushedPredicate,
       partitionPredicate,
+      limit,
       options,
       flussConfig)
   }

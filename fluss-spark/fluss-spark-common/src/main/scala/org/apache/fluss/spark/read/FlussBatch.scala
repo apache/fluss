@@ -39,6 +39,7 @@ abstract class FlussBatch(
     tablePath: TablePath,
     tableInfo: TableInfo,
     readSchema: StructType,
+    limit: Option[Int],
     flussConfig: Configuration)
   extends Batch
   with AutoCloseable {
@@ -114,9 +115,10 @@ class FlussAppendBatch(
     readSchema: StructType,
     pushedPredicate: Option[Predicate],
     partitionPredicate: Option[Predicate],
+    limit: Option[Int],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
-  extends FlussBatch(tablePath, tableInfo, readSchema, flussConfig) {
+  extends FlussBatch(tablePath, tableInfo, readSchema, limit, flussConfig) {
 
   override val startOffsetsInitializer: OffsetsInitializer = {
     FlussOffsetInitializers.startOffsetsInitializer(options, flussConfig)
@@ -202,6 +204,7 @@ class FlussAppendBatch(
       tablePath,
       projection,
       pushedPredicate,
+      limit,
       options,
       flussConfig)
   }
@@ -214,9 +217,10 @@ class FlussUpsertBatch(
     tableInfo: TableInfo,
     readSchema: StructType,
     partitionPredicate: Option[Predicate],
+    limit: Option[Int],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
-  extends FlussBatch(tablePath, tableInfo, readSchema, flussConfig) {
+  extends FlussBatch(tablePath, tableInfo, readSchema, limit, flussConfig) {
 
   override val startOffsetsInitializer: OffsetsInitializer = {
     val offsetsInitializer = FlussOffsetInitializers.startOffsetsInitializer(options, flussConfig)
@@ -253,6 +257,6 @@ class FlussUpsertBatch(
   }
 
   override def createReaderFactory(): PartitionReaderFactory = {
-    new FlussUpsertPartitionReaderFactory(tablePath, projection, options, flussConfig)
+    new FlussUpsertPartitionReaderFactory(tablePath, projection, limit, options, flussConfig)
   }
 }

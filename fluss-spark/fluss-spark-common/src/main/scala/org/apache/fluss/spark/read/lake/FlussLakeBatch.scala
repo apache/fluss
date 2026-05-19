@@ -37,9 +37,10 @@ abstract class FlussLakeBatch(
     tablePath: TablePath,
     tableInfo: TableInfo,
     readSchema: StructType,
+    limit: Option[Int],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
-  extends FlussBatch(tablePath, tableInfo, readSchema, flussConfig) {
+  extends FlussBatch(tablePath, tableInfo, readSchema, limit, flussConfig) {
 
   override val stoppingOffsetsInitializer: OffsetsInitializer = {
     FlussOffsetInitializers.stoppingOffsetsInitializer(true, options, flussConfig)

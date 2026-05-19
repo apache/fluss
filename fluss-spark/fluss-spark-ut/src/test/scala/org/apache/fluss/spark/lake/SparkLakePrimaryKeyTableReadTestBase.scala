@@ -459,6 +459,32 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
     }
   }
 
+  test("Spark Lake Read: union with limit pushdown") {
+    withTable("t_pk_union_limit") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_pk_union_limit (id INT, name STRING, score INT)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${PRIMARY_KEY.key()}' = 'id',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_pk_union_limit VALUES
+             |(1, 'alice', 90), (2, 'bob', 85), (3, 'charlie', 95)
+             |""".stripMargin)
+      tierToLake("t_pk_union_limit")
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_pk_union_limit VALUES
+             |(4, 'dave', 88), (5, 'eve', 92)
+             |""".stripMargin)
+
+      val query =
+        sql(s"SELECT id, score FROM $DEFAULT_DATABASE.t_pk_union_limit LIMIT 2")
+      assert(flussScan(query).flatMap(_.limit).distinct == Seq(2))
+    }
+  }
+
   test("Spark Lake Read: primary key table projection with type-dependent columns") {
     withTable("t") {
       val tablePath = createTablePath("t")

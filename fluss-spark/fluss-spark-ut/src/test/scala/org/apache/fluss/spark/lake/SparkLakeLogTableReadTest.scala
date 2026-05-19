@@ -616,6 +616,33 @@ abstract class SparkLakeLogTableReadTest extends SparkLakeTableReadTestBase {
     }
   }
 
+  test("Spark Lake Read: log table union read with limit pushdown") {
+    withTable("t_union_limit") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_union_limit (id INT, name STRING)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_union_limit VALUES
+             |(1, "alpha"), (2, "beta"), (3, "gamma")
+             |""".stripMargin)
+
+      tierToLake("t_union_limit")
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_union_limit VALUES
+             |(4, "delta"), (5, "epsilon")
+             |""".stripMargin)
+
+      val df = sql(s"SELECT * FROM $DEFAULT_DATABASE.t_union_limit LIMIT 2")
+      assert(flussScan(df).flatMap(_.limit).distinct == Seq(2))
+    }
+  }
+
   test("Spark Lake Read: non-FULL startup mode skips lake path") {
     withTable("t_earliest") {
       sql(s"""

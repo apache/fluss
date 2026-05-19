@@ -34,7 +34,10 @@ import org.apache.spark.sql.connector.read.PartitionReader
 
 import java.time.Duration
 
-abstract class FlussPartitionReader(tablePath: TablePath, flussConfig: Configuration)
+abstract class FlussPartitionReader(
+    tablePath: TablePath,
+    flussConfig: Configuration,
+    limit: Option[Int])
   extends PartitionReader[InternalRow]
   with Logging {
 
@@ -57,6 +60,9 @@ abstract class FlussPartitionReader(tablePath: TablePath, flussConfig: Configura
   def next0(): Boolean
 
   override def next(): Boolean = {
+    if (limit.isDefined && numRowsRead >= limit.get) {
+      return false
+    }
     val hasNext = next0()
     if (hasNext) {
       numRowsRead += 1

@@ -24,7 +24,7 @@ import org.apache.fluss.spark.read.lake.{FlussLakeBatch, FlussLakeUtils}
 import org.apache.fluss.spark.utils.{SparkPartitionPredicate, SparkPredicateConverter}
 
 import org.apache.spark.sql.connector.expressions.filter.Predicate
-import org.apache.spark.sql.connector.read.{Scan, ScanBuilder, SupportsPushDownRequiredColumns, SupportsPushDownV2Filters}
+import org.apache.spark.sql.connector.read.{Scan, ScanBuilder, SupportsPushDownLimit, SupportsPushDownRequiredColumns, SupportsPushDownV2Filters}
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
@@ -33,12 +33,21 @@ import java.util.{Collections, IdentityHashMap, Set => JSet}
 import scala.collection.JavaConverters._
 
 /** An interface that extends from Spark [[ScanBuilder]]. */
-trait FlussScanBuilder extends ScanBuilder with SupportsPushDownRequiredColumns {
+trait FlussScanBuilder
+  extends ScanBuilder
+  with SupportsPushDownRequiredColumns
+  with SupportsPushDownLimit {
 
   protected var requiredSchema: Option[StructType] = None
+  protected var limit: Option[Int] = None
 
   override def pruneColumns(requiredSchema: StructType): Unit = {
     this.requiredSchema = Some(requiredSchema)
+  }
+
+  override def pushLimit(limit: Int): Boolean = {
+    this.limit = Some(limit)
+    true
   }
 }
 
@@ -133,6 +142,7 @@ class FlussAppendScanBuilder(
       pushedPredicate,
       partitionPredicate,
       acceptedPredicates.toSeq,
+      limit,
       options,
       flussConfig)
   }
@@ -154,6 +164,7 @@ class FlussLakeAppendScanBuilder(
       pushedPredicate,
       partitionPredicate,
       acceptedPredicates.toSeq,
+      limit,
       options,
       flussConfig)
   }
@@ -168,7 +179,14 @@ class FlussUpsertScanBuilder(
   extends FlussSupportsPushDownV2Filters {
 
   override def build(): Scan = {
-    FlussUpsertScan(tablePath, tableInfo, requiredSchema, partitionPredicate, options, flussConfig)
+    FlussUpsertScan(
+      tablePath,
+      tableInfo,
+      requiredSchema,
+      partitionPredicate,
+      limit,
+      options,
+      flussConfig)
   }
 }
 
@@ -188,6 +206,7 @@ class FlussLakeUpsertScanBuilder(
       pushedPredicate,
       partitionPredicate,
       acceptedPredicates.toSeq,
+      limit,
       options,
       flussConfig)
   }
