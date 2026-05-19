@@ -101,7 +101,9 @@ class HudiBucketingFunctionTest {
 
     @Test
     void testStringHash() {
-        String testValue = "Hello Hudi, Fluss this side!";
+        // NOTE: ',' is Hudi's record-part separator and is rejected by the encoder — use a
+        // delimiter-free message here. (See HudiKeyEncoder Javadoc for details.)
+        String testValue = "Hello Hudi - Fluss this side!";
         int bucketNum = 10;
         String key = "name";
 
@@ -206,7 +208,7 @@ class HudiBucketingFunctionTest {
     void testMultiKeysHashing() {
         int testIntValue = 42;
         long testLongValue = 1234567890123456789L;
-        String testStringValue = "Hello Hudi, Fluss this side!";
+        String testStringValue = "Hello Hudi - Fluss this side!";
         BigDecimal testValue = new BigDecimal("123.45");
         Decimal decimal = Decimal.fromBigDecimal(testValue, 10, 2);
         int bucketNum = 10;
@@ -261,45 +263,33 @@ class HudiBucketingFunctionTest {
     }
 
     @Test
-    void testNullFieldUsesPlaceholder() {
+    void testSingleFieldNull_keepsPlaceholderString_matchesHudi() {
+        // SINGLE-field mode: Hudi's KeyGenUtils.extractRecordKeysByFields takes the
+        // fast path (no ',' AND no ':' in the recordKey) and returns the raw string
+        // verbatim — i.e. the literal "__null__" — without round-tripping it back to
+        // a real null. The strong-aligned encoder must mirror that and hash the
+        // placeholder string, NOT a null element.
         int bucketNum = 10;
         String key = "name";
 
         RowType rowType =
                 RowType.of(new DataType[] {DataTypes.STRING().copy(true)}, new String[] {key});
 
-        // a row with an explicit null on the bucket key column
         GenericRow row = GenericRow.of((Object) null);
         HudiKeyEncoder encoder = new HudiKeyEncoder(rowType, Collections.singletonList(key));
 
-        // Encoded bytes must hash the placeholder, NOT the literal "null" string.
         byte[] ourEncodedKey = encoder.encodeKey(row);
-        byte[] placeholderBytes = toBytes(new String[] {NULL_RECORDKEY_PLACEHOLDER});
-        byte[] javaNullLiteralBytes = toBytes(new String[] {"null"});
+        byte[] placeholderStringBytes = toBytes(new String[] {NULL_RECORDKEY_PLACEHOLDER});
+        byte[] literalNullStringBytes = toBytes(new String[] {"null"});
 
-        assertThat(ourEncodedKey).isEqualTo(placeholderBytes);
-        assertThat(ourEncodedKey).isNotEqualTo(javaNullLiteralBytes);
+        assertThat(ourEncodedKey).isEqualTo(placeholderStringBytes);
+        assertThat(ourEncodedKey).isNotEqualTo(literalNullStringBytes);
 
-        int hudiBucket = BucketIdentifier.getBucketId(NULL_RECORDKEY_PLACEHOLDER, key, bucketNum);
+        // Cross-validate against Hudi's recordKey-string overload (production path).
+        int hudiBucket =
+                BucketIdentifier.getBucketId(NULL_RECORDKEY_PLACEHOLDER, key, bucketNum);
         int ourBucket = new HudiBucketingFunction().bucketing(ourEncodedKey, bucketNum);
         assertThat(ourBucket).isEqualTo(hudiBucket);
-    }
-
-    @Test
-    void testNullFieldDoesNotCollideWithLiteralNullString() {
-        // The literal string "null" must not produce the same encoded bytes as a real
-        // null value — a regression test for the previous String.valueOf(null) behavior.
-        String key = "name";
-        RowType rowType =
-                RowType.of(new DataType[] {DataTypes.STRING().copy(true)}, new String[] {key});
-
-        HudiKeyEncoder encoder = new HudiKeyEncoder(rowType, Collections.singletonList(key));
-
-        byte[] encodedNull = encoder.encodeKey(GenericRow.of((Object) null));
-        byte[] encodedLiteralNull =
-                encoder.encodeKey(GenericRow.of(BinaryString.fromString("null")));
-
-        assertThat(encodedNull).isNotEqualTo(encodedLiteralNull);
     }
 
     @Test
@@ -340,10 +330,11 @@ class HudiBucketingFunctionTest {
     }
 
     @Test
-    void testCompositeBucketKeyMatchesHudiFieldValueRecordKey() {
-        // Two-field bucket key: Hudi expects record key in "f1:v1,f2:v2" form when its
-        // BucketIdentifier sees a ':' in the record key, then extracts ["v1","v2"] and
-        // hashes that List<String>. Fluss feeds the same ["v1","v2"] into List#hashCode().
+    void testCompositeBucketKeyMatchesHudiRecordKeyOverload() {
+        // Strong alignment: go through Hudi's production parse path
+        // (BucketIdentifier#getBucketId(String recordKey, ...)) instead of the
+        // pre-parsed List<String> overload, so any future divergence in parsing
+        // (including ':'-handling for timestamps) is caught.
         int bucketNum = 16;
         String f1 = "user_id";
         String f2 = "region";
@@ -358,20 +349,19 @@ class HudiBucketingFunctionTest {
         HudiKeyEncoder encoder = new HudiKeyEncoder(rowType, Arrays.asList(f1, f2));
 
         byte[] ourEncodedKey = encoder.encodeKey(row);
-        byte[] expected = toBytes(new String[] {String.valueOf(idValue), regionValue});
-        assertThat(ourEncodedKey).isEqualTo(expected);
-
-        // Compare against Hudi's List<String>-based overload to avoid Hudi's own
-        // recordKey-parsing path (which would split on ':' inside values like timestamps).
-        int hudiBucket =
-                BucketIdentifier.getBucketId(
-                        Arrays.asList(String.valueOf(idValue), regionValue), bucketNum);
         int ourBucket = new HudiBucketingFunction().bucketing(ourEncodedKey, bucketNum);
+
+        String recordKey = f1 + ":" + idValue + "," + f2 + ":" + regionValue;
+        int hudiBucket =
+                BucketIdentifier.getBucketId(recordKey, f1 + "," + f2, bucketNum);
         assertThat(ourBucket).isEqualTo(hudiBucket);
     }
 
     @Test
-    void testCompositeBucketKeyWithNullFieldUsesPlaceholder() {
+    void testCompositeBucketKeyWithNullFieldMatchesHudiRecordKeyOverload() {
+        // Hudi serializes a null bucket-key field as "__null__" in the record key, then
+        // parses it back to a `null` element before hashing. The strong-aligned encoder
+        // must produce a bucket id identical to Hudi's recordKey-string parse path.
         int bucketNum = 8;
         String f1 = "user_id";
         String f2 = "region";
@@ -385,13 +375,12 @@ class HudiBucketingFunctionTest {
         HudiKeyEncoder encoder = new HudiKeyEncoder(rowType, Arrays.asList(f1, f2));
 
         byte[] ourEncodedKey = encoder.encodeKey(row);
-        byte[] expected = toBytes(new String[] {"42", NULL_RECORDKEY_PLACEHOLDER});
-        assertThat(ourEncodedKey).isEqualTo(expected);
-
-        int hudiBucket =
-                BucketIdentifier.getBucketId(
-                        Arrays.asList("42", NULL_RECORDKEY_PLACEHOLDER), bucketNum);
         int ourBucket = new HudiBucketingFunction().bucketing(ourEncodedKey, bucketNum);
+
+        // The on-wire record key Hudi would have built for this row.
+        String recordKey = f1 + ":42," + f2 + ":" + NULL_RECORDKEY_PLACEHOLDER;
+        int hudiBucket =
+                BucketIdentifier.getBucketId(recordKey, f1 + "," + f2, bucketNum);
         assertThat(ourBucket).isEqualTo(hudiBucket);
     }
 
@@ -479,5 +468,131 @@ class HudiBucketingFunctionTest {
     private byte[] toBytes(String[] value) {
         List<String> values = Arrays.asList(value);
         return ByteBuffer.allocate(4).putInt(values.hashCode()).array();
+    }
+
+    // ------------------------------------------------------------------
+    // End-to-end tests against Hudi's recordKey-string overloads — these
+    // exercise the same parsing path Hudi takes in production (HoodieKey
+    // -> getHashKeys via ':' / ',' split) and therefore catch divergence
+    // that the List<String>-based overload would silently hide.
+    // ------------------------------------------------------------------
+
+    @Test
+    void testCompositeBucketKeyMatchesHudiRecordKeyOverload_safeValues() {
+        // Values intentionally free of ':' and ',' — the encoder must agree with Hudi's
+        // record-key-parsing path under the documented contract.
+        int bucketNum = 16;
+        String f1 = "user_id";
+        String f2 = "region";
+        int idValue = 12345;
+        String regionValue = "cn-north";
+
+        RowType rowType =
+                RowType.of(
+                        new DataType[] {DataTypes.INT(), DataTypes.STRING()},
+                        new String[] {f1, f2});
+        GenericRow row = GenericRow.of(idValue, BinaryString.fromString(regionValue));
+        HudiKeyEncoder encoder = new HudiKeyEncoder(rowType, Arrays.asList(f1, f2));
+
+        byte[] ourEncodedKey = encoder.encodeKey(row);
+        int ourBucket = new HudiBucketingFunction().bucketing(ourEncodedKey, bucketNum);
+
+        // Build Hudi's wire-format record key: "f1:v1,f2:v2", then go through the
+        // recordKey-string overload that splits on ':' / ',' before hashing.
+        String recordKey = f1 + ":" + idValue + "," + f2 + ":" + regionValue;
+        int hudiBucket =
+                BucketIdentifier.getBucketId(recordKey, f1 + "," + f2, bucketNum);
+
+        assertThat(ourBucket).isEqualTo(hudiBucket);
+    }
+
+    @Test
+    void testCompositeKeyWithColonInValue_matchesHudiRecordKeyOverload() {
+        // Hudi's KeyGenUtils.extractRecordKeysByFields has a dedicated look-ahead loop
+        // that correctly handles values containing ':' (e.g. timestamps like
+        // "2023-10-25T10:01:13.182Z"). The strong-aligned encoder must match Hudi
+        // bit-for-bit on this case — not merely "document the divergence".
+        int bucketNum = 8;
+        String f1 = "tenant";
+        String f2 = "ts";
+        String tenant = "acme";
+        TimestampLtz ts = TimestampLtz.fromInstant(Instant.ofEpochMilli(1700000000000L));
+
+        RowType rowType =
+                RowType.of(
+                        new DataType[] {DataTypes.STRING(), DataTypes.TIMESTAMP_LTZ(6)},
+                        new String[] {f1, f2});
+        GenericRow row = GenericRow.of(BinaryString.fromString(tenant), ts);
+        HudiKeyEncoder encoder = new HudiKeyEncoder(rowType, Arrays.asList(f1, f2));
+
+        byte[] ourEncodedKey = encoder.encodeKey(row);
+        int ourBucket = new HudiBucketingFunction().bucketing(ourEncodedKey, bucketNum);
+
+        String recordKey = f1 + ":" + tenant + "," + f2 + ":" + ts.toString();
+        int hudiBucket =
+                BucketIdentifier.getBucketId(recordKey, f1 + "," + f2, bucketNum);
+
+        // Strong alignment: bucket ids MUST match.
+        assertThat(ourBucket).isEqualTo(hudiBucket);
+    }
+
+    @Test
+    void testRejectsValueContainingRecordSeparator() {
+        // ',' is Hudi's record-part separator and is NOT escaped by Hudi's record-key
+        // serialization. The encoder must refuse such values rather than silently
+        // diverge from Hudi's bucket layout.
+        RowType rowType =
+                RowType.of(
+                        new DataType[] {DataTypes.STRING(), DataTypes.STRING()},
+                        new String[] {"tenant", "name"});
+        GenericRow row =
+                GenericRow.of(
+                        BinaryString.fromString("acme"),
+                        BinaryString.fromString("smith, john"));
+        HudiKeyEncoder encoder =
+                new HudiKeyEncoder(rowType, Arrays.asList("tenant", "name"));
+
+        assertThatThrownBy(() -> encoder.encodeKey(row))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("'name'")
+                .hasMessageContaining("','");
+    }
+
+    @Test
+    void testRejectsLiteralPlaceholderValueInCompositeKey() {
+        // Composite-key mode: a user-supplied value equal to Hudi's reserved placeholder
+        // would be round-tripped to null by Hudi's parser, silently changing the bucket id.
+        // (In single-field mode the placeholder is kept verbatim by Hudi, so it's safe.)
+        RowType rowType =
+                RowType.of(
+                        new DataType[] {DataTypes.STRING(), DataTypes.STRING()},
+                        new String[] {"tenant", "name"});
+        GenericRow row =
+                GenericRow.of(
+                        BinaryString.fromString("acme"),
+                        BinaryString.fromString(NULL_RECORDKEY_PLACEHOLDER));
+        HudiKeyEncoder encoder =
+                new HudiKeyEncoder(rowType, Arrays.asList("tenant", "name"));
+
+        assertThatThrownBy(() -> encoder.encodeKey(row))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reserved record-key placeholder");
+    }
+
+    @Test
+    void testRejectsUnsupportedBucketKeyType() {
+        // BYTES / BINARY would otherwise fall through to Object#toString() and produce
+        // instance-bound bucket ids (e.g. "[B@1a2b3c"). The encoder must refuse them up
+        // front rather than silently corrupt the bucket layout.
+        RowType rowType =
+                RowType.of(new DataType[] {DataTypes.BYTES()}, new String[] {"payload"});
+
+        assertThatThrownBy(
+                        () ->
+                                new HudiKeyEncoder(
+                                        rowType, Collections.singletonList("payload")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Unsupported Hudi bucket key type")
+                .hasMessageContaining("payload");
     }
 }
