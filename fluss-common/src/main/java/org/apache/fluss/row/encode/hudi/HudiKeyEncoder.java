@@ -35,7 +35,7 @@ import java.util.Set;
  *
  * <h3>What this encoder must reproduce</h3>
  *
- * The bucket id Hudi computes in production is:
+ * <p>The bucket id Hudi computes in production is:
  *
  * <pre>{@code
  * BucketIdentifier.getBucketId(HoodieKey, indexKeyFields, numBuckets)
@@ -43,7 +43,7 @@ import java.util.Set;
  *      & Integer.MAX_VALUE) % numBuckets
  * }</pre>
  *
- * In other words, Hudi parses a {@code "f1:v1,f2:v2,..."} record-key string back into a {@code
+ * <p>In other words, Hudi parses a {@code "f1:v1,f2:v2,..."} record-key string back into a {@code
  * List<String>} (with {@code "__null__"} → {@code null} and {@code "__empty__"} → {@code ""}) and
  * then takes {@link java.util.List#hashCode()}.
  *
@@ -53,7 +53,7 @@ import java.util.Set;
  *
  * <h3>Why a list of nullable {@code String}s (and not stringified placeholders)</h3>
  *
- * Hudi's parser turns the literal {@code "__null__"}/{@code "__empty__"} substrings back into
+ * <p>Hudi's parser turns the literal {@code "__null__"}/{@code "__empty__"} substrings back into
  * {@code null}/{@code ""} <em>before</em> hashing. {@code List#hashCode} treats a {@code null}
  * element as contributing {@code 0} and a non-null element as contributing its {@code String}
  * hash. Hashing the placeholder string directly would therefore give a different bucket id than
@@ -61,7 +61,7 @@ import java.util.Set;
  *
  * <h3>Why we reject values containing {@code ','}</h3>
  *
- * {@code ','} is Hudi's record-part separator and is <strong>not escaped</strong> in Hudi's
+ * <p>{@code ','} is Hudi's record-part separator and is <strong>not escaped</strong> in Hudi's
  * record-key serialization. Any bucket-key value containing {@code ','} is therefore ambiguous on
  * Hudi's parse path and would produce a different reconstructed list than the one we hash here.
  * We refuse such values up front with {@link IllegalArgumentException} so callers cannot silently
@@ -71,7 +71,7 @@ import java.util.Set;
  *
  * <h3>Supported key field types</h3>
  *
- * See {@link #SUPPORTED_BUCKET_KEY_TYPE_ROOTS}. Composite or binary types (ARRAY/MAP/ROW/
+ * <p>See {@link #SUPPORTED_BUCKET_KEY_TYPE_ROOTS}. Composite or binary types (ARRAY/MAP/ROW/
  * BINARY/VARBINARY) would fall back to {@code Object#toString()} and produce instance-bound,
  * non-reproducible bucket ids; they are rejected at construction time.
  */
