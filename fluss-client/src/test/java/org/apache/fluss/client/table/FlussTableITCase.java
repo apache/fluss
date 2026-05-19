@@ -34,6 +34,8 @@ import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.exception.InvalidAlterTableException;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.TestFileSystem;
 import org.apache.fluss.metadata.DataLakeFormat;
@@ -70,9 +72,11 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.client.table.scanner.batch.BatchScanUtils.collectRows;
@@ -1162,6 +1166,128 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             }
             assertThat(count).isEqualTo(expectedSize);
         }
+    }
+
+    @Test
+    void testAppendWithAlterTableBucket() throws Exception {
+        TableDescriptor data1TableDescriptor =
+                TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1).build();
+        createTable(DATA1_TABLE_PATH, data1TableDescriptor, false);
+        TableInfo tableInfo = admin.getTableInfo(DATA1_TABLE_PATH).get();
+
+        int lastCount = verifyAppendForAlterTableBucket(1, 0);
+
+        // alter table bucket from 1 to 2
+        List<TableChange> tableChanges = Collections.singletonList(TableChange.bucketNum(2));
+        admin.alterTable(DATA1_TABLE_PATH, tableChanges, false);
+
+        // wait until new bucket replicas are ready
+        waitAllReplicasReady(tableInfo.getTableId(), 2);
+
+        verifyAppendForAlterTableBucket(2, lastCount);
+    }
+
+    int verifyAppendForAlterTableBucket(int bucketNum, int lastCount) throws Exception {
+        Configuration clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+        // use round-robin bucket assigner, so that we can append data to all buckets
+        clientConf.set(
+                ConfigOptions.CLIENT_WRITER_BUCKET_NO_KEY_ASSIGNER,
+                ConfigOptions.NoKeyAssigner.ROUND_ROBIN);
+        Connection conn = ConnectionFactory.createConnection(clientConf);
+        int rowCount = 10;
+        int expectedRowCount = lastCount + rowCount;
+        try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+
+            for (int i = 0; i < rowCount; i++) {
+                GenericRow row = row(i, "a");
+                appendWriter.append(row).get();
+            }
+            appendWriter.flush();
+
+            try (LogScanner logScanner = createLogScanner(table)) {
+                subscribeFromBeginning(logScanner, table);
+
+                int count = 0;
+                Set<TableBucket> allBuckets = new HashSet<>();
+                while (count < expectedRowCount) {
+                    ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                    allBuckets.addAll(scanRecords.buckets());
+                    count += scanRecords.count();
+                }
+                assertThat(allBuckets.size()).isEqualTo(bucketNum);
+                assertThat(count).isEqualTo(expectedRowCount);
+            }
+        }
+        conn.close();
+        return expectedRowCount;
+    }
+
+    @Test
+    void testInvalidAlterTableBucket() throws Exception {
+        Schema logTableSchema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .build();
+        TableDescriptor td1 =
+                TableDescriptor.builder().schema(logTableSchema).distributedBy(1, "a").build();
+        TablePath t1 = TablePath.of("test_db_1", "test_invalid_alter_table_bucket_1");
+        createTable(t1, td1, false);
+
+        // alter table bucket from 1 to 2
+        List<TableChange> tableChanges = Collections.singletonList(TableChange.bucketNum(2));
+        // alter table bucket is not supported for log table with bucket keys now
+        assertThatThrownBy(() -> admin.alterTable(t1, tableChanges, false).get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessage(
+                        "Alter table bucket is not supported for Log table with bucket keys or PrimaryKey Table now.");
+
+        Schema pkTableSchema =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .primaryKey("a")
+                        .build();
+        TableDescriptor td2 =
+                TableDescriptor.builder().schema(pkTableSchema).distributedBy(1).build();
+        TablePath t2 = TablePath.of("test_db_2", "test_invalid_alter_table_bucket_2");
+        createTable(t2, td2, false);
+
+        // alter table bucket from 1 to 2
+        List<TableChange> tableChanges2 = Collections.singletonList(TableChange.bucketNum(2));
+        // alter table bucket is not supported for pk table now
+        assertThatThrownBy(() -> admin.alterTable(t2, tableChanges2, false).get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessage(
+                        "Alter table bucket is not supported for Log table with bucket keys or PrimaryKey Table now.");
+
+        // test bucket number cannot be decreased
+        Schema logTableNoBucketKey =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .build();
+        TableDescriptor td3 =
+                TableDescriptor.builder().schema(logTableNoBucketKey).distributedBy(3).build();
+        TablePath t3 = TablePath.of("test_db_3", "test_invalid_alter_table_bucket_3");
+        createTable(t3, td3, false);
+
+        // alter table bucket from 3 to 2 (shrink)
+        List<TableChange> tableChanges3 = Collections.singletonList(TableChange.bucketNum(2));
+        assertThatThrownBy(() -> admin.alterTable(t3, tableChanges3, false).get())
+                .cause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("Bucket number can only be increased");
+
+        // alter table bucket from 3 to 3 (same)
+        List<TableChange> tableChanges4 = Collections.singletonList(TableChange.bucketNum(3));
+        assertThatThrownBy(() -> admin.alterTable(t3, tableChanges4, false).get())
+                .cause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("Bucket number can only be increased");
     }
 
     @ParameterizedTest

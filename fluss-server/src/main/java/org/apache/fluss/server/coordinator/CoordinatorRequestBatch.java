@@ -288,7 +288,9 @@ public class CoordinatorRequestBatch {
      *   <li>case8: One newly tabletServer added into cluster
      *   <li>case9: One tabletServer is removed from cluster
      *   <li>case10: schemaId is changed after table is created.
-     *   <li>case 11: TableRegistration changed after table is created.
+     *   <li>case11: TableRegistration changed after table is created.
+     *   <li>case12: Alter table bucket and new bucketAssigment of this table or table's partition
+     *       generated.
      * </ol>
      */
     // todo: improve this with different phase enum.
@@ -313,7 +315,7 @@ public class CoordinatorRequestBatch {
                 updateMetadataRequestBucketMap.put(tableId, Collections.emptyList());
             }
         } else {
-            // case1, case2, case5, case7, case8
+            // case1, case2, case5, case7, case8, case12
             for (TableBucket tableBucket : tableBuckets) {
                 long currentTableId = tableBucket.getTableId();
                 Long currentPartitionId = tableBucket.getPartitionId();

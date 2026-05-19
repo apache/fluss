@@ -232,6 +232,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final boolean kvTableAllowCreation;
     private final Supplier<EventManager> eventManagerSupplier;
     private final Supplier<Integer> coordinatorEpochSupplier;
+    private final Supplier<Integer> coordinatorZkVersionSupplier;
     private final CoordinatorMetadataCache metadataCache;
 
     private final LakeTableTieringManager lakeTableTieringManager;
@@ -272,6 +273,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEventManager();
         this.coordinatorEpochSupplier =
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEpoch();
+        this.coordinatorZkVersionSupplier =
+                () -> coordinatorEventProcessorSupplier.get().getCoordinatorZkVersion();
         this.lakeTableTieringManager = lakeTableTieringManager;
         this.metadataCache = metadataCache;
         this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
@@ -532,7 +535,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     alterTableConfigChanges,
                     tablePropertyChanges,
                     request.isIgnoreIfNotExists(),
-                    currentSession().getPrincipal());
+                    metadataCache,
+                    currentSession().getPrincipal(),
+                    coordinatorZkVersionSupplier.get());
         }
 
         return CompletableFuture.completedFuture(new AlterTableResponse());
@@ -545,7 +550,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         }
 
         for (TableChange tableChange : tableChanges) {
-            if (tableChange instanceof TableChange.SetOption) {
+            if (tableChange instanceof TableChange.BucketNumOption) {
+                TableChange.BucketNumOption bucketNumOption =
+                        (TableChange.BucketNumOption) tableChange;
+                builder.setBucketNum(bucketNumOption.getBucketNum());
+            } else if (tableChange instanceof TableChange.SetOption) {
                 TableChange.SetOption setOption = (TableChange.SetOption) tableChange;
                 String optionKey = setOption.getKey();
                 if (isTableStorageConfig(optionKey)) {

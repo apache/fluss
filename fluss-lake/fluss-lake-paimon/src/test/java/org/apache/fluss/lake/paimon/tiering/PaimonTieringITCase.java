@@ -34,6 +34,7 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableSet;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -435,6 +436,180 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
     }
 
     @Test
+    void testTieringNonPartitionedTableForAlterTableBucket() throws Exception {
+        // start tiering job
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        try {
+            // create a log table
+            TablePath t1 = TablePath.of(DEFAULT_DB, "logTableAlterTableBucket");
+            long t1Id =
+                    createLogTable(
+                            t1, 1, false, false, Collections.emptyMap(), Collections.emptyMap());
+            TableBucket t1Bucket0 = new TableBucket(t1Id, 0);
+            List<InternalRow> flussRows = new ArrayList<>();
+            // write records
+            int seq = 0;
+            for (int i = 0; i < 30; i++) {
+                List<InternalRow> rows = Collections.singletonList(row(seq, "v" + seq));
+                flussRows.addAll(rows);
+                writeRows(t1, rows, true);
+                seq++;
+            }
+
+            // check the status of replica after synced;
+            assertReplicaStatus(t1Bucket0, 30);
+            // check data in paimon
+            checkDataInPaimonAppendOnlyTableForMultipleBuckets(t1, flussRows);
+            // check snapshot offsets
+            Map<TableBucket, Long> expectedOffsets = new HashMap<>();
+            expectedOffsets.put(t1Bucket0, 30L);
+            checkFlussOffsetsInSnapshot(t1, expectedOffsets);
+
+            // alter table bucket num from 1 to 2
+            TableChange.BucketNumOption bucketNumOption = TableChange.bucketNum(2);
+            List<TableChange> changes = Collections.singletonList(bucketNumOption);
+            admin.alterTable(t1, changes, false).get();
+
+            TableBucket t1Bucket1 = new TableBucket(t1Id, 1);
+            // write records again to all buckets
+            for (int i = 0; i < 30; i++) {
+                List<InternalRow> rows = Collections.singletonList(row(seq, "v" + seq));
+                flussRows.addAll(rows);
+                writeRows(t1, rows, true);
+                seq++;
+            }
+
+            // check the status of replica after synced;
+            assertReplicaStatus(ImmutableSet.of(t1Bucket0, t1Bucket1), 60);
+            // check data in paimon of all buckets
+            checkDataInPaimonAppendOnlyTableForMultipleBuckets(t1, flussRows);
+            // check snapshot offsets
+            assertThat(
+                            getLeaderReplica(t1Bucket0).getLakeLogEndOffset()
+                                    + getLeaderReplica(t1Bucket1).getLakeLogEndOffset())
+                    .isEqualTo(60);
+            expectedOffsets.put(t1Bucket0, getLeaderReplica(t1Bucket0).getLakeLogEndOffset());
+            expectedOffsets.put(t1Bucket1, getLeaderReplica(t1Bucket1).getLakeLogEndOffset());
+            checkFlussOffsetsInSnapshot(t1, expectedOffsets);
+        } finally {
+            jobClient.cancel().get();
+        }
+    }
+
+    @Test
+    void testTieringPartitionedTableForAlterTableBucket() throws Exception {
+        // start tiering job
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        try {
+            // create partitioned table and wait partitions are ready
+            TablePath partitionedTablePath =
+                    TablePath.of(DEFAULT_DB, "partitionedTableAlterTableBucket");
+            Tuple2<Long, TableDescriptor> tableIdAndDescriptor =
+                    createPartitionedTable(partitionedTablePath);
+            Map<Long, String> partitionNameByIds = waitUntilPartitions(partitionedTablePath);
+
+            List<InternalRow> partitionFlussRows = new ArrayList<>();
+            // now, write rows into partitioned table
+            TableDescriptor partitionedTableDescriptor = tableIdAndDescriptor.f1;
+            Map<String, List<InternalRow>> writtenRowsByPartition = new HashMap<>();
+            int partitionSeq = 0;
+            for (String partitionName : partitionNameByIds.values()) {
+                List<InternalRow> partitionRows = new ArrayList<>();
+                for (int i = 0; i < 3; i++) {
+                    partitionRows.add(row(partitionSeq, "v" + partitionSeq, partitionName));
+                    partitionSeq++;
+                }
+                partitionFlussRows.addAll(partitionRows);
+                writtenRowsByPartition.put(partitionName, partitionRows);
+
+                writeRows(partitionedTablePath, partitionRows, true);
+            }
+            long tableId = tableIdAndDescriptor.f0;
+
+            // wait until synced to paimon
+            Map<TableBucket, Long> expectedOffset = new HashMap<>();
+            for (Long partitionId : partitionNameByIds.keySet()) {
+                TableBucket tableBucket = new TableBucket(tableId, partitionId, 0);
+                assertReplicaStatus(tableBucket, 3);
+                expectedOffset.put(tableBucket, 3L);
+            }
+
+            // now, let's check data in paimon per partition
+            // check data in paimon
+            String partitionCol = partitionedTableDescriptor.getPartitionKeys().get(0);
+            for (String partitionName : partitionNameByIds.values()) {
+                checkDataInPaimonAppendOnlyPartitionedTable(
+                        partitionedTablePath,
+                        Collections.singletonMap(partitionCol, partitionName),
+                        writtenRowsByPartition.get(partitionName),
+                        0);
+            }
+
+            checkFlussOffsetsInSnapshot(partitionedTablePath, expectedOffset);
+
+            // alter partitioned table bucket from 1 to 2
+            TableChange.BucketNumOption bucketNumOption = TableChange.bucketNum(2);
+            List<TableChange> changes = Collections.singletonList(bucketNumOption);
+            admin.alterTable(partitionedTablePath, changes, false).get();
+
+            List<PartitionInfo> partitionInfos =
+                    admin.listPartitionInfos(partitionedTablePath).get();
+            // wait until new bucket replicas are ready
+            for (PartitionInfo partitionInfo : partitionInfos) {
+                for (int i = 0; i < 2; i++) {
+                    FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(
+                            new TableBucket(tableId, partitionInfo.getPartitionId(), i));
+                }
+            }
+
+            // reconnect to force update partition metadata
+            reconnect();
+
+            // write rows into partitioned table again
+            for (String partitionName : partitionNameByIds.values()) {
+                List<InternalRow> partitionRows = new ArrayList<>();
+                for (int i = 0; i < 3; i++) {
+                    partitionRows.add(row(partitionSeq, "v" + partitionSeq, partitionName));
+                    partitionSeq++;
+                }
+                partitionFlussRows.addAll(partitionRows);
+                writtenRowsByPartition.get(partitionName).addAll(partitionRows);
+
+                writeRows(partitionedTablePath, partitionRows, true);
+            }
+
+            // wait until synced to paimon
+            for (Long partitionId : partitionNameByIds.keySet()) {
+                TableBucket tableBucket0 = new TableBucket(tableId, partitionId, 0);
+                TableBucket tableBucket1 = new TableBucket(tableId, partitionId, 1);
+                assertReplicaStatus(ImmutableSet.of(tableBucket0, tableBucket1), 6);
+                assertThat(getLeaderReplica(tableBucket0).getLakeLogEndOffset()).isGreaterThan(3);
+                assertThat(getLeaderReplica(tableBucket1).getLakeLogEndOffset()).isGreaterThan(0);
+                expectedOffset.put(
+                        tableBucket0, getLeaderReplica(tableBucket0).getLakeLogEndOffset());
+                expectedOffset.put(
+                        tableBucket1, getLeaderReplica(tableBucket1).getLakeLogEndOffset());
+            }
+
+            // now, let's check data in paimon per partition
+            // check data in paimon
+            for (String partitionName : partitionNameByIds.values()) {
+                checkDataInPaimonAppendOnlyPartitionedTableForMultipleBuckets(
+                        partitionedTablePath,
+                        Collections.singletonMap(partitionCol, partitionName),
+                        partitionFlussRows,
+                        writtenRowsByPartition.get(partitionName).size());
+            }
+
+            checkFlussOffsetsInSnapshot(partitionedTablePath, expectedOffset);
+        } finally {
+            jobClient.cancel().get();
+        }
+    }
+
+    @Test
     void testTieringToDvEnabledTable() throws Exception {
         TablePath t1 = TablePath.of(DEFAULT_DB, "pkTableWithDv");
         long t1Id =
@@ -511,6 +686,32 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
         assertThat(flussRowIterator.hasNext()).isFalse();
     }
 
+    /** Check for multiple buckets. */
+    private void checkDataInPaimonAppendOnlyTableForMultipleBuckets(
+            TablePath tablePath, List<InternalRow> expectedRows) throws Exception {
+        Iterator<org.apache.paimon.data.InternalRow> paimonRowIterator =
+                getPaimonRowCloseableIterator(tablePath);
+        int paimonCount = 0;
+        Map<Integer, Long> startingOffsets = new HashMap<>();
+        while (paimonRowIterator.hasNext()) {
+            org.apache.paimon.data.InternalRow row = paimonRowIterator.next();
+            int offset = row.getInt(0);
+            InternalRow flussRow = expectedRows.get(offset);
+
+            assertThat(row.getInt(0)).isEqualTo(flussRow.getInt(0));
+            assertThat(row.getString(1).toString()).isEqualTo(flussRow.getString(1).toString());
+
+            int bucket = row.getInt(2);
+            startingOffsets.putIfAbsent(bucket, 0L);
+            // the idx 2 is __bucket, so use 3
+            assertThat(row.getLong(3)).isEqualTo(startingOffsets.get(bucket));
+            startingOffsets.put(bucket, startingOffsets.get(bucket) + 1);
+
+            paimonCount++;
+        }
+        assertThat(paimonCount).isEqualTo(expectedRows.size());
+    }
+
     private void checkDataInPaimonAppendOnlyPartitionedTable(
             TablePath tablePath,
             Map<String, String> partitionSpec,
@@ -530,6 +731,40 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
             assertThat(row.getLong(4)).isEqualTo(startingOffset++);
         }
         assertThat(flussRowIterator.hasNext()).isFalse();
+    }
+
+    /** Check for multiple buckets. */
+    private void checkDataInPaimonAppendOnlyPartitionedTableForMultipleBuckets(
+            TablePath tablePath,
+            Map<String, String> partitionSpec,
+            List<InternalRow> expectedRows,
+            int expectedCount)
+            throws Exception {
+        Iterator<org.apache.paimon.data.InternalRow> paimonRowIterator =
+                getPaimonRowCloseableIterator(tablePath, partitionSpec);
+        int paimonCount = 0;
+        Map<Tuple2<String, Integer>, Long> startingOffsets = new HashMap<>();
+        while (paimonRowIterator.hasNext()) {
+            org.apache.paimon.data.InternalRow row = paimonRowIterator.next();
+            int offset = row.getInt(0);
+            InternalRow flussRow = expectedRows.get(offset);
+
+            assertThat(row.getInt(0)).isEqualTo(flussRow.getInt(0));
+            assertThat(row.getString(1).toString()).isEqualTo(flussRow.getString(1).toString());
+
+            String partitionName = row.getString(2).toString();
+            int bucket = row.getInt(3);
+            startingOffsets.putIfAbsent(Tuple2.of(partitionName, bucket), 0L);
+            // the idx 3 is __bucket, so use 4
+            assertThat(row.getLong(4))
+                    .isEqualTo(startingOffsets.get(Tuple2.of(partitionName, bucket)));
+            startingOffsets.put(
+                    Tuple2.of(partitionName, bucket),
+                    startingOffsets.get(Tuple2.of(partitionName, bucket)) + 1);
+
+            paimonCount++;
+        }
+        assertThat(paimonCount).isEqualTo(expectedCount);
     }
 
     private CloseableIterator<org.apache.paimon.data.InternalRow> getPaimonRowCloseableIterator(

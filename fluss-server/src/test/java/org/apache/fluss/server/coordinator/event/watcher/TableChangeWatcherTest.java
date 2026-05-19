@@ -44,6 +44,7 @@ import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.ZkVersion;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.types.DataTypes;
 
@@ -379,7 +380,13 @@ class TableChangeWatcherTest {
         builder.setCustomProperty("custom.key", "custom.value");
         TablePropertyChanges tablePropertyChanges = builder.build();
         metadataManager.alterTableProperties(
-                tablePath, Collections.emptyList(), tablePropertyChanges, false, null);
+                tablePath,
+                Collections.emptyList(),
+                tablePropertyChanges,
+                false,
+                null,
+                null,
+                ZkVersion.MATCH_ANY_VERSION.getVersion());
 
         // get the updated table registration
         TableRegistration updatedTableRegistration =
