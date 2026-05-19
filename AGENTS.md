@@ -28,7 +28,6 @@ import org.apache.zookeeper.*                           // → org.apache.fluss.
 
 **MANDATORY utility substitutions:**
 ```java
-// ❌ new ConcurrentHashMap<>()  → ✅ MapUtils.newConcurrentMap()  (see https://github.com/apache/fluss/issues/375)
 // ❌ com.google.common.base.Preconditions  → ✅ org.apache.fluss.utils.Preconditions (import statically)
 // ❌ com.google.common.annotations.VisibleForTesting  → ✅ org.apache.fluss.annotation.VisibleForTesting
 // ❌ org.apache.commons.lang3.SerializationUtils  → ✅ org.apache.fluss.utils.InstantiationUtil
@@ -240,7 +239,7 @@ fluss/
 | **Interface** | Plain descriptive name | `Connection`, `Admin`, `LogScanner` |
 | **Implementation** | Suffix `Impl` or descriptive name | `AdminImpl`, `NettyClient`, `RocksDBKvStore` |
 | **Abstract class** | Prefix `Abstract` | `AbstractIterator`, `AbstractGoal` |
-| **Utility class** | Suffix `Utils` (private constructor, static methods) | `MapUtils`, `StringUtils`, `IOUtils` |
+| **Utility class** | Suffix `Utils` (private constructor, static methods) | `StringUtils`, `IOUtils` |
 | **Test class** | Suffix `Test` (unit) or `ITCase` (integration) | `ConfigBuilderTest`, `ServerITCaseBase` |
 | **Test utility** | Prefix `Testing` | `TestingRemoteLogStorage` |
 | **Exception** | Suffix `Exception` | `TableNotExistException` |
@@ -273,8 +272,6 @@ fluss/
 **Thread safety annotations:** `@ThreadSafe`, `@NotThreadSafe`, `@GuardedBy("lockName")` for documentation
 
 **Locking:** Explicit lock objects (`private final Object lock`), use `synchronized(lock)`, `volatile` for fields accessed outside locks
-
-**ConcurrentHashMap:** NEVER instantiate directly - use `MapUtils.newConcurrentMap()` (Checkstyle enforced - see Section 1)
 
 **CompletableFuture:** Use `.thenCompose()`, `.thenCombine()`, `.thenApply()` for composition; `FutureUtils.completeAll()` for multiple futures
 
@@ -325,7 +322,7 @@ public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
 
 **Shaded dependencies:** See Section 1 for forbidden imports. Always use `org.apache.fluss.shaded.*` versions (guava, jackson, netty, arrow, zookeeper)
 
-**Fluss utilities:** `Preconditions`, `MapUtils`, `ArrayUtils`, `CollectionUtils`, `BytesUtils`, `ExceptionUtils`, `FutureUtils`, `TimeUtils`, `IOUtils`, `FileUtils`
+**Fluss utilities:** `Preconditions`, `ArrayUtils`, `CollectionUtils`, `BytesUtils`, `ExceptionUtils`, `FutureUtils`, `TimeUtils`, `IOUtils`, `FileUtils`
 
 **Module dependency rules:**
 - `fluss-common` (foundation) → `fluss-rpc` → `fluss-client`/`fluss-server` (peers) → connectors → lake
@@ -443,7 +440,7 @@ Before pushing, conduct thorough self-review:
 1. **Review full diff:** `git diff main...HEAD` - verify only intentional changes
 2. **Check code style:** `./mvnw spotless:check`
 3. **Run tests:** `./mvnw verify -pl <affected-modules>`
-4. **Verify Checkstyle:** Check no forbidden imports, AssertJ usage, MapUtils, etc.
+4. **Verify Checkstyle:** Check no forbidden imports, AssertJ usage, etc.
 5. **Audit security:** No secrets, credentials, or sensitive data committed
 
 ### Creating Pull Request
