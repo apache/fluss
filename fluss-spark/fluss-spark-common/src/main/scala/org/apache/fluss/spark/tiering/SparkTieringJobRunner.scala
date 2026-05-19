@@ -19,7 +19,7 @@ package org.apache.fluss.spark.tiering
 
 import org.apache.fluss.client.{Connection, ConnectionFactory}
 import org.apache.fluss.client.admin.Admin
-import org.apache.fluss.client.tiering.FlussTableLakeSnapshotCommitter
+import org.apache.fluss.client.tiering.{FlussTableLakeSnapshotCommitter, TableBucketWriteResult, TieringCommitter}
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.lake.committer.TieringStats
 import org.apache.fluss.lake.lakestorage.LakeStoragePluginSetUp
@@ -35,6 +35,7 @@ import org.apache.spark.sql.SparkSession
 import java.util.concurrent.{Executors, ScheduledExecutorService, ScheduledFuture, TimeUnit}
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
 
+import scala.collection.JavaConverters._
 import scala.concurrent.{Await, ExecutionContext, Future, Promise}
 import scala.concurrent.duration.{Duration => ScalaDuration}
 
@@ -249,18 +250,19 @@ class SparkTieringJobRunner(
       }
 
       // Commit results
-      val stats = TieringCommitter.commitAll(
+      val tieringCommitter = new TieringCommitter[AnyRef, AnyRef]()
+      val stats = tieringCommitter.commitWriteResults(
+        admin,
         tableId,
         tablePath,
-        results,
-        lakeTieringFactory,
         flussConfig,
         lakeTieringConfig,
-        admin,
-        snapshotCommitter)
+        lakeTieringFactory,
+        snapshotCommitter,
+        results.asJava)
 
       logInfo(s"Tiering completed for table $tablePath, stats=$stats")
-      coordinator.markTableFinished(tableId, tieringEpoch, stats)
+      coordinator.markTableFinished(tableId, tieringEpoch, stats.stats)
 
     } catch {
       case e: Exception =>
@@ -284,7 +286,7 @@ class SparkTieringJobRunner(
       consecutiveHeartbeatFailures: AtomicInteger,
       splits: Seq[TieringSplit],
       tablePath: TablePath,
-      tableId: Long): Seq[SerializedTaskResult] = {
+      tableId: Long): Seq[TableBucketWriteResult[AnyRef]] = {
     val jobGroupId = s"tiering-${tablePath.getDatabaseName}-${tablePath.getTableName}-$tableId"
     sc.setJobGroup(jobGroupId, s"Tiering table $tablePath")
 
@@ -363,7 +365,7 @@ object SparkTieringJobRunner {
       flussConfig: Configuration,
       dataLakeFormat: String,
       lakeConfig: Configuration,
-      pollTimeoutMs: Long): RDD[SerializedTaskResult] = {
+      pollTimeoutMs: Long): RDD[TableBucketWriteResult[AnyRef]] = {
     sparkContext.parallelize(splits, splits.size).map {
       split => TieringTask.process(split, flussConfig, dataLakeFormat, lakeConfig, pollTimeoutMs)
     }

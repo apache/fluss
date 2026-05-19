@@ -23,16 +23,20 @@ import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.flink.api.connector.source.SourceOutput;
 import org.apache.flink.connector.base.source.reader.RecordEmitter;
 
-/** The emitter to emit {@link TableBucketWriteResult} to downstream {@link LakeCommitter}. */
+/**
+ * The emitter to emit {@link org.apache.fluss.client.tiering.TableBucketWriteResult} to downstream
+ * {@link LakeCommitter}.
+ */
 public class TableBucketWriteResultEmitter<WriteResult>
         implements RecordEmitter<
-                TableBucketWriteResult<WriteResult>,
-                TableBucketWriteResult<WriteResult>,
+                org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>,
+                org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>,
                 TieringSplitState> {
     @Override
     public void emitRecord(
-            TableBucketWriteResult<WriteResult> writeResult,
-            SourceOutput<TableBucketWriteResult<WriteResult>> sourceOutput,
+            org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult> writeResult,
+            SourceOutput<org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>>
+                    sourceOutput,
             TieringSplitState splitState) {
         sourceOutput.collect(writeResult);
     }

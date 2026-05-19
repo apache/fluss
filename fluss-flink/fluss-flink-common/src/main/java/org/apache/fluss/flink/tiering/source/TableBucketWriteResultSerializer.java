@@ -26,9 +26,10 @@ import org.apache.flink.core.memory.DataOutputSerializer;
 
 import java.io.IOException;
 
-/** The serializer for {@link TableBucketWriteResult}. */
+/** The serializer for {@link org.apache.fluss.client.tiering.TableBucketWriteResult}. */
 public class TableBucketWriteResultSerializer<WriteResult>
-        implements SimpleVersionedSerializer<TableBucketWriteResult<WriteResult>> {
+        implements SimpleVersionedSerializer<
+                org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>> {
 
     private static final ThreadLocal<DataOutputSerializer> SERIALIZER_CACHE =
             ThreadLocal.withInitial(() -> new DataOutputSerializer(64));
@@ -50,7 +51,9 @@ public class TableBucketWriteResultSerializer<WriteResult>
     }
 
     @Override
-    public byte[] serialize(TableBucketWriteResult<WriteResult> tableBucketWriteResult)
+    public byte[] serialize(
+            org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>
+                    tableBucketWriteResult)
             throws IOException {
         final DataOutputSerializer out = SERIALIZER_CACHE.get();
         // serialize table path
@@ -97,8 +100,8 @@ public class TableBucketWriteResultSerializer<WriteResult>
     }
 
     @Override
-    public TableBucketWriteResult<WriteResult> deserialize(int version, byte[] serialized)
-            throws IOException {
+    public org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult> deserialize(
+            int version, byte[] serialized) throws IOException {
         if (version != CURRENT_VERSION) {
             throw new IOException("Unknown version " + version);
         }
@@ -136,7 +139,7 @@ public class TableBucketWriteResultSerializer<WriteResult>
         long maxTimestamp = in.readLong();
         // deserialize number of write results
         int numberOfWriteResults = in.readInt();
-        return new TableBucketWriteResult<>(
+        return new org.apache.fluss.client.tiering.TableBucketWriteResult<>(
                 tablePath,
                 tableBucket,
                 partitionName,

@@ -88,13 +88,15 @@ class TieringSplitReaderTest extends FlinkTestBase {
             tieringSplitReader.fetch();
 
             // fetch again to get the fetch result of the splits
-            RecordsWithSplitIds<TableBucketWriteResult<TestingWriteResult>> fetchResult =
-                    tieringSplitReader.fetch();
+            RecordsWithSplitIds<
+                            org.apache.fluss.client.tiering.TableBucketWriteResult<
+                                    TestingWriteResult>>
+                    fetchResult = tieringSplitReader.fetch();
             for (int i = 0; i < 3; i++) {
                 fetchResult.nextSplit();
                 // should has result, but the writeResult should be null
-                TableBucketWriteResult<TestingWriteResult> nextRecord =
-                        fetchResult.nextRecordFromSplit();
+                org.apache.fluss.client.tiering.TableBucketWriteResult<TestingWriteResult>
+                        nextRecord = fetchResult.nextRecordFromSplit();
                 assertThat(nextRecord).isNotNull();
                 assertThat(nextRecord.writeResult()).isNull();
             }
@@ -128,8 +130,8 @@ class TieringSplitReaderTest extends FlinkTestBase {
                 // one fetch to make this snapshot split as finished
                 fetchResult = tieringSplitReader.fetch();
                 fetchResult.nextSplit();
-                TableBucketWriteResult<TestingWriteResult> tableBucketWriteResult =
-                        fetchResult.nextRecordFromSplit();
+                org.apache.fluss.client.tiering.TableBucketWriteResult<TestingWriteResult>
+                        tableBucketWriteResult = fetchResult.nextRecordFromSplit();
                 assertThat(tableBucketWriteResult).isNotNull();
                 TestingWriteResult testingWriteResult = tableBucketWriteResult.writeResult();
                 assertThat(testingWriteResult).isNotNull();
@@ -324,11 +326,14 @@ class TieringSplitReaderTest extends FlinkTestBase {
             tieringSplitReader.handleSplitsChanges(
                     new SplitsAddition<TieringSplit>(Collections.singletonList(tieringLogSplit)));
 
-            RecordsWithSplitIds<TableBucketWriteResult<TestingWriteResult>> result =
-                    tieringSplitReader.fetch();
+            RecordsWithSplitIds<
+                            org.apache.fluss.client.tiering.TableBucketWriteResult<
+                                    TestingWriteResult>>
+                    result = tieringSplitReader.fetch();
 
             assertThat(result.nextSplit()).isEqualTo(tieringLogSplit.splitId());
-            TableBucketWriteResult<TestingWriteResult> writeResult = result.nextRecordFromSplit();
+            org.apache.fluss.client.tiering.TableBucketWriteResult<TestingWriteResult> writeResult =
+                    result.nextRecordFromSplit();
             assertThat(writeResult).isNotNull();
             // expect null write result since no any records written
             assertThat(writeResult.writeResult()).isNull();
@@ -373,7 +378,9 @@ class TieringSplitReaderTest extends FlinkTestBase {
             LinkedHashMap<Long, Map<TableBucket, Integer>> expectTierRows,
             LinkedHashMap<Long, Set<String>> expectedFinishSplits)
             throws IOException {
-        RecordsWithSplitIds<TableBucketWriteResult<TestingWriteResult>> fetchResult;
+        RecordsWithSplitIds<
+                        org.apache.fluss.client.tiering.TableBucketWriteResult<TestingWriteResult>>
+                fetchResult;
         for (Map.Entry<Long, Map<TableBucket, Integer>> expectTieringRowEntry :
                 expectTierRows.entrySet()) {
             long tableId = expectTieringRowEntry.getKey();
@@ -385,8 +392,8 @@ class TieringSplitReaderTest extends FlinkTestBase {
                 fetchResult = tieringSplitReader.fetch();
                 actualFinishSplits.addAll(fetchResult.finishedSplits());
                 while (fetchResult.nextSplit() != null) {
-                    TableBucketWriteResult<TestingWriteResult> tableBucketWriteResult =
-                            fetchResult.nextRecordFromSplit();
+                    org.apache.fluss.client.tiering.TableBucketWriteResult<TestingWriteResult>
+                            tableBucketWriteResult = fetchResult.nextRecordFromSplit();
                     assertThat(tableBucketWriteResult).isNotNull();
                     TableBucket tableBucket = tableBucketWriteResult.tableBucket();
                     assertThat(tableBucket.getTableId()).isEqualTo(tableId);

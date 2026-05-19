@@ -40,14 +40,21 @@ import java.util.function.Supplier;
  */
 public class TieringSourceFetcherManager<WriteResult>
         extends SingleThreadFetcherManagerAdapter<
-                TableBucketWriteResult<WriteResult>, TieringSplit> {
+                org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>, TieringSplit> {
 
     private static final Logger LOG = LoggerFactory.getLogger(TieringSourceFetcherManager.class);
 
     public TieringSourceFetcherManager(
-            FutureCompletingBlockingQueue<RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>>
+            FutureCompletingBlockingQueue<
+                            RecordsWithSplitIds<
+                                    org.apache.fluss.client.tiering.TableBucketWriteResult<
+                                            WriteResult>>>
                     elementsQueue,
-            Supplier<SplitReader<TableBucketWriteResult<WriteResult>, TieringSplit>>
+            Supplier<
+                            SplitReader<
+                                    org.apache.fluss.client.tiering.TableBucketWriteResult<
+                                            WriteResult>,
+                                    TieringSplit>>
                     splitReaderSupplier,
             Configuration configuration,
             Consumer<Collection<String>> splitFinishedHook) {
@@ -64,8 +71,10 @@ public class TieringSourceFetcherManager<WriteResult>
                                     enqueueMarkTableReachTieringMaxDurationTask(
                                             splitFetcher, tableId));
         } else {
-            SplitFetcher<TableBucketWriteResult<WriteResult>, TieringSplit> splitFetcher =
-                    createSplitFetcher();
+            SplitFetcher<
+                            org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>,
+                            TieringSplit>
+                    splitFetcher = createSplitFetcher();
             LOG.info(
                     "fetchers is empty, enqueue marking tiering max duration for table {}",
                     tableId);
@@ -75,7 +84,10 @@ public class TieringSourceFetcherManager<WriteResult>
     }
 
     private void enqueueMarkTableReachTieringMaxDurationTask(
-            SplitFetcher<TableBucketWriteResult<WriteResult>, TieringSplit> splitFetcher,
+            SplitFetcher<
+                            org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>,
+                            TieringSplit>
+                    splitFetcher,
             long reachTieringDeadlineTable) {
         splitFetcher.enqueueTask(
                 new SplitFetcherTask() {

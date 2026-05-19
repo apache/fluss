@@ -60,7 +60,9 @@ class TieringSourceReaderTest extends FlinkTestBase {
                 ConfigOptions.NoKeyAssigner.ROUND_ROBIN);
         try (Connection connection = ConnectionFactory.createConnection(conf)) {
             FutureCompletingBlockingQueue<
-                            RecordsWithSplitIds<TableBucketWriteResult<TestingWriteResult>>>
+                            RecordsWithSplitIds<
+                                    org.apache.fluss.client.tiering.TableBucketWriteResult<
+                                            TestingWriteResult>>>
                     elementsQueue = new FutureCompletingBlockingQueue<>(16);
             TestingReaderContext readerContext = new TestingReaderContext();
             try (TieringSourceReader<TestingWriteResult> reader =
@@ -87,13 +89,16 @@ class TieringSourceReaderTest extends FlinkTestBase {
                 retry(
                         Duration.ofMinutes(1),
                         () -> {
-                            TestingReaderOutput<TableBucketWriteResult<TestingWriteResult>> output =
-                                    new TestingReaderOutput<>();
+                            TestingReaderOutput<
+                                            org.apache.fluss.client.tiering.TableBucketWriteResult<
+                                                    TestingWriteResult>>
+                                    output = new TestingReaderOutput<>();
                             // should force to finish, the write result is null
                             reader.pollNext(output);
                             assertThat(output.getEmittedRecords()).hasSize(1);
-                            TableBucketWriteResult<TestingWriteResult> result =
-                                    output.getEmittedRecords().get(0);
+                            org.apache.fluss.client.tiering.TableBucketWriteResult<
+                                            TestingWriteResult>
+                                    result = output.getEmittedRecords().get(0);
                             assertThat(result.writeResult()).isNull();
                         });
 
@@ -117,7 +122,9 @@ class TieringSourceReaderTest extends FlinkTestBase {
 
                 // wait to run one round of tiering to do some tiering
                 FutureCompletingBlockingQueue<
-                                RecordsWithSplitIds<TableBucketWriteResult<TestingWriteResult>>>
+                                RecordsWithSplitIds<
+                                        org.apache.fluss.client.tiering.TableBucketWriteResult<
+                                                TestingWriteResult>>>
                         blockingQueue = getElementsQueue(reader);
                 // wait blockingQueue is not empty to make sure we have one fetch
                 // in tiering source reader
@@ -135,14 +142,17 @@ class TieringSourceReaderTest extends FlinkTestBase {
                 retry(
                         Duration.ofMinutes(1),
                         () -> {
-                            TestingReaderOutput<TableBucketWriteResult<TestingWriteResult>>
+                            TestingReaderOutput<
+                                            org.apache.fluss.client.tiering.TableBucketWriteResult<
+                                                    TestingWriteResult>>
                                     output1 = new TestingReaderOutput<>();
 
                             // should force to finish, the write result isn't null
                             reader.pollNext(output1);
                             assertThat(output1.getEmittedRecords()).hasSize(1);
-                            TableBucketWriteResult<TestingWriteResult> result =
-                                    output1.getEmittedRecords().get(0);
+                            org.apache.fluss.client.tiering.TableBucketWriteResult<
+                                            TestingWriteResult>
+                                    result = output1.getEmittedRecords().get(0);
                             TestingWriteResult testingWriteResult = result.writeResult();
                             assertThat(testingWriteResult).isNotNull();
                             assertThat(result.logEndOffset()).isEqualTo(1);
@@ -162,13 +172,16 @@ class TieringSourceReaderTest extends FlinkTestBase {
                 retry(
                         Duration.ofMinutes(1),
                         () -> {
-                            TestingReaderOutput<TableBucketWriteResult<TestingWriteResult>>
+                            TestingReaderOutput<
+                                            org.apache.fluss.client.tiering.TableBucketWriteResult<
+                                                    TestingWriteResult>>
                                     output1 = new TestingReaderOutput<>();
                             // should force to finish, and the result is null
                             reader.pollNext(output1);
                             assertThat(output1.getEmittedRecords()).hasSize(1);
-                            TableBucketWriteResult<TestingWriteResult> result =
-                                    output1.getEmittedRecords().get(0);
+                            org.apache.fluss.client.tiering.TableBucketWriteResult<
+                                            TestingWriteResult>
+                                    result = output1.getEmittedRecords().get(0);
                             assertThat(result.writeResult()).isNull();
                         });
             }
@@ -183,7 +196,9 @@ class TieringSourceReaderTest extends FlinkTestBase {
      */
     @SuppressWarnings("unchecked")
     private FutureCompletingBlockingQueue<
-                    RecordsWithSplitIds<TableBucketWriteResult<TestingWriteResult>>>
+                    RecordsWithSplitIds<
+                            org.apache.fluss.client.tiering.TableBucketWriteResult<
+                                    TestingWriteResult>>>
             getElementsQueue(TieringSourceReader<TestingWriteResult> reader) throws Exception {
         Class<?> clazz = reader.getClass();
         while (clazz != null) {
@@ -191,7 +206,9 @@ class TieringSourceReaderTest extends FlinkTestBase {
                 Field elementsQueueField = clazz.getDeclaredField("elementsQueue");
                 elementsQueueField.setAccessible(true);
                 return (FutureCompletingBlockingQueue<
-                                RecordsWithSplitIds<TableBucketWriteResult<TestingWriteResult>>>)
+                                RecordsWithSplitIds<
+                                        org.apache.fluss.client.tiering.TableBucketWriteResult<
+                                                TestingWriteResult>>>)
                         elementsQueueField.get(reader);
             } catch (NoSuchFieldException e) {
                 // Try parent class

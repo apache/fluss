@@ -20,10 +20,9 @@ package org.apache.fluss.spark.tiering
 import org.apache.fluss.client.{Connection, ConnectionFactory}
 import org.apache.fluss.client.table.Table
 import org.apache.fluss.client.table.scanner.ScanRecord
-import org.apache.fluss.client.tiering.TieringWriterInitContext
+import org.apache.fluss.client.tiering.{TableBucketWriteResult, TieringWriterInitContext}
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.lake.lakestorage.LakeStoragePluginSetUp
-import org.apache.fluss.lake.serializer.SimpleVersionedSerializer
 import org.apache.fluss.lake.writer.{LakeTieringFactory, LakeWriter}
 
 import org.apache.spark.internal.Logging
@@ -47,7 +46,7 @@ object TieringTask extends Logging {
       flussConfig: Configuration,
       dataLakeFormat: String,
       lakeConfig: Configuration,
-      pollTimeoutMs: Long): SerializedTaskResult = {
+      pollTimeoutMs: Long): TableBucketWriteResult[AnyRef] = {
     val tablePath = split.tablePath
     val tableBucket = split.tableBucket
     val partitionName = split.partitionName
@@ -70,7 +69,6 @@ object TieringTask extends Logging {
 
       // Initialize LakeTieringFactory on executor
       val lakeTieringFactory = createLakeTieringFactory(dataLakeFormat, lakeConfig)
-      val writeResultSerializer = lakeTieringFactory.getWriteResultSerializer
 
       val writerInitContext =
         new TieringWriterInitContext(
@@ -82,14 +80,9 @@ object TieringTask extends Logging {
 
       split match {
         case logSplit: TieringLogSplit =>
-          processLogSplit(table, lakeWriter, logSplit, pollTimeoutMs, writeResultSerializer)
+          processLogSplit(table, lakeWriter, logSplit, pollTimeoutMs)
         case snapshotSplit: TieringSnapshotSplit =>
-          processSnapshotSplit(
-            table,
-            lakeWriter,
-            snapshotSplit,
-            pollTimeoutMs,
-            writeResultSerializer)
+          processSnapshotSplit(table, lakeWriter, snapshotSplit, pollTimeoutMs)
       }
     } finally {
       closeQuietly(lakeWriter, "LakeWriter")
@@ -111,8 +104,7 @@ object TieringTask extends Logging {
       table: Table,
       lakeWriter: LakeWriter[AnyRef],
       split: TieringLogSplit,
-      pollTimeoutMs: Long,
-      writeResultSerializer: SimpleVersionedSerializer[AnyRef]): SerializedTaskResult = {
+      pollTimeoutMs: Long): TableBucketWriteResult[AnyRef] = {
     val logScanner = table.newScan().createLogScanner()
     try {
       val tableBucket = split.tableBucket
@@ -152,22 +144,16 @@ object TieringTask extends Logging {
       }
 
       val writeResult = lakeWriter.complete()
-      val serializedBytes = if (writeResult != null) {
-        writeResultSerializer.serialize(writeResult)
-      } else {
-        null
-      }
 
       logInfo(
         s"Finished tiering log split for bucket $tableBucket," +
           s" logEndOffset=$stoppingOffset, maxTimestamp=$maxTimestamp")
 
-      SerializedTaskResult(
+      new TableBucketWriteResult(
         split.tablePath,
         tableBucket,
-        split.partitionName,
-        serializedBytes,
-        writeResultSerializer.getVersion,
+        split.partitionName.orNull,
+        writeResult,
         stoppingOffset,
         maxTimestamp,
         split.numberOfSplits)
@@ -180,8 +166,7 @@ object TieringTask extends Logging {
       table: Table,
       lakeWriter: LakeWriter[AnyRef],
       split: TieringSnapshotSplit,
-      pollTimeoutMs: Long,
-      writeResultSerializer: SimpleVersionedSerializer[AnyRef]): SerializedTaskResult = {
+      pollTimeoutMs: Long): TableBucketWriteResult[AnyRef] = {
     val tableBucket = split.tableBucket
     val batchScanner = table
       .newScan()
@@ -202,11 +187,6 @@ object TieringTask extends Logging {
       }
 
       val writeResult = lakeWriter.complete()
-      val serializedBytes = if (writeResult != null) {
-        writeResultSerializer.serialize(writeResult)
-      } else {
-        null
-      }
 
       val logEndOffset = split.logOffsetOfSnapshot
 
@@ -214,12 +194,11 @@ object TieringTask extends Logging {
         s"Finished tiering snapshot split for bucket $tableBucket," +
           s" snapshotId=${split.snapshotId}, logEndOffset=$logEndOffset")
 
-      SerializedTaskResult(
+      new TableBucketWriteResult(
         split.tablePath,
         tableBucket,
-        split.partitionName,
-        serializedBytes,
-        writeResultSerializer.getVersion,
+        split.partitionName.orNull,
+        writeResult,
         logEndOffset,
         UNKNOWN_BUCKET_TIMESTAMP,
         split.numberOfSplits
