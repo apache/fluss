@@ -65,7 +65,50 @@ class TableDescriptorValidationTest {
                 .hasMessageContaining("Invalid time format");
     }
 
+    @Test
+    void timeFormatWithDisallowedCharactersIsRejected() {
+        TableDescriptor descriptor =
+                dayPartitionedBuilder()
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT.key(), "yyyy/MM/dd")
+                        .build();
+        assertThatThrownBy(() -> validate(descriptor))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("Allowed characters: ASCII alphanumerics, '_' and '-'");
+    }
+
+    @Test
+    void timeFormatWithInsufficientPrecisionIsRejected() {
+        TableDescriptor descriptor =
+                hourPartitionedBuilder()
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT.key(), "yyyy-MM-dd")
+                        .build();
+        assertThatThrownBy(() -> validate(descriptor))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("lacks the precision");
+    }
+
+    @Test
+    void hourTimeFormatIsAccepted() {
+        TableDescriptor descriptor =
+                hourPartitionedBuilder()
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT.key(),
+                                "yyyy-MM-dd-HH")
+                        .build();
+        assertThatCode(() -> validate(descriptor)).doesNotThrowAnyException();
+    }
+
     private static TableDescriptor.Builder dayPartitionedBuilder() {
+        return autoPartitionedBuilder(AutoPartitionTimeUnit.DAY);
+    }
+
+    private static TableDescriptor.Builder hourPartitionedBuilder() {
+        return autoPartitionedBuilder(AutoPartitionTimeUnit.HOUR);
+    }
+
+    private static TableDescriptor.Builder autoPartitionedBuilder(AutoPartitionTimeUnit timeUnit) {
         return TableDescriptor.builder()
                 .schema(
                         Schema.newBuilder()
@@ -76,7 +119,7 @@ class TableDescriptorValidationTest {
                 .partitionedBy("dt")
                 .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 1)
                 .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
-                .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.DAY)
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, timeUnit)
                 .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE, 0);
     }
 

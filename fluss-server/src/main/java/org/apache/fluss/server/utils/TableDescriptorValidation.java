@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.utils;
 
+import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -36,6 +37,7 @@ import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
@@ -44,6 +46,8 @@ import org.apache.fluss.utils.StringUtils;
 
 import javax.annotation.Nullable;
 
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
 import java.util.Collections;
@@ -489,8 +493,9 @@ public class TableDescriptorValidation {
                                         "'%s' must not be empty.",
                                         ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT.key()));
                     }
+                    DateTimeFormatter formatter;
                     try {
-                        DateTimeFormatter.ofPattern(timeFormat, Locale.ROOT);
+                        formatter = DateTimeFormatter.ofPattern(timeFormat, Locale.ROOT);
                     } catch (IllegalArgumentException e) {
                         throw new InvalidConfigException(
                                 String.format(
@@ -499,8 +504,56 @@ public class TableDescriptorValidation {
                                         ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT.key(),
                                         e.getMessage()));
                     }
+
+                    // Check that timeFormat is precise enough for timeUnit.
+                    AutoPartitionTimeUnit timeUnit = autoPartition.timeUnit();
+                    ZonedDateTime sample =
+                            ZonedDateTime.of(2024, 6, 15, 12, 0, 0, 0, ZoneOffset.UTC);
+                    String formatted = formatter.format(sample);
+                    String formattedNext = formatter.format(plusOneUnit(sample, timeUnit));
+
+                    String charErr = TablePath.detectInvalidName(formatted);
+                    if (charErr != null) {
+                        throw new InvalidConfigException(
+                                String.format(
+                                        "Time format '%s' for '%s' produces an invalid partition value "
+                                                + "'%s': %s. Allowed characters: ASCII alphanumerics, '_' and '-'.",
+                                        timeFormat,
+                                        ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT.key(),
+                                        formatted,
+                                        charErr));
+                    }
+                    if (formatted.equals(formattedNext)) {
+                        throw new InvalidConfigException(
+                                String.format(
+                                        "Time format '%s' for '%s' lacks the precision required by "
+                                                + "time-unit '%s': two consecutive %s values render to the same "
+                                                + "partition value '%s'.",
+                                        timeFormat,
+                                        ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT.key(),
+                                        timeUnit,
+                                        timeUnit,
+                                        formatted));
+                    }
                 }
             }
+        }
+    }
+
+    private static ZonedDateTime plusOneUnit(ZonedDateTime time, AutoPartitionTimeUnit unit) {
+        switch (unit) {
+            case YEAR:
+                return time.plusYears(1);
+            case QUARTER:
+                return time.plusMonths(3);
+            case MONTH:
+                return time.plusMonths(1);
+            case DAY:
+                return time.plusDays(1);
+            case HOUR:
+                return time.plusHours(1);
+            default:
+                throw new IllegalArgumentException("Unsupported time unit: " + unit);
         }
     }
 

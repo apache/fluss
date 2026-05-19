@@ -1461,7 +1461,9 @@ public class ConfigOptions {
                                     + "When set, this value overrides the format derived from the time unit, "
                                     + "while the partition granularity still follows `table.auto-partition.time-unit`. "
                                     + "A custom format must use zero-padded fields covering at least the unit's precision, "
-                                    + "so partition values sort by time as strings (e.g. `yyyy-MM-dd` for DAY).");
+                                    + "so partition values sort by time as strings (e.g. `yyyy-MM-dd` for DAY). "
+                                    + "The formatted value must contain only ASCII alphanumerics, `_` and `-`; "
+                                    + "patterns producing `/`, `.`, spaces or other separators are rejected.");
 
     public static final ConfigOption<String> TABLE_AUTO_PARTITION_TIMEZONE =
             key("table.auto-partition.time-zone")
