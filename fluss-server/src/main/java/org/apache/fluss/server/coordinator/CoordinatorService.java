@@ -763,9 +763,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     public CompletableFuture<AdjustIsrResponse> adjustIsr(AdjustIsrRequest request) {
         // This is an internal-only RPC, reject all external sessions
         if (!currentSession().isInternal()) {
-            return CompletableFuture.failedFuture(
+            CompletableFuture<AdjustIsrResponse> failedFuture = new CompletableFuture<>();
+            failedFuture.completeExceptionally(
                     new AuthorizationException(
                             "AdjustIsr is an internal RPC and cannot be called by external clients"));
+            return failedFuture;
         }
         CompletableFuture<AdjustIsrResponse> response = new CompletableFuture<>();
         eventManagerSupplier
