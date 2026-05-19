@@ -286,8 +286,7 @@ class HudiBucketingFunctionTest {
         assertThat(ourEncodedKey).isNotEqualTo(literalNullStringBytes);
 
         // Cross-validate against Hudi's recordKey-string overload (production path).
-        int hudiBucket =
-                BucketIdentifier.getBucketId(NULL_RECORDKEY_PLACEHOLDER, key, bucketNum);
+        int hudiBucket = BucketIdentifier.getBucketId(NULL_RECORDKEY_PLACEHOLDER, key, bucketNum);
         int ourBucket = new HudiBucketingFunction().bucketing(ourEncodedKey, bucketNum);
         assertThat(ourBucket).isEqualTo(hudiBucket);
     }
@@ -352,8 +351,7 @@ class HudiBucketingFunctionTest {
         int ourBucket = new HudiBucketingFunction().bucketing(ourEncodedKey, bucketNum);
 
         String recordKey = f1 + ":" + idValue + "," + f2 + ":" + regionValue;
-        int hudiBucket =
-                BucketIdentifier.getBucketId(recordKey, f1 + "," + f2, bucketNum);
+        int hudiBucket = BucketIdentifier.getBucketId(recordKey, f1 + "," + f2, bucketNum);
         assertThat(ourBucket).isEqualTo(hudiBucket);
     }
 
@@ -379,8 +377,7 @@ class HudiBucketingFunctionTest {
 
         // The on-wire record key Hudi would have built for this row.
         String recordKey = f1 + ":42," + f2 + ":" + NULL_RECORDKEY_PLACEHOLDER;
-        int hudiBucket =
-                BucketIdentifier.getBucketId(recordKey, f1 + "," + f2, bucketNum);
+        int hudiBucket = BucketIdentifier.getBucketId(recordKey, f1 + "," + f2, bucketNum);
         assertThat(ourBucket).isEqualTo(hudiBucket);
     }
 
@@ -500,8 +497,7 @@ class HudiBucketingFunctionTest {
         // Build Hudi's wire-format record key: "f1:v1,f2:v2", then go through the
         // recordKey-string overload that splits on ':' / ',' before hashing.
         String recordKey = f1 + ":" + idValue + "," + f2 + ":" + regionValue;
-        int hudiBucket =
-                BucketIdentifier.getBucketId(recordKey, f1 + "," + f2, bucketNum);
+        int hudiBucket = BucketIdentifier.getBucketId(recordKey, f1 + "," + f2, bucketNum);
 
         assertThat(ourBucket).isEqualTo(hudiBucket);
     }
@@ -529,8 +525,7 @@ class HudiBucketingFunctionTest {
         int ourBucket = new HudiBucketingFunction().bucketing(ourEncodedKey, bucketNum);
 
         String recordKey = f1 + ":" + tenant + "," + f2 + ":" + ts.toString();
-        int hudiBucket =
-                BucketIdentifier.getBucketId(recordKey, f1 + "," + f2, bucketNum);
+        int hudiBucket = BucketIdentifier.getBucketId(recordKey, f1 + "," + f2, bucketNum);
 
         // Strong alignment: bucket ids MUST match.
         assertThat(ourBucket).isEqualTo(hudiBucket);
@@ -547,10 +542,8 @@ class HudiBucketingFunctionTest {
                         new String[] {"tenant", "name"});
         GenericRow row =
                 GenericRow.of(
-                        BinaryString.fromString("acme"),
-                        BinaryString.fromString("smith, john"));
-        HudiKeyEncoder encoder =
-                new HudiKeyEncoder(rowType, Arrays.asList("tenant", "name"));
+                        BinaryString.fromString("acme"), BinaryString.fromString("smith, john"));
+        HudiKeyEncoder encoder = new HudiKeyEncoder(rowType, Arrays.asList("tenant", "name"));
 
         assertThatThrownBy(() -> encoder.encodeKey(row))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -571,8 +564,7 @@ class HudiBucketingFunctionTest {
                 GenericRow.of(
                         BinaryString.fromString("acme"),
                         BinaryString.fromString(NULL_RECORDKEY_PLACEHOLDER));
-        HudiKeyEncoder encoder =
-                new HudiKeyEncoder(rowType, Arrays.asList("tenant", "name"));
+        HudiKeyEncoder encoder = new HudiKeyEncoder(rowType, Arrays.asList("tenant", "name"));
 
         assertThatThrownBy(() -> encoder.encodeKey(row))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -584,13 +576,9 @@ class HudiBucketingFunctionTest {
         // BYTES / BINARY would otherwise fall through to Object#toString() and produce
         // instance-bound bucket ids (e.g. "[B@1a2b3c"). The encoder must refuse them up
         // front rather than silently corrupt the bucket layout.
-        RowType rowType =
-                RowType.of(new DataType[] {DataTypes.BYTES()}, new String[] {"payload"});
+        RowType rowType = RowType.of(new DataType[] {DataTypes.BYTES()}, new String[] {"payload"});
 
-        assertThatThrownBy(
-                        () ->
-                                new HudiKeyEncoder(
-                                        rowType, Collections.singletonList("payload")))
+        assertThatThrownBy(() -> new HudiKeyEncoder(rowType, Collections.singletonList("payload")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Unsupported Hudi bucket key type")
                 .hasMessageContaining("payload");

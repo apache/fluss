@@ -55,19 +55,19 @@ import java.util.Set;
  *
  * <p>Hudi's parser turns the literal {@code "__null__"}/{@code "__empty__"} substrings back into
  * {@code null}/{@code ""} <em>before</em> hashing. {@code List#hashCode} treats a {@code null}
- * element as contributing {@code 0} and a non-null element as contributing its {@code String}
- * hash. Hashing the placeholder string directly would therefore give a different bucket id than
- * Hudi for any row with a null bucket-key field.
+ * element as contributing {@code 0} and a non-null element as contributing its {@code String} hash.
+ * Hashing the placeholder string directly would therefore give a different bucket id than Hudi for
+ * any row with a null bucket-key field.
  *
  * <h3>Why we reject values containing {@code ','}</h3>
  *
  * <p>{@code ','} is Hudi's record-part separator and is <strong>not escaped</strong> in Hudi's
  * record-key serialization. Any bucket-key value containing {@code ','} is therefore ambiguous on
- * Hudi's parse path and would produce a different reconstructed list than the one we hash here.
- * We refuse such values up front with {@link IllegalArgumentException} so callers cannot silently
+ * Hudi's parse path and would produce a different reconstructed list than the one we hash here. We
+ * refuse such values up front with {@link IllegalArgumentException} so callers cannot silently
  * desync from Hudi's bucket layout. ({@code ':'} on the other hand is safe — Hudi's parser has a
- * dedicated look-ahead loop that handles values containing {@code ':'}, e.g. timestamps like
- * {@code "2023-10-25T10:01:13.182Z"}.)
+ * dedicated look-ahead loop that handles values containing {@code ':'}, e.g. timestamps like {@code
+ * "2023-10-25T10:01:13.182Z"}.)
  *
  * <h3>Supported key field types</h3>
  *
@@ -89,8 +89,8 @@ public class HudiKeyEncoder implements KeyEncoder {
 
     /**
      * The set of {@link DataTypeRoot}s allowed as Hudi bucket key fields. These are exactly the
-     * scalar types for which {@code toString()} (or a deterministic equivalent) round-trips
-     * through Hudi's record-key serialization.
+     * scalar types for which {@code toString()} (or a deterministic equivalent) round-trips through
+     * Hudi's record-key serialization.
      */
     public static final Set<DataTypeRoot> SUPPORTED_BUCKET_KEY_TYPE_ROOTS =
             Collections.unmodifiableSet(
@@ -184,14 +184,14 @@ public class HudiKeyEncoder implements KeyEncoder {
      * <ul>
      *   <li><b>single-field</b> ({@code composite == false}): Hudi returns the raw recordKey
      *       verbatim, so {@code "__null__"} stays as the literal string. We therefore emit the
-     *       placeholder string for a null field, and reject {@code ','}-containing values only
-     *       for safety (a single-field recordKey containing {@code ','} would actually trip the
+     *       placeholder string for a null field, and reject {@code ','}-containing values only for
+     *       safety (a single-field recordKey containing {@code ','} would actually trip the
      *       composite quick-path check on Hudi's side too).
-     *   <li><b>composite</b> ({@code composite == true}): Hudi parses {@code "__null__"} →
-     *       {@code null} and {@code "__empty__"} → {@code ""} before hashing. We emit {@code
-     *       null}/{@code ""} directly. Values literally equal to a placeholder, or containing
-     *       {@code ','}, are rejected because they would either collide with Hudi's reserved
-     *       sentinels or break Hudi's reverse parsing.
+     *   <li><b>composite</b> ({@code composite == true}): Hudi parses {@code "__null__"} → {@code
+     *       null} and {@code "__empty__"} → {@code ""} before hashing. We emit {@code null}/{@code
+     *       ""} directly. Values literally equal to a placeholder, or containing {@code ','}, are
+     *       rejected because they would either collide with Hudi's reserved sentinels or break
+     *       Hudi's reverse parsing.
      * </ul>
      */
     private static String toHudiHashElement(String fieldName, Object value, boolean composite) {
@@ -211,8 +211,7 @@ public class HudiKeyEncoder implements KeyEncoder {
             // Guard against literal placeholder collisions — if a user literally stores
             // "__null__"/"__empty__" as the value, Hudi would round-trip it to null/"" and
             // we'd silently disagree.
-            if (NULL_RECORDKEY_PLACEHOLDER.equals(stringValue)
-                    || "__empty__".equals(stringValue)) {
+            if (NULL_RECORDKEY_PLACEHOLDER.equals(stringValue) || "__empty__".equals(stringValue)) {
                 throw new IllegalArgumentException(
                         "Bucket key field '"
                                 + fieldName
