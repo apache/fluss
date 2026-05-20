@@ -270,12 +270,15 @@ public class FlussSourceEnumeratorStateSerializer
         if (in.readBoolean()) {
             int numSplits = in.readInt();
             List<SourceSplitBase> splits = new ArrayList<>(numSplits);
+            int version = in.readInt();
+            if (numSplits == 0) {
+                return splits;
+            }
             SourceSplitSerializer sourceSplitSerializer =
                     new SourceSplitSerializer(
                             checkNotNull(
                                     lakeSource,
                                     "lake source must not be null when there are hybrid lake splits."));
-            int version = in.readInt();
             for (int i = 0; i < numSplits; i++) {
                 int splitSizeInBytes = in.readInt();
                 byte[] splitBytes = new byte[splitSizeInBytes];

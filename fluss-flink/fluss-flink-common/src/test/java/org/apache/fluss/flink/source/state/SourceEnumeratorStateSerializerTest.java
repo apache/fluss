@@ -169,4 +169,26 @@ class SourceEnumeratorStateSerializerTest {
                 serializer.deserialize(serializer.getVersion(), serialized);
         assertThat(deserializedSourceEnumeratorState).isEqualTo(sourceEnumeratorState);
     }
+
+    @Test
+    void testEmptyPendingSplitsCheckpointSerdeWithoutLakeSource() throws Exception {
+        FlussSourceEnumeratorStateSerializer serializer =
+                new FlussSourceEnumeratorStateSerializer(null);
+
+        SourceEnumeratorState sourceEnumeratorState =
+                new SourceEnumeratorState(
+                        Collections.emptySet(),
+                        Collections.emptyMap(),
+                        Collections.emptyList(),
+                        LeaseContext.DEFAULT.getKvSnapshotLeaseId());
+
+        byte[] serialized = serializer.serialize(sourceEnumeratorState);
+        SourceEnumeratorState deserializedSourceEnumeratorState =
+                serializer.deserialize(serializer.getVersion(), serialized);
+
+        assertThat(deserializedSourceEnumeratorState).isEqualTo(sourceEnumeratorState);
+        assertThat(deserializedSourceEnumeratorState.getRemainingHybridLakeFlussSplits())
+                .isNotNull()
+                .isEmpty();
+    }
 }

@@ -134,6 +134,19 @@ public class FlinkSourceEnumerator
     /** Buckets that have been assigned to readers. */
     private final Set<TableBucket> assignedTableBuckets;
 
+    /**
+     * Remaining lake snapshot and hybrid lake/Fluss splits to assign.
+     *
+     * <p>The field has three states:
+     *
+     * <ul>
+     *   <li>{@code null}: lake split initialization has not run yet.
+     *   <li>empty list: lake split initialization has run, or this enumerator was started in
+     *       Fluss-only (non-lake) mode and must not initialize lake splits after restore.
+     *   <li>non-empty list: lake split initialization has run and these splits still need to be
+     *       assigned.
+     * </ul>
+     */
     @Nullable private List<SourceSplitBase> pendingHybridLakeFlussSplits;
 
     private final long scanPartitionDiscoveryIntervalMs;
@@ -1207,11 +1220,16 @@ public class FlinkSourceEnumerator
 
     @Override
     public SourceEnumeratorState snapshotState(long checkpointId) {
+        List<SourceSplitBase> remainingHybridLakeFlussSplits =
+                // Preserve Fluss-only (non-lake) startup across restore. Otherwise a restored
+                // enumerator with a non-null lakeSource would treat null as "not initialized yet"
+                // and generate lake snapshot splits.
+                lakeSource == null ? Collections.emptyList() : pendingHybridLakeFlussSplits;
         final SourceEnumeratorState enumeratorState =
                 new SourceEnumeratorState(
                         assignedTableBuckets,
                         assignedPartitions,
-                        pendingHybridLakeFlussSplits,
+                        remainingHybridLakeFlussSplits,
                         leaseContext.getKvSnapshotLeaseId());
         LOG.debug("Source Checkpoint is {}", enumeratorState);
         return enumeratorState;

@@ -32,6 +32,7 @@ import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
 import org.apache.fluss.flink.source.split.LogSplit;
 import org.apache.fluss.flink.source.split.SnapshotSplit;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
+import org.apache.fluss.flink.source.state.SourceEnumeratorState;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
@@ -207,6 +208,97 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                             false))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("Split assignment batch size must be positive");
+        }
+    }
+
+    @Test
+    void testRestoreFlussOnlySourceWithLakeSourceDoesNotGenerateLakeSplits(@TempDir Path tempDir)
+            throws Throwable {
+        long tableId =
+                createTable(DEFAULT_TABLE_PATH, DEFAULT_AUTO_PARTITIONED_LOG_TABLE_DESCRIPTOR);
+        ZooKeeperClient zooKeeperClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        Map<Long, String> partitionNameByIds =
+                waitUntilPartitions(zooKeeperClient, DEFAULT_TABLE_PATH);
+        Long partitionId = partitionNameByIds.keySet().stream().sorted().findFirst().get();
+        String partitionName = partitionNameByIds.get(partitionId);
+
+        LakeTableSnapshot lakeTableSnapshot =
+                new LakeTableSnapshot(
+                        0,
+                        ImmutableMap.of(
+                                new TableBucket(tableId, partitionId, 0), 50L,
+                                new TableBucket(tableId, partitionId, 1), 50L,
+                                new TableBucket(tableId, partitionId, 2), 50L));
+        LakeTableHelper lakeTableHelper = new LakeTableHelper(zooKeeperClient, tempDir.toString());
+        lakeTableHelper.registerLakeTableSnapshotV1(tableId, lakeTableSnapshot);
+
+        ResolvedPartitionSpec partitionSpec =
+                ResolvedPartitionSpec.fromPartitionName(
+                        Collections.singletonList("name"), partitionName);
+        LakeSource<LakeSplit> lakeSource =
+                new TestingLakeSource(
+                        DEFAULT_BUCKET_NUM,
+                        Collections.singletonList(
+                                new PartitionInfo(
+                                        partitionId, partitionSpec, DEFAULT_REMOTE_DATA_DIR)));
+
+        SourceEnumeratorState checkpointState;
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                new MockSplitEnumeratorContext<>(1)) {
+            FlinkSourceEnumerator enumerator =
+                    new FlinkSourceEnumerator(
+                            DEFAULT_TABLE_PATH,
+                            flussConf,
+                            true,
+                            false,
+                            context,
+                            OffsetsInitializer.timestamp(1000L),
+                            DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                            streaming,
+                            null,
+                            null,
+                            LeaseContext.DEFAULT,
+                            false);
+
+            checkpointState = enumerator.snapshotState(1L);
+            assertThat(checkpointState.getRemainingHybridLakeFlussSplits()).isNotNull().isEmpty();
+        }
+
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                        new MockSplitEnumeratorContext<>(DEFAULT_BUCKET_NUM);
+                MockWorkExecutor workExecutor = new MockWorkExecutor(context);
+                FlinkSourceEnumerator restoredEnumerator =
+                        new FlinkSourceEnumerator(
+                                DEFAULT_TABLE_PATH,
+                                flussConf,
+                                false,
+                                true,
+                                context,
+                                checkpointState.getAssignedBuckets(),
+                                checkpointState.getAssignedPartitions(),
+                                checkpointState.getRemainingHybridLakeFlussSplits(),
+                                OffsetsInitializer.full(),
+                                DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                                streaming,
+                                null,
+                                lakeSource,
+                                workExecutor,
+                                LeaseContext.DEFAULT,
+                                true)) {
+            restoredEnumerator.start();
+            runPeriodicPartitionDiscovery(workExecutor);
+
+            for (int i = 0; i < DEFAULT_BUCKET_NUM; i++) {
+                registerReader(context, restoredEnumerator, i);
+            }
+
+            List<SourceSplitBase> assignedSplits =
+                    getReadersAssignments(context).values().stream()
+                            .flatMap(List::stream)
+                            .collect(Collectors.toList());
+            assertThat(assignedSplits).isNotEmpty();
+            assertThat(assignedSplits).allMatch(split -> split instanceof LogSplit);
+            assertThat(assignedSplits).noneMatch(split -> split instanceof LakeSnapshotSplit);
         }
     }
 
