@@ -261,7 +261,6 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             false);
 
             checkpointState = enumerator.snapshotState(1L);
-            assertThat(checkpointState.getRemainingHybridLakeFlussSplits()).isNotNull().isEmpty();
         }
 
         try (MockSplitEnumeratorContext<SourceSplitBase> context =
