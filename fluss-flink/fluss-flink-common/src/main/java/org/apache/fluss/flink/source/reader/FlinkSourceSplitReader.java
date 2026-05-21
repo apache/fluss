@@ -424,10 +424,6 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     }
 
     private FlinkRecordsWithSplitIds forLogRecords(ScanRecords scanRecords) {
-        // For calculating the currentFetchEventTimeLag
-        long fetchTimestamp = System.currentTimeMillis();
-        long maxConsumerRecordTimestampInFetch = -1;
-
         Map<String, CloseableIterator<RecordAndPos>> splitRecords = new HashMap<>();
         Map<TableBucket, Long> stoppingOffsets = new HashMap<>();
         Set<String> finishedSplits = new HashSet<>();
@@ -445,10 +441,6 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             List<ScanRecord> bucketScanRecords = scanRecords.records(scanBucket);
             if (!bucketScanRecords.isEmpty()) {
                 final ScanRecord lastRecord = bucketScanRecords.get(bucketScanRecords.size() - 1);
-                // We keep the maximum message timestamp in the fetch for calculating lags
-                maxConsumerRecordTimestampInFetch =
-                        Math.max(maxConsumerRecordTimestampInFetch, lastRecord.timestamp());
-
                 // After processing a record with offset of "stoppingOffset - 1", the split reader
                 // should not continue fetching because the record with stoppingOffset may not
                 // exist. Keep polling will just block forever
@@ -473,14 +465,6 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                         return splitIdByTableBucket.get(buckets.next());
                     }
                 };
-
-        // We use the timestamp on ScanRecord as the event time to calculate the
-        // currentFetchEventTimeLag. This is not totally accurate as the event time could be
-        // overridden by user's custom TimestampAssigner configured in source operator.
-        if (maxConsumerRecordTimestampInFetch > 0) {
-            flinkSourceReaderMetrics.reportRecordEventTime(
-                    fetchTimestamp - maxConsumerRecordTimestampInFetch);
-        }
 
         FlinkRecordsWithSplitIds recordsWithSplitIds =
                 new FlinkRecordsWithSplitIds(

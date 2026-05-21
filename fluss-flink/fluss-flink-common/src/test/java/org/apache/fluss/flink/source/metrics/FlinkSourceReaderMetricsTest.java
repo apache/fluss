@@ -21,6 +21,7 @@ import org.apache.fluss.metadata.TableBucket;
 
 import org.apache.flink.metrics.Gauge;
 import org.apache.flink.metrics.testutils.MetricListener;
+import org.apache.flink.runtime.metrics.MetricNames;
 import org.apache.flink.runtime.metrics.groups.InternalSourceReaderMetricGroup;
 import org.junit.jupiter.api.Test;
 
@@ -62,6 +63,61 @@ class FlinkSourceReaderMetricsTest {
         assertCurrentOffset(t1, 18213L, metricListener);
         assertCurrentOffset(t2, 18613L, metricListener);
         assertCurrentOffset(t3, 15513L, metricListener);
+    }
+
+    @Test
+    void testCurrentFetchEventTimeLagTracksMaxLag() {
+        MetricListener metricListener = new MetricListener();
+        FlinkSourceReaderMetrics flinkSourceReaderMetrics =
+                new FlinkSourceReaderMetrics(
+                        InternalSourceReaderMetricGroup.mock(metricListener.getMetricGroup()));
+        TableBucket tableBucket0 = new TableBucket(0, 0);
+        TableBucket tableBucket1 = new TableBucket(0, 1);
+
+        long timestamp = System.currentTimeMillis() - 100000L;
+        flinkSourceReaderMetrics.reportRecordEventTime(tableBucket0, timestamp);
+
+        Optional<Gauge<Long>> readerEventTimeLagGauge =
+                metricListener.getGauge(MetricNames.CURRENT_FETCH_EVENT_TIME_LAG);
+        Optional<Gauge<Long>> bucket0EventTimeLagGauge =
+                metricListener.getGauge(
+                        FLUSS_METRIC_GROUP,
+                        READER_METRIC_GROUP,
+                        BUCKET_GROUP,
+                        String.valueOf(tableBucket0.getBucket()),
+                        MetricNames.CURRENT_FETCH_EVENT_TIME_LAG);
+        assertThat(readerEventTimeLagGauge).isPresent();
+        assertThat(bucket0EventTimeLagGauge).isPresent();
+        long readerEventTimeLag = readerEventTimeLagGauge.get().getValue();
+        long bucket0EventTimeLag = bucket0EventTimeLagGauge.get().getValue();
+
+        flinkSourceReaderMetrics.reportRecordEventTime(tableBucket0, timestamp - 100000L);
+        long maxReaderEventTimeLag = readerEventTimeLagGauge.get().getValue();
+        assertThat(maxReaderEventTimeLag).isGreaterThan(readerEventTimeLag);
+        assertThat((long) bucket0EventTimeLagGauge.get().getValue())
+                .isGreaterThan(bucket0EventTimeLag);
+
+        long newerTimestamp = System.currentTimeMillis();
+        flinkSourceReaderMetrics.reportRecordEventTime(tableBucket1, newerTimestamp);
+        Optional<Gauge<Long>> bucket1EventTimeLagGauge =
+                metricListener.getGauge(
+                        FLUSS_METRIC_GROUP,
+                        READER_METRIC_GROUP,
+                        BUCKET_GROUP,
+                        String.valueOf(tableBucket1.getBucket()),
+                        MetricNames.CURRENT_FETCH_EVENT_TIME_LAG);
+        assertThat(bucket1EventTimeLagGauge).isPresent();
+        assertThat((long) readerEventTimeLagGauge.get().getValue())
+                .isEqualTo(maxReaderEventTimeLag);
+        assertThat((long) bucket1EventTimeLagGauge.get().getValue())
+                .isLessThan(maxReaderEventTimeLag);
+
+        long updatedBucket0Timestamp = newerTimestamp - 50000L;
+        flinkSourceReaderMetrics.reportRecordEventTime(tableBucket0, updatedBucket0Timestamp);
+        assertThat((long) readerEventTimeLagGauge.get().getValue())
+                .isEqualTo(maxReaderEventTimeLag);
+        assertThat((long) bucket0EventTimeLagGauge.get().getValue())
+                .isLessThan(maxReaderEventTimeLag);
     }
 
     // ----------- Assertions --------------

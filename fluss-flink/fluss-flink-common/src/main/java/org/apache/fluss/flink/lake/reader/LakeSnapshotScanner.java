@@ -19,6 +19,7 @@ package org.apache.fluss.flink.lake.reader;
 
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
+import org.apache.fluss.flink.source.reader.LogRecordRowIterator;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.record.LogRecord;
@@ -66,7 +67,7 @@ public class LakeSnapshotScanner implements BatchScanner {
         }
     }
 
-    private static class InternalRowIterator implements CloseableIterator<InternalRow> {
+    private static class InternalRowIterator implements LogRecordRowIterator {
 
         private final CloseableIterator<LogRecord> recordCloseableIterator;
 
@@ -90,8 +91,8 @@ public class LakeSnapshotScanner implements BatchScanner {
         }
 
         @Override
-        public InternalRow next() {
-            return recordCloseableIterator.next().getRow();
+        public LogRecord nextLogRecord() {
+            return recordCloseableIterator.next();
         }
     }
 }
