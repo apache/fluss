@@ -1455,10 +1455,15 @@ public class FlussAuthorizationITCase {
         }
 
         // Test 5: Even root user (super user) cannot call these RPCs from external sessions
+        Configuration rootClientConf =
+                new Configuration(FLUSS_CLUSTER_EXTENSION.getClientConfig("CLIENT"));
+        rootClientConf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "sasl");
+        rootClientConf.set(ConfigOptions.CLIENT_SASL_MECHANISM, "plain");
+        rootClientConf.setString("client.security.sasl.username", "root");
+        rootClientConf.setString("client.security.sasl.password", "password");
+
         try (RpcClient rootRpcClient =
-                RpcClient.create(
-                        FLUSS_CLUSTER_EXTENSION.getClientConfig("CLIENT"),
-                        TestingClientMetricGroup.newInstance())) {
+                RpcClient.create(rootClientConf, TestingClientMetricGroup.newInstance())) {
 
             TabletServerGateway rootTabletGateway =
                     GatewayClientProxy.createGatewayProxy(
