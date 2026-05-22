@@ -482,7 +482,55 @@ final class LogTabletTest extends LogTestBase {
                                 logTablet.getTableBucket().getBucket()));
     }
 
+    @Test
+    void testTableLevelSegmentFileSizeOverridesServerConfig() throws Exception {
+        // Server-level default is 1024m; set table-level override to a tiny value so that
+        // each single-row append triggers a segment roll.
+        MemoryLogRecords records =
+                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {1, "a"}));
+        int recordsSize = records.sizeInBytes();
+
+        // Without table-level override: segment file size is the server default (1024m),
+        // appending a few small records stays in one segment.
+        LogTablet logDefault = createLogTablet(conf);
+        logDefault.appendAsLeader(records);
+        logDefault.appendAsLeader(
+                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {2, "b"})));
+        assertThat(logDefault.logSegments().size()).isEqualTo(1);
+
+        // With table-level override: set segment size just large enough for one batch so that
+        // the second append triggers a roll to a new segment.
+        Configuration tableProperties = new Configuration();
+        tableProperties.set(ConfigOptions.TABLE_LOG_SEGMENT_FILE_SIZE, new MemorySize(recordsSize));
+        LogTablet logOverride = createLogTablet(conf, tableProperties);
+        logOverride.appendAsLeader(records);
+        logOverride.appendAsLeader(
+                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {2, "b"})));
+        assertThat(logOverride.logSegments().size()).isGreaterThan(1);
+    }
+
+    @Test
+    void testTableLevelFlushIntervalMessagesOverridesServerConfig() throws Exception {
+        // Server-level default is Long.MAX_VALUE (flush only on explicit flush()).
+        // With table-level override of 1, every message triggers a flush.
+        Configuration tableProperties = new Configuration();
+        tableProperties.set(ConfigOptions.TABLE_LOG_FLUSH_INTERVAL_MESSAGES, 1L);
+        LogTablet log = createLogTablet(conf, tableProperties);
+
+        MemoryLogRecords records =
+                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {1, "a"}));
+        log.appendAsLeader(records);
+        // After appending with flushIntervalMessages=1, the unflushed offset should equal
+        // the log end offset (i.e., the flush happened automatically).
+        assertThat(log.localLogEndOffset()).isEqualTo(log.getRecoveryPoint());
+    }
+
     private LogTablet createLogTablet(Configuration config) throws Exception {
+        return createLogTablet(config, new Configuration());
+    }
+
+    private LogTablet createLogTablet(Configuration config, Configuration tableProperties)
+            throws Exception {
         File logDir =
                 LogTestUtils.makeRandomLogTabletDir(
                         tempDir,
@@ -496,6 +544,7 @@ final class LogTabletTest extends LogTestBase {
                 PhysicalTablePath.of(DATA1_TABLE_PATH),
                 logDir,
                 config,
+                tableProperties,
                 TestingMetricGroups.TABLET_SERVER_METRICS,
                 0,
                 scheduler,

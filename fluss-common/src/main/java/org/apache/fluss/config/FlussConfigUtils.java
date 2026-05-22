@@ -50,7 +50,12 @@ public class FlussConfigUtils {
                         ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(),
                         ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.key(),
                         ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION.key(),
-                        ConfigOptions.TABLE_STATISTICS_COLUMNS.key());
+                        ConfigOptions.TABLE_STATISTICS_COLUMNS.key(),
+                        ConfigOptions.TABLE_LOG_SEGMENT_FILE_SIZE.key(),
+                        ConfigOptions.TABLE_LOG_INDEX_FILE_SIZE.key(),
+                        ConfigOptions.TABLE_LOG_INDEX_INTERVAL_SIZE.key(),
+                        ConfigOptions.TABLE_LOG_FILE_PREALLOCATE.key(),
+                        ConfigOptions.TABLE_LOG_FLUSH_INTERVAL_MESSAGES.key());
     }
 
     public static boolean isTableStorageConfig(String key) {

@@ -316,6 +316,38 @@ public final class LogTablet {
             Clock clock,
             boolean isCleanShutdown)
             throws Exception {
+        return create(
+                dataDir,
+                tablePath,
+                tabletDir,
+                conf,
+                new Configuration(),
+                serverMetricGroup,
+                recoveryPoint,
+                scheduler,
+                logFormat,
+                tieredLogLocalSegments,
+                isChangelog,
+                clock,
+                isCleanShutdown);
+    }
+
+    public static LogTablet create(
+            File dataDir,
+            PhysicalTablePath tablePath,
+            File tabletDir,
+            Configuration conf,
+            Configuration tableProperties,
+            TabletServerMetricGroup serverMetricGroup,
+            long recoveryPoint,
+            Scheduler scheduler,
+            LogFormat logFormat,
+            int tieredLogLocalSegments,
+            boolean isChangelog,
+            Clock clock,
+            boolean isCleanShutdown)
+            throws Exception {
+        conf = buildEffectiveLogConfig(conf, tableProperties);
         // create the log directory if it doesn't exist
         Files.createDirectories(tabletDir.toPath());
 
@@ -1377,5 +1409,31 @@ public final class LogTablet {
     @VisibleForTesting
     public long getMinRetainOffset() {
         return minRetainOffset;
+    }
+
+    /**
+     * Builds an effective log configuration by overlaying table-level log.* overrides onto the
+     * server-level configuration. Table-level values take precedence. Options not set at table
+     * level transparently fall back to the server value.
+     */
+    private static Configuration buildEffectiveLogConfig(
+            Configuration serverConf, Configuration tableProperties) {
+        Configuration effective = new Configuration(serverConf);
+        tableProperties
+                .getOptional(ConfigOptions.TABLE_LOG_SEGMENT_FILE_SIZE)
+                .ifPresent(v -> effective.set(ConfigOptions.LOG_SEGMENT_FILE_SIZE, v));
+        tableProperties
+                .getOptional(ConfigOptions.TABLE_LOG_INDEX_FILE_SIZE)
+                .ifPresent(v -> effective.set(ConfigOptions.LOG_INDEX_FILE_SIZE, v));
+        tableProperties
+                .getOptional(ConfigOptions.TABLE_LOG_INDEX_INTERVAL_SIZE)
+                .ifPresent(v -> effective.set(ConfigOptions.LOG_INDEX_INTERVAL_SIZE, v));
+        tableProperties
+                .getOptional(ConfigOptions.TABLE_LOG_FILE_PREALLOCATE)
+                .ifPresent(v -> effective.set(ConfigOptions.LOG_FILE_PREALLOCATE, v));
+        tableProperties
+                .getOptional(ConfigOptions.TABLE_LOG_FLUSH_INTERVAL_MESSAGES)
+                .ifPresent(v -> effective.set(ConfigOptions.LOG_FLUSH_INTERVAL_MESSAGES, v));
+        return effective;
     }
 }

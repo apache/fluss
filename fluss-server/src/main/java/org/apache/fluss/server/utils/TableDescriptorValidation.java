@@ -127,6 +127,7 @@ public class TableDescriptorValidation {
         checkSystemColumns(schema.getRowType());
         validateStatisticsConfig(tableDescriptor);
         checkTableLakeFormatMatchesCluster(tableConf, clusterDataLakeFormat);
+        checkLogSegmentFileSize(tableConf);
     }
 
     private static void checkTableLakeFormatMatchesCluster(
@@ -406,6 +407,21 @@ public class TableDescriptorValidation {
                                 column.getName(), e.getMessage()));
             }
         }
+    }
+
+    private static void checkLogSegmentFileSize(Configuration tableConf) {
+        tableConf
+                .getOptional(ConfigOptions.TABLE_LOG_SEGMENT_FILE_SIZE)
+                .ifPresent(
+                        size -> {
+                            if (size.getBytes() > Integer.MAX_VALUE) {
+                                throw new InvalidConfigException(
+                                        String.format(
+                                                "Invalid configuration for '%s', it must be less than or equal to %d bytes.",
+                                                ConfigOptions.TABLE_LOG_SEGMENT_FILE_SIZE.key(),
+                                                Integer.MAX_VALUE));
+                            }
+                        });
     }
 
     private static void checkTieredLog(Configuration tableConf) {

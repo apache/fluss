@@ -1557,6 +1557,56 @@ public class ConfigOptions {
                             "The number of log segments to retain in local for each table when log tiered storage is enabled. "
                                     + "It must be greater that 0. The default is 2.");
 
+    public static final ConfigOption<MemorySize> TABLE_LOG_SEGMENT_FILE_SIZE =
+            key("table.log.segment.file-size")
+                    .memoryType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The segment file size for the log of this table. "
+                                    + "When set, overrides the cluster-level '"
+                                    + LOG_SEGMENT_FILE_SIZE.key()
+                                    + "' for this table only.");
+
+    public static final ConfigOption<MemorySize> TABLE_LOG_INDEX_FILE_SIZE =
+            key("table.log.index.file-size")
+                    .memoryType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The index file size for the log of this table. "
+                                    + "When set, overrides the cluster-level '"
+                                    + LOG_INDEX_FILE_SIZE.key()
+                                    + "' for this table only.");
+
+    public static final ConfigOption<MemorySize> TABLE_LOG_INDEX_INTERVAL_SIZE =
+            key("table.log.index.interval-size")
+                    .memoryType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The index interval size for the log of this table. "
+                                    + "When set, overrides the cluster-level '"
+                                    + LOG_INDEX_INTERVAL_SIZE.key()
+                                    + "' for this table only.");
+
+    public static final ConfigOption<Boolean> TABLE_LOG_FILE_PREALLOCATE =
+            key("table.log.file-preallocate")
+                    .booleanType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Whether to preallocate log segment files for this table. "
+                                    + "When set, overrides the cluster-level '"
+                                    + LOG_FILE_PREALLOCATE.key()
+                                    + "' for this table only.");
+
+    public static final ConfigOption<Long> TABLE_LOG_FLUSH_INTERVAL_MESSAGES =
+            key("table.log.flush.interval-messages")
+                    .longType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The flush interval in number of messages for the log of this table. "
+                                    + "When set, overrides the cluster-level '"
+                                    + LOG_FLUSH_INTERVAL_MESSAGES.key()
+                                    + "' for this table only.");
+
     public static final ConfigOption<Boolean> TABLE_DATALAKE_ENABLED =
             key("table.datalake.enabled")
                     .booleanType()

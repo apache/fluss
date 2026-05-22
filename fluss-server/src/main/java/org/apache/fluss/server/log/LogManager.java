@@ -263,6 +263,7 @@ public final class LogManager extends TabletManagerBase {
      * @param logFormat the log format
      * @param tieredLogLocalSegments the number of segments to retain in local for tiered log
      * @param isChangelog whether the log is a changelog of primary key table
+     * @param tableProperties table-level configuration properties
      */
     public LogTablet getOrCreateLog(
             File dataDir,
@@ -270,7 +271,8 @@ public final class LogManager extends TabletManagerBase {
             TableBucket tableBucket,
             LogFormat logFormat,
             int tieredLogLocalSegments,
-            boolean isChangelog)
+            boolean isChangelog,
+            Configuration tableProperties)
             throws Exception {
         return inLock(
                 logCreationOrDeletionLock,
@@ -287,6 +289,7 @@ public final class LogManager extends TabletManagerBase {
                                     tablePath,
                                     tabletDir,
                                     conf,
+                                    tableProperties,
                                     serverMetricGroup,
                                     0L,
                                     scheduler,
@@ -304,6 +307,25 @@ public final class LogManager extends TabletManagerBase {
 
                     return logTablet;
                 });
+    }
+
+    @VisibleForTesting
+    public LogTablet getOrCreateLog(
+            File dataDir,
+            PhysicalTablePath tablePath,
+            TableBucket tableBucket,
+            LogFormat logFormat,
+            int tieredLogLocalSegments,
+            boolean isChangelog)
+            throws Exception {
+        return getOrCreateLog(
+                dataDir,
+                tablePath,
+                tableBucket,
+                logFormat,
+                tieredLogLocalSegments,
+                isChangelog,
+                new Configuration());
     }
 
     public Optional<LogTablet> getLog(TableBucket tableBucket) {
@@ -392,6 +414,7 @@ public final class LogManager extends TabletManagerBase {
                         physicalTablePath,
                         tabletDir,
                         conf,
+                        tableInfo.getProperties(),
                         serverMetricGroup,
                         logRecoveryPoint,
                         scheduler,

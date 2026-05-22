@@ -2159,7 +2159,8 @@ public final class Replica {
                         tableBucket,
                         tableConfig.getLogFormat(),
                         tableConfig.getTieredLogLocalSegments(),
-                        isKvTable());
+                        isKvTable(),
+                        tableInfo.getProperties());
         // update high watermark.
         Optional<Long> watermarkOpt = lazyHighWatermarkCheckpoint.fetch(tableBucket);
         long watermark =
