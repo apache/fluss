@@ -15,33 +15,31 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.config;
+package org.apache.fluss.server.config;
 
-import org.apache.fluss.metadata.DeleteBehavior;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.MemorySize;
 
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Tests for {@link TableConfig}. */
-class TableConfigTest {
+/** Tests for {@link ResolvedTableConfig}. */
+class ResolvedTableConfigTest {
 
     @Test
-    void testDeleteBehavior() {
-        Configuration conf = new Configuration();
-        TableConfig tableConfig = new TableConfig(conf);
+    void testLogSegmentSizeFallsBackToServerConfig() {
+        Configuration tableConf = new Configuration();
+        Configuration serverConf = new Configuration();
+        serverConf.set(ConfigOptions.LOG_SEGMENT_FILE_SIZE, MemorySize.parse("8kb"));
 
-        // Test default value (empty optional since not set)
-        assertThat(tableConfig.getDeleteBehavior()).isEmpty();
+        ResolvedTableConfig tableConfig = new ResolvedTableConfig(tableConf, serverConf);
 
-        // Test configured value
-        conf.set(ConfigOptions.TABLE_DELETE_BEHAVIOR, DeleteBehavior.ALLOW);
-        TableConfig tableConfig2 = new TableConfig(conf);
-        assertThat(tableConfig2.getDeleteBehavior()).hasValue(DeleteBehavior.ALLOW);
+        assertThat(tableConfig.getLogSegmentSize()).isEqualTo(MemorySize.parse("8kb"));
 
-        // Test IGNORE
-        conf.set(ConfigOptions.TABLE_DELETE_BEHAVIOR, DeleteBehavior.IGNORE);
-        TableConfig tableConfig3 = new TableConfig(conf);
-        assertThat(tableConfig3.getDeleteBehavior()).hasValue(DeleteBehavior.IGNORE);
+        tableConf.set(ConfigOptions.LOG_SEGMENT_FILE_SIZE, MemorySize.parse("4kb"));
+
+        assertThat(tableConfig.getLogSegmentSize()).isEqualTo(MemorySize.parse("4kb"));
     }
 }

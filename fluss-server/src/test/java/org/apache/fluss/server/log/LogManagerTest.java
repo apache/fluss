@@ -26,6 +26,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogTestBase;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.server.config.ResolvedTableConfig;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.storage.LocalDiskManager;
@@ -202,7 +203,7 @@ final class LogManagerTest extends LogTestBase {
                         tempDir,
                         PhysicalTablePath.of(tablePath1),
                         tableBucket1,
-                        new TableConfig(tableProperties),
+                        new ResolvedTableConfig(tableProperties, conf),
                         false);
 
         log.appendAsLeader(records);
@@ -580,7 +581,7 @@ final class LogManagerTest extends LogTestBase {
     }
 
     private TableConfig createTableConfig() {
-        return new TableConfig(new Configuration());
+        return new ResolvedTableConfig(new Configuration(), conf);
     }
 
     private void initTableBuckets(@Nullable String partitionName) {
