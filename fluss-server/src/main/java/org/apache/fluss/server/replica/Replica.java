@@ -20,6 +20,7 @@ package org.apache.fluss.server.replica;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
@@ -249,7 +250,8 @@ public final class Replica {
             TableInfo tableInfo,
             Clock clock,
             RemoteLogManager remoteLogManager,
-            ScannerManager scannerManager)
+            ScannerManager scannerManager,
+            @Nullable Configuration configuration)
             throws Exception {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
@@ -271,7 +273,7 @@ public final class Replica {
                         tableInfo.getSchemaId(),
                         tableInfo.getSchema());
         this.tableInfo = tableInfo;
-        this.tableConfig = tableInfo.getTableConfig();
+        this.tableConfig = tableInfo.getTableConfig().withServerConf(configuration);
         this.logFormat = tableConfig.getLogFormat();
         this.arrowCompressionInfo = tableConfig.getArrowCompressionInfo();
         this.snapshotContext = snapshotContext;
@@ -2157,12 +2159,7 @@ public final class Replica {
             throws Exception {
         LogTablet log =
                 logManager.getOrCreateLog(
-                        dataDir,
-                        physicalPath,
-                        tableBucket,
-                        tableConfig.getLogFormat(),
-                        tableConfig.getTieredLogLocalSegments(),
-                        isKvTable());
+                        dataDir, physicalPath, tableBucket, tableConfig, isKvTable());
         // update high watermark.
         Optional<Long> watermarkOpt = lazyHighWatermarkCheckpoint.fetch(tableBucket);
         long watermark =

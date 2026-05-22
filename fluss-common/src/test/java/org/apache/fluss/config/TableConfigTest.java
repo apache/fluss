@@ -44,4 +44,19 @@ class TableConfigTest {
         TableConfig tableConfig3 = new TableConfig(conf);
         assertThat(tableConfig3.getDeleteBehavior()).hasValue(DeleteBehavior.IGNORE);
     }
+
+    @Test
+    void testLogSegmentSizeFallsBackToServerConfig() {
+        Configuration tableConf = new Configuration();
+        Configuration serverConf = new Configuration();
+        serverConf.set(ConfigOptions.LOG_SEGMENT_FILE_SIZE, MemorySize.parse("8kb"));
+
+        TableConfig tableConfig = new TableConfig(tableConf).withServerConf(serverConf);
+
+        assertThat(tableConfig.getLogSegmentSize()).isEqualTo(MemorySize.parse("8kb"));
+
+        tableConf.set(ConfigOptions.LOG_SEGMENT_FILE_SIZE, MemorySize.parse("4kb"));
+
+        assertThat(tableConfig.getLogSegmentSize()).isEqualTo(MemorySize.parse("4kb"));
+    }
 }

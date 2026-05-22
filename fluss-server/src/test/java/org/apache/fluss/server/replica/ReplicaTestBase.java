@@ -543,7 +543,8 @@ public class ReplicaTestBase {
                 DATA1_TABLE_INFO,
                 manualClock,
                 remoteLogManager,
-                scannerManager);
+                scannerManager,
+                conf);
     }
 
     private void initRemoteLogEnv() throws Exception {

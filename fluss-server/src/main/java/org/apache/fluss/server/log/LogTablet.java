@@ -20,6 +20,7 @@ package org.apache.fluss.server.log;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.CorruptRecordException;
 import org.apache.fluss.exception.DuplicateSequenceException;
 import org.apache.fluss.exception.FlussRuntimeException;
@@ -143,14 +144,13 @@ public final class LogTablet {
             Configuration conf,
             Scheduler scheduler,
             WriterStateManager writerStateManager,
-            LogFormat logFormat,
-            int tieredLogLocalSegments,
+            TableConfig tableConfig,
             boolean isChangelog,
             Clock clock) {
         this.dataDir = dataDir;
         this.physicalPath = physicalPath;
         this.localLog = localLog;
-        this.maxSegmentFileSize = (int) conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes();
+        this.maxSegmentFileSize = (int) tableConfig.getLogSegmentSize().getBytes();
         this.logFlushIntervalMessages = conf.get(ConfigOptions.LOG_FLUSH_INTERVAL_MESSAGES);
         int writerExpirationCheckIntervalMs =
                 (int) conf.get(ConfigOptions.WRITER_ID_EXPIRATION_CHECK_INTERVAL).toMillis();
@@ -165,11 +165,11 @@ public final class LogTablet {
                         () -> removeExpiredWriter(System.currentTimeMillis()),
                         writerExpirationCheckIntervalMs,
                         writerExpirationCheckIntervalMs);
-        this.logFormat = logFormat;
+        this.logFormat = tableConfig.getLogFormat();
         checkArgument(
-                tieredLogLocalSegments > 0,
+                tableConfig.getTieredLogLocalSegments() > 0,
                 "log segments to retain in local must be greater than 0");
-        this.tieredLogLocalSegments = tieredLogLocalSegments;
+        this.tieredLogLocalSegments = tableConfig.getTieredLogLocalSegments();
 
         this.clock = clock;
         this.isChangeLog = isChangelog;
@@ -338,15 +338,17 @@ public final class LogTablet {
             PhysicalTablePath tablePath,
             File tabletDir,
             Configuration conf,
+            TableConfig tableConfig,
             TabletServerMetricGroup serverMetricGroup,
             long recoveryPoint,
             Scheduler scheduler,
-            LogFormat logFormat,
-            int tieredLogLocalSegments,
             boolean isChangelog,
             Clock clock,
             boolean isCleanShutdown)
             throws Exception {
+        TableConfig logTableConfig = tableConfig.withServerConf(conf);
+        LogFormat logFormat = logTableConfig.getLogFormat();
+
         // create the log directory if it doesn't exist
         Files.createDirectories(tabletDir.toPath());
 
@@ -389,8 +391,7 @@ public final class LogTablet {
                 conf,
                 scheduler,
                 writerStateManager,
-                logFormat,
-                tieredLogLocalSegments,
+                logTableConfig,
                 isChangelog,
                 clock);
     }

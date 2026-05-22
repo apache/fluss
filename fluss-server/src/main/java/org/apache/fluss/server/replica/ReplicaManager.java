@@ -2104,7 +2104,8 @@ public class ReplicaManager implements ServerReconfigurable {
                                 tableInfo,
                                 clock,
                                 remoteLogManager,
-                                scannerManager);
+                                scannerManager,
+                                conf);
                 if (!existingLogTabletOpt.isPresent()) {
                     localDiskManager.recordReplicaLoad(dataDir, isKvTable);
                 }
