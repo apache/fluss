@@ -28,7 +28,8 @@ We'd like to thank the following members and committers to the Apache Fluss proj
 | Cheng Wang           | [@xx789633](https://github.com/xx789633)           | [chengwang](https://people.apache.org/committer-index.html#chengwang)         | Committer           |
 | Leonard Xu           | [@leonardBang](https://github.com/leonardBang)     | [leonard](https://people.apache.org/committer-index.html#leonard)             | Committer           |
 | Anton Borisov        | [@fresh-borzoni](https://github.com/fresh-borzoni) | [aborisov](https://people.apache.org/committer-index.html#aborisov)           | Committer           |
-| Liebing Yu           | [@LiebingYu](https://github.com/LiebingYu)     | [liebing](https://people.apache.org/committer-index.html#liebing)            | Committer           |
+| Liebing Yu           | [@LiebingYu](https://github.com/LiebingYu)         | [liebing](https://people.apache.org/committer-index.html#liebing)             | Committer           |
+| Cheng Zhou           | [@zcoo](https://github.com/zcoo)                   | [zcoo](https://people.apache.org/committer-index.html#zcoo)                   | Committer           |
 
 The Apache Fluss project recognizes the following roles, each representing a distinct type of contribution to the project’s development:
 
