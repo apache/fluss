@@ -30,6 +30,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.TabletManagerBase;
+import org.apache.fluss.server.config.ResolvedTableConfig;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.storage.LocalDiskManager;
@@ -260,7 +261,7 @@ public final class LogManager extends TabletManagerBase {
      * @param dataDir the local data directory chosen for the bucket
      * @param tablePath the table path of the bucket belongs to
      * @param tableBucket the table bucket
-     * @param tableConfig the table config
+     * @param tableConfig the resolved table config
      * @param isChangelog whether the log is a changelog of primary key table
      */
     public LogTablet getOrCreateLog(
@@ -389,7 +390,7 @@ public final class LogManager extends TabletManagerBase {
                         physicalTablePath,
                         tabletDir,
                         conf,
-                        tableInfo.getTableConfig(),
+                        new ResolvedTableConfig(tableInfo.getProperties(), conf),
                         serverMetricGroup,
                         logRecoveryPoint,
                         scheduler,

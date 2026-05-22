@@ -44,8 +44,6 @@ public class TableConfig {
     // the table properties configuration
     private final Configuration config;
 
-    private final Optional<Configuration> serverConfig;
-
     /**
      * Creates a new table config.
      *
@@ -53,33 +51,11 @@ public class TableConfig {
      */
     public TableConfig(Configuration config) {
         this.config = config;
-        this.serverConfig = Optional.empty();
-    }
-
-    private TableConfig(Configuration tableConfig, Configuration serverConfig) {
-        this.config = tableConfig;
-        this.serverConfig = Optional.of(serverConfig);
-    }
-
-    /** Returns a table config that falls back to the server configuration for server options. */
-    public TableConfig withServerConf(Configuration serverConfig) {
-        if (serverConfig != null) {
-            return new TableConfig(config, serverConfig);
-        }
-        return new TableConfig(config);
-    }
-
-    private <T> T fallbackGet(ConfigOption<T> key) {
-        Configuration conf = config;
-        if (!config.contains(key)) {
-            conf = serverConfig.orElse(config);
-        }
-        return conf.get(key);
     }
 
     /** Gets the log segment file size of the table. */
     public MemorySize getLogSegmentSize() {
-        return fallbackGet(ConfigOptions.LOG_SEGMENT_FILE_SIZE);
+        return config.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE);
     }
 
     /** Gets the replication factor of the table. */

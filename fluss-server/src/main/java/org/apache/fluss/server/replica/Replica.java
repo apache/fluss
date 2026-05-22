@@ -55,6 +55,7 @@ import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.rpc.util.PredicateMessageUtils;
 import org.apache.fluss.server.SequenceIDCounter;
+import org.apache.fluss.server.config.ResolvedTableConfig;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.KvManager;
@@ -273,7 +274,7 @@ public final class Replica {
                         tableInfo.getSchemaId(),
                         tableInfo.getSchema());
         this.tableInfo = tableInfo;
-        this.tableConfig = tableInfo.getTableConfig().withServerConf(configuration);
+        this.tableConfig = new ResolvedTableConfig(tableInfo.getProperties(), configuration);
         this.logFormat = tableConfig.getLogFormat();
         this.arrowCompressionInfo = tableConfig.getArrowCompressionInfo();
         this.snapshotContext = snapshotContext;

@@ -315,8 +315,7 @@ public final class LogTablet {
             Clock clock,
             boolean isCleanShutdown)
             throws Exception {
-        TableConfig logTableConfig = tableConfig.withServerConf(conf);
-        LogFormat logFormat = logTableConfig.getLogFormat();
+        LogFormat logFormat = tableConfig.getLogFormat();
 
         // create the log directory if it doesn't exist
         Files.createDirectories(tabletDir.toPath());
@@ -360,7 +359,7 @@ public final class LogTablet {
                 conf,
                 scheduler,
                 writerStateManager,
-                logTableConfig,
+                tableConfig,
                 isChangelog,
                 clock);
     }
