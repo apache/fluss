@@ -86,7 +86,8 @@ class FlussLakeAppendBatch(
           throw e
       }
 
-    val lakeSource = FlussLakeUtils.createLakeSource(tableInfo.getProperties.toMap, tablePath)
+    val lakeSource =
+      FlussLakeUtils.createLakeSource(flussConfig.toMap, tableInfo.getProperties.toMap, tablePath)
     lakeSource.withProject(FlussLakeUtils.lakeProjection(projection))
     pushedPredicate.foreach(FlussLakeBatch.applyLakeFilters(lakeSource, _))
 

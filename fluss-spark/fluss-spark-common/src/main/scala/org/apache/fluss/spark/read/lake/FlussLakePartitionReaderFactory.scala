@@ -39,7 +39,7 @@ class FlussLakePartitionReaderFactory(
   extends PartitionReaderFactory {
 
   @transient private lazy val lakeSource: LakeSource[LakeSplit] = {
-    val source = FlussLakeUtils.createLakeSource(tableProperties, tablePath)
+    val source = FlussLakeUtils.createLakeSource(flussConfig.toMap, tableProperties, tablePath)
     source.withProject(FlussLakeUtils.lakeProjection(projection))
     flussPredicate.foreach(FlussLakeBatch.applyLakeFilters(source, _))
     source

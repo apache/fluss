@@ -93,6 +93,8 @@ trait FlussLakeSupportsPushDownV2Filters extends FlussSupportsPushDownV2Filters 
 
   def tablePath: TablePath
 
+  def flussConfig: FlussConfiguration
+
   override def pushPredicates(predicates: Array[Predicate]): Array[Predicate] = {
     val pairs =
       SparkPredicateConverter.convertPerPredicate(tableInfo.getRowType, predicates.toSeq)
@@ -100,7 +102,7 @@ trait FlussLakeSupportsPushDownV2Filters extends FlussSupportsPushDownV2Filters 
       (Seq.empty[Predicate], Seq.empty[FlussPredicate])
     } else {
       val lakeSource =
-        FlussLakeUtils.createLakeSource(tableInfo.getProperties.toMap, tablePath)
+        FlussLakeUtils.createLakeSource(flussConfig.toMap, tableInfo.getProperties.toMap, tablePath)
       val result = FlussLakeBatch.applyLakeFilters(lakeSource, pairs.map(_._2).asJava)
       // Identity-match: lake sources are expected to return the same instances they received.
       val acceptedSet: JSet[FlussPredicate] =
@@ -119,7 +121,7 @@ class FlussAppendScanBuilder(
     tablePath: TablePath,
     val tableInfo: TableInfo,
     options: CaseInsensitiveStringMap,
-    flussConfig: FlussConfiguration)
+    val flussConfig: FlussConfiguration)
   extends FlussSupportsPushDownV2Filters {
 
   override def build(): Scan = {
@@ -140,7 +142,7 @@ class FlussLakeAppendScanBuilder(
     val tablePath: TablePath,
     val tableInfo: TableInfo,
     options: CaseInsensitiveStringMap,
-    flussConfig: FlussConfiguration)
+    val flussConfig: FlussConfiguration)
   extends FlussLakeSupportsPushDownV2Filters {
 
   override def build(): Scan = {
@@ -160,7 +162,7 @@ class FlussUpsertScanBuilder(
     tablePath: TablePath,
     val tableInfo: TableInfo,
     options: CaseInsensitiveStringMap,
-    flussConfig: FlussConfiguration)
+    val flussConfig: FlussConfiguration)
   extends FlussSupportsPushDownPartitionFilters {
 
   override def build(): Scan = {
@@ -173,7 +175,7 @@ class FlussLakeUpsertScanBuilder(
     val tablePath: TablePath,
     val tableInfo: TableInfo,
     options: CaseInsensitiveStringMap,
-    flussConfig: FlussConfiguration)
+    val flussConfig: FlussConfiguration)
   extends FlussLakeSupportsPushDownV2Filters {
 
   override def build(): Scan = {

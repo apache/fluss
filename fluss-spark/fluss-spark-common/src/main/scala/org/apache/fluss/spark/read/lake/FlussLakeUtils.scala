@@ -25,17 +25,25 @@ import org.apache.fluss.utils.PropertiesUtils
 
 import java.util
 
+import scala.collection.JavaConverters._
+
 object FlussLakeUtils {
 
+  private val SPARK_CATALOG_PREFIX = "spark.catalog."
+
   def createLakeSource(
+      catalogProperties: util.Map[String, String],
       tableProperties: util.Map[String, String],
       tablePath: TablePath): LakeSource[LakeSplit] = {
     val tableConfig = Configuration.fromMap(tableProperties)
     val datalakeFormat = tableConfig.get(ConfigOptions.TABLE_DATALAKE_FORMAT)
     val dataLakePrefix = "table.datalake." + datalakeFormat + "."
 
-    val catalogProperties = PropertiesUtils.extractAndRemovePrefix(tableProperties, dataLakePrefix)
-    val lakeConfig = Configuration.fromMap(catalogProperties)
+    val lakeConfig =
+      Configuration.fromMap(PropertiesUtils.extractAndRemovePrefix(tableProperties, dataLakePrefix))
+    catalogProperties.asScala.foreach {
+      case (k, v) => lakeConfig.setString(s"$SPARK_CATALOG_PREFIX$k", v)
+    }
     val lakeStoragePlugin =
       LakeStoragePluginSetUp.fromDataLakeFormat(datalakeFormat.toString, null)
     val lakeStorage = lakeStoragePlugin.createLakeStorage(lakeConfig)
