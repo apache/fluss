@@ -46,7 +46,12 @@ class FlussConfigUtilsTest {
                     assertThat(k).startsWith("table.");
                     assertThat(v.key()).startsWith("table.");
                 });
-        assertThat(tableOptions.size()).isEqualTo(TABLE_OPTIONS.size());
+        assertThat(TABLE_OPTIONS).containsAllEntriesOf(tableOptions);
+        assertThat(TABLE_OPTIONS)
+                .containsEntry(
+                        ConfigOptions.LOG_SEGMENT_FILE_SIZE.key(),
+                        ConfigOptions.LOG_SEGMENT_FILE_SIZE);
+        assertThat(TABLE_OPTIONS.size()).isEqualTo(tableOptions.size() + 1);
 
         Map<String, ConfigOption<?>> clientOptions = extractConfigOptions("client.");
         assertThat(clientOptions).isNotEmpty();
