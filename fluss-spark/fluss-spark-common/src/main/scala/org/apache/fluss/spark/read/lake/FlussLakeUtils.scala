@@ -29,7 +29,7 @@ import scala.collection.JavaConverters._
 
 object FlussLakeUtils {
 
-  private val SPARK_CATALOG_PREFIX = "spark.catalog."
+  private val SPARK_CATALOG_PREFIX = "spark.sql.catalog."
 
   def createLakeSource(
       catalogProperties: util.Map[String, String],
