@@ -20,8 +20,8 @@ package org.apache.fluss.server.log;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
-import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
@@ -92,11 +92,10 @@ final class LogTabletTest extends LogTestBase {
                         PhysicalTablePath.of(DATA1_TABLE_PATH),
                         logDir,
                         conf,
+                        new TableConfig(conf),
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         0,
                         scheduler,
-                        LogFormat.ARROW,
-                        1,
                         false,
                         SystemClock.getInstance(),
                         true);
@@ -496,11 +495,10 @@ final class LogTabletTest extends LogTestBase {
                 PhysicalTablePath.of(DATA1_TABLE_PATH),
                 logDir,
                 config,
+                new TableConfig(config),
                 TestingMetricGroups.TABLET_SERVER_METRICS,
                 0,
                 scheduler,
-                LogFormat.ARROW,
-                1,
                 false,
                 SystemClock.getInstance(),
                 true);

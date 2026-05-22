@@ -112,6 +112,7 @@ public class TableDescriptorValidation {
             ConfigOption<?> option = TABLE_OPTIONS.get(key);
             validateOptionValue(tableConf, option);
         }
+        checkLogSegmentFileSize(tableConf);
 
         // check distribution
         checkDistribution(tableDescriptor, maxBucketNum);
@@ -414,6 +415,17 @@ public class TableDescriptorValidation {
                     String.format(
                             "'%s' must be greater than 0.",
                             ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.key()));
+        }
+    }
+
+    private static void checkLogSegmentFileSize(Configuration tableConf) {
+        if (tableConf.contains(ConfigOptions.LOG_SEGMENT_FILE_SIZE)
+                && tableConf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes()
+                        > Integer.MAX_VALUE) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "Invalid configuration for %s, it must be less than or equal %d bytes.",
+                            ConfigOptions.LOG_SEGMENT_FILE_SIZE.key(), Integer.MAX_VALUE));
         }
     }
 

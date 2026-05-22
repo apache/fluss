@@ -21,7 +21,6 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.metadata.KvFormat;
-import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -371,7 +370,11 @@ final class KvManagerTest {
                         tablePath.getDatabaseName(), tablePath.getTableName(), partitionName);
         LogTablet logTablet =
                 logManager.getOrCreateLog(
-                        tempDir, physicalTablePath, tableBucket, LogFormat.ARROW, 1, true);
+                        tempDir,
+                        physicalTablePath,
+                        tableBucket,
+                        new TableConfig(new Configuration()),
+                        true);
         return kvManager.getOrCreateKv(
                 physicalTablePath,
                 tableBucket,
