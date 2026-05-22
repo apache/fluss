@@ -466,11 +466,27 @@ public class CoordinatorRequestBatch {
                         if (throwable != null) {
                             // todo: in FLUSS-55886145, we will introduce a sender thread to send
                             // the request.
-                            // in here, we just ignore the error.
                             LOG.warn(
                                     "Failed to send stop replica request to tablet server {}.",
                                     serverId,
                                     throwable);
+                            // For delete replicas (delete=true && deleteRemote=true), we must emit
+                            // a failure event so the retry/give-up logic in
+                            // processDeleteReplicaResponseReceived can move the replica out of
+                            // ReplicaDeletionStarted. Without this, replicas get permanently stuck
+                            // in ReplicaDeletionStarted with no code path to recover.
+                            if (!deletedReplicaBuckets.isEmpty()) {
+                                List<DeleteReplicaResultForBucket> failedResults =
+                                        new ArrayList<>();
+                                ApiError apiError = ApiError.fromThrowable(throwable);
+                                for (TableBucket bucket : deletedReplicaBuckets) {
+                                    failedResults.add(
+                                            new DeleteReplicaResultForBucket(
+                                                    bucket, serverId, apiError));
+                                }
+                                eventManager.put(
+                                        new DeleteReplicaResponseReceivedEvent(failedResults));
+                            }
                             return;
                         }
                         // handle the response

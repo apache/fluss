@@ -316,8 +316,42 @@ public final class LogTablet {
             Clock clock,
             boolean isCleanShutdown)
             throws Exception {
+        return create(
+                dataDir,
+                tablePath,
+                tabletDir,
+                conf,
+                new Configuration(),
+                serverMetricGroup,
+                recoveryPoint,
+                scheduler,
+                logFormat,
+                tieredLogLocalSegments,
+                isChangelog,
+                clock,
+                isCleanShutdown);
+    }
+
+    public static LogTablet create(
+            File dataDir,
+            PhysicalTablePath tablePath,
+            File tabletDir,
+            Configuration conf,
+            Configuration tableProperties,
+            TabletServerMetricGroup serverMetricGroup,
+            long recoveryPoint,
+            Scheduler scheduler,
+            LogFormat logFormat,
+            int tieredLogLocalSegments,
+            boolean isChangelog,
+            Clock clock,
+            boolean isCleanShutdown)
+            throws Exception {
         // create the log directory if it doesn't exist
         Files.createDirectories(tabletDir.toPath());
+
+        // Build a merged config where table-level log.* properties override server-level config.
+        conf = mergeLogConfig(conf, tableProperties);
 
         TableBucket tableBucket = FlussPaths.parseTabletDir(tabletDir).f1;
         LogSegments segments = new LogSegments(tableBucket);
