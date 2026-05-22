@@ -11,10 +11,10 @@ sidebar_position: 7
 
 Tencent Cloud COS support is not included in the default Fluss distribution. To enable COS support, you need to manually install the filesystem plugin into Fluss.
 
-1. **Prepare the plugin JAR**: 
+1. **Prepare the plugin JAR**:
 
    - Download the `fluss-fs-cos-$FLUSS_VERSION$.jar` from the [Maven Repository](https://repo1.maven.org/maven2/org/apache/fluss/fluss-fs-cos/$FLUSS_VERSION$/fluss-fs-cos-$FLUSS_VERSION$.jar).
-   
+
 2. **Place the plugin**: Place the plugin JAR file in the `${FLUSS_HOME}/plugins/cos/` directory:
    ```bash
    mkdir -p ${FLUSS_HOME}/plugins/cos/
@@ -50,12 +50,12 @@ To avoid exposing sensitive access key information directly in the `server.yaml`
 
 For example, to use environment variables for credential management:
 ```yaml
-fs.cosn.credentials.provider: org.apache.hadoop.fs.cosn.auth.EnvironmentVariableCredentialProvider
+fs.cosn.credentials.provider: org.apache.hadoop.fs.cosn.auth.EnvironmentVariableCredentialsProvider
 ```
 Then, set the following environment variables before starting the Fluss service:
 ```bash
-export COS_SECRET_ID=<your-secret-id>
-export COS_SECRET_KEY=<your-secret-key>
+export COSN_SECRET_ID=<your-secret-id>
+export COSN_SECRET_KEY=<your-secret-key>
 ```
 This approach enhances security by keeping sensitive credentials out of configuration files.
 
@@ -73,7 +73,7 @@ find different regions in [Tencent Cloud COS Regions](https://cloud.tencent.com/
 ### How it works
 
 1. The Fluss server calls `GetFederationToken` with the configured permanent credentials to obtain a temporary credential consisting of a temporary secret id, a temporary secret key, and a session token.
-2. By default, the temporary credential is granted **full COS read-write permission** (`name/cos:*` on all resources) and has a **validity period of 30 minutes**.
+2. By default, the temporary credential is granted **full COS read-write permission** (`name/cos:*`) scoped to the bucket configured via `remote.data.dir`, and has a **validity period of 1 hour**. You can override this default policy by setting `fs.cosn.security.token.policy` to a custom STS policy JSON.
 3. The temporary credential is distributed to clients, which use it to access COS directly.
 4. Fluss automatically refreshes the credential before it expires.
 

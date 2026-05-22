@@ -25,6 +25,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 
 import java.io.IOException;
+import java.net.URI;
 
 /**
  * A {@link FileSystem} for Tencent Cloud COS that wraps an {@link HadoopFileSystem}, but overwrite
@@ -35,10 +36,12 @@ class COSFileSystem extends HadoopFileSystem {
     private final Configuration conf;
     private volatile COSSecurityTokenProvider cosSecurityTokenProvider;
     private final String scheme;
+    private final URI fsUri;
 
-    COSFileSystem(FileSystem hadoopFileSystem, String scheme, Configuration conf) {
+    COSFileSystem(FileSystem hadoopFileSystem, String scheme, URI fsUri, Configuration conf) {
         super(hadoopFileSystem);
         this.scheme = scheme;
+        this.fsUri = fsUri;
         this.conf = conf;
     }
 
@@ -56,7 +59,7 @@ class COSFileSystem extends HadoopFileSystem {
         if (cosSecurityTokenProvider == null) {
             synchronized (this) {
                 if (cosSecurityTokenProvider == null) {
-                    cosSecurityTokenProvider = new COSSecurityTokenProvider(conf);
+                    cosSecurityTokenProvider = new COSSecurityTokenProvider(fsUri, conf);
                 }
             }
         }

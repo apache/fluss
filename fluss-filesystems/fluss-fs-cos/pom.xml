@@ -65,6 +65,16 @@
                     <groupId>com.qcloud</groupId>
                     <artifactId>cos_api</artifactId>
                 </exclusion>
+                <!--
+                  Exclude the bundled COS SDK shipped by hadoop-cos to avoid having two
+                  COS SDK variants on the classpath (cos_api-bundle:5.6.69 and the directly
+                  declared cos_api:${fs.cos.api.version}), which produces hundreds of
+                  overlapping com.qcloud.cos.* classes during shading.
+                -->
+                <exclusion>
+                    <groupId>com.qcloud</groupId>
+                    <artifactId>cos_api-bundle</artifactId>
+                </exclusion>
                 <exclusion>
                     <groupId>org.apache.hadoop</groupId>
                     <artifactId>hadoop-common</artifactId>

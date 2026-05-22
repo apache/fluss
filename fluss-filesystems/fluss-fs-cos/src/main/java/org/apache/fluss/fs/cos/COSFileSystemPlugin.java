@@ -52,6 +52,14 @@ public class COSFileSystemPlugin implements FileSystemPlugin {
 
     public static final String ENDPOINT_KEY = "fs.cosn.bucket.endpoint_suffix";
 
+    /**
+     * Optional user-provided STS access policy (a JSON string) applied when calling {@code
+     * GetFederationToken}. When unset, Fluss will derive a default policy that scopes the temporary
+     * credential to the bucket configured in {@code remote.data.dir} so that the token cannot
+     * access other COS resources.
+     */
+    public static final String SECURITY_TOKEN_POLICY = "fs.cosn.security.token.policy";
+
     @Override
     public String getScheme() {
         return SCHEME;
@@ -93,7 +101,7 @@ public class COSFileSystemPlugin implements FileSystemPlugin {
         }
 
         org.apache.hadoop.fs.FileSystem fileSystem = initFileSystem(fsUri, hadoopConfig);
-        return new COSFileSystem(fileSystem, getScheme(), hadoopConfig);
+        return new COSFileSystem(fileSystem, getScheme(), fsUri, hadoopConfig);
     }
 
     protected org.apache.hadoop.fs.FileSystem initFileSystem(
