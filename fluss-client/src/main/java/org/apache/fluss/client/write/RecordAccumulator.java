@@ -113,6 +113,18 @@ public final class RecordAccumulator {
     private final ConcurrentMap<PhysicalTablePath, BucketAndWriteBatches> writeBatches =
             new CopyOnWriteMap<>();
 
+    /**
+     * Paths that have been marked stale (e.g. the partition was dropped). New appends to these
+     * paths are rejected. The Sender thread removes an entry from {@link #writeBatches} once all
+     * its deques are drained.
+     *
+     * <p>All accesses must be guarded by {@link #staleLock}.
+     */
+    private final Set<PhysicalTablePath> stalePaths = new HashSet<>();
+
+    /** Guards {@link #stalePaths} and the remove-if-empty logic in {@link #writeBatches}. */
+    private final Object staleLock = new Object();
+
     private final IncompleteBatches incomplete;
 
     private final Map<Integer, Integer> nodesDrainIndex;
@@ -185,6 +197,17 @@ public final class RecordAccumulator {
         // The metadata may return null for the partition id, but it is fine to pass null here,
         // because we will fill the partitionId in bucketReady() before send the batch.
         Optional<Long> partitionIdOpt = cluster.getPartitionId(physicalTablePath);
+
+        // Reject appends to paths that the Sender has marked as stale (e.g. dropped partitions).
+        // This check must happen before computeIfAbsent so that a concurrent markPathsAsStale +
+        // removeStalePathIfEmpty cannot race with a new append re-inserting the same path.
+        synchronized (staleLock) {
+            if (stalePaths.contains(physicalTablePath)) {
+                throw new IllegalStateException(
+                        "Cannot append to a stale (dropped) partition: " + physicalTablePath);
+            }
+        }
+
         BucketAndWriteBatches bucketAndWriteBatches =
                 writeBatches.computeIfAbsent(
                         physicalTablePath,
@@ -426,6 +449,50 @@ public final class RecordAccumulator {
 
     public Set<PhysicalTablePath> getPhysicalTablePathsInBatches() {
         return writeBatches.keySet();
+    }
+
+    /**
+     * Mark the given physical table paths as stale. Subsequent {@link #append} calls for these
+     * paths will be rejected. The Sender should call {@link #removeStalePathIfEmpty} once a path's
+     * deques have been fully drained.
+     *
+     * @param paths the paths to mark as stale (e.g. dropped partitions)
+     */
+    public void markPathsAsStale(Set<PhysicalTablePath> paths) {
+        synchronized (staleLock) {
+            stalePaths.addAll(paths);
+        }
+    }
+
+    /**
+     * Remove a stale path from {@link #writeBatches} if and only if all its deques are empty.
+     *
+     * <p>This is safe to call from the Sender thread. The {@link #staleLock} prevents a concurrent
+     * {@link #append} from sneaking in between the emptiness check and the remove.
+     *
+     * @param path the stale path to try to remove
+     * @return {@code true} if the path was removed, {@code false} if it still had pending data
+     */
+    public boolean removeStalePathIfEmpty(PhysicalTablePath path) {
+        synchronized (staleLock) {
+            BucketAndWriteBatches entry = writeBatches.get(path);
+            if (entry == null) {
+                stalePaths.remove(path);
+                return true;
+            }
+            for (Deque<WriteBatch> deque : entry.batches.values()) {
+                synchronized (deque) {
+                    if (!deque.isEmpty()) {
+                        return false;
+                    }
+                }
+            }
+            // All deques are empty under staleLock: no concurrent append can insert new data
+            // because append() checks stalePaths while holding staleLock before computeIfAbsent.
+            writeBatches.remove(path);
+            stalePaths.remove(path);
+            return true;
+        }
     }
 
     private List<MemorySegment> allocateMemorySegments(

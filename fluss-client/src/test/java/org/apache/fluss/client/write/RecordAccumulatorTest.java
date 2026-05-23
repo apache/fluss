@@ -574,6 +574,34 @@ class RecordAccumulatorTest {
                 Collections.emptyMap());
     }
 
+    /**
+     * Create a cluster that contains all the given bucket locations for DATA1 table plus an extra
+     * physical table path with its single bucket. Used to test stale-path cleanup.
+     */
+    private Cluster updateClusterWithExtra(
+            List<BucketLocation> bucketLocations,
+            PhysicalTablePath extraPath,
+            BucketLocation extraBucket) {
+        Map<Integer, ServerNode> aliveTabletServersById = new HashMap<>();
+        aliveTabletServersById.put(node1.id(), node1);
+        aliveTabletServersById.put(node2.id(), node2);
+        aliveTabletServersById.put(node3.id(), node3);
+
+        Map<PhysicalTablePath, List<BucketLocation>> bucketsByPath = new HashMap<>();
+        bucketsByPath.put(DATA1_PHYSICAL_TABLE_PATH, bucketLocations);
+        bucketsByPath.put(extraPath, Collections.singletonList(extraBucket));
+
+        Map<TablePath, Long> tableIdByPath = new HashMap<>();
+        tableIdByPath.put(DATA1_TABLE_PATH, DATA1_TABLE_ID);
+        tableIdByPath.put(extraPath.getTablePath(), DATA1_TABLE_ID);
+        return new Cluster(
+                aliveTabletServersById,
+                new ServerNode(0, "localhost", 89, ServerType.COORDINATOR),
+                bucketsByPath,
+                tableIdByPath,
+                Collections.emptyMap());
+    }
+
     private void delayedInterrupt(final Thread thread, final long delayMs) {
         Thread t =
                 new Thread(
@@ -600,6 +628,87 @@ class RecordAccumulatorTest {
                     tableBucketsInBatch.addAll(tbList);
                 });
         assertThat(tableBucketsInBatch).containsExactlyInAnyOrder(tb);
+    }
+
+    @Test
+    void testMarkAndRemoveStalePathAfterDrain() throws Exception {
+        IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        // batchTimeoutMs=0 so batches are immediately ready and drain() polls them out.
+        RecordAccumulator accum = createTestRecordAccumulator(0, 4 * 1024, 256, 64 * 1024);
+
+        // Create a stale path representing a dropped partition.
+        PhysicalTablePath stalePath =
+                PhysicalTablePath.of(TablePath.of("test_db", "test_table"), "stale_partition");
+        BucketLocation staleBucket =
+                new BucketLocation(stalePath, DATA1_TABLE_ID, 0, node1.id(), serverNodes);
+        Cluster clusterWithStale =
+                updateClusterWithExtra(Arrays.asList(bucket1, bucket2), stalePath, staleBucket);
+
+        accum.append(createRecord(row), writeCallback, cluster, 0, false);
+        accum.append(
+                WriteRecord.forIndexedAppend(
+                        DATA1_TABLE_INFO,
+                        stalePath,
+                        indexedRow(DATA1_ROW_TYPE, new Object[] {2, "b"}),
+                        null),
+                writeCallback,
+                clusterWithStale,
+                0,
+                false);
+
+        assertThat(accum.getPhysicalTablePathsInBatches()).contains(DATA1_PHYSICAL_TABLE_PATH);
+        assertThat(accum.getPhysicalTablePathsInBatches()).contains(stalePath);
+
+        // Mark stale: subsequent appends to stalePath must be rejected.
+        accum.markPathsAsStale(Collections.singleton(stalePath));
+        assertThatThrownBy(
+                        () ->
+                                accum.append(
+                                        WriteRecord.forIndexedAppend(
+                                                DATA1_TABLE_INFO,
+                                                stalePath,
+                                                indexedRow(DATA1_ROW_TYPE, new Object[] {3, "c"}),
+                                                null),
+                                        writeCallback,
+                                        clusterWithStale,
+                                        0,
+                                        false))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("stale");
+
+        // Drain and deallocate — deque becomes empty.
+        Map<Integer, List<ReadyWriteBatch>> drained =
+                accum.drain(clusterWithStale, Collections.singleton(node1.id()), Integer.MAX_VALUE);
+        for (List<ReadyWriteBatch> batches : drained.values()) {
+            for (ReadyWriteBatch b : batches) {
+                accum.deallocate(b.writeBatch());
+            }
+        }
+
+        // Now the deque is empty: removeStalePathIfEmpty must succeed.
+        boolean removed = accum.removeStalePathIfEmpty(stalePath);
+        assertThat(removed).isTrue();
+        assertThat(accum.getPhysicalTablePathsInBatches()).doesNotContain(stalePath);
+        // The live path still has un-drained data and must not be removed.
+        assertThat(accum.getPhysicalTablePathsInBatches()).contains(DATA1_PHYSICAL_TABLE_PATH);
+    }
+
+    @Test
+    void testRemoveStalePathReturnsFalseWhenDequeNonEmpty() throws Exception {
+        IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        RecordAccumulator accum = createTestRecordAccumulator(4 * 1024, 64 * 1024);
+
+        // Append a record but do NOT drain — deque is non-empty.
+        accum.append(createRecord(row), writeCallback, cluster, 0, false);
+        assertThat(accum.getPhysicalTablePathsInBatches()).contains(DATA1_PHYSICAL_TABLE_PATH);
+
+        // Mark stale and attempt removal while there is still pending data.
+        accum.markPathsAsStale(Collections.singleton(DATA1_PHYSICAL_TABLE_PATH));
+        boolean removed = accum.removeStalePathIfEmpty(DATA1_PHYSICAL_TABLE_PATH);
+
+        assertThat(removed).isFalse();
+        // Path must still be present because data is pending.
+        assertThat(accum.getPhysicalTablePathsInBatches()).contains(DATA1_PHYSICAL_TABLE_PATH);
     }
 
     @Test

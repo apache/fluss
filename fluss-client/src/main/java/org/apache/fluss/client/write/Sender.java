@@ -231,6 +231,11 @@ public class Sender implements Runnable {
                     readyCheckResult.unknownLeaderTables);
         }
 
+        // Clean up stale physical table path entries from the accumulator on every cycle.
+        // Dropped partitions will no longer appear in the cluster's bucket locations; any
+        // writeBatches entry whose deques are all empty can be safely removed.
+        cleanupStaleWriteBatches(metadataUpdater.getCluster());
+
         Set<Integer> readyNodes = readyCheckResult.readyNodes;
         if (readyNodes.isEmpty()) {
             // TODO The method sendWriteData is in a busy loop. If there is no data continuously, it
@@ -253,6 +258,37 @@ public class Sender implements Runnable {
 
             // move metrics update to the end to make sure the batches has been built.
             updateWriterMetrics(batches);
+        }
+    }
+
+    /**
+     * Mark physical table paths that no longer appear in the cluster as stale, then try to remove
+     * any stale path whose deques have been fully drained.
+     *
+     * <p>Marking prevents new appends to dropped partitions. Removal is deferred until all
+     * in-flight batches for a path have been drained, so no data is silently lost.
+     */
+    private void cleanupStaleWriteBatches(Cluster cluster) {
+        Set<PhysicalTablePath> clusterPaths = cluster.getBucketLocationsByPath().keySet();
+        Set<PhysicalTablePath> newStalePaths = new HashSet<>();
+        for (PhysicalTablePath path : accumulator.getPhysicalTablePathsInBatches()) {
+            if (!clusterPaths.contains(path)) {
+                newStalePaths.add(path);
+            }
+        }
+        if (!newStalePaths.isEmpty()) {
+            LOG.debug(
+                    "Marking {} stale physical table path(s) from write batches: {}",
+                    newStalePaths.size(),
+                    newStalePaths);
+            accumulator.markPathsAsStale(newStalePaths);
+        }
+
+        // Try to remove every path that has been marked stale and is now fully drained.
+        for (PhysicalTablePath path : accumulator.getPhysicalTablePathsInBatches()) {
+            if (!clusterPaths.contains(path)) {
+                accumulator.removeStalePathIfEmpty(path);
+            }
         }
     }
 
