@@ -30,12 +30,15 @@ import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.server.kv.rowmerger.AggregateRowMerger;
 import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldHllSketchAgg;
+import org.apache.fluss.server.kv.rowmerger.aggregate.functions.FieldKllDoubleSketchAgg;
 import org.apache.fluss.server.utils.RoaringBitmapUtils;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.datasketches.hll.HllSketch;
+import org.apache.datasketches.kll.KllDoublesSketch;
+import org.apache.datasketches.memory.Memory;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -854,6 +857,74 @@ class FieldAggregatorParameterizedTest {
         assertThatThrownBy(() -> aggregator.agg(sketch.toCompactByteArray(), new byte[] {1, 2, 3}))
                 .isInstanceOf(RuntimeException.class)
                 .hasMessageContaining("Unable to deserialize or merge HLL sketch bytes");
+    }
+
+    @Test
+    void testKllDoubleSketchAggregation() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("value", DataTypes.BYTES(), AggFunctions.KLL_DOUBLE_SKETCH())
+                        .primaryKey("id")
+                        .build();
+
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(schema, tableConfig);
+
+        KllDoublesSketch sketch1 = KllDoublesSketch.newHeapInstance();
+        sketch1.update(1.0);
+        sketch1.update(2.0);
+        KllDoublesSketch sketch2 = KllDoublesSketch.newHeapInstance();
+        sketch2.update(3.0);
+        sketch2.update(4.0);
+
+        BinaryRow row1 = compactedRow(schema.getRowType(), new Object[] {1, sketch1.toByteArray()});
+        BinaryRow row2 = compactedRow(schema.getRowType(), new Object[] {1, sketch2.toByteArray()});
+
+        BinaryValue merged = merger.merge(toBinaryValue(row1), toBinaryValue(row2));
+
+        KllDoublesSketch mergedSketch =
+                KllDoublesSketch.heapify(Memory.wrap(merged.row.getBytes(1)));
+        assertThat(mergedSketch.getN()).isEqualTo(4);
+        assertThat(mergedSketch.getMinItem()).isEqualTo(1.0);
+        assertThat(mergedSketch.getMaxItem()).isEqualTo(4.0);
+        assertThat(mergedSketch.getQuantile(0.5)).isBetween(2.0, 3.0);
+    }
+
+    @Test
+    void testKllDoubleSketchAggregationWithNull() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("value", DataTypes.BYTES(), AggFunctions.KLL_DOUBLE_SKETCH())
+                        .primaryKey("id")
+                        .build();
+
+        TableConfig tableConfig = new TableConfig(new Configuration());
+        AggregateRowMerger merger = createMerger(schema, tableConfig);
+
+        KllDoublesSketch sketch = KllDoublesSketch.newHeapInstance();
+        sketch.update(42.0);
+        byte[] sketchBytes = sketch.toByteArray();
+
+        BinaryRow row1 = compactedRow(schema.getRowType(), new Object[] {1, sketchBytes});
+        BinaryRow row2 = compactedRow(schema.getRowType(), new Object[] {1, null});
+
+        BinaryValue merged = merger.merge(toBinaryValue(row1), toBinaryValue(row2));
+
+        assertThat(merged.row.getBytes(1)).isEqualTo(sketchBytes);
+    }
+
+    @Test
+    void testKllDoubleSketchAggregationWithInvalidPayload() {
+        FieldKllDoubleSketchAgg aggregator = new FieldKllDoubleSketchAgg(DataTypes.BYTES());
+
+        KllDoublesSketch sketch = KllDoublesSketch.newHeapInstance();
+        sketch.update(1.0);
+
+        assertThatThrownBy(() -> aggregator.agg(sketch.toByteArray(), new byte[] {1, 2, 3}))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining("Unable to deserialize or merge KLL double sketch bytes");
     }
 
     // ===================================================================================
