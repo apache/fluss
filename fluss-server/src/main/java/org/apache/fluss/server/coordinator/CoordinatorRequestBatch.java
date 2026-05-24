@@ -518,6 +518,7 @@ public class CoordinatorRequestBatch {
                                     "Failed to send stop replica request to tablet server {}.",
                                     serverId,
                                     throwable);
+
                             // For deletion replicas, surface as StopReplicaSendFailedEvent so
                             // they can be marked ineligible. Non-delete stop replica failures
                             // are best-effort and can be ignored.

@@ -1117,6 +1117,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         }
 
         coordinatorContext.queueTableDeletion(Collections.singleton(tableId));
+
         // Route through resumeDeletions so that the eligibility check applies uniformly.
         tableManager.resumeDeletions();
         if (dropTableEvent.isAutoPartitionTable()) {
@@ -1164,6 +1165,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         }
 
         coordinatorContext.queuePartitionDeletion(Collections.singleton(tablePartition));
+
         // Route through resumeDeletions so that the eligibility check applies uniformly.
         tableManager.resumeDeletions();
         autoPartitionManager.removePartition(tableId, dropPartitionEvent.getPartitionName());

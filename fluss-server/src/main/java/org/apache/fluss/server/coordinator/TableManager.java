@@ -477,6 +477,9 @@ public class TableManager {
 
     private boolean isEligibleForDeletion(long tableId) {
         // Three-guard check: queued, no replica in Started, not in ineligible set.
+        //   1. queued for deletion,
+        //   2. no replica currently in ReplicaDeletionStarted,
+        //   3. table not in ineligible set (e.g., owning TS still down).
         return coordinatorContext.isTableQueuedForDeletion(tableId)
                 && !coordinatorContext.isAnyReplicaInState(
                         tableId, ReplicaState.ReplicaDeletionStarted)
