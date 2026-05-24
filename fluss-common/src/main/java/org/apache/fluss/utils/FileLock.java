@@ -22,6 +22,7 @@ import org.apache.fluss.annotation.Internal;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.channels.OverlappingFileLockException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
@@ -70,8 +71,14 @@ public class FileLock {
      * Try to acquire a lock on the locking file. This method immediately returns whenever the lock
      * is acquired or not.
      *
+     * <p>Returns {@code false} when the lock is already held (either by another process via {@link
+     * java.nio.channels.FileChannel#tryLock()} returning {@code null}, or by another lock in the
+     * same JVM signalled by {@link OverlappingFileLockException}). Genuine I/O failures are
+     * propagated to the caller instead of being silently swallowed, so they are not mistaken for a
+     * contended lock.
+     *
      * @return True if successfully acquired the lock
-     * @throws IOException If the file path is invalid
+     * @throws IOException If an I/O error occurs while acquiring the lock
      */
     public boolean tryLock() throws IOException {
         if (outputStream == null) {
@@ -79,8 +86,17 @@ public class FileLock {
         }
         try {
             lock = outputStream.getChannel().tryLock();
-        } catch (Exception e) {
+        } catch (OverlappingFileLockException e) {
+            // Another lock in the same JVM already holds (or overlaps) this region; treat it as
+            // an unsuccessful attempt rather than an error, mirroring the FileChannel#tryLock
+            // contract for inter-process contention.
             return false;
+        } catch (IOException | RuntimeException e) {
+            // The FileOutputStream was opened by init() above; if acquiring the lock fails for
+            // any reason other than contention we must release it here, otherwise the underlying
+            // file descriptor leaks for the lifetime of the JVM.
+            closeOutputStreamQuietly();
+            throw e;
         }
 
         return lock != null;
@@ -106,18 +122,39 @@ public class FileLock {
      */
     public void unlockAndDestroy() throws IOException {
         try {
-            unlock();
-            if (lock != null) {
-                lock.channel().close();
-                lock = null;
+            try {
+                unlock();
+            } finally {
+                try {
+                    if (lock != null) {
+                        lock.channel().close();
+                        lock = null;
+                    }
+                } finally {
+                    // Always close the output stream, even when releasing or closing the channel
+                    // above threw; otherwise the file descriptor would leak whenever cleanup
+                    // failed partway through.
+                    if (outputStream != null) {
+                        outputStream.close();
+                        outputStream = null;
+                    }
+                }
             }
-            if (outputStream != null) {
-                outputStream.close();
-                outputStream = null;
-            }
-
         } finally {
             this.file.delete();
+        }
+    }
+
+    private void closeOutputStreamQuietly() {
+        if (outputStream == null) {
+            return;
+        }
+        try {
+            outputStream.close();
+        } catch (IOException ignored) {
+            // Best-effort cleanup; the original failure will be propagated by the caller.
+        } finally {
+            outputStream = null;
         }
     }
 
