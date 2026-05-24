@@ -267,9 +267,7 @@ public class StopReplicaITCase {
 
         FLUSS_CLUSTER_EXTENSION.startTabletServer(offlineServerId);
         FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(3);
-
-        // Both the log directory (with data files) and the partition parent
-        // directory should be cleaned at startup via the PartitionNotExistException handler.
+        
         retry(
                 Duration.ofMinutes(1),
                 () -> {
