@@ -100,6 +100,15 @@ public class CoordinatorContext {
     private final Set<TablePartition> partitionsToBeDeleted = new HashSet<>();
 
     /**
+     * Tables/partitions temporarily ineligible for deletion retry. Marked when a replica's hosting
+     * TabletServer is offline or stopReplica RPC failed; cleared when the TabletServer reconnects.
+     * The value stores the reason for diagnostic logging.
+     */
+    private final Map<Long, String> tablesIneligibleForDeletion = new HashMap<>();
+
+    private final Map<TablePartition, String> partitionsIneligibleForDeletion = new HashMap<>();
+
+    /**
      * A mapping from tablet server to offline buckets. When the leader replica of a table bucket
      * become offline, we'll put the entry tablet_server_id -> table_bucket to this map so that we
      * won't elect the tablet server as the leader again in re-election. We'll remove the key
@@ -751,8 +760,63 @@ public class CoordinatorContext {
         partitionsToBeDeleted.addAll(tablePartitions);
     }
 
+    /** Mark a table as ineligible for deletion (only effective if queued for deletion). */
+    public void markTableIneligibleForDeletion(long tableId, String reason) {
+        if (tablesToBeDeleted.contains(tableId)) {
+            String prev = tablesIneligibleForDeletion.put(tableId, reason);
+            if (prev == null) {
+                LOG.info("Marking table {} ineligible for deletion. Reason: {}", tableId, reason);
+            }
+        }
+    }
+
+    public void markPartitionIneligibleForDeletion(TablePartition tablePartition, String reason) {
+        if (partitionsToBeDeleted.contains(tablePartition)) {
+            String prev = partitionsIneligibleForDeletion.put(tablePartition, reason);
+            if (prev == null) {
+                LOG.info(
+                        "Marking partition {} ineligible for deletion. Reason: {}",
+                        tablePartition,
+                        reason);
+            }
+        }
+    }
+
+    /** Remove the ineligible mark, allowing deletion to be retried. */
+    public void markTableEligibleForDeletion(long tableId) {
+        tablesIneligibleForDeletion.remove(tableId);
+    }
+
+    public void markPartitionEligibleForDeletion(TablePartition tablePartition) {
+        partitionsIneligibleForDeletion.remove(tablePartition);
+    }
+
+    public boolean isTableIneligibleForDeletion(long tableId) {
+        return tablesIneligibleForDeletion.containsKey(tableId);
+    }
+
+    public boolean isPartitionIneligibleForDeletion(TablePartition tablePartition) {
+        return partitionsIneligibleForDeletion.containsKey(tablePartition);
+    }
+
+    public Set<TableBucketReplica> getReplicasInState(long tableId, ReplicaState state) {
+        return getAllReplicasForTable(tableId).stream()
+                .filter(r -> getReplicaState(r) == state)
+                .collect(Collectors.toSet());
+    }
+
+    public Set<TableBucketReplica> getReplicasInState(
+            TablePartition tablePartition, ReplicaState state) {
+        return getAllReplicasForPartition(
+                        tablePartition.getTableId(), tablePartition.getPartitionId())
+                .stream()
+                .filter(r -> getReplicaState(r) == state)
+                .collect(Collectors.toSet());
+    }
+
     public void removeTable(long tableId) {
         tablesToBeDeleted.remove(tableId);
+        tablesIneligibleForDeletion.remove(tableId);
         Map<Integer, List<Integer>> assignment = tableAssignments.remove(tableId);
         if (assignment != null) {
             Set<TableBucket> removedBuckets = new HashSet<>();
@@ -776,6 +840,7 @@ public class CoordinatorContext {
 
     public void removePartition(TablePartition tablePartition) {
         partitionsToBeDeleted.remove(tablePartition);
+        partitionsIneligibleForDeletion.remove(tablePartition);
         Map<Integer, List<Integer>> assignment = partitionAssignments.remove(tablePartition);
         if (assignment != null) {
             Set<TableBucket> removedBuckets = new HashSet<>();
@@ -839,6 +904,9 @@ public class CoordinatorContext {
 
     public void resetContext() {
         tablesToBeDeleted.clear();
+        partitionsToBeDeleted.clear();
+        tablesIneligibleForDeletion.clear();
+        partitionsIneligibleForDeletion.clear();
         clearTablesState();
         liveTabletServers.clear();
         liveCoordinatorServers.clear();

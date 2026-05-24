@@ -23,6 +23,7 @@ import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
@@ -33,9 +34,12 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.testutils.RpcMessageTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -47,6 +51,8 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
@@ -202,6 +208,7 @@ public class StopReplicaITCase {
         FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
 
         TablePath tablePath = TablePath.of("test_db_stop_replica", "test_orphan_partition");
+
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
                         .schema(
@@ -217,6 +224,7 @@ public class StopReplicaITCase {
                 RpcMessageTestUtils.createTable(
                         FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
 
+        // Create one partition explicitly (auto-partition is disabled for this descriptor).
         String partitionName = "p1";
         long partitionId =
                 RpcMessageTestUtils.createPartition(

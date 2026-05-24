@@ -60,6 +60,7 @@ import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.NewReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OfflineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
+import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionIneligible;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionStarted;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -302,6 +303,52 @@ class ReplicaStateMachineTest {
                                 Collections.emptyList(),
                                 0,
                                 3));
+    }
+
+    @Test
+    void testReplicaDeletionIneligibleTransitions() {
+        CoordinatorContext coordinatorContext = new CoordinatorContext(zkEpoch);
+        coordinatorContext.setLiveTabletServers(
+                CoordinatorTestUtils.createServers(Arrays.asList(0, 1)));
+        ReplicaStateMachine replicaStateMachine = createReplicaStateMachine(coordinatorContext);
+
+        long tableId = 1;
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        TableBucketReplica replica = new TableBucketReplica(tableBucket, 0);
+
+        // pre-seed: directly put replica into ReplicaDeletionStarted; we are exercising
+        // the state machine's transition validation, not how the replica got into Started.
+        coordinatorContext.putReplicaState(replica, ReplicaDeletionStarted);
+
+        // ReplicaDeletionStarted -> ReplicaDeletionIneligible should be a valid transition
+        replicaStateMachine.handleStateChanges(
+                Collections.singletonList(replica), ReplicaDeletionIneligible);
+        assertThat(coordinatorContext.getReplicaState(replica))
+                .isEqualTo(ReplicaDeletionIneligible);
+
+        // ReplicaDeletionIneligible -> OfflineReplica should be a valid transition
+        replicaStateMachine.handleStateChanges(Collections.singletonList(replica), OfflineReplica);
+        assertThat(coordinatorContext.getReplicaState(replica)).isEqualTo(OfflineReplica);
+    }
+
+    @Test
+    void testIneligibleToOnlineTransitionIsValid() {
+        CoordinatorContext coordinatorContext = new CoordinatorContext(zkEpoch);
+        coordinatorContext.setLiveTabletServers(
+                CoordinatorTestUtils.createServers(Arrays.asList(0, 1)));
+        ReplicaStateMachine replicaStateMachine = createReplicaStateMachine(coordinatorContext);
+
+        long tableId = 1;
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        TableBucketReplica replica = new TableBucketReplica(tableBucket, 0);
+
+        // pre-seed Ineligible directly: we want to verify checkValidReplicaStateChange
+        // accepts Ineligible -> OnlineReplica.
+        coordinatorContext.putReplicaState(replica, ReplicaDeletionIneligible);
+
+        replicaStateMachine.handleStateChanges(Collections.singletonList(replica), OnlineReplica);
+
+        assertThat(coordinatorContext.getReplicaState(replica)).isEqualTo(OnlineReplica);
     }
 
     private void toReplicaDeletionStartedState(

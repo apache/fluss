@@ -39,6 +39,7 @@ import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
+import org.apache.fluss.server.coordinator.event.StopReplicaSendFailedEvent;
 import org.apache.fluss.server.entity.DeleteReplicaResultForBucket;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.metadata.BucketMetadata;
@@ -468,6 +469,7 @@ public class CoordinatorRequestBatch {
     }
 
     private void sendStopRequest(int coordinatorEpoch) {
+        Set<Integer> liveServers = coordinatorContext.liveTabletServerSet();
         for (Map.Entry<Integer, Map<TableBucket, PbStopReplicaReqForBucket>> stopReplciaEntry :
                 stopReplicaRequestMap.entrySet()) {
             // send request for each tablet server
@@ -487,18 +489,48 @@ public class CoordinatorRequestBatch {
                             .map(t -> toTableBucket(t.getTableBucket()))
                             .collect(Collectors.toSet());
 
+            // If the TS is not live, the channel manager has no gateway and would silently
+            // drop the request. Surface the failure so deletion replicas can be marked
+            // ineligible instead of stuck in ReplicaDeletionStarted.
+            if (!liveServers.contains(serverId)) {
+                if (!deletedReplicaBuckets.isEmpty()) {
+                    LOG.warn(
+                            "Tablet server {} is not in the live set when sending stop replica "
+                                    + "request; surfacing as StopReplicaSendFailedEvent for {} "
+                                    + "deletion replica(s).",
+                            serverId,
+                            deletedReplicaBuckets.size());
+                    Set<TableBucketReplica> failedReplicas =
+                            deletedReplicaBuckets.stream()
+                                    .map(bucket -> new TableBucketReplica(bucket, serverId))
+                                    .collect(Collectors.toSet());
+                    eventManager.put(new StopReplicaSendFailedEvent(failedReplicas));
+                }
+                continue;
+            }
+
             coordinatorChannelManager.sendStopBucketReplicaRequest(
                     serverId,
                     stopReplicaRequest,
                     (response, throwable) -> {
                         if (throwable != null) {
-                            // todo: in FLUSS-55886145, we will introduce a sender thread to send
-                            // the request.
-                            // in here, we just ignore the error.
                             LOG.warn(
                                     "Failed to send stop replica request to tablet server {}.",
                                     serverId,
                                     throwable);
+                            // For deletion replicas, surface as StopReplicaSendFailedEvent so
+                            // they can be marked ineligible. Non-delete stop replica failures
+                            // are best-effort and can be ignored.
+                            if (!deletedReplicaBuckets.isEmpty()) {
+                                Set<TableBucketReplica> failedReplicas =
+                                        deletedReplicaBuckets.stream()
+                                                .map(
+                                                        bucket ->
+                                                                new TableBucketReplica(
+                                                                        bucket, serverId))
+                                                .collect(Collectors.toSet());
+                                eventManager.put(new StopReplicaSendFailedEvent(failedReplicas));
+                            }
                             return;
                         }
                         // handle the response
