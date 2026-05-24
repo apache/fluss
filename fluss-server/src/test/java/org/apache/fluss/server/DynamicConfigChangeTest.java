@@ -636,7 +636,7 @@ public class DynamicConfigChangeTest {
                                                             "0.0",
                                                             AlterConfigOpType.SET))))
                     .isInstanceOf(ConfigException.class)
-                    .hasMessageContaining("must be within (0.0, 1.0]");
+                    .hasMessageContaining("must be within (0.1, 1.0]");
 
             // Verify the ratio was NOT changed
             assertThat(localDiskManager.getDiskWriteLimitRatio()).isEqualTo(0.85);

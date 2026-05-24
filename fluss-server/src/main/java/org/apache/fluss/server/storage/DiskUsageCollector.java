@@ -59,7 +59,8 @@ public final class DiskUsageCollector {
      * usage across all distinct {@link FileStore}s. Returns {@code 0.0} when no data directory is
      * configured or every reachable file store reports a non-positive total space.
      *
-     * <p>Individual directories that fail (e.g. deleted at runtime) are skipped with a warning so
+     * <p>Individual directories that fail (e.g. deleted at runtime, or whose {@link FileStore}
+     * throws during {@code getTotalSpace}/{@code getUsableSpace}) are skipped with a warning so
      * that one unhealthy directory does not prevent monitoring of the remaining disks. An {@link
      * IOException} is thrown only when <b>all</b> directories fail.
      */
@@ -68,23 +69,21 @@ public final class DiskUsageCollector {
         Set<FileStore> counted = new HashSet<>();
         int failures = 0;
         for (File dir : dataDirs) {
-            FileStore fs;
             try {
-                fs = Files.getFileStore(dir.toPath());
+                FileStore fs = Files.getFileStore(dir.toPath());
+                if (counted.add(fs)) {
+                    long total = fs.getTotalSpace();
+                    if (total <= 0L) {
+                        continue;
+                    }
+                    double ratio = (double) (total - fs.getUsableSpace()) / total;
+                    if (ratio > maxRatio) {
+                        maxRatio = ratio;
+                    }
+                }
             } catch (IOException e) {
-                LOG.warn("Failed to get FileStore for data directory {}; skipping.", dir, e);
+                LOG.warn("Failed to stat FileStore for data directory {}; skipping.", dir, e);
                 failures++;
-                continue;
-            }
-            if (counted.add(fs)) {
-                long total = fs.getTotalSpace();
-                if (total <= 0L) {
-                    continue;
-                }
-                double ratio = (double) (total - fs.getUsableSpace()) / total;
-                if (ratio > maxRatio) {
-                    maxRatio = ratio;
-                }
             }
         }
         if (failures > 0 && failures == dataDirs.size()) {

@@ -473,13 +473,7 @@ public final class LocalDiskManager implements Closeable, ServerReconfigurable {
      * first scheduled tick.
      */
     public void startDiskUsageMonitor(Scheduler scheduler) {
-        // initial sample to avoid an open window before the first scheduled run
-        diskUsageMonitor.runOnce();
-        scheduler.schedule(
-                "disk-usage-monitor",
-                diskUsageMonitor::runOnce,
-                diskCheckIntervalMs,
-                diskCheckIntervalMs);
+        scheduler.schedule("disk-usage-monitor", diskUsageMonitor::runOnce, 0, diskCheckIntervalMs);
     }
 
     /**
@@ -527,10 +521,10 @@ public final class LocalDiskManager implements Closeable, ServerReconfigurable {
     @Override
     public void validate(Configuration newConfig) throws ConfigException {
         double newRatio = newConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO);
-        if (newRatio <= 0.0 || newRatio > 1.0) {
+        if (newRatio <= 0.1 || newRatio > 1.0) {
             throw new ConfigException(
                     String.format(
-                            "Invalid %s: must be within (0.0, 1.0], but was %s",
+                            "Invalid %s: must be within (0.1, 1.0], but was %s",
                             ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(), newRatio));
         }
     }

@@ -343,7 +343,7 @@ public class ConfigOptions {
                             "Reject writes when the tablet server data disk usage exceeds this ratio. "
                                     + "Writes resume after the usage drops below (ratio - 0.10). "
                                     + "Set to 1.0 to disable the disk-usage protection entirely. "
-                                    + "The valid range is (0.0, 1.0].");
+                                    + "The valid range is (0.1, 1.0].");
 
     public static final ConfigOption<Duration> SERVER_DATA_DISK_CHECK_INTERVAL =
             key("server.data-disk.check-interval")
