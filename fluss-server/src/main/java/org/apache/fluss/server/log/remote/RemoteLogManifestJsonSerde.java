@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.log.remote;
 
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.remote.RemoteLogSegment;
@@ -50,6 +51,7 @@ public class RemoteLogManifestJsonSerde
     private static final String END_OFFSET_FIELD = "end_offset";
     private static final String MAX_TIMESTAMP_FIELD = "max_timestamp";
     private static final String SEGMENT_SIZE_IN_BYTES_FIELD = "size_in_bytes";
+    private static final String REMOTE_LOG_DIR_FIELD = "remote_log_dir";
     private static final int SNAPSHOT_VERSION = 1;
 
     @Override
@@ -85,9 +87,14 @@ public class RemoteLogManifestJsonSerde
             generator.writeNumberField(MAX_TIMESTAMP_FIELD, remoteLogSegment.maxTimestamp());
             generator.writeNumberField(
                     SEGMENT_SIZE_IN_BYTES_FIELD, remoteLogSegment.segmentSizeInBytes());
+            generator.writeStringField(
+                    REMOTE_LOG_DIR_FIELD, remoteLogSegment.remoteLogDir().toString());
             generator.writeEndObject();
         }
         generator.writeEndArray();
+
+        generator.writeStringField(REMOTE_LOG_DIR_FIELD, manifest.getRemoteLogDir().toString());
+
         generator.writeEndObject();
     }
 
@@ -119,6 +126,11 @@ public class RemoteLogManifestJsonSerde
             long endOffset = entryJson.get(END_OFFSET_FIELD).asLong();
             long maxTimestamp = entryJson.get(MAX_TIMESTAMP_FIELD).asLong();
             int segmentSizeInBytes = entryJson.get(SEGMENT_SIZE_IN_BYTES_FIELD).asInt();
+            // backward compatibility for existing RemoteLogSegment which does not have remoteLogDir
+            FsPath remoteLogDir = null;
+            if (entryJson.has(REMOTE_LOG_DIR_FIELD)) {
+                remoteLogDir = new FsPath(entryJson.get(REMOTE_LOG_DIR_FIELD).asText());
+            }
             snapshotEntries.add(
                     RemoteLogSegment.Builder.builder()
                             .physicalTablePath(physicalTablePath)
@@ -128,10 +140,17 @@ public class RemoteLogManifestJsonSerde
                             .remoteLogEndOffset(endOffset)
                             .maxTimestamp(maxTimestamp)
                             .segmentSizeInBytes(segmentSizeInBytes)
+                            .remoteLogDir(remoteLogDir)
                             .build());
         }
 
-        return new RemoteLogManifest(physicalTablePath, tableBucket, snapshotEntries);
+        // backward compatibility for existing RemoteLogManifest which does not have remoteLogDir
+        FsPath remoteLogDir = null;
+        if (node.has(REMOTE_LOG_DIR_FIELD)) {
+            remoteLogDir = new FsPath(node.get(REMOTE_LOG_DIR_FIELD).asText());
+        }
+
+        return new RemoteLogManifest(physicalTablePath, tableBucket, snapshotEntries, remoteLogDir);
     }
 
     public static RemoteLogManifest fromJson(byte[] json) {
