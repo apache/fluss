@@ -427,6 +427,19 @@ public class FlussPaths {
     }
 
     /**
+     * Returns the remote root directory path for storing log files.
+     *
+     * <p>The path contract:
+     *
+     * <pre>
+     * {$remote.data.dir}/log
+     * </pre>
+     */
+    public static FsPath remoteLogDir(String remoteDataDir) {
+        return new FsPath(remoteDataDir, REMOTE_LOG_DIR_NAME);
+    }
+
+    /**
      * Returns the remote directory path for storing log files for a log tablet.
      *
      * <p>The path contract:
@@ -590,6 +603,19 @@ public class FlussPaths {
      */
     public static FsPath remoteKvDir(Configuration conf) {
         return new FsPath(conf.get(ConfigOptions.REMOTE_DATA_DIR) + "/" + REMOTE_KV_DIR_NAME);
+    }
+
+    /**
+     * Returns the remote root directory path for storing kv snapshot files.
+     *
+     * <p>The path contract:
+     *
+     * <pre>
+     * {$remote.data.dir}/kv
+     * </pre>
+     */
+    public static FsPath remoteKvDir(String remoteDataDir) {
+        return new FsPath(remoteDataDir, REMOTE_KV_DIR_NAME);
     }
 
     /**
