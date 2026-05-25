@@ -18,6 +18,7 @@
 package org.apache.fluss.remote;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 
@@ -59,6 +60,8 @@ public class RemoteLogSegment {
 
     private final int segmentSizeInBytes;
 
+    private final FsPath remoteLogDir;
+
     private RemoteLogSegment(
             PhysicalTablePath physicalTablePath,
             TableBucket tableBucket,
@@ -68,7 +71,8 @@ public class RemoteLogSegment {
             @Nullable Long logicalStartOffset,
             @Nullable Long logicalEndOffset,
             long maxTimestamp,
-            int segmentSizeInBytes) {
+            int segmentSizeInBytes,
+            FsPath remoteLogDir) {
         this.physicalTablePath = checkNotNull(physicalTablePath);
         this.tableBucket = checkNotNull(tableBucket);
         this.remoteLogSegmentId = checkNotNull(remoteLogSegmentId);
@@ -107,6 +111,7 @@ public class RemoteLogSegment {
         }
         this.maxTimestamp = maxTimestamp;
         this.segmentSizeInBytes = segmentSizeInBytes;
+        this.remoteLogDir = remoteLogDir;
     }
 
     public PhysicalTablePath physicalTablePath() {
@@ -161,7 +166,8 @@ public class RemoteLogSegment {
                 logicalStartOffset,
                 logicalEndOffset,
                 maxTimestamp,
-                segmentSizeInBytes);
+                segmentSizeInBytes,
+                remoteLogDir);
     }
 
     public long maxTimestamp() {
@@ -170,6 +176,10 @@ public class RemoteLogSegment {
 
     public int segmentSizeInBytes() {
         return segmentSizeInBytes;
+    }
+
+    public FsPath remoteLogDir() {
+        return remoteLogDir;
     }
 
     @Override
@@ -189,7 +199,8 @@ public class RemoteLogSegment {
                 && maxTimestamp == that.maxTimestamp
                 && Objects.equals(remoteLogSegmentId, that.remoteLogSegmentId)
                 && Objects.equals(physicalTablePath, that.physicalTablePath)
-                && Objects.equals(tableBucket, that.tableBucket);
+                && Objects.equals(tableBucket, that.tableBucket)
+                && Objects.equals(remoteLogDir, that.remoteLogDir);
     }
 
     @Override
@@ -203,7 +214,8 @@ public class RemoteLogSegment {
                 logicalStartOffset,
                 logicalEndOffset,
                 maxTimestamp,
-                segmentSizeInBytes);
+                segmentSizeInBytes,
+                remoteLogDir);
     }
 
     @Override
@@ -227,6 +239,8 @@ public class RemoteLogSegment {
                 + maxTimestamp
                 + ", segmentSizeInBytes="
                 + segmentSizeInBytes
+                + ", remoteLogDir="
+                + remoteLogDir
                 + '}';
     }
 
@@ -241,6 +255,7 @@ public class RemoteLogSegment {
         private @Nullable Long logicalEndOffset;
         private long maxTimestamp;
         private int segmentSizeInBytes;
+        private FsPath remoteLogDir;
 
         public static Builder builder() {
             return new Builder();
@@ -291,6 +306,11 @@ public class RemoteLogSegment {
             return this;
         }
 
+        public Builder remoteLogDir(FsPath remoteLogDir) {
+            this.remoteLogDir = remoteLogDir;
+            return this;
+        }
+
         public RemoteLogSegment build() {
             return new RemoteLogSegment(
                     physicalTablePath,
@@ -301,7 +321,8 @@ public class RemoteLogSegment {
                     logicalStartOffset,
                     logicalEndOffset,
                     maxTimestamp,
-                    segmentSizeInBytes);
+                    segmentSizeInBytes,
+                    remoteLogDir);
         }
     }
 }

@@ -144,7 +144,8 @@ class DefaultRemoteLogStorageTest extends RemoteLogTestBase {
                 new RemoteLogManifest(
                         logTablet.getPhysicalTablePath(),
                         logTablet.getTableBucket(),
-                        remoteLogSegmentList));
+                        remoteLogSegmentList,
+                        FlussPaths.remoteLogDir(conf)));
         assertThat(remoteLogTablet.getIdToRemoteLogSegmentMap())
                 .hasSize(remoteLogSegmentList.size());
         RemoteLogManifest manifestSnapshot = remoteLogTablet.currentManifest();
@@ -188,13 +189,14 @@ class DefaultRemoteLogStorageTest extends RemoteLogTestBase {
         File remoteDirForBucket =
                 new File(
                         FlussPaths.remoteLogTabletDir(
-                                        remoteLogStorageManager.getRemoteLogDir(),
+                                        remoteLogSegment.remoteLogDir(),
                                         physicalTablePath,
                                         tableBucket)
                                 .toString());
         assertThat(remoteDirForBucket.exists()).isTrue();
 
-        remoteLogStorageManager.deleteTableBucket(physicalTablePath, tableBucket);
+        remoteLogStorageManager.deleteTableBucket(
+                remoteLogSegment.remoteLogDir(), physicalTablePath, tableBucket);
         assertThat(remoteDirForBucket.exists()).isFalse();
         assertThatThrownBy(
                         () ->
@@ -208,7 +210,7 @@ class DefaultRemoteLogStorageTest extends RemoteLogTestBase {
         return new File(
                 FlussPaths.remoteLogSegmentDir(
                                 FlussPaths.remoteLogTabletDir(
-                                        remoteLogStorageManager.getRemoteLogDir(),
+                                        remoteLogSegment.remoteLogDir(),
                                         remoteLogSegment.physicalTablePath(),
                                         remoteLogSegment.tableBucket()),
                                 remoteLogSegment.remoteLogSegmentId())

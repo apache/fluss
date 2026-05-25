@@ -47,7 +47,7 @@ class RemoteLogTabletOverlapTest {
         RemoteLogSegment shorter = segment(10L, 20L);
         RemoteLogManifest manifest =
                 legacyManifest(shorterFirst ? shorter : longer, shorterFirst ? longer : shorter);
-        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET);
+        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET, null);
         tablet.loadRemoteLogManifest(manifest);
 
         assertThat(tablet.relevantRemoteLogSegmentsForFetchV0(20L)).containsExactly(longer);
@@ -67,7 +67,7 @@ class RemoteLogTabletOverlapTest {
     @Test
     void testLoadLegacyManifestWithNestedSegment() {
         RemoteLogSegment longer = segment(10L, 40L);
-        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET);
+        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET, null);
         tablet.loadRemoteLogManifest(legacyManifest(longer, segment(20L, 30L)));
 
         assertThat(tablet.relevantRemoteLogSegmentsForFetchV0(35L)).containsExactly(longer);
@@ -77,7 +77,7 @@ class RemoteLogTabletOverlapTest {
     void testLogicalLookupUsesClippedRanges() {
         RemoteLogSegment first = segment(0L, 10L).withLogicalRange(0L, 5L);
         RemoteLogSegment second = segment(5L, 20L);
-        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET);
+        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET, null);
         tablet.loadRemoteLogManifest(
                 new RemoteLogManifest(TABLE_PATH, TABLE_BUCKET, Arrays.asList(first, second)));
 
@@ -91,7 +91,7 @@ class RemoteLogTabletOverlapTest {
     void testFetchV0StopsBeforePhysicalOverlap() {
         RemoteLogSegment first = segment(0L, 10L).withLogicalRange(0L, 5L);
         RemoteLogSegment second = segment(5L, 20L);
-        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET);
+        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET, null);
         tablet.loadRemoteLogManifest(
                 new RemoteLogManifest(TABLE_PATH, TABLE_BUCKET, Arrays.asList(first, second)));
 
@@ -103,7 +103,7 @@ class RemoteLogTabletOverlapTest {
     void testFetchV0ReturnsContiguousSegmentsTogether() {
         List<RemoteLogSegment> segments =
                 Arrays.asList(segment(0L, 10L), segment(10L, 20L), segment(20L, 30L));
-        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET);
+        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET, null);
         tablet.loadRemoteLogManifest(new RemoteLogManifest(TABLE_PATH, TABLE_BUCKET, segments));
 
         assertThat(tablet.relevantRemoteLogSegmentsForFetchV0(5L))
@@ -112,7 +112,7 @@ class RemoteLogTabletOverlapTest {
 
     @Test
     void testEmptyManifestKeepsCopyProgress() {
-        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET);
+        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET, null);
         tablet.loadRemoteLogManifest(
                 new RemoteLogManifest(TABLE_PATH, TABLE_BUCKET, Collections.emptyList(), 20L));
 
@@ -126,7 +126,7 @@ class RemoteLogTabletOverlapTest {
         RemoteLogSegment first = segment(0L, 20L);
         RemoteLogSegment second = segment(10L, 30L);
         RemoteLogSegment third = segment(25L, 40L);
-        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET);
+        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET, null);
         tablet.loadRemoteLogManifest(legacyManifest(third, first, second));
 
         RemoteLogSegment extension = segment(35L, 50L);
@@ -159,7 +159,7 @@ class RemoteLogTabletOverlapTest {
     void testLegacyManifestKeepsGapsUnreadable() {
         RemoteLogSegment first = segment(10L, 20L);
         RemoteLogSegment second = segment(30L, 40L);
-        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET);
+        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET, null);
         tablet.loadRemoteLogManifest(legacyManifest(second, first));
 
         assertThat(tablet.relevantRemoteLogSegmentsForFetchV0(9L)).isEmpty();
@@ -173,7 +173,7 @@ class RemoteLogTabletOverlapTest {
     void testLegacyTimestampLookupContinuesAfterNormalizedClippedEnd() {
         RemoteLogSegment first = segment(0L, 20L, 30L);
         RemoteLogSegment second = segment(10L, 30L, 40L);
-        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET);
+        RemoteLogTablet tablet = new RemoteLogTablet(TABLE_PATH, TABLE_BUCKET, null);
         tablet.loadRemoteLogManifest(legacyManifest(first, second));
 
         assertThat(tablet.findSegmentsByTimestamp(25L))
