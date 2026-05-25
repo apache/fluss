@@ -21,7 +21,6 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.ScannerMetricGroup;
-import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -126,7 +125,6 @@ public class LogFetcher implements Closeable {
             Configuration conf,
             MetadataUpdater metadataUpdater,
             ScannerMetricGroup scannerMetricGroup,
-            RemoteFileDownloader remoteFileDownloader,
             SchemaGetter schemaGetter) {
         this.tablePath = tableInfo.getTablePath();
         this.isPartitioned = tableInfo.isPartitioned();
@@ -163,8 +161,7 @@ public class LogFetcher implements Closeable {
         this.logFetchCollector =
                 new LogFetchCollector(tablePath, logScannerStatus, conf, metadataUpdater);
         this.scannerMetricGroup = scannerMetricGroup;
-        this.remoteLogDownloader =
-                new RemoteLogDownloader(tablePath, conf, remoteFileDownloader, scannerMetricGroup);
+        this.remoteLogDownloader = new RemoteLogDownloader(tablePath, conf, scannerMetricGroup);
         remoteLogDownloader.start();
     }
 
@@ -480,20 +477,35 @@ public class LogFetcher implements Closeable {
                 fetchOffset = segment.remoteLogStartOffset();
             }
             RemoteLogDownloadFuture downloadFuture =
-                    remoteLogDownloader.requestRemoteLog(remoteLogTabletDir, segment);
-            RemotePendingFetch pendingFetch =
-                    new RemotePendingFetch(
-                            segment,
-                            downloadFuture,
-                            posInLogSegment,
-                            fetchOffset,
-                            highWatermark,
-                            remoteReadContext,
-                            logScannerStatus,
-                            isCheckCrcs);
-            logFetchBuffer.pend(pendingFetch);
-            downloadFuture.onComplete(() -> logFetchBuffer.tryComplete(segment.tableBucket()));
+                    remoteLogDownloader.requestRemoteLog(
+                            remoteLogTabletDir, segment, posInLogSegment);
+            pendRemoteChunkFetch(segment, downloadFuture, fetchOffset, highWatermark);
         }
+    }
+
+    /**
+     * Registers a pending fetch for a single chunk and sets up the callback chain so that
+     * subsequent chunks of the same segment are automatically pended.
+     */
+    private void pendRemoteChunkFetch(
+            RemoteLogSegment segment,
+            RemoteLogDownloadFuture downloadFuture,
+            long fetchOffset,
+            long highWatermark) {
+        downloadFuture.setNextChunkCallback(
+                nextFuture ->
+                        pendRemoteChunkFetch(segment, nextFuture, fetchOffset, highWatermark));
+        RemotePendingFetch pendingFetch =
+                new RemotePendingFetch(
+                        segment,
+                        downloadFuture,
+                        fetchOffset,
+                        highWatermark,
+                        remoteReadContext,
+                        logScannerStatus,
+                        isCheckCrcs);
+        logFetchBuffer.pend(pendingFetch);
+        downloadFuture.onComplete(() -> logFetchBuffer.tryComplete(segment.tableBucket()));
     }
 
     @VisibleForTesting

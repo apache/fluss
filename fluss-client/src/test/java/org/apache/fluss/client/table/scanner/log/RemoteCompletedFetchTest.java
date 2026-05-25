@@ -18,44 +18,38 @@
 package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.client.table.scanner.ScanRecord;
-import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.LogFormat;
-import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.ChangeType;
-import org.apache.fluss.record.FileLogRecords;
 import org.apache.fluss.record.LogRecordReadContext;
+import org.apache.fluss.record.LogRecords;
+import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.TestingSchemaGetter;
-import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataTypes;
-import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.Projection;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
-import java.io.File;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static org.apache.fluss.record.TestData.DATA2;
-import static org.apache.fluss.record.TestData.DATA2_PHYSICAL_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA2_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA2_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_ID;
@@ -63,15 +57,13 @@ import static org.apache.fluss.record.TestData.DATA2_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
-import static org.apache.fluss.testutils.DataTestUtils.genLogFile;
-import static org.apache.fluss.utils.FlussPaths.remoteLogSegmentDir;
+import static org.apache.fluss.testutils.DataTestUtils.createRecordsWithoutBaseLogOffset;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link org.apache.fluss.client.table.scanner.log.RemoteCompletedFetch}. */
 class RemoteCompletedFetchTest {
     private LogScannerStatus logScannerStatus;
     private LogRecordReadContext remoteReadContext;
-    private @TempDir File tempDir;
     private TableInfo tableInfo;
     private SchemaGetter schemaGetter;
 
@@ -103,13 +95,11 @@ class RemoteCompletedFetchTest {
         long fetchOffset = 0L;
         TableBucket tableBucket = new TableBucket(DATA2_TABLE_ID, 0);
         AtomicBoolean recycleCalled = new AtomicBoolean(false);
-        FileLogRecords fileLogRecords =
-                createFileLogRecords(
-                        tableBucket, DATA2_PHYSICAL_TABLE_PATH, DATA2, LogFormat.ARROW);
+        MemoryLogRecords memoryLogRecords = createMemoryLogRecords(DATA2, LogFormat.ARROW);
         RemoteCompletedFetch completedFetch =
                 makeCompletedFetch(
                         tableBucket,
-                        fileLogRecords,
+                        memoryLogRecords,
                         fetchOffset,
                         null,
                         () -> recycleCalled.set(true));
@@ -122,9 +112,7 @@ class RemoteCompletedFetchTest {
         scanRecords = completedFetch.fetchRecords(8);
         assertThat(scanRecords.size()).isEqualTo(2);
         assertThat(scanRecords.get(0).logOffset()).isEqualTo(8L);
-        // when read finish, the file channel should be closed.
-        assertThat(fileLogRecords.channel().isOpen()).isFalse();
-        // and recycle should be called.
+        // recycle should be called when read finishes.
         assertThat(recycleCalled.get()).isTrue();
 
         // no more records can be read
@@ -137,15 +125,10 @@ class RemoteCompletedFetchTest {
         long fetchOffset = 0L;
         TableBucket tb = new TableBucket(DATA2_TABLE_ID, (long) 0, 0);
         AtomicBoolean recycleCalled = new AtomicBoolean(false);
-        FileLogRecords fileLogRecords =
-                createFileLogRecords(
-                        tb,
-                        PhysicalTablePath.of(DATA2_TABLE_PATH, "20240904"),
-                        DATA2,
-                        LogFormat.ARROW);
+        MemoryLogRecords memoryLogRecords = createMemoryLogRecords(DATA2, LogFormat.ARROW);
         RemoteCompletedFetch completedFetch =
                 makeCompletedFetch(
-                        tb, fileLogRecords, fetchOffset, null, () -> recycleCalled.set(true));
+                        tb, memoryLogRecords, fetchOffset, null, () -> recycleCalled.set(true));
 
         List<ScanRecord> scanRecords = completedFetch.fetchRecords(8);
         assertThat(scanRecords.size()).isEqualTo(8);
@@ -155,9 +138,7 @@ class RemoteCompletedFetchTest {
         scanRecords = completedFetch.fetchRecords(8);
         assertThat(scanRecords.size()).isEqualTo(2);
         assertThat(scanRecords.get(0).logOffset()).isEqualTo(8L);
-        // when read finish, the file channel should be closed.
-        assertThat(fileLogRecords.channel().isOpen()).isFalse();
-        // and recycle should be called.
+        // recycle should be called when read finishes.
         assertThat(recycleCalled.get()).isTrue();
 
         // no more records can be read
@@ -169,11 +150,9 @@ class RemoteCompletedFetchTest {
     void testNegativeFetchCount() throws Exception {
         long fetchOffset = 0L;
         TableBucket tableBucket = new TableBucket(DATA2_TABLE_ID, 0);
-        FileLogRecords fileLogRecords =
-                createFileLogRecords(
-                        tableBucket, DATA2_PHYSICAL_TABLE_PATH, DATA2, LogFormat.ARROW);
+        MemoryLogRecords memoryLogRecords = createMemoryLogRecords(DATA2, LogFormat.ARROW);
         RemoteCompletedFetch completedFetch =
-                makeCompletedFetch(tableBucket, fileLogRecords, fetchOffset, null);
+                makeCompletedFetch(tableBucket, memoryLogRecords, fetchOffset, null);
 
         List<ScanRecord> scanRecords = completedFetch.fetchRecords(-10);
         assertThat(scanRecords.size()).isEqualTo(0);
@@ -183,14 +162,10 @@ class RemoteCompletedFetchTest {
     void testNoRecordsInFetch() throws Exception {
         long fetchOffset = 0L;
         TableBucket tableBucket = new TableBucket(DATA2_TABLE_ID, 0);
-        FileLogRecords fileLogRecords =
-                createFileLogRecords(
-                        tableBucket,
-                        DATA2_PHYSICAL_TABLE_PATH,
-                        Collections.emptyList(),
-                        LogFormat.ARROW);
+        MemoryLogRecords memoryLogRecords =
+                createMemoryLogRecords(Collections.emptyList(), LogFormat.ARROW);
         RemoteCompletedFetch completedFetch =
-                makeCompletedFetch(tableBucket, fileLogRecords, fetchOffset, null);
+                makeCompletedFetch(tableBucket, memoryLogRecords, fetchOffset, null);
 
         List<ScanRecord> scanRecords = completedFetch.fetchRecords(10);
         assertThat(scanRecords.size()).isEqualTo(0);
@@ -224,11 +199,13 @@ class RemoteCompletedFetchTest {
                         System.currentTimeMillis());
         long fetchOffset = 0L;
         TableBucket tableBucket = new TableBucket(DATA2_TABLE_ID, 0);
-        FileLogRecords fileLogRecords =
-                createFileLogRecords(tableBucket, DATA2_PHYSICAL_TABLE_PATH, DATA2, logFormat);
+        MemoryLogRecords memoryLogRecords = createMemoryLogRecords(DATA2, logFormat);
         RemoteCompletedFetch completedFetch =
                 makeCompletedFetch(
-                        tableBucket, fileLogRecords, fetchOffset, Projection.of(new int[] {0, 2}));
+                        tableBucket,
+                        memoryLogRecords,
+                        fetchOffset,
+                        Projection.of(new int[] {0, 2}));
 
         List<ScanRecord> scanRecords = completedFetch.fetchRecords(8);
         List<Object[]> expectedObjects =
@@ -254,7 +231,10 @@ class RemoteCompletedFetchTest {
 
         completedFetch =
                 makeCompletedFetch(
-                        tableBucket, fileLogRecords, fetchOffset, Projection.of(new int[] {2, 0}));
+                        tableBucket,
+                        memoryLogRecords,
+                        fetchOffset,
+                        Projection.of(new int[] {2, 0}));
         scanRecords = completedFetch.fetchRecords(8);
         assertThat(scanRecords.size()).isEqualTo(8);
         for (int i = 0; i < scanRecords.size(); i++) {
@@ -268,37 +248,30 @@ class RemoteCompletedFetchTest {
         }
     }
 
-    private FileLogRecords createFileLogRecords(
-            TableBucket tableBucket,
-            PhysicalTablePath physicalTablePath,
-            List<Object[]> objects,
-            LogFormat logFormat)
+    private MemoryLogRecords createMemoryLogRecords(List<Object[]> objects, LogFormat logFormat)
             throws Exception {
-        UUID segmentId = UUID.randomUUID();
-        RemoteLogSegment remoteLogSegment =
-                RemoteLogSegment.Builder.builder()
-                        .tableBucket(tableBucket)
-                        .physicalTablePath(physicalTablePath)
-                        .remoteLogSegmentId(segmentId)
-                        .remoteLogStartOffset(0L)
-                        .remoteLogEndOffset(9L)
-                        .segmentSizeInBytes(Integer.MAX_VALUE)
-                        .build();
-        File logFile =
-                genRemoteLogSegmentFile(
-                        DATA2_ROW_TYPE, tempDir, remoteLogSegment, objects, 0L, logFormat);
-        return FileLogRecords.open(logFile, false);
+        if (objects.isEmpty()) {
+            return MemoryLogRecords.EMPTY;
+        }
+        return createRecordsWithoutBaseLogOffset(
+                DATA2_ROW_TYPE,
+                DEFAULT_SCHEMA_ID,
+                0L,
+                System.currentTimeMillis(),
+                CURRENT_LOG_MAGIC_VALUE,
+                objects,
+                logFormat);
     }
 
     private RemoteCompletedFetch makeCompletedFetch(
             TableBucket tableBucket,
-            FileLogRecords fileLogRecords,
+            LogRecords logRecords,
             long fetchOffset,
             @Nullable Projection projection,
             Runnable recycle) {
         return new RemoteCompletedFetch(
                 tableBucket,
-                fileLogRecords,
+                logRecords,
                 10L,
                 LogRecordReadContext.createReadContext(tableInfo, true, projection, schemaGetter),
                 logScannerStatus,
@@ -309,25 +282,9 @@ class RemoteCompletedFetchTest {
 
     private RemoteCompletedFetch makeCompletedFetch(
             TableBucket tableBucket,
-            FileLogRecords fileLogRecords,
+            LogRecords logRecords,
             long fetchOffset,
             @Nullable Projection projection) {
-        return makeCompletedFetch(tableBucket, fileLogRecords, fetchOffset, projection, () -> {});
-    }
-
-    private static File genRemoteLogSegmentFile(
-            RowType rowType,
-            File remoteLogTabletDir,
-            RemoteLogSegment remoteLogSegment,
-            List<Object[]> objects,
-            long baseOffset,
-            LogFormat logFormat)
-            throws Exception {
-        FsPath remoteLogSegmentDir =
-                remoteLogSegmentDir(
-                        new FsPath(remoteLogTabletDir.getAbsolutePath()),
-                        remoteLogSegment.remoteLogSegmentId());
-        return genLogFile(
-                rowType, new File(remoteLogSegmentDir.toString()), objects, baseOffset, logFormat);
+        return makeCompletedFetch(tableBucket, logRecords, fetchOffset, projection, () -> {});
     }
 }

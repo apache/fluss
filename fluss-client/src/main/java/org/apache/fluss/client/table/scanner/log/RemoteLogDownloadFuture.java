@@ -17,40 +17,39 @@
 
 package org.apache.fluss.client.table.scanner.log;
 
-import org.apache.fluss.exception.FlussRuntimeException;
-import org.apache.fluss.record.FileLogRecords;
+import org.apache.fluss.record.LogRecords;
 
-import java.io.File;
-import java.io.IOException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
-/** Represents the future of a remote log download request. */
+/**
+ * Represents the future of a single chunk read from a remote log segment. Each chunk is delivered
+ * as a {@link LogRecords} via a {@link CompletableFuture}.
+ */
 public class RemoteLogDownloadFuture {
 
-    private final CompletableFuture<File> logFileFuture;
+    private static final Logger LOG = LoggerFactory.getLogger(RemoteLogDownloadFuture.class);
+
+    private final CompletableFuture<LogRecords> chunkFuture;
     private final Runnable recycleCallback;
+    private Consumer<RemoteLogDownloadFuture> nextChunkCallback;
 
     public RemoteLogDownloadFuture(
-            CompletableFuture<File> logFileFuture, Runnable recycleCallback) {
-        this.logFileFuture = logFileFuture;
+            CompletableFuture<LogRecords> chunkFuture, Runnable recycleCallback) {
+        this.chunkFuture = chunkFuture;
         this.recycleCallback = recycleCallback;
     }
 
     public boolean isDone() {
-        return logFileFuture.isDone();
+        return chunkFuture.isDone();
     }
 
-    public FileLogRecords getFileLogRecords(int startPosition) {
-        try {
-            FileLogRecords fileLogRecords = FileLogRecords.open(logFileFuture.join(), false);
-            if (startPosition > 0) {
-                return fileLogRecords.slice(startPosition, Integer.MAX_VALUE);
-            } else {
-                return fileLogRecords;
-            }
-        } catch (IOException e) {
-            throw new FlussRuntimeException(e);
-        }
+    /** Returns the chunk data. Blocks until the chunk is ready. */
+    public LogRecords getLogRecords() {
+        return chunkFuture.join();
     }
 
     public Runnable getRecycleCallback() {
@@ -58,6 +57,29 @@ public class RemoteLogDownloadFuture {
     }
 
     public void onComplete(Runnable callback) {
-        logFileFuture.thenRun(callback);
+        // Use whenComplete (instead of thenRun) so the callback fires regardless of whether
+        // the chunkFuture completed successfully or exceptionally. This is critical: if a chunk
+        // read fails, the LogFetchBuffer still needs tryComplete() to be called so the failed
+        // PendingFetch can be drained (otherwise the bucket would be stuck permanently).
+        chunkFuture.whenComplete(
+                (result, throwable) -> {
+                    try {
+                        callback.run();
+                    } catch (Throwable t) {
+                        LOG.error("Exception in chunk completion callback", t);
+                    }
+                });
+    }
+
+    /**
+     * Sets a callback that will be invoked when the next chunk's future is created. This allows the
+     * {@link LogFetcher} to register a new {@link RemotePendingFetch} for each subsequent chunk.
+     */
+    public void setNextChunkCallback(Consumer<RemoteLogDownloadFuture> callback) {
+        this.nextChunkCallback = callback;
+    }
+
+    public Consumer<RemoteLogDownloadFuture> getNextChunkCallback() {
+        return nextChunkCallback;
     }
 }

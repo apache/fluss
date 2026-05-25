@@ -22,7 +22,6 @@ import org.apache.fluss.client.admin.FlussAdmin;
 import org.apache.fluss.client.metadata.ClientSchemaGetter;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.TestingScannerMetricGroup;
-import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
@@ -108,7 +107,6 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                         clientConf,
                         metadataUpdater,
                         TestingScannerMetricGroup.newInstance(),
-                        new RemoteFileDownloader(1),
                         clientSchemaGetter);
     }
 
@@ -183,7 +181,6 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                         clientConf,
                         metadataUpdater,
                         TestingScannerMetricGroup.newInstance(),
-                        new RemoteFileDownloader(1),
                         clientSchemaGetter);
         newSchemaLogFetcher.sendFetches();
         // The fetcher is async to fetch data, so we need to wait the result write to the
@@ -282,7 +279,6 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                         clientConf,
                         metadataUpdater,
                         TestingScannerMetricGroup.newInstance(),
-                        new RemoteFileDownloader(1),
                         clientSchemaGetter);
 
         // send fetches to fetch data, should have no available fetch.
@@ -323,7 +319,6 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                         clientConf,
                         metadataUpdater1,
                         TestingScannerMetricGroup.newInstance(),
-                        new RemoteFileDownloader(1),
                         clientSchemaGetter);
 
         ExecutorService executor = Executors.newSingleThreadExecutor();

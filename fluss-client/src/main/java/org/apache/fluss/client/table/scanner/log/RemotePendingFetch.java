@@ -18,8 +18,8 @@
 package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.record.FileLogRecords;
 import org.apache.fluss.record.LogRecordReadContext;
+import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.remote.RemoteLogSegment;
 
 /**
@@ -31,7 +31,6 @@ class RemotePendingFetch implements PendingFetch {
     final RemoteLogSegment remoteLogSegment;
     private final RemoteLogDownloadFuture downloadFuture;
 
-    private final int posInLogSegment;
     private final long fetchOffset;
     private final long highWatermark;
     private final LogRecordReadContext readContext;
@@ -41,7 +40,6 @@ class RemotePendingFetch implements PendingFetch {
     RemotePendingFetch(
             RemoteLogSegment remoteLogSegment,
             RemoteLogDownloadFuture downloadFuture,
-            int posInLogSegment,
             long fetchOffset,
             long highWatermark,
             LogRecordReadContext readContext,
@@ -49,7 +47,6 @@ class RemotePendingFetch implements PendingFetch {
             boolean isCheckCrc) {
         this.remoteLogSegment = remoteLogSegment;
         this.downloadFuture = downloadFuture;
-        this.posInLogSegment = posInLogSegment;
         this.fetchOffset = fetchOffset;
         this.highWatermark = highWatermark;
         this.readContext = readContext;
@@ -69,10 +66,10 @@ class RemotePendingFetch implements PendingFetch {
 
     @Override
     public CompletedFetch toCompletedFetch() {
-        FileLogRecords fileLogRecords = downloadFuture.getFileLogRecords(posInLogSegment);
+        LogRecords logRecords = downloadFuture.getLogRecords();
         return new RemoteCompletedFetch(
                 remoteLogSegment.tableBucket(),
-                fileLogRecords,
+                logRecords,
                 highWatermark,
                 readContext,
                 logScannerStatus,
@@ -88,8 +85,6 @@ class RemotePendingFetch implements PendingFetch {
                 + remoteLogSegment
                 + ", fetchOffset="
                 + fetchOffset
-                + ", posInLogSegment="
-                + posInLogSegment
                 + ", highWatermark="
                 + highWatermark
                 + '}';

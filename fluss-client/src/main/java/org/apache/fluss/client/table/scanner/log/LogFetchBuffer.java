@@ -109,20 +109,31 @@ public class LogFetchBuffer implements AutoCloseable {
                     while (pendings != null && !pendings.isEmpty()) {
                         PendingFetch pendingFetch = pendings.peek();
                         if (pendingFetch.isCompleted()) {
-                            CompletedFetch completedFetch = pendingFetch.toCompletedFetch();
-                            completedFetches.add(completedFetch);
                             pendings.poll();
-                            hasCompleted = true;
+                            try {
+                                CompletedFetch completedFetch = pendingFetch.toCompletedFetch();
+                                completedFetches.add(completedFetch);
+                                hasCompleted = true;
+                            } catch (Throwable t) {
+                                // If toCompletedFetch() fails (e.g. the underlying chunk
+                                // future completed exceptionally), discard this entry so
+                                // the queue is not blocked. The bucket will become fetchable
+                                // again and the server can re-issue a remote fetch.
+                                LOG.warn(
+                                        "Discarding failed pending fetch for bucket {}",
+                                        tableBucket,
+                                        t);
+                            }
                         } else {
                             break;
                         }
                     }
                     if (hasCompleted) {
                         notEmptyCondition.signalAll();
-                        // clear the bucket entry if there is no pending fetches for the bucket.
-                        if (pendings.isEmpty()) {
-                            this.pendingFetches.remove(tableBucket);
-                        }
+                    }
+                    // clear the bucket entry if there are no pending fetches for the bucket.
+                    if (pendings != null && pendings.isEmpty()) {
+                        this.pendingFetches.remove(tableBucket);
                     }
                 });
     }
