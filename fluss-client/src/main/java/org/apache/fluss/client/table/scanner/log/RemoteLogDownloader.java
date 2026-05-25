@@ -142,15 +142,14 @@ public class RemoteLogDownloader implements Closeable {
      * to fetch.
      */
     void fetchOnce() throws Exception {
-        // blocks until there is capacity (the fetched file is consumed)
-        prefetchSemaphore.acquire();
-
         // wait until there is a remote fetch request
         RemoteLogDownloadRequest request = segmentsToFetch.poll(pollTimeout, TimeUnit.MILLISECONDS);
         if (request == null) {
-            prefetchSemaphore.release();
             return;
         }
+
+        // blocks until there is capacity (the fetched file is consumed)
+        prefetchSemaphore.acquire();
 
         TableBucket tableBucket = request.getTableBucket();
         try {

@@ -126,7 +126,11 @@ class RemoteLogDownloaderTest {
 
             futures.get(1).getRecycleCallback().run();
             futures.get(2).getRecycleCallback().run();
-            assertThat(remoteLogDownloader.getPrefetchSemaphore().availablePermits()).isEqualTo(2);
+            // The 2 semaphores are released, so there should be 2 permits available. However,
+            // fetchOnce() may be called concurrently at this point and acquire a permit, so we
+            // assert the permits are between 1 and 2.
+            assertThat(remoteLogDownloader.getPrefetchSemaphore().availablePermits())
+                    .isBetween(1, 2);
             // the removal of log files are async, so we need to wait for the removal.
             retry(
                     Duration.ofMinutes(1),
@@ -216,8 +220,11 @@ class RemoteLogDownloaderTest {
                     });
             // make sure 4 threads are used.
             assertThat(fileDownloader.threadNames.size()).isEqualTo(4);
-            // only 4 segments are pre-fetched.
-            assertThat(remoteLogDownloader.getSizeOfSegmentsToFetch()).isEqualTo(totalSegments - 4);
+            // only 4 segments are pre-fetched; the download thread may have polled one additional
+            // segment from the queue before blocking on the semaphore, so queue size is
+            // either totalSegments-4 (nothing extra polled) or totalSegments-5 (one extra polled).
+            assertThat(remoteLogDownloader.getSizeOfSegmentsToFetch())
+                    .isBetween(totalSegments - 4 - 1, totalSegments - 4);
 
             for (int i = 3; i < totalSegments; i++) {
                 RemoteLogSegment segment = remoteLogSegments.get(i);
