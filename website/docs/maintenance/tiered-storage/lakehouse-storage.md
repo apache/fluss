@@ -16,6 +16,27 @@ by external systems such as Flink, Spark, StarRocks and others. With data tiered
 can gain much storage cost reduction and analytics performance improvement.
 
 
+## Dependencies
+
+Apache Fluss publishes the Flink-based tiering service JAR to Maven Central:
+
+| Artifact | Jar |
+|----------|-----|
+| Fluss Flink tiering service | [fluss-flink-tiering-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-tiering/$FLUSS_VERSION$/fluss-flink-tiering-$FLUSS_VERSION$.jar) |
+
+Maven coordinates:
+
+```xml
+<dependency>
+  <groupId>org.apache.fluss</groupId>
+  <artifactId>fluss-flink-tiering</artifactId>
+  <version>$FLUSS_VERSION$</version>
+</dependency>
+```
+
+Verify downloaded JARs against the [KEYS file](https://downloads.apache.org/incubator/fluss/KEYS) using the [verification instructions](/downloads).
+
+
 ## Enable Lakehouse Storage
 
 Lakehouse Storage is disabled by default, you must enable it manually. 
@@ -59,13 +80,13 @@ Additionally, when using Paimon with HDFS, you must also configure the Fluss ser
 Then, you must start the datalake tiering service to tier Fluss's data to the lakehouse storage.
 #### Prerequisites
 - A running Flink cluster (currently only Flink is supported as the tiering backend)
-- Download [fluss-flink-tiering-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/$FLUSS_VERSION$/fluss-flink-tiering-$FLUSS_VERSION$.jar) 
+- Download [fluss-flink-tiering-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-tiering/$FLUSS_VERSION$/fluss-flink-tiering-$FLUSS_VERSION$.jar) (see [Dependencies](#dependencies))
 
 #### Prepare required jars
-- Put [fluss-flink connector jar](/downloads) into `${FLINK_HOME}/lib`, you should choose a connector version matching your Flink version. If you're using Flink 1.20, please use [fluss-flink-1.20-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar)
+- Put the Fluss Flink connector JAR into `${FLINK_HOME}/lib`; pick the version matching your Flink runtime (see [Dependencies](../../engine-flink/getting-started.md#dependencies)). For Flink 1.20, use [fluss-flink-1.20-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar).
 - If you are using [Amazon S3](http://aws.amazon.com/s3/), [Aliyun OSS](https://www.aliyun.com/product/oss) or [HDFS(Hadoop Distributed File System)](https://hadoop.apache.org/docs/stable/) as Fluss's [remote storage](maintenance/tiered-storage/remote-storage.md),
-  you should download the corresponding [Fluss filesystem jar](/downloads#filesystem-jars) and also put it into `${FLINK_HOME}/lib`
-- Put [fluss-lake-paimon jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-paimon/$FLUSS_VERSION$/fluss-lake-paimon-$FLUSS_VERSION$.jar) into `${FLINK_HOME}/lib`
+  you should download the corresponding Fluss filesystem JAR (see [Filesystems](../filesystems/overview.md)) and also put it into `${FLINK_HOME}/lib`
+- Put [fluss-lake-paimon-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-lake-paimon/$FLUSS_VERSION$/fluss-lake-paimon-$FLUSS_VERSION$.jar) into `${FLINK_HOME}/lib`
 - Put [paimon-bundle jar](https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-bundle/$PAIMON_VERSION$/paimon-bundle-$PAIMON_VERSION$.jar) into `${FLINK_HOME}/lib`
 - [Download](https://flink.apache.org/downloads/) pre-bundled Hadoop jar `flink-shaded-hadoop-2-uber-*.jar` and put into `${FLINK_HOME}/lib`
 - Put Paimon's [filesystem jar](https://paimon.apache.org/docs/$PAIMON_VERSION_SHORT$/project/download/) into `${FLINK_HOME}/lib`, if you use s3 to store paimon data, please put `paimon-s3` jar into `${FLINK_HOME}/lib`

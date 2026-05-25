@@ -164,7 +164,7 @@ Using Flink SQL Client to interact with Fluss.
 
 You can start a Flink standalone cluster refer to [Flink Environment Preparation](engine-flink/getting-started.md#preparation-when-using-flink-sql-client)
 
-**Note**: Make sure the [Fluss connector jar](/downloads/) already has copied to the `lib` directory of your Flink home.
+**Note**: Make sure the [Fluss Flink connector jar](../engine-flink/getting-started.md#dependencies) has already been copied to the `lib` directory of your Flink home.
 
 #### Add catalog
 

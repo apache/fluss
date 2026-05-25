@@ -7,6 +7,26 @@ sidebar_position: 2
 [HDFS (Hadoop Distributed File System)](https://hadoop.apache.org/docs/stable/) is the primary storage system used by Hadoop applications. Fluss
 supports HDFS as a remote storage.
 
+## Dependencies
+
+Apache Fluss publishes the HDFS filesystem plugin to Maven Central:
+
+| Artifact | Jar |
+|----------|-----|
+| Fluss HDFS filesystem plugin | [fluss-fs-hdfs-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-fs-hdfs/$FLUSS_VERSION$/fluss-fs-hdfs-$FLUSS_VERSION$.jar) |
+
+Maven coordinates:
+
+```xml
+<dependency>
+  <groupId>org.apache.fluss</groupId>
+  <artifactId>fluss-fs-hdfs</artifactId>
+  <version>$FLUSS_VERSION$</version>
+</dependency>
+```
+
+Verify downloaded JARs against the [KEYS file](https://downloads.apache.org/incubator/fluss/KEYS) using the [verification instructions](/downloads).
+
 
 ## Configurations setup
 To enabled HDFS as remote storage, you need to define the hdfs path as remote storage in Fluss' `server.yaml`:

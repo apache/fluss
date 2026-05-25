@@ -742,8 +742,8 @@ _fsAzurePlugin: &fsAzurePlugin
         - sh
         - -c
         - |
-          wget -O /plugins/azure/fluss-fs-azure-0.9.jar \
-            https://repo1.maven.org/maven2/org/apache/fluss/fluss-fs-azure/0.9.0-incubating/fluss-fs-azure-0.9.0-incubating.jar
+          wget -O /plugins/azure/fluss-fs-azure-$FLUSS_VERSION$.jar \
+            $FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-fs-azure/$FLUSS_VERSION$/fluss-fs-azure-$FLUSS_VERSION$.jar
       volumeMounts:
         - name: azure-plugin
           mountPath: /plugins

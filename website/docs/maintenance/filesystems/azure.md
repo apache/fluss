@@ -7,13 +7,33 @@ sidebar_position: 5
 
 [Azure Blob Storage](https://azure.microsoft.com/en-us/products/storage/blobs) (Azure Blob Storage) is a massively scalable and secure object storage for cloud-native workloads, archives, data lakes, HPC, and machine learning.
 
+## Dependencies
+
+Apache Fluss publishes the Azure filesystem plugin to Maven Central:
+
+| Artifact | Jar |
+|----------|-----|
+| Fluss Azure filesystem plugin | [fluss-fs-azure-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-fs-azure/$FLUSS_VERSION$/fluss-fs-azure-$FLUSS_VERSION$.jar) |
+
+Maven coordinates:
+
+```xml
+<dependency>
+  <groupId>org.apache.fluss</groupId>
+  <artifactId>fluss-fs-azure</artifactId>
+  <version>$FLUSS_VERSION$</version>
+</dependency>
+```
+
+Verify downloaded JARs against the [KEYS file](https://downloads.apache.org/incubator/fluss/KEYS) using the [verification instructions](/downloads).
+
 ## Install Azure FS Plugin Manually
 
 Azure Blob Storage support is not included in the default Fluss distribution. To enable Azure Blob Storage support, you need to manually install the filesystem plugin into Fluss.
 
 1. **Prepare the plugin JAR**:
 
-    - Download the `fluss-fs-azure-$FLUSS_VERSION$.jar` from the [Maven Repository](https://repo1.maven.org/maven2/org/apache/fluss/fluss-fs-azure/$FLUSS_VERSION$/fluss-fs-azure-$FLUSS_VERSION$.jar).
+    - Download `fluss-fs-azure-$FLUSS_VERSION$.jar` from the [Dependencies](#dependencies) section above.
 
 2. **Place the plugin**: Place the plugin JAR file in the `${FLUSS_HOME}/plugins/azure/` directory:
    ```bash

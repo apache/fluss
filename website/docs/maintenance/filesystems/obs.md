@@ -7,13 +7,33 @@ sidebar_position: 6
 
 [HuaweiCloud Object Storage Service](https://www.huaweicloud.com/product/obs.html) (HuaweiCloud OBS) is an enterprise-grade object storage solution delivering industry-leading scalability, data durability, security, and cost-efficiency. Trusted by organizations across finance, healthcare, manufacturing, and media, OBS enables you to securely store, manage, analyze, and protect unlimited data volumes for diverse scenarios like AI training, data lakes, multi-cloud backup, and real-time media processing.
 
+## Dependencies
+
+Apache Fluss publishes the OBS filesystem plugin to Maven Central:
+
+| Artifact | Jar |
+|----------|-----|
+| Fluss OBS filesystem plugin | [fluss-fs-obs-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-fs-obs/$FLUSS_VERSION$/fluss-fs-obs-$FLUSS_VERSION$.jar) |
+
+Maven coordinates:
+
+```xml
+<dependency>
+  <groupId>org.apache.fluss</groupId>
+  <artifactId>fluss-fs-obs</artifactId>
+  <version>$FLUSS_VERSION$</version>
+</dependency>
+```
+
+Verify downloaded JARs against the [KEYS file](https://downloads.apache.org/incubator/fluss/KEYS) using the [verification instructions](/downloads).
+
 ## Install OBS Plugin Manually
 
 HuaweiCloud OBS support is not included in the default Fluss distribution. To enable OBS support, you need to manually install the filesystem plugin into Fluss.
 
-1. **Prepare the plugin JAR**: 
+1. **Prepare the plugin JAR**:
 
-   - Download the `fluss-fs-obs-$FLUSS_VERSION$.jar` from the [Maven Repository](https://repo1.maven.org/maven2/org/apache/fluss/fluss-fs-obs/$FLUSS_VERSION$/fluss-fs-obs-$FLUSS_VERSION$.jar).
+   - Download `fluss-fs-obs-$FLUSS_VERSION$.jar` from the [Dependencies](#dependencies) section above.
    
 2. **Place the plugin**: Place the plugin JAR file in the `${FLUSS_HOME}/plugins/obs/` directory:
    ```bash
