@@ -34,7 +34,9 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
@@ -122,9 +124,28 @@ class IcebergSchemaEvolutionITCase extends FlinkIcebergTieringTestBase {
                     icebergTable.schema().columns().stream()
                             .map(Types.NestedField::name)
                             .collect(Collectors.toList());
-            int newColIdx = fieldNames.indexOf("f_new");
-            int bucketIdx = fieldNames.indexOf(BUCKET_COLUMN_NAME);
-            assertThat(newColIdx).isLessThan(bucketIdx);
+            assertThat(fieldNames.indexOf("f_new"))
+                    .isLessThan(fieldNames.indexOf(BUCKET_COLUMN_NAME));
+
+            // Post-ALTER rows: new rows carry f_new values; old rows must surface NULL
+            // via Iceberg field-ID schema evolution.
+            List<InternalRow> postAlterRows =
+                    Arrays.asList(row(4, "v4", "newA"), row(5, "v5", "newB"));
+            writeRows(tablePath, postAlterRows, true);
+            assertReplicaStatus(bucket, 5);
+
+            icebergTable.refresh();
+            List<Record> records = getIcebergRecords(tablePath);
+            assertThat(records).hasSize(5);
+            Map<Integer, Object> fNewByFInt = new HashMap<>();
+            for (Record record : records) {
+                fNewByFInt.put((Integer) record.getField("f_int"), record.getField("f_new"));
+            }
+            assertThat(fNewByFInt.get(1)).isNull();
+            assertThat(fNewByFInt.get(2)).isNull();
+            assertThat(fNewByFInt.get(3)).isNull();
+            assertThat(fNewByFInt.get(4)).isEqualTo("newA");
+            assertThat(fNewByFInt.get(5)).isEqualTo("newB");
         } finally {
             jobClient.cancel().get();
         }
@@ -175,9 +196,27 @@ class IcebergSchemaEvolutionITCase extends FlinkIcebergTieringTestBase {
                     icebergTable.schema().columns().stream()
                             .map(Types.NestedField::name)
                             .collect(Collectors.toList());
-            int newColIdx = fieldNames.indexOf("f_new");
-            int bucketIdx = fieldNames.indexOf(BUCKET_COLUMN_NAME);
-            assertThat(newColIdx).isLessThan(bucketIdx);
+            assertThat(fieldNames.indexOf("f_new"))
+                    .isLessThan(fieldNames.indexOf(BUCKET_COLUMN_NAME));
+
+            // Post-ALTER upserts + snapshot trigger; verify all rows tier.
+            List<InternalRow> postAlterRows = Arrays.asList(row(4, "v4", 100), row(5, "v5", 200));
+            writeRows(tablePath, postAlterRows, false);
+            FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
+            assertReplicaStatus(bucket, 5);
+
+            icebergTable.refresh();
+            List<Record> postAlterRecords = getIcebergRecords(tablePath);
+            assertThat(postAlterRecords).hasSize(5);
+            Map<Integer, Object> fNewByFInt = new HashMap<>();
+            for (Record record : postAlterRecords) {
+                fNewByFInt.put((Integer) record.getField("f_int"), record.getField("f_new"));
+            }
+            assertThat(fNewByFInt.get(1)).isNull();
+            assertThat(fNewByFInt.get(2)).isNull();
+            assertThat(fNewByFInt.get(3)).isNull();
+            assertThat(fNewByFInt.get(4)).isEqualTo(100);
+            assertThat(fNewByFInt.get(5)).isEqualTo(200);
         } finally {
             jobClient.cancel().get();
         }
@@ -232,13 +271,150 @@ class IcebergSchemaEvolutionITCase extends FlinkIcebergTieringTestBase {
                     icebergTable.schema().columns().stream()
                             .map(Types.NestedField::name)
                             .collect(Collectors.toList());
-            int newColIdx = fieldNames.indexOf("f_new");
-            int bucketIdx = fieldNames.indexOf(BUCKET_COLUMN_NAME);
-            assertThat(newColIdx).isLessThan(bucketIdx);
+            assertThat(fieldNames.indexOf("f_new"))
+                    .isLessThan(fieldNames.indexOf(BUCKET_COLUMN_NAME));
 
-            // Verify complex type columns are still intact
             assertThat(icebergTable.schema().findField("f_tags").type().isListType()).isTrue();
             assertThat(icebergTable.schema().findField("f_meta").type().isMapType()).isTrue();
+
+            // Post-ALTER rows alongside pre-existing complex columns.
+            List<InternalRow> postAlterRows =
+                    Arrays.asList(
+                            row(4, "v4", null, null, "newA"), row(5, "v5", null, null, "newB"));
+            writeRows(tablePath, postAlterRows, true);
+            assertReplicaStatus(bucket, 5);
+
+            icebergTable.refresh();
+            List<Record> records = getIcebergRecords(tablePath);
+            assertThat(records).hasSize(5);
+            Map<Integer, Object> fNewByFInt = new HashMap<>();
+            for (Record record : records) {
+                fNewByFInt.put((Integer) record.getField("f_int"), record.getField("f_new"));
+            }
+            assertThat(fNewByFInt.get(1)).isNull();
+            assertThat(fNewByFInt.get(2)).isNull();
+            assertThat(fNewByFInt.get(3)).isNull();
+            assertThat(fNewByFInt.get(4)).isEqualTo("newA");
+            assertThat(fNewByFInt.get(5)).isEqualTo("newB");
+        } finally {
+            jobClient.cancel().get();
+        }
+    }
+
+    @Test
+    void testSchemaEvolutionLogTableAddComplexColumn() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "schemaEvoLogAddComplex");
+        long tableId = createLogTable(tablePath, 1, false, INITIAL_LOG_SCHEMA);
+        TableBucket bucket = new TableBucket(tableId, 0);
+        List<InternalRow> initialRows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
+        writeRows(tablePath, initialRows, true);
+
+        JobClient jobClient = buildTieringJob(execEnv);
+        try {
+            assertReplicaStatus(bucket, 3);
+            admin.alterTable(
+                            tablePath,
+                            Collections.singletonList(
+                                    TableChange.addColumn(
+                                            "f_tags",
+                                            DataTypes.ARRAY(DataTypes.STRING()),
+                                            null,
+                                            TableChange.ColumnPosition.last())),
+                            false)
+                    .get();
+
+            org.apache.iceberg.Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
+            Types.NestedField added = icebergTable.schema().findField("f_tags");
+            assertThat(added).isNotNull();
+            assertThat(added.type().isListType()).isTrue();
+            assertThat(added.type().asListType().elementType()).isEqualTo(Types.StringType.get());
+            List<String> fieldNames =
+                    icebergTable.schema().columns().stream()
+                            .map(Types.NestedField::name)
+                            .collect(Collectors.toList());
+            assertThat(fieldNames.indexOf("f_tags"))
+                    .isLessThan(fieldNames.indexOf(BUCKET_COLUMN_NAME));
+
+            // Post-ALTER rows for a complex new column. Writing null exercises the
+            // data-plane path through the new ARRAY field ID without forcing the test
+            // to build an InternalArray literal.
+            List<InternalRow> postAlterRows = Arrays.asList(row(4, "v4", null), row(5, "v5", null));
+            writeRows(tablePath, postAlterRows, true);
+            assertReplicaStatus(bucket, 5);
+
+            icebergTable.refresh();
+            List<Record> records = getIcebergRecords(tablePath);
+            assertThat(records).hasSize(5);
+            for (Record record : records) {
+                assertThat(record.getField("f_tags")).isNull();
+            }
+        } finally {
+            jobClient.cancel().get();
+        }
+    }
+
+    @Test
+    void testSchemaEvolutionPkTableWithComplexPreExisting() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "schemaEvoPkComplex");
+        Schema pkComplexSchema =
+                Schema.newBuilder()
+                        .column("f_int", DataTypes.INT())
+                        .column("f_str", DataTypes.STRING())
+                        .column("f_tags", DataTypes.ARRAY(DataTypes.STRING()))
+                        .primaryKey("f_int")
+                        .build();
+        long tableId = createPkTable(tablePath, 1, false, pkComplexSchema);
+        TableBucket bucket = new TableBucket(tableId, 0);
+
+        List<InternalRow> initialRows =
+                Arrays.asList(row(1, "v1", null), row(2, "v2", null), row(3, "v3", null));
+        writeRows(tablePath, initialRows, false);
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
+
+        JobClient jobClient = buildTieringJob(execEnv);
+        try {
+            assertReplicaStatus(bucket, 3);
+            admin.alterTable(
+                            tablePath,
+                            Collections.singletonList(
+                                    TableChange.addColumn(
+                                            "f_new",
+                                            DataTypes.INT(),
+                                            null,
+                                            TableChange.ColumnPosition.last())),
+                            false)
+                    .get();
+
+            org.apache.iceberg.Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
+            assertThat(icebergTable.schema().findField("f_new").type())
+                    .isEqualTo(Types.IntegerType.get());
+            assertThat(icebergTable.schema().findField("f_tags").type().isListType()).isTrue();
+            List<String> fieldNames =
+                    icebergTable.schema().columns().stream()
+                            .map(Types.NestedField::name)
+                            .collect(Collectors.toList());
+            assertThat(fieldNames.indexOf("f_new"))
+                    .isLessThan(fieldNames.indexOf(BUCKET_COLUMN_NAME));
+
+            // Post-ALTER upserts with f_new values + snapshot trigger.
+            List<InternalRow> postAlterRows =
+                    Arrays.asList(row(4, "v4", null, 100), row(5, "v5", null, 200));
+            writeRows(tablePath, postAlterRows, false);
+            FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath);
+            assertReplicaStatus(bucket, 5);
+
+            icebergTable.refresh();
+            List<Record> records = getIcebergRecords(tablePath);
+            assertThat(records).hasSize(5);
+            Map<Integer, Object> fNewByFInt = new HashMap<>();
+            for (Record record : records) {
+                fNewByFInt.put((Integer) record.getField("f_int"), record.getField("f_new"));
+            }
+            assertThat(fNewByFInt.get(1)).isNull();
+            assertThat(fNewByFInt.get(2)).isNull();
+            assertThat(fNewByFInt.get(3)).isNull();
+            assertThat(fNewByFInt.get(4)).isEqualTo(100);
+            assertThat(fNewByFInt.get(5)).isEqualTo(200);
         } finally {
             jobClient.cancel().get();
         }
