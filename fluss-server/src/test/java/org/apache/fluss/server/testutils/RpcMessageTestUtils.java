@@ -193,6 +193,11 @@ public class RpcMessageTestUtils {
 
     public static ProduceLogRequest newProduceLogRequest(
             long tableId, int bucketId, int acks, MemoryLogRecords records) {
+        return newProduceLogRequest(tableId, null, bucketId, acks, records);
+    }
+
+    public static ProduceLogRequest newProduceLogRequest(
+            long tableId, Long partitionId, int bucketId, int acks, MemoryLogRecords records) {
         ProduceLogRequest produceRequest = new ProduceLogRequest();
         produceRequest.setTableId(tableId).setAcks(acks).setTimeoutMs(10000);
         PbProduceLogReqForBucket pbProduceLogReqForBucket = new PbProduceLogReqForBucket();
@@ -203,16 +208,27 @@ public class RpcMessageTestUtils {
                                 records.getMemorySegment(),
                                 records.getPosition(),
                                 records.sizeInBytes()));
+        if (partitionId != null) {
+            pbProduceLogReqForBucket.setPartitionId(partitionId);
+        }
         produceRequest.addAllBucketsReqs(Collections.singletonList(pbProduceLogReqForBucket));
         return produceRequest;
     }
 
     public static PutKvRequest newPutKvRequest(
             long tableId, int bucketId, int acks, KvRecordBatch kvRecordBatch) {
+        return newPutKvRequest(tableId, null, bucketId, acks, kvRecordBatch);
+    }
+
+    public static PutKvRequest newPutKvRequest(
+            long tableId, Long partitionId, int bucketId, int acks, KvRecordBatch kvRecordBatch) {
         PutKvRequest putKvRequest = new PutKvRequest();
         putKvRequest.setTableId(tableId).setAcks(acks).setTimeoutMs(10000);
         PbPutKvReqForBucket pbPutKvReqForBucket = new PbPutKvReqForBucket();
         pbPutKvReqForBucket.setBucketId(bucketId);
+        if (partitionId != null) {
+            pbPutKvReqForBucket.setPartitionId(partitionId);
+        }
         if (kvRecordBatch instanceof DefaultKvRecordBatch) {
             DefaultKvRecordBatch batch = (DefaultKvRecordBatch) kvRecordBatch;
             pbPutKvReqForBucket.setRecords(

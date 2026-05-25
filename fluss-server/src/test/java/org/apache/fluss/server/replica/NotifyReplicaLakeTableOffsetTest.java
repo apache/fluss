@@ -35,7 +35,6 @@ import java.util.concurrent.CompletableFuture;
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.testutils.DataTestUtils.createRecordsWithoutBaseLogOffset;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -114,18 +113,6 @@ class NotifyReplicaLakeTableOffsetTest extends ReplicaTestBase {
                 .isEqualTo(endOffset);
         AssertionsForClassTypes.assertThat(replica.getLogTablet().getLakeMaxTimestamp())
                 .isEqualTo(maxTimestamp);
-    }
-
-    private TableBucket makeTableBucket(boolean partitionTable) {
-        return makeTableBucket(DATA1_TABLE_ID, partitionTable);
-    }
-
-    private TableBucket makeTableBucket(long tableId, boolean partitionTable) {
-        if (partitionTable) {
-            return new TableBucket(tableId, 0L, 0);
-        } else {
-            return new TableBucket(tableId, 0);
-        }
     }
 
     private NotifyLakeTableOffsetData getNotifyLakeTableOffset(
