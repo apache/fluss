@@ -49,7 +49,7 @@ public class RoundRobinRemoteDirSelector implements RemoteDirSelector {
             return remoteDataDir;
         }
 
-        int index = position.getAndUpdate(i -> (i + 1) % remoteDataDirs.size());
-        return remoteDataDirs.get(index);
+        int index = position.getAndIncrement();
+        return remoteDataDirs.get(index % remoteDataDirs.size());
     }
 }

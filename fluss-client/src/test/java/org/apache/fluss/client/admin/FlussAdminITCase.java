@@ -1619,6 +1619,43 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .get();
     }
 
+    @Test
+    void testDynamicRemoteDataDirsWithRoundRobin() throws Exception {
+        String originalDir = FLUSS_CLUSTER_EXTENSION.getRemoteDataDir();
+        String newDir1 = FLUSS_CLUSTER_EXTENSION.getRemoteDataDir("remote-dir-1");
+        String newDir2 = FLUSS_CLUSTER_EXTENSION.getRemoteDataDir("remote-dir-2");
+
+        // Dynamically switch from single remote.data.dir to multiple remote.data.dirs
+        // with round-robin strategy; original dir must be included
+        admin.alterClusterConfigs(
+                        Collections.singletonList(
+                                new AlterConfig(
+                                        ConfigOptions.REMOTE_DATA_DIRS.key(),
+                                        String.join(",", originalDir, newDir1, newDir2),
+                                        AlterConfigOpType.SET)))
+                .get();
+
+        // Create 6 tables and verify round-robin distribution across 3 directories
+        int tableCount = 6;
+        Map<String, Integer> dirUsageCount = new HashMap<>();
+        for (int i = 0; i < tableCount; i++) {
+            TablePath tablePath = TablePath.of("test_db", "dynamic_rr_table_" + i);
+            createTable(
+                    tablePath,
+                    TableDescriptor.builder().schema(DEFAULT_SCHEMA).distributedBy(1, "id").build(),
+                    true);
+
+            TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+            String remoteDataDir = tableInfo.getRemoteDataDir();
+            assertThat(remoteDataDir).isNotNull();
+            dirUsageCount.merge(remoteDataDir, 1, Integer::sum);
+        }
+
+        // Each of the 3 directories should be used exactly twice (6 / 3 = 2)
+        assertThat(dirUsageCount).hasSize(3);
+        assertThat(dirUsageCount.values()).allMatch(count -> count == 2);
+    }
+
     private void assertConfigEntry(
             String key, @Nullable String value, ConfigEntry.ConfigSource source)
             throws ExecutionException, InterruptedException {

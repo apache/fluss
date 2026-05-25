@@ -24,6 +24,7 @@ import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.IllegalConfigurationException;
 
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
@@ -65,16 +66,23 @@ public class RemoteDirDynamicLoader implements ServerReconfigurable, AutoCloseab
         if (newRemoteDataDirsOp.isPresent()) {
             List<String> oldRemoteDataDirs =
                     currentConfiguration.get(ConfigOptions.REMOTE_DATA_DIRS);
+            // When old remote.data.dirs is empty, the cluster was using remote.data.dir
+            // as the sole directory. Ensure it is included in new remote.data.dirs.
+            if (oldRemoteDataDirs.isEmpty()) {
+                String oldRemoteDataDir = currentConfiguration.get(ConfigOptions.REMOTE_DATA_DIR);
+                if (oldRemoteDataDir != null) {
+                    oldRemoteDataDirs = Collections.singletonList(oldRemoteDataDir);
+                }
+            }
             Set<String> newRemoteDataDirs = new HashSet<>(newRemoteDataDirsOp.get());
             if (!newRemoteDataDirs.containsAll(oldRemoteDataDirs)) {
                 throw new ConfigException(
                         String.format(
-                                "New %s: %s must contain all old %s: %s. "
+                                "New %s: %s must contain all existing remote data directories: %s. "
                                         + "If you want the Fluss cluster to stop transferring data to a certain path, "
                                         + "keep it in %s and set its weight to 0 in %s.",
                                 ConfigOptions.REMOTE_DATA_DIRS.key(),
                                 newRemoteDataDirsOp.get(),
-                                ConfigOptions.REMOTE_DATA_DIRS.key(),
                                 oldRemoteDataDirs,
                                 ConfigOptions.REMOTE_DATA_DIRS.key(),
                                 ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS.key()));

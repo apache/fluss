@@ -129,8 +129,9 @@ class RemoteDirsITCase {
             dirUsageCount.merge(dir, 1, Integer::sum);
         }
 
-        // With round-robin, all configured dirs should be used
+        // With round-robin, all configured dirs should be used exactly twice (6 / 3)
         assertThat(dirUsageCount.keySet()).hasSize(REMOTE_DIR_NAMES.size());
+        assertThat(dirUsageCount.values()).allMatch(count -> count == 2);
     }
 
     @ParameterizedTest

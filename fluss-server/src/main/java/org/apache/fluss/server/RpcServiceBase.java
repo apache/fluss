@@ -302,6 +302,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         response.setTableJson(tableInfo.toTableDescriptor().toJsonBytes())
                 .setSchemaId(tableInfo.getSchemaId())
                 .setTableId(tableInfo.getTableId())
+                .setRemoteDataDir(tableInfo.getRemoteDataDir())
                 .setCreatedTime(tableInfo.getCreatedTime())
                 .setModifiedTime(tableInfo.getModifiedTime());
         return CompletableFuture.completedFuture(response);

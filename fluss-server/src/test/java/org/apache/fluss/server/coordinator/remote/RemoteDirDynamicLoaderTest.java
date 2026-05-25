@@ -93,8 +93,8 @@ class RemoteDirDynamicLoaderTest {
     }
 
     @Test
-    void testReconfigureWithRemoteDataDirsChange() throws Exception {
-        // Test new dirs must contain all old dirs
+    void testValidateRemoteDataDirsChange() throws Exception {
+        // 1. New dirs must contain all old remote.data.dirs
         Configuration conf1 = new Configuration();
         conf1.set(ConfigOptions.REMOTE_DATA_DIRS, Arrays.asList("hdfs://dir1", "hdfs://dir2"));
         try (RemoteDirDynamicLoader loader = new RemoteDirDynamicLoader(conf1)) {
@@ -104,7 +104,28 @@ class RemoteDirDynamicLoaderTest {
 
             assertThatThrownBy(() -> loader.validate(newConfig))
                     .isInstanceOf(ConfigException.class)
-                    .hasMessageContaining("must contain all old remote.data.dirs");
+                    .hasMessageContaining("must contain all existing remote data directories");
+        }
+
+        // 2. New dirs must also contain old remote.data.dir (singular)
+        Configuration conf2 = new Configuration();
+        conf2.setString(ConfigOptions.REMOTE_DATA_DIR, "hdfs://original-dir");
+        try (RemoteDirDynamicLoader loader = new RemoteDirDynamicLoader(conf2)) {
+            Configuration newConfig = new Configuration();
+            newConfig.set(
+                    ConfigOptions.REMOTE_DATA_DIRS, Arrays.asList("hdfs://dir1", "hdfs://dir2"));
+
+            assertThatThrownBy(() -> loader.validate(newConfig))
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining("must contain all existing remote data directories")
+                    .hasMessageContaining("hdfs://original-dir");
+
+            // 3. Including old remote.data.dir should pass
+            Configuration validConfig = new Configuration();
+            validConfig.set(
+                    ConfigOptions.REMOTE_DATA_DIRS,
+                    Arrays.asList("hdfs://original-dir", "hdfs://dir2"));
+            loader.validate(validConfig);
         }
     }
 }
