@@ -526,9 +526,8 @@ public class FlinkSourceEnumerator
     private void startInStreamModeForNonPartitionedTable() {
         if (lakeSource != null) {
             // Generate lake splits synchronously so that they are available before the
-            // first checkpoint.  This is consistent with the partitioned-table path in
-            // start() and ensures generateHybridLakeFlussSplits() can safely use
-            // checkpointTriggeredBefore to distinguish fresh starts from restores.
+            // first checkpoint. This is consistent with the partitioned-table path in
+            // start().
             List<SourceSplitBase> splits = generateHybridLakeFlussSplits();
             if (splits == null) {
                 // no lake snapshot, fall back to normal Fluss splits
@@ -885,13 +884,6 @@ public class FlinkSourceEnumerator
         // without re-generating.
         if (pendingHybridLakeFlussSplits != null) {
             LOG.info("Still have pending lake fluss splits, shouldn't list splits again.");
-            return pendingHybridLakeFlussSplits;
-        }
-        // Restored from checkpoint but pending lake split is null(e.g. the source was
-        // originally started in Fluss-only mode without lake).  Do not generate lake
-        // splits for this restore; mark as initialized and return empty list.
-        if (checkpointTriggeredBefore) {
-            pendingHybridLakeFlussSplits = Collections.emptyList();
             return pendingHybridLakeFlussSplits;
         }
         try {
