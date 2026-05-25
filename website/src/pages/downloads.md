@@ -60,6 +60,12 @@ Read the [release blog](/blog/releases/0.8/) about the new features and signific
 
 ------------------
 
+## Verifying Downloads
+
+Downloaded Apache Fluss (Incubating) artifacts can be verified by following [this tutorial](https://www.apache.org/info/verification.html) of the Apache Software Foundation using the Apache Fluss (Incubating) release-signing [KEYS](https://downloads.apache.org/incubator/fluss/KEYS).
+
+------------------
+
 ## Previous Releases (Non-Apache)
 
 ### Fluss 0.7.0
