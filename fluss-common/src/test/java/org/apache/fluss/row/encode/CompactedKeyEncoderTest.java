@@ -26,6 +26,7 @@ import org.apache.fluss.row.compacted.CompactedRowReader;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.row.indexed.IndexedRowTest;
 import org.apache.fluss.row.indexed.IndexedRowWriter;
+import org.apache.fluss.shaded.guava32.com.google.common.io.BaseEncoding;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -71,6 +72,9 @@ class CompactedKeyEncoderTest {
 
         CompactedKeyEncoder keyEncoder = CompactedKeyEncoder.createKeyEncoder(rowType, pk);
         byte[] encodedBytes = keyEncoder.encodeKey(row);
+
+        //  2 (start of text), 97 (the letter a), 50 (the number 2)
+        assertThat(encodedBytes).isEqualTo(new byte[] {2, 97, 50});
 
         // decode it, should only get "a2"
         InternalRow encodedKey =
@@ -124,6 +128,9 @@ class CompactedKeyEncoderTest {
                         BinaryString.fromString("a3"));
         keyBytes = keyEncoder1.encodeKey(row);
 
+        // 1, 2 (start of text), 97 (the letter a), 50 (the number 2)
+        assertThat(keyBytes).isEqualTo(new byte[] {1, 2, 97, 50});
+
         InternalRow keyRow =
                 decodeRow(
                         new DataType[] {
@@ -153,6 +160,81 @@ class CompactedKeyEncoderTest {
             byte[] keyBytes = keyEncoder.encodeKey(row);
 
             InternalRow keyRow = decodeRow(keyDataTypes, keyBytes);
+
+            // Expected encoding of all types, ensuring consistency across Java and Rust
+            // clients. Hex bytes are grouped by type for readability.
+            StringBuilder expectedHexString = new StringBuilder();
+            // BOOLEAN: true
+            expectedHexString.append("01");
+            // TINYINT: 2
+            expectedHexString.append("02");
+            // SMALLINT: 10
+            expectedHexString.append("0A");
+            // INT: 100
+            expectedHexString.append("00 64");
+            // BIGINT: -6101065172474983726
+            expectedHexString.append("D2 95 FC D8 CE B1 AA AA AB 01");
+            // FLOAT: 13.2
+            expectedHexString.append("33 33 53 41");
+            // DOUBLE: 15.21
+            expectedHexString.append("EC 51 B8 1E 85 6B 2E 40");
+            // DATE: "2023-10-25"
+            expectedHexString.append("C7 99 01");
+            // TIME(0): "09:30:00.0"
+            expectedHexString.append("C0 B3 A7 10");
+            // BINARY(20): "1234567890"
+            expectedHexString.append("0A 31 32 33 34 35 36 37 38 39 30");
+            // BYTES: "20".getBytes()
+            expectedHexString.append("02 32 30");
+            // CHAR(2): "1"
+            expectedHexString.append("01 31");
+            // STRING: "hello"
+            expectedHexString.append("05 68 65 6C 6C 6F");
+            // DECIMAL(5,2): fromUnscaledLong(9, 5, 2)
+            expectedHexString.append("09");
+            // DECIMAL(20,0): fromBigDecimal(new BigDecimal(10), 20, 0)
+            expectedHexString.append("01 0A");
+            // TIMESTAMP(1): TimestampNtz.fromMillis(1698235273182L)
+            expectedHexString.append("DE 9F D7 B5 B6 31");
+            // TIMESTAMP(5): TimestampNtz.fromMillis(1698235273182L)
+            expectedHexString.append("DE 9F D7 B5 B6 31 00");
+            // TIMESTAMP_LTZ(1): TimestampLtz.fromEpochMillis(1698235273182L)
+            expectedHexString.append("DE 9F D7 B5 B6 31");
+            // TIMESTAMP_LTZ(5): TimestampLtz.fromEpochMillis(1698235273182L)
+            expectedHexString.append("DE 9F D7 B5 B6 31 00");
+            // ARRAY(INT): GenericArray.of(1, 2, 3, 4, 5, -11, null, 444, 102234)
+            expectedHexString.append("30 09 00 00 00 40 00 00 00 01 ");
+            expectedHexString.append("00 00 00 02 00 00 00 03 00 00 ");
+            expectedHexString.append("00 04 00 00 00 05 00 00 00 F5 ");
+            expectedHexString.append("FF FF FF 00 00 00 00 BC 01 00 ");
+            expectedHexString.append("00 5A 8F 01 00 00 00 00 00");
+            // ARRAY<FLOAT NOT NULL>: GenericArray.of(0.1f, 1.1f, -0.5f, 6.6f, MAX, MIN)
+            expectedHexString.append("20 06 00 00 00 00 00 00 00 CD ");
+            expectedHexString.append("CC CC 3D CD CC 8C 3F 00 00 00 ");
+            expectedHexString.append("BF 33 33 D3 40 FF FF 7F 7F 01 ");
+            expectedHexString.append("00 00 00");
+            // ARRAY<ARRAY<STRING>>
+            expectedHexString.append("58 03 00 00 00 02 00 00 00 20 ");
+            expectedHexString.append("00 00 00 20 00 00 00 00 00 00 ");
+            expectedHexString.append("00 00 00 00 00 18 00 00 00 40 ");
+            expectedHexString.append("00 00 00 03 00 00 00 02 00 00 ");
+            expectedHexString.append("00 61 00 00 00 00 00 00 81 00 ");
+            expectedHexString.append("00 00 00 00 00 00 00 63 00 00 ");
+            expectedHexString.append("00 00 00 00 81 02 00 00 00 00 ");
+            expectedHexString.append("00 00 00 68 65 6C 6C 6F 00 00 ");
+            expectedHexString.append("85 77 6F 72 6C 64 00 00 85");
+            // MAP<INT NOT NULL, STRING>
+            expectedHexString.append("3C 18 00 00 00 03 00 00 00 00 ");
+            expectedHexString.append("00 00 00 00 00 00 00 01 00 00 ");
+            expectedHexString.append("00 02 00 00 00 00 00 00 00 03 ");
+            expectedHexString.append("00 00 00 01 00 00 00 00 00 00 ");
+            expectedHexString.append("00 00 00 00 00 31 00 00 00 00 ");
+            expectedHexString.append("00 00 81 32 00 00 00 00 00 00 ");
+            expectedHexString.append("81");
+            byte[] expected =
+                    BaseEncoding.base16().decode(expectedHexString.toString().replace(" ", ""));
+
+            assertThat(keyBytes).isEqualTo(expected);
 
             // get the field getter for the key field
             InternalRow.FieldGetter[] fieldGetters =
