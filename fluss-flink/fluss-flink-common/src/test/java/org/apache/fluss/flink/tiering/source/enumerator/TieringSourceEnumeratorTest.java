@@ -166,7 +166,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
             // register all readers
             registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 0);
-            waitUntilTieringTableSplitAssignmentReady(context, DEFAULT_BUCKET_NUM, 3000L);
+            waitUntilTieringTableSplitAssignmentReady(context, DEFAULT_BUCKET_NUM, 1000L);
 
             List<TieringSplit> expectedSnapshotAssignment = new ArrayList<>();
             for (int tableBucket = 0; tableBucket < DEFAULT_BUCKET_NUM; tableBucket++) {
@@ -185,6 +185,12 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             assertThat(actualAssignment)
                     .containsExactlyInAnyOrderElementsOf(expectedSnapshotAssignment);
 
+            // Lease should have been acquired for this table's snapshot buckets after the
+            // snapshot splits are generated and assigned.
+            assertThat(enumerator.getLeasedBucketsByTable()).containsOnlyKeys(tableId);
+            assertThat(enumerator.getLeasedBucketsByTable().get(tableId))
+                    .hasSize(DEFAULT_BUCKET_NUM);
+
             // mock finished tiered this round, check second round
             context.getSplitsAssignmentSequence().clear();
             final Map<Integer, Long> initialBucketOffsets = new HashMap<>();
@@ -199,6 +205,9 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                     .get();
 
             enumerator.handleSourceEvent(1, new FinishedTieringEvent(tableId));
+
+            // Once the table is finished, the lease held for its buckets should be released.
+            assertThat(enumerator.getLeasedBucketsByTable()).doesNotContainKey(tableId);
 
             Map<Integer, Long> bucketOffsetOfSecondWrite =
                     upsertRow(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR, 10, 20);
@@ -448,7 +457,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                             0,
                             1);
 
-            waitUntilTieringTableSplitAssignmentReady(context, partitionNameByIds.size(), 3000L);
+            waitUntilTieringTableSplitAssignmentReady(context, partitionNameByIds.size(), 1000L);
 
             List<TieringSplit> expectedAssignment = new ArrayList<>();
             for (Map.Entry<String, Long> partitionNameById : partitionNameByIds.entrySet()) {
@@ -731,6 +740,87 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
     }
 
     @Test
+    void testLeaseReleasedOnFailedTieringEvent() throws Throwable {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-lease-fail-test");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numSubtasks = 3;
+
+        upsertRow(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR, 0, 10);
+        triggerAndWaitSnapshot(tableId);
+
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
+            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
+            enumerator.start();
+
+            // register all readers
+            registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 0);
+            waitUntilTieringTableSplitAssignmentReady(context, DEFAULT_BUCKET_NUM, 1000L);
+
+            // Lease should be acquired
+            assertThat(enumerator.getLeasedBucketsByTable()).containsOnlyKeys(tableId);
+
+            // Simulate failed tiering event
+            enumerator.handleSourceEvent(1, new FailedTieringEvent(tableId, "test failure"));
+
+            // Lease should be released after failure
+            assertThat(enumerator.getLeasedBucketsByTable()).doesNotContainKey(tableId);
+        }
+    }
+
+    @Test
+    void testLeaseReleasedOnReaderFailover() throws Throwable {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-lease-failover-test");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numSubtasks = 3;
+
+        upsertRow(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR, 0, 10);
+        triggerAndWaitSnapshot(tableId);
+
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
+            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
+            enumerator.start();
+
+            // register all readers with attempt 0
+            registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 0);
+            waitUntilTieringTableSplitAssignmentReady(context, DEFAULT_BUCKET_NUM, 1000L);
+
+            // Lease should be acquired
+            assertThat(enumerator.getLeasedBucketsByTable()).containsOnlyKeys(tableId);
+
+            // Simulate reader failover (attempt 1)
+            context.getSplitsAssignmentSequence().clear();
+            registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 1);
+
+            // After failover, all leases for the failed tables should be released
+            assertThat(enumerator.getLeasedBucketsByTable()).doesNotContainKey(tableId);
+        }
+    }
+
+    @Test
+    void testLogOnlyTableDoesNotAcquireLease() throws Throwable {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-lease-log-only-test");
+        createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
+        int numSubtasks = 3;
+
+        appendRow(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR, 0, 10);
+
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
+            TieringSourceEnumerator enumerator = createTieringSourceEnumerator(flussConf, context);
+            enumerator.start();
+
+            // register all readers
+            registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 0);
+            waitUntilTieringTableSplitAssignmentReady(context, DEFAULT_BUCKET_NUM, 1000L);
+
+            // Log-only table should not have any leased buckets
+            assertThat(enumerator.getLeasedBucketsByTable()).isEmpty();
+        }
+    }
+
+    @Test
     void testTableReachMaxTieringDuration() throws Throwable {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-max-duration-test-log-table");
         long tableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
@@ -757,7 +847,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             waitUntilTieringTableSplitAssignmentReady(context, 2, 200L);
 
             retry(
-                    Duration.ofSeconds(30),
+                    Duration.ofSeconds(5),
                     () -> {
                         // Verify that TieringReachMaxDurationEvent was sent to all readers
                         // Use reflection to access events sent to readers

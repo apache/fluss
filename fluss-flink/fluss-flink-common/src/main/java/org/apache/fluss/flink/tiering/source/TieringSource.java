@@ -91,7 +91,6 @@ public class TieringSource<WriteResult>
     public SplitEnumerator<TieringSplit, TieringSourceEnumeratorState> restoreEnumerator(
             SplitEnumeratorContext<TieringSplit> splitEnumeratorContext,
             TieringSourceEnumeratorState tieringSourceEnumeratorState) {
-        // stateless operator
         return new TieringSourceEnumerator(
                 flussConf, splitEnumeratorContext, pollTieringTableIntervalMs);
     }

@@ -17,25 +17,8 @@
 
 package org.apache.fluss.flink.tiering.source.state;
 
-import org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator;
-
-/** The marker class of stateless component {@link TieringSourceEnumerator}. */
+/** The state of the tiering source enumerator. Currently a stateless marker. */
 public class TieringSourceEnumeratorState {
+
     public TieringSourceEnumeratorState() {}
-
-    @Override
-    public boolean equals(Object that) {
-        if (this == that) {
-            return true;
-        }
-        if (that != null) {
-            return this.toString().equals(that.toString());
-        }
-        return false;
-    }
-
-    @Override
-    public String toString() {
-        return "SourceEnumeratorState{}";
-    }
 }
