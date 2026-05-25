@@ -27,7 +27,7 @@
     </parent>
 
     <artifactId>fluss-protogen-maven-plugin</artifactId>
-    <name>Fluss : ProtoGen : Maven Plugin</name>
+    <name>Apache Fluss (Incubating) : ProtoGen : Maven Plugin</name>
     <packaging>maven-plugin</packaging>
 
     <dependencies>

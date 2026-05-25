@@ -28,7 +28,7 @@
     </parent>
 
     <artifactId>fluss-fs-hdfs</artifactId>
-    <name>Fluss : FileSystems : HDFS FS</name>
+    <name>Apache Fluss (Incubating) : FileSystems : HDFS FS</name>
 
     <packaging>jar</packaging>
 

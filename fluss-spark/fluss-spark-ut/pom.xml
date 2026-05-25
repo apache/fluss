@@ -28,7 +28,7 @@
     </parent>
 
     <artifactId>fluss-spark-ut_${scala.binary.version}</artifactId>
-    <name>Fluss : Engine Spark : UT</name>
+    <name>Apache Fluss (Incubating) : Engine Spark : UT</name>
 
     <dependencies>
         <dependency>

@@ -28,7 +28,7 @@
     </parent>
 
     <artifactId>fluss-fs-azure</artifactId>
-    <name>Fluss : FileSystems : Azure FS</name>
+    <name>Apache Fluss (Incubating) : FileSystems : Azure FS</name>
 
     <packaging>jar</packaging>
 

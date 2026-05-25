@@ -27,7 +27,7 @@
     </parent>
 
     <artifactId>fluss-kafka</artifactId>
-    <name>Fluss : Kafka Compatibility</name>
+    <name>Apache Fluss (Incubating) : Kafka Compatibility</name>
 
     <properties>
         <kafka.version>3.9.2</kafka.version>

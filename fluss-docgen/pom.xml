@@ -28,7 +28,7 @@
     </parent>
 
     <artifactId>fluss-docgen</artifactId>
-    <name>Fluss : Documentation Generator</name>
+    <name>Apache Fluss (Incubating) : Documentation Generator</name>
 
     <dependencies>
         <dependency>

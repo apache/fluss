@@ -29,7 +29,7 @@
 
     <artifactId>fluss-flink-1.20</artifactId>
 
-    <name>Fluss : Engine Flink : 1.20</name>
+    <name>Apache Fluss (Incubating) : Engine Flink : 1.20</name>
 
     <properties>
         <flink.major.version>1.20</flink.major.version>

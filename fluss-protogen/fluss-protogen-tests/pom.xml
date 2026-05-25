@@ -27,7 +27,7 @@
     </parent>
 
     <artifactId>fluss-protogen-tests</artifactId>
-    <name>Fluss : ProtoGen : Tests</name>
+    <name>Apache Fluss (Incubating) : ProtoGen : Tests</name>
 
     <dependencies>
         <dependency>
