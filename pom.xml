@@ -68,6 +68,7 @@
         <module>fluss-kafka</module>
         <module>fluss-docgen</module>
         <module>tools/ci/fluss-ci-tools</module>
+        <module>fluss-compatibility-test</module>
     </modules>
 
     <properties>
