@@ -34,6 +34,8 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -51,6 +53,16 @@ public class TableManager {
     private final TableBucketStateMachine tableBucketStateMachine;
     private final ExecutorService ioExecutor;
 
+    /**
+     * Optional manager used to batch and rate-limit the asynchronous replica cleanup that follows
+     * {@link #onDeleteTable(long)} / {@link #onDeletePartition(long, long)}. When set, {@link
+     * #resumeDeletions()} routes eligible drops through the manager instead of invoking the
+     * state-machine transitions directly, and {@link #completeDeleteTable(long)} / {@link
+     * #completeDeletePartition(TablePartition)} notify the manager so the next batch can be
+     * released.
+     */
+    @Nullable private ReplicaCleanupManager replicaCleanupManager;
+
     public TableManager(
             MetadataManager metadataManager,
             CoordinatorContext coordinatorContext,
@@ -64,6 +76,10 @@ public class TableManager {
         this.replicaStateMachine = replicaStateMachine;
         this.tableBucketStateMachine = tableBucketStateMachine;
         this.ioExecutor = ioExecutor;
+    }
+
+    public void setReplicaCleanupManager(ReplicaCleanupManager replicaCleanupManager) {
+        this.replicaCleanupManager = replicaCleanupManager;
     }
 
     public void startup() {
@@ -208,22 +224,19 @@ public class TableManager {
 
     private void resumeTableDeletions() {
         Set<Long> tablesToBeDeleted = new HashSet<>(coordinatorContext.getTablesToBeDeleted());
-        Set<Long> eligibleTableDeletion = new HashSet<>();
-
         for (long tableId : tablesToBeDeleted) {
-            // if all replicas are marked as deleted successfully, then table deletion is done
             if (coordinatorContext.areAllReplicasInState(
                     tableId, ReplicaState.ReplicaDeletionSuccessful)) {
                 completeDeleteTable(tableId);
                 LOG.info("Deletion of table with id {} successfully completed.", tableId);
-            }
-            if (isEligibleForDeletion(tableId)) {
-                eligibleTableDeletion.add(tableId);
-            }
-        }
-        if (!eligibleTableDeletion.isEmpty()) {
-            for (long tableId : eligibleTableDeletion) {
-                onDeleteTable(tableId);
+            } else if (isEligibleForDeletion(tableId)) {
+                if (replicaCleanupManager != null) {
+                    int bucketCount = coordinatorContext.getAllBucketsForTable(tableId).size();
+                    replicaCleanupManager.submitTableDropForResume(
+                            tableId, bucketCount, () -> onDeleteTable(tableId));
+                } else {
+                    onDeleteTable(tableId);
+                }
             }
         }
     }
@@ -231,22 +244,29 @@ public class TableManager {
     private void resumePartitionDeletions() {
         Set<TablePartition> partitionsToDelete =
                 new HashSet<>(coordinatorContext.getPartitionsToBeDeleted());
-        Set<TablePartition> eligiblePartitionDeletion = new HashSet<>();
-
         for (TablePartition partition : partitionsToDelete) {
-            // if all replicas are marked as deleted successfully, then partition deletion is done
             if (coordinatorContext.areAllReplicasInState(
                     partition, ReplicaState.ReplicaDeletionSuccessful)) {
                 completeDeletePartition(partition);
                 LOG.info("Deletion of partition {} successfully completed.", partition);
-            }
-            if (isEligibleForDeletion(partition)) {
-                eligiblePartitionDeletion.add(partition);
-            }
-        }
-        if (!eligiblePartitionDeletion.isEmpty()) {
-            for (TablePartition partition : eligiblePartitionDeletion) {
-                onDeletePartition(partition.getTableId(), partition.getPartitionId());
+            } else if (isEligibleForDeletion(partition)) {
+                long tableId = partition.getTableId();
+                long partitionId = partition.getPartitionId();
+                if (replicaCleanupManager != null) {
+                    int bucketCount =
+                            coordinatorContext
+                                    .getAllBucketsForPartition(tableId, partitionId)
+                                    .size();
+                    String partitionName = coordinatorContext.getPartitionName(partitionId);
+                    replicaCleanupManager.submitPartitionDropForResume(
+                            tableId,
+                            partitionId,
+                            partitionName,
+                            bucketCount,
+                            () -> onDeletePartition(tableId, partitionId));
+                } else {
+                    onDeletePartition(tableId, partitionId);
+                }
             }
         }
     }
@@ -257,6 +277,10 @@ public class TableManager {
         asyncDeleteRemoteDirectory(tableId);
         asyncDeleteTableMetadata(tableId);
         coordinatorContext.removeTable(tableId);
+        if (replicaCleanupManager != null) {
+            // Release the manager's in-flight tracking so the next batch can be submitted.
+            replicaCleanupManager.onTableDropCompleted(tableId);
+        }
     }
 
     private void completeDeletePartition(TablePartition tablePartition) {
@@ -267,6 +291,9 @@ public class TableManager {
         asyncDeleteRemoteDirectory(tablePartition);
         asyncDeletePartitionMetadata(tablePartition.getPartitionId());
         coordinatorContext.removePartition(tablePartition);
+        if (replicaCleanupManager != null) {
+            replicaCleanupManager.onPartitionDropCompleted(tablePartition);
+        }
     }
 
     private void asyncDeleteRemoteDirectory(long tableId) {
@@ -321,16 +348,12 @@ public class TableManager {
     }
 
     private boolean isEligibleForDeletion(long tableId) {
-        // the table is queued for deletion and
-        // no any replica is in state deletion started
         return coordinatorContext.isTableQueuedForDeletion(tableId)
                 && !coordinatorContext.isAnyReplicaInState(
                         tableId, ReplicaState.ReplicaDeletionStarted);
     }
 
     private boolean isEligibleForDeletion(TablePartition tablePartition) {
-        // the partition is queued for deletion and
-        // no any replica is in state deletion started
         return coordinatorContext.isPartitionQueuedForDeletion(tablePartition)
                 && !coordinatorContext.isAnyReplicaInState(
                         tablePartition, ReplicaState.ReplicaDeletionStarted);

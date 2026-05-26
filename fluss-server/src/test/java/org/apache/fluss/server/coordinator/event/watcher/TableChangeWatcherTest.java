@@ -29,6 +29,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.coordinator.ReplicaCleanupManager;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.CreatePartitionEvent;
 import org.apache.fluss.server.coordinator.event.CreateTableEvent;
@@ -81,6 +82,7 @@ class TableChangeWatcherTest {
     private static ZooKeeperClient zookeeperClient;
     private static String remoteDataDir;
     private TestingEventManager eventManager;
+    private ReplicaCleanupManager replicaCleanupManager;
     private TableChangeWatcher tableChangeWatcher;
     private static MetadataManager metadataManager;
 
@@ -109,7 +111,16 @@ class TableChangeWatcherTest {
         metadataManager.createDatabase(DEFAULT_DB, DatabaseDescriptor.builder().build(), false);
 
         eventManager = new TestingEventManager();
-        tableChangeWatcher = new TableChangeWatcher(zookeeperClient, eventManager);
+        // Use a real ReplicaCleanupManager so that drop submissions are forwarded into the
+        // event manager as DropPartitionEvent / DropTableEvent (the existing assertions in this
+        // test verify exactly that).
+        replicaCleanupManager =
+                new ReplicaCleanupManager(
+                        eventManager,
+                        new Configuration(),
+                        org.apache.fluss.utils.clock.SystemClock.getInstance());
+        tableChangeWatcher =
+                new TableChangeWatcher(zookeeperClient, eventManager, replicaCleanupManager);
         tableChangeWatcher.start();
     }
 
@@ -117,6 +128,9 @@ class TableChangeWatcherTest {
     void after() {
         if (tableChangeWatcher != null) {
             tableChangeWatcher.stop();
+        }
+        if (replicaCleanupManager != null) {
+            replicaCleanupManager.close();
         }
     }
 
@@ -461,7 +475,13 @@ class TableChangeWatcherTest {
         // existing nodes with full data - the same code path as when the async
         // getData race causes NODE_CHANGED to be lost.
         TestingEventManager newEventManager = new TestingEventManager();
-        TableChangeWatcher newWatcher = new TableChangeWatcher(zookeeperClient, newEventManager);
+        ReplicaCleanupManager newCleanupManager =
+                new ReplicaCleanupManager(
+                        newEventManager,
+                        new Configuration(),
+                        org.apache.fluss.utils.clock.SystemClock.getInstance());
+        TableChangeWatcher newWatcher =
+                new TableChangeWatcher(zookeeperClient, newEventManager, newCleanupManager);
         newWatcher.start();
 
         retry(
@@ -470,5 +490,6 @@ class TableChangeWatcherTest {
                         assertThat(newEventManager.getEvents())
                                 .containsExactlyInAnyOrderElementsOf(expectedEvents));
         newWatcher.stop();
+        newCleanupManager.close();
     }
 }

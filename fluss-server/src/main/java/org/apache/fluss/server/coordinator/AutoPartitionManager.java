@@ -344,7 +344,7 @@ public class AutoPartitionManager implements AutoCloseable {
             dropPartitions(
                     tablePath,
                     tableInfo.getPartitionKeys(),
-                    createPartitionInstant,
+                    now,
                     tableInfo.getTableConfig().getAutoPartitionStrategy(),
                     currentPartitions);
             createPartitions(tableInfo, createPartitionInstant, currentPartitions);

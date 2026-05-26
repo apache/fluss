@@ -123,6 +123,7 @@ import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.AutoPartitionStrategy;
+import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -174,6 +175,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final CoordinatorEventManager coordinatorEventManager;
     private final MetadataManager metadataManager;
     private final TableManager tableManager;
+    private final ReplicaCleanupManager replicaCleanupManager;
     private final AutoPartitionManager autoPartitionManager;
     private final LakeTableTieringManager lakeTableTieringManager;
     private final TableChangeWatcher tableChangeWatcher;
@@ -199,7 +201,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
             Configuration conf,
             ExecutorService ioExecutor,
             MetadataManager metadataManager,
-            KvSnapshotLeaseManager kvSnapshotLeaseManager) {
+            KvSnapshotLeaseManager kvSnapshotLeaseManager,
+            Clock clock) {
         this.zooKeeperClient = zooKeeperClient;
         this.serverMetadataCache = serverMetadataCache;
         this.coordinatorChannelManager = coordinatorChannelManager;
@@ -231,9 +234,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         tableBucketStateMachine,
                         new RemoteStorageCleaner(conf, ioExecutor),
                         ioExecutor);
+        this.replicaCleanupManager =
+                new ReplicaCleanupManager(coordinatorEventManager, conf, clock);
+        this.tableManager.setReplicaCleanupManager(replicaCleanupManager);
         this.coordinatorChangeWatcher =
                 new CoordinatorChangeWatcher(zooKeeperClient, coordinatorEventManager);
-        this.tableChangeWatcher = new TableChangeWatcher(zooKeeperClient, coordinatorEventManager);
+        this.tableChangeWatcher =
+                new TableChangeWatcher(
+                        zooKeeperClient, coordinatorEventManager, replicaCleanupManager);
         this.tabletServerChangeWatcher =
                 new TabletServerChangeWatcher(zooKeeperClient, coordinatorEventManager);
         this.coordinatorRequestBatch =
@@ -271,6 +279,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
         return coordinatorContext;
     }
 
+    @VisibleForTesting
+    ReplicaCleanupManager getReplicaCleanupManager() {
+        return replicaCleanupManager;
+    }
+
     public void startup() {
         coordinatorContext.setCoordinatorServerInfo(getCoordinatorServerInfo());
         // start watchers first so that we won't miss node in zk;
@@ -300,6 +313,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // start table manager
         tableManager.startup();
+
+        // start replica cleanup manager timeout checker after table manager is up
+        replicaCleanupManager.start();
 
         // start the event manager which will then process the event
         coordinatorEventManager.start();
@@ -562,6 +578,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private void onShutdown() {
         // first shutdown table manager
         tableManager.shutdown();
+
+        // shut down replica cleanup manager timeout checker
+        replicaCleanupManager.close();
 
         // then stop watchers
         coordinatorChangeWatcher.stop();
@@ -925,6 +944,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // remove table metrics.
         coordinatorMetricGroup.removeTableMetricGroup(dropTableInfo.getTablePath(), tableId);
+
+        // For partitioned tables the table-level assignment is empty, so no
+        // DeleteReplicaResponse will ever arrive to trigger resumeDeletions().
+        // Call it now so the vacuously-complete table is finalized immediately.
+        tableManager.resumeDeletions();
     }
 
     private void processDropPartition(DropPartitionEvent dropPartitionEvent) {

@@ -23,10 +23,9 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.coordinator.ReplicaCleanupManager;
 import org.apache.fluss.server.coordinator.event.CreatePartitionEvent;
 import org.apache.fluss.server.coordinator.event.CreateTableEvent;
-import org.apache.fluss.server.coordinator.event.DropPartitionEvent;
-import org.apache.fluss.server.coordinator.event.DropTableEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
 import org.apache.fluss.server.coordinator.event.TableRegistrationChangeEvent;
@@ -47,6 +46,8 @@ import org.apache.fluss.utils.types.Tuple2;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 
 /** A watcher to watch the table changes(create/delete) in zookeeper. */
@@ -58,13 +59,21 @@ public class TableChangeWatcher {
     private volatile boolean running;
 
     private final EventManager eventManager;
+    private final ReplicaCleanupManager replicaCleanupManager;
     private final ZooKeeperClient zooKeeperClient;
 
-    public TableChangeWatcher(ZooKeeperClient zooKeeperClient, EventManager eventManager) {
+    /** Cache of {@code tableId -> bucketCount} for partitions. */
+    private final Map<Long, Integer> tableBucketCount = new HashMap<>();
+
+    public TableChangeWatcher(
+            ZooKeeperClient zooKeeperClient,
+            EventManager eventManager,
+            ReplicaCleanupManager replicaCleanupManager) {
         this.zooKeeperClient = zooKeeperClient;
         this.curatorCache =
                 CuratorCache.build(zooKeeperClient.getCuratorClient(), DatabasesZNode.path());
         this.eventManager = eventManager;
+        this.replicaCleanupManager = replicaCleanupManager;
         this.curatorCache.listenable().addListener(new TablePathChangeListener());
     }
 
@@ -166,14 +175,22 @@ public class TableChangeWatcher {
                         PhysicalTablePath physicalTablePath =
                                 PartitionZNode.parsePath(oldData.getPath());
                         if (physicalTablePath != null) {
-                            // it's for deletion of a table partition node
+                            // it's for deletion of a table partition node. Submit to the
+                            // replica cleanup manager rather than putting a DropPartitionEvent
+                            // directly: the manager throttles admission into the coordinator
+                            // event queue so that a cascading drop (10k+ partitions) cannot
+                            // starve unrelated coordinator work.
                             PartitionRegistration partition =
                                     PartitionZNode.decode(oldData.getData());
-                            eventManager.put(
-                                    new DropPartitionEvent(
+                            int buckets =
+                                    resolveTableBucketCount(
                                             partition.getTableId(),
-                                            partition.getPartitionId(),
-                                            physicalTablePath.getPartitionName()));
+                                            physicalTablePath.getTablePath());
+                            replicaCleanupManager.submitPartitionDrop(
+                                    partition.getTableId(),
+                                    partition.getPartitionId(),
+                                    physicalTablePath.getPartitionName(),
+                                    buckets);
                         } else {
                             // maybe table node is deleted
                             // try to parse the path as a table node
@@ -184,13 +201,11 @@ public class TableChangeWatcher {
                             TableRegistration table = TableZNode.decode(oldData.getData());
                             TableConfig tableConfig =
                                     new TableConfig(Configuration.fromMap(table.properties));
-                            eventManager.put(
-                                    new DropTableEvent(
-                                            table.tableId,
-                                            tableConfig
-                                                    .getAutoPartitionStrategy()
-                                                    .isAutoPartitionEnabled(),
-                                            tableConfig.isDataLakeEnabled()));
+                            replicaCleanupManager.submitTableDrop(
+                                    table.tableId,
+                                    tableConfig.getAutoPartitionStrategy().isAutoPartitionEnabled(),
+                                    tableConfig.isDataLakeEnabled(),
+                                    table.bucketCount);
                         }
                         break;
                     }
@@ -275,6 +290,37 @@ public class TableChangeWatcher {
             TableRegistration newTable = TableZNode.decode(newData.getData());
             eventManager.put(new TableRegistrationChangeEvent(tablePath, newTable));
         }
+    }
+
+    /**
+     * Returns the bucket count owned by a single partition of the given table. Looks up the local
+     * cache first and falls back to a synchronous {@link ZooKeeperClient#getTable} read on miss. If
+     * the table znode is already gone (e.g. cascading drop where the table node was deleted before
+     * this partition NODE_DELETED is delivered), returns {@code 0}; the drop is still admitted
+     * thanks to the manager's starvation guard.
+     */
+    private int resolveTableBucketCount(long tableId, TablePath tablePath) {
+        Integer cached = tableBucketCount.get(tableId);
+        if (cached != null) {
+            return cached;
+        }
+        try {
+            Optional<TableRegistration> registration = zooKeeperClient.getTable(tablePath);
+            if (registration.isPresent()) {
+                int buckets = registration.get().bucketCount;
+                tableBucketCount.put(tableId, buckets);
+                return buckets;
+            }
+        } catch (Exception e) {
+            LOG.warn(
+                    "Failed to read TableRegistration for {} (tableId={}) while resolving "
+                            + "bucket count for partition drop. Falling back to bucketCount=0; "
+                            + "the drop will still be admitted via the starvation guard.",
+                    tablePath,
+                    tableId,
+                    e);
+        }
+        return 0;
     }
 
     private void processSchemaChange(TablePath tablePath, int schemaId) {
