@@ -46,7 +46,7 @@ public class HudiCatalogUtils {
     public static final String CATALOG_NAME_CONFIG = "name";
 
     public static final String HUDI_CATALOG_DEFAULT_NAME = "fluss-hudi-catalog";
-    public static final String HIVA_META_STAORE_TYPE = "hms";
+    public static final String HIVE_META_STORE_TYPE = "hms";
     public static final String FILE_SYSTEM_TYPE = "dfs";
 
     public static Catalog createHudiCatalog(Configuration configuration) {
@@ -65,14 +65,14 @@ public class HudiCatalogUtils {
             Map<String, String> hudiProps,
             org.apache.flink.configuration.Configuration configuration) {
         String catalogMode =
-                hudiProps.getOrDefault(CatalogOptions.MODE.key(), HIVA_META_STAORE_TYPE);
+                hudiProps.getOrDefault(CatalogOptions.MODE.key(), HIVE_META_STORE_TYPE);
         LOG.info(
                 "create hudi catalog: {}, mode: {}, configuration: {}",
                 catalogName,
                 catalogMode,
                 configuration);
         switch (catalogMode.toLowerCase(Locale.ENGLISH)) {
-            case HIVA_META_STAORE_TYPE:
+            case HIVE_META_STORE_TYPE:
                 return new HoodieHiveCatalog(catalogName, configuration);
             case FILE_SYSTEM_TYPE:
                 return new HoodieCatalog(catalogName, configuration);

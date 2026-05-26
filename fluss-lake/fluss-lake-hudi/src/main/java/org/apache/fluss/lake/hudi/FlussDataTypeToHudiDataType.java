@@ -42,7 +42,7 @@ import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.types.DataType;
 
 import static org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils.FILE_SYSTEM_TYPE;
-import static org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils.HIVA_META_STAORE_TYPE;
+import static org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils.HIVE_META_STORE_TYPE;
 
 /** Convert from Fluss's data type to Hudi's internal data type. */
 public class FlussDataTypeToHudiDataType implements DataTypeVisitor<DataType> {
@@ -56,7 +56,7 @@ public class FlussDataTypeToHudiDataType implements DataTypeVisitor<DataType> {
     public static final FlussDataTypeToHudiDataType DFS_INSTANCE =
             new FlussDataTypeToHudiDataType(FILE_SYSTEM_TYPE);
     public static final FlussDataTypeToHudiDataType HMS_INSTANCE =
-            new FlussDataTypeToHudiDataType(HIVA_META_STAORE_TYPE);
+            new FlussDataTypeToHudiDataType(HIVE_META_STORE_TYPE);
 
     @Override
     public DataType visit(CharType charType) {
@@ -139,7 +139,7 @@ public class FlussDataTypeToHudiDataType implements DataTypeVisitor<DataType> {
 
     @Override
     public DataType visit(LocalZonedTimestampType localZonedTimestampType) {
-        return HIVA_META_STAORE_TYPE.equals(catalogMode)
+        return HIVE_META_STORE_TYPE.equals(catalogMode)
                 ? withNullability(DataTypes.BIGINT(), localZonedTimestampType.isNullable())
                 : withNullability(
                         DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE(),

@@ -45,7 +45,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 
-import static org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils.HIVA_META_STAORE_TYPE;
+import static org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils.HIVE_META_STORE_TYPE;
 import static org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils.HUDI_CATALOG_DEFAULT_NAME;
 import static org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils.MODE_CONFIG;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
@@ -66,10 +66,10 @@ public class HudiLakeCatalog implements LakeCatalog {
     }
 
     private final Catalog hudiCatalog;
-    private final String catalagMode;
+    private final String catalogMode;
 
     public HudiLakeCatalog(Configuration configuration) {
-        this.catalagMode = configuration.toMap().getOrDefault(MODE_CONFIG, HIVA_META_STAORE_TYPE);
+        this.catalogMode = configuration.toMap().getOrDefault(MODE_CONFIG, HIVE_META_STORE_TYPE);
         this.hudiCatalog = HudiCatalogUtils.createHudiCatalog(configuration);
         this.hudiCatalog.open();
     }
@@ -90,7 +90,7 @@ public class HudiLakeCatalog implements LakeCatalog {
 
         // Create Hudi catalog table
         CatalogTable catalogTable =
-                HudiConversions.createHudiCatalogTable(tableDescriptor, isPkTable, catalagMode);
+                HudiConversions.createHudiCatalogTable(tableDescriptor, isPkTable, catalogMode);
 
         // Create table in Hudi catalog
         try {

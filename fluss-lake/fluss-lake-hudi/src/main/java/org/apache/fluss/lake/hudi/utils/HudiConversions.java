@@ -48,7 +48,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.apache.fluss.lake.hudi.HudiLakeCatalog.SYSTEM_COLUMNS;
-import static org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils.HIVA_META_STAORE_TYPE;
+import static org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils.HIVE_META_STORE_TYPE;
 
 /** Utils for conversion between Hudi and Fluss. */
 public class HudiConversions {
@@ -203,7 +203,7 @@ public class HudiConversions {
         LOG.info("Hudi table properties: {}", options);
 
         String comment = tableDescriptor.getComment().orElse("Hudi table created from Fluss");
-        return HIVA_META_STAORE_TYPE.equals(catalogMode)
+        return HIVE_META_STORE_TYPE.equals(catalogMode)
                 ? HudiCatalogUtils.createCatalogTable(schema, partitionKeys, options, comment)
                 : HudiCatalogUtils.createResolvedCatalogTable(
                         schema, partitionKeys, options, comment, resolvedSchema);

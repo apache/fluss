@@ -43,10 +43,7 @@ public class HudiLakeStorage implements LakeStorage {
 
     @Override
     public LakeCatalog createLakeCatalog() {
-        throw new UnsupportedOperationException(
-                "HudiLakeStorage is currently a scaffold and does not support creating a "
-                        + "LakeCatalog yet. Verify that Hudi lake storage was selected "
-                        + "intentionally and that the required Hudi support/module is available.");
+        return new HudiLakeCatalog(hudiConfig);
     }
 
     @Override
