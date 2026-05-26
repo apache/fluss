@@ -113,6 +113,40 @@ class RoaringBitmapSerializerTest {
     }
 
     @Test
+    void testSerializeWithRunOptimizableBitmap() throws Exception {
+        RoaringBitmap original = new RoaringBitmap();
+        original.add(0L, 50_000L);
+
+        DataOutputSerializer out = new DataOutputSerializer(64 * 1024);
+        serializer.serialize(original, out);
+
+        DataInputDeserializer in = new DataInputDeserializer(out.getCopyOfBuffer());
+        RoaringBitmap restored = serializer.deserialize(in);
+
+        assertThat(restored).isEqualTo(original);
+        assertThat(restored.getLongCardinality()).isEqualTo(50_000L);
+        // The deserializer must have consumed exactly the bytes we wrote.
+        assertThat(in.available()).isZero();
+    }
+
+    @Test
+    void testCopyStreamWithRunOptimizableBitmap() throws Exception {
+        RoaringBitmap original = new RoaringBitmap();
+        original.add(0L, 50_000L);
+
+        DataOutputSerializer out = new DataOutputSerializer(64 * 1024);
+        serializer.serialize(original, out);
+
+        DataInputDeserializer in = new DataInputDeserializer(out.getCopyOfBuffer());
+        DataOutputSerializer copied = new DataOutputSerializer(64 * 1024);
+        serializer.copy(in, copied);
+
+        RoaringBitmap restored =
+                serializer.deserialize(new DataInputDeserializer(copied.getCopyOfBuffer()));
+        assertThat(restored).isEqualTo(original);
+    }
+
+    @Test
     void testEmptyBitmapRoundTrip() throws Exception {
         RoaringBitmap empty = new RoaringBitmap();
 

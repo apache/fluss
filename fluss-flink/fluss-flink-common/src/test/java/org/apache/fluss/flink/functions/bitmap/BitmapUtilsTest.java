@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.roaringbitmap.RoaringBitmap;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -80,12 +81,20 @@ class BitmapUtilsTest {
     }
 
     @Test
-    void testFormatCompatibleWithServerSerialization() throws IOException {
-        // This test verifies that our ByteBuffer-based serialization produces bytes
-        // that can be deserialized back correctly — same guarantee the server relies on.
-        RoaringBitmap original = RoaringBitmap.bitmapOf(42, 100, 200, 300);
-        byte[] bytes = BitmapUtils.toBytes(original);
-        RoaringBitmap restored = BitmapUtils.fromBytes(bytes);
-        assertThat(restored).isEqualTo(original);
+    void testProducesSameBytesAsServerSerializationRecipe() throws IOException {
+        // Use a bitmap that benefits from runOptimize so the test would catch
+        // removal of runOptimize from one side but not the other.
+        RoaringBitmap original = new RoaringBitmap();
+        original.add(0L, 50_000L);
+
+        byte[] clientBytes = BitmapUtils.toBytes(original.clone());
+
+        RoaringBitmap forServer = original.clone();
+        forServer.runOptimize();
+        ByteBuffer buffer = ByteBuffer.allocate(forServer.serializedSizeInBytes());
+        forServer.serialize(buffer);
+        byte[] serverRecipeBytes = buffer.array();
+
+        assertThat(clientBytes).isEqualTo(serverRecipeBytes);
     }
 }

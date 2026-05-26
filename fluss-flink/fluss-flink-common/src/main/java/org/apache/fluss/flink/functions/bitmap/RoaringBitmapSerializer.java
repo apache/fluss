@@ -71,9 +71,8 @@ public final class RoaringBitmapSerializer extends TypeSerializerSingleton<Roari
 
     @Override
     public void serialize(RoaringBitmap record, DataOutputView target) throws IOException {
-        int size = record.serializedSizeInBytes();
-        target.writeInt(size);
         byte[] bytes = BitmapUtils.toBytes(record);
+        target.writeInt(bytes.length);
         target.write(bytes);
     }
 
