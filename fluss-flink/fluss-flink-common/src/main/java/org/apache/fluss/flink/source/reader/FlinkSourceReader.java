@@ -28,6 +28,7 @@ import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
 import org.apache.fluss.flink.source.reader.fetcher.FlinkSourceFetcherManager;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplitState;
+import org.apache.fluss.flink.source.split.KvBatchSplitState;
 import org.apache.fluss.flink.source.split.LogSplitState;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.flink.source.split.SourceSplitState;
@@ -86,7 +87,8 @@ public class FlinkSourceReader<OUT>
                                         projectedFields,
                                         logRecordBatchFilter,
                                         lakeSource,
-                                        flinkSourceReaderMetrics),
+                                        flinkSourceReaderMetrics,
+                                        context::sendSourceEventToCoordinator),
                         (ignore) -> {}),
                 recordEmitter,
                 context.getConfiguration(),
@@ -163,6 +165,8 @@ public class FlinkSourceReader<OUT>
             return new HybridSnapshotLogSplitState(split.asHybridSnapshotLogSplit());
         } else if (split.isLogSplit()) {
             return new LogSplitState(split.asLogSplit());
+        } else if (split.isKvBatchSplit()) {
+            return new KvBatchSplitState(split.asKvBatchSplit());
         } else if (split.isLakeSplit()) {
             return LakeSplitStateInitializer.initializedState(split);
         } else {
