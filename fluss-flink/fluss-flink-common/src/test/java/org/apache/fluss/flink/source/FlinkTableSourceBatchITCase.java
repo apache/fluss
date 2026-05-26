@@ -20,6 +20,7 @@ package org.apache.fluss.flink.source;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.metadata.TablePath;
@@ -251,8 +252,13 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         assertThatThrownBy(() -> tEnv.explainSql(query))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessage(
-                        "Currently, Fluss only support queries on table with datalake enabled"
-                                + " or point queries on primary key when it's in batch execution mode.");
+                        "Batch mode requires either data-lake integration"
+                                + " (set '"
+                                + ConfigOptions.TABLE_DATALAKE_ENABLED.key()
+                                + "' = 'true') or server-side KV scan on a"
+                                + " primary-key table (set '"
+                                + ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED.key()
+                                + "' = 'true').");
     }
 
     @Test
@@ -489,7 +495,13 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                 tEnv.explainSql(
                                         String.format("SELECT COUNT(address) FROM %s", tableName)))
                 .hasMessageContaining(
-                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+                        "Batch mode requires either data-lake integration"
+                                + " (set '"
+                                + ConfigOptions.TABLE_DATALAKE_ENABLED.key()
+                                + "' = 'true') or server-side KV scan on a"
+                                + " primary-key table (set '"
+                                + ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED.key()
+                                + "' = 'true').");
 
         assertThatThrownBy(
                         () ->
@@ -498,7 +510,13 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                                 "SELECT COUNT(DISTINCT address) FROM %s",
                                                 tableName)))
                 .hasMessageContaining(
-                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+                        "Batch mode requires either data-lake integration"
+                                + " (set '"
+                                + ConfigOptions.TABLE_DATALAKE_ENABLED.key()
+                                + "' = 'true') or server-side KV scan on a"
+                                + " primary-key table (set '"
+                                + ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED.key()
+                                + "' = 'true').");
 
         // test not push down grouping count.
         assertThatThrownBy(
@@ -509,7 +527,13 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                                         tableName))
                                         .wait())
                 .hasMessageContaining(
-                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+                        "Batch mode requires either data-lake integration"
+                                + " (set '"
+                                + ConfigOptions.TABLE_DATALAKE_ENABLED.key()
+                                + "' = 'true') or server-side KV scan on a"
+                                + " primary-key table (set '"
+                                + ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED.key()
+                                + "' = 'true').");
     }
 
     @Test
@@ -564,7 +588,13 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                 tEnv.explainSql(
                                         String.format("SELECT COUNT(address) FROM %s", tableName)))
                 .hasMessageContaining(
-                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+                        "Batch mode requires either data-lake integration"
+                                + " (set '"
+                                + ConfigOptions.TABLE_DATALAKE_ENABLED.key()
+                                + "' = 'true') or server-side KV scan on a"
+                                + " primary-key table (set '"
+                                + ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED.key()
+                                + "' = 'true').");
         assertThatThrownBy(
                         () ->
                                 tEnv.explainSql(
@@ -572,7 +602,13 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                                 "SELECT COUNT(DISTINCT address) FROM %s",
                                                 tableName)))
                 .hasMessageContaining(
-                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+                        "Batch mode requires either data-lake integration"
+                                + " (set '"
+                                + ConfigOptions.TABLE_DATALAKE_ENABLED.key()
+                                + "' = 'true') or server-side KV scan on a"
+                                + " primary-key table (set '"
+                                + ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED.key()
+                                + "' = 'true').");
 
         // test not push down grouping count.
         assertThatThrownBy(
@@ -583,7 +619,13 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                                         tableName))
                                         .wait())
                 .hasMessageContaining(
-                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+                        "Batch mode requires either data-lake integration"
+                                + " (set '"
+                                + ConfigOptions.TABLE_DATALAKE_ENABLED.key()
+                                + "' = 'true') or server-side KV scan on a"
+                                + " primary-key table (set '"
+                                + ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED.key()
+                                + "' = 'true').");
     }
 
     private String prepareSourceTable(String[] keys, String partitionedKey) throws Exception {

@@ -40,10 +40,6 @@ public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSp
     private static final ThreadLocal<DataOutputSerializer> SERIALIZER_CACHE =
             ThreadLocal.withInitial(() -> new DataOutputSerializer(64));
 
-    private static final byte HYBRID_SNAPSHOT_SPLIT_FLAG = 1;
-    private static final byte LOG_SPLIT_FLAG = 2;
-    private static final byte KV_BATCH_SPLIT_FLAG = 3;
-
     private static final int CURRENT_VERSION = VERSION_0;
 
     @Nullable private final LakeSource<LakeSplit> lakeSource;
@@ -83,8 +79,7 @@ public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSp
                 // write stopping offset
                 out.writeLong(logSplit.getStoppingOffset().orElse(LogSplit.NO_STOPPING_OFFSET));
             } else {
-                // KvBatchSplit
-                checkNotNull(split.asKvBatchSplit());
+                // KvBatchSplit has no extra fields to serialize beyond the common header.
             }
         } else {
             LakeSplitSerializer lakeSplitSerializer =
@@ -132,7 +127,7 @@ public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSp
         int bucketId = in.readInt();
         TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
 
-        if (splitKind == HYBRID_SNAPSHOT_SPLIT_FLAG) {
+        if (splitKind == SourceSplitBase.HYBRID_SNAPSHOT_SPLIT_FLAG) {
             long snapshotId = in.readLong();
             long recordsToSkip = in.readLong();
             boolean isSnapshotFinished = in.readBoolean();
@@ -144,11 +139,11 @@ public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSp
                     recordsToSkip,
                     isSnapshotFinished,
                     logStartingOffset);
-        } else if (splitKind == LOG_SPLIT_FLAG) {
+        } else if (splitKind == SourceSplitBase.LOG_SPLIT_FLAG) {
             long startingOffset = in.readLong();
             long stoppingOffset = in.readLong();
             return new LogSplit(tableBucket, partitionName, startingOffset, stoppingOffset);
-        } else if (splitKind == KV_BATCH_SPLIT_FLAG) {
+        } else if (splitKind == SourceSplitBase.KV_BATCH_SPLIT_FLAG) {
             return new KvBatchSplit(tableBucket, partitionName);
         } else {
             LakeSplitSerializer lakeSplitSerializer =

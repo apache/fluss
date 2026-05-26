@@ -236,7 +236,7 @@ The server evaluates these predicates against per-batch column statistics and sk
 
 ### Full Scan of Primary Key Tables
 
-Fluss can perform a bounded full-table scan on a primary-key table directly via the server-side KV scan API. 
+Fluss can perform a bounded full-table scan on a primary-key table directly via the server-side KV scan API.
 
 Enable the feature by setting `client.scanner.kv.server-side.enabled = true` on the table or as a SQL hint:
 

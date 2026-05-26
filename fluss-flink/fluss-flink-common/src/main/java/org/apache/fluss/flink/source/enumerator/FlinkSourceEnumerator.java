@@ -600,8 +600,10 @@ public class FlinkSourceEnumerator
         } else {
             throw new UnsupportedOperationException(
                     String.format(
-                            "Batch only supports when table option '%s' is set to true.",
-                            ConfigOptions.TABLE_DATALAKE_ENABLED));
+                            "Batch mode requires either '%s' = 'true' (data-lake integration) "
+                                    + "or '%s' = 'true' (server-side KV scan, primary-key tables only).",
+                            ConfigOptions.TABLE_DATALAKE_ENABLED,
+                            ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED));
         }
     }
 
