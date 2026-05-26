@@ -30,7 +30,7 @@ Maven coordinates:
 </dependency>
 ```
 
-Verify downloaded JARs against the [KEYS file](https://downloads.apache.org/incubator/fluss/KEYS) using the [verification instructions](/downloads).
+Verify downloaded JARs against the [KEYS file](https://downloads.apache.org/incubator/fluss/KEYS) using the [verification instructions](/downloads#verifying-downloads).
 
 
 ## Configure Iceberg as LakeHouse Storage

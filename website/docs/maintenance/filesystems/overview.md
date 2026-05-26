@@ -30,13 +30,13 @@ Never use local file system as remote storage in production as it is not fault-t
 ## Pluggable File Systems
 The Fluss project supports the following file systems:
 
-- **[HDFS](hdfs.md)** is supported by `fluss-fs-hadoop` and registered under the `hdfs://` URI scheme.
+- **[HDFS](hdfs.md)** is supported by `fluss-fs-hadoop` and registered under the `hdfs://` URI scheme. HDFS filesystem is included in default Fluss binary distribution, so you can use it directly without manual installation.
 
-- **[Aliyun OSS](oss.md)** is supported by `fluss-fs-oss` and registered under the `oss://` URI scheme.
+- **[Aliyun OSS](oss.md)** is supported by `fluss-fs-oss` and registered under the `oss://` URI scheme. OSS filesystem is included in default Fluss binary distribution, so you can use it directly without manual installation.
 
-- **[AWS S3](s3.md)** is supported by `fluss-fs-s3` and registered under the `s3://` URI scheme.
+- **[AWS S3](s3.md)** is supported by `fluss-fs-s3` and registered under the `s3://` URI scheme. S3 filesystem is included in default Fluss binary distribution, so you can use it directly without manual installation.
 
-- **[Azure Blob Storage](azure.md)** is supported by `fluss-fs-azure` and registered under the `abfs://`,`abfss://`,`wasb://`,`wasbs://`, URI schemes.
+- **[Azure Blob Storage](azure.md)** is supported by `fluss-fs-azure` and registered under the `abfs://`,`abfss://`,`wasb://`,`wasbs://`, URI schemes. Please make sure to [manually install the OBS plugin](azure.md#install-azure-fs-plugin-manually).
 
 - **[HuaweiCloud OBS](obs.md)** is supported by `fluss-fs-obs` and registered under the `obs://` URI scheme. Please make sure to [manually install the OBS plugin](obs.md#install-obs-plugin-manually).
 
