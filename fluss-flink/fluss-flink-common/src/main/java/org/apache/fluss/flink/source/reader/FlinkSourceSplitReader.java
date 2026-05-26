@@ -26,16 +26,12 @@ import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.LeaderNotAvailableException;
-import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.flink.lake.LakeSplitReaderGenerator;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
-import org.apache.fluss.flink.source.event.UnfinishedSplitEvent;
 import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
-import org.apache.fluss.flink.source.split.KvBatchSplit;
 import org.apache.fluss.flink.source.split.LogSplit;
 import org.apache.fluss.flink.source.split.SnapshotSplit;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
@@ -73,7 +69,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
-import java.util.function.Consumer;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -122,8 +117,6 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     // Set to collect table buckets that are unsubscribed.
     private Set<TableBucket> unsubscribedTableBuckets = new HashSet<>();
 
-    private final Consumer<UnfinishedSplitEvent> unfinishedSplitConsumer;
-
     public FlinkSourceSplitReader(
             Configuration flussConf,
             TablePath tablePath,
@@ -132,26 +125,6 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             @Nullable Predicate logRecordBatchFilter,
             @Nullable LakeSource<LakeSplit> lakeSource,
             FlinkSourceReaderMetrics flinkSourceReaderMetrics) {
-        this(
-                flussConf,
-                tablePath,
-                sourceOutputType,
-                projectedFields,
-                logRecordBatchFilter,
-                lakeSource,
-                flinkSourceReaderMetrics,
-                event -> {});
-    }
-
-    public FlinkSourceSplitReader(
-            Configuration flussConf,
-            TablePath tablePath,
-            RowType sourceOutputType,
-            @Nullable int[] projectedFields,
-            @Nullable Predicate logRecordBatchFilter,
-            @Nullable LakeSource<LakeSplit> lakeSource,
-            FlinkSourceReaderMetrics flinkSourceReaderMetrics,
-            Consumer<UnfinishedSplitEvent> unfinishedSplitConsumer) {
         this.flinkMetricRegistry =
                 new FlinkMetricRegistry(flinkSourceReaderMetrics.getSourceReaderMetricGroup());
         this.connection = ConnectionFactory.createConnection(flussConf, flinkMetricRegistry);
@@ -172,7 +145,6 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         this.stoppingOffsets = new HashMap<>();
         this.emptyLogSplits = new HashSet<>();
         this.lakeSource = lakeSource;
-        this.unfinishedSplitConsumer = unfinishedSplitConsumer;
     }
 
     @Override
@@ -186,15 +158,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         }
         checkSnapshotSplitOrStartNext();
         if (currentBoundedSplitReader != null) {
-            CloseableIterator<RecordAndPos> recordIterator;
-            try {
-                recordIterator = currentBoundedSplitReader.readBatch();
-            } catch (IOException e) {
-                if (currentBoundedSplit.isKvBatchSplit() && isLeaderRebalance(e)) {
-                    return handleKvBatchLeaderRebalance(e);
-                }
-                throw e;
-            }
+            CloseableIterator<RecordAndPos> recordIterator = currentBoundedSplitReader.readBatch();
             if (recordIterator == null) {
                 LOG.info("split {} is finished", currentBoundedSplit.splitId());
                 return finishCurrentBoundedSplit();
@@ -618,36 +582,6 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         table.close();
         connection.close();
         flinkMetricRegistry.close();
-    }
-
-    private static boolean isLeaderRebalance(Throwable t) {
-        while (t != null) {
-            if (t instanceof NotLeaderOrFollowerException
-                    || t instanceof LeaderNotAvailableException) {
-                return true;
-            }
-            t = t.getCause();
-        }
-        return false;
-    }
-
-    private FlinkRecordsWithSplitIds handleKvBatchLeaderRebalance(IOException cause)
-            throws IOException {
-        KvBatchSplit failedSplit = currentBoundedSplit.asKvBatchSplit();
-        String splitId = failedSplit.splitId();
-        LOG.warn(
-                "Leader rebalance for KvBatchSplit {}; requesting enumerator re-assignment.",
-                splitId,
-                cause);
-        closeCurrentBoundedSplit();
-        unfinishedSplitConsumer.accept(
-                new UnfinishedSplitEvent(
-                        splitId,
-                        failedSplit.getTableBucket(),
-                        failedSplit.getPartitionName(),
-                        cause.getMessage()));
-        return new FlinkRecordsWithSplitIds(
-                Collections.singleton(splitId), flinkSourceReaderMetrics);
     }
 
     private void sanityCheck(RowType flussTableRowType, @Nullable int[] projectedFields) {

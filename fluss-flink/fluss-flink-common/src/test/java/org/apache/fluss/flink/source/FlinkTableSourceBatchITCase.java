@@ -255,6 +255,41 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
     }
 
     @Test
+    void testKvBatchScanOnPkTable() throws Exception {
+        String tableName = String.format("test_kv_batch_pk_%s", RandomUtils.nextInt());
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + "  id int not null,"
+                                + "  address varchar,"
+                                + "  name varchar,"
+                                + "  primary key (id) NOT ENFORCED)"
+                                + " with ("
+                                + "  'bucket.num' = '4',"
+                                + "  'client.scanner.kv.server-side.enabled' = 'true')",
+                        tableName));
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            for (int i = 1; i <= 5; i++) {
+                upsertWriter.upsert(row(i, "address" + i, "name" + i));
+            }
+            upsertWriter.flush();
+        }
+
+        CloseableIterator<Row> collected =
+                tEnv.executeSql(String.format("SELECT * FROM %s", tableName)).collect();
+        List<String> expected =
+                Arrays.asList(
+                        "+I[1, address1, name1]",
+                        "+I[2, address2, name2]",
+                        "+I[3, address3, name3]",
+                        "+I[4, address4, name4]",
+                        "+I[5, address5, name5]");
+        assertResultsIgnoreOrder(collected, expected, true);
+    }
+
+    @Test
     void testLakeTableQueryOnLakeDisabledTable() throws Exception {
         String tableName = prepareSourceTable(new String[] {"id", "name"}, null);
         assertThatThrownBy(() -> tEnv.executeSql(String.format("SELECT * FROM %s$lake", tableName)))

@@ -30,7 +30,6 @@ import org.apache.fluss.flink.source.FlinkSource;
 import org.apache.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
 import org.apache.fluss.flink.source.event.PartitionsRemovedEvent;
-import org.apache.fluss.flink.source.event.UnfinishedSplitEvent;
 import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
 import org.apache.fluss.flink.source.split.KvBatchSplit;
@@ -63,7 +62,6 @@ import org.apache.flink.api.connector.source.SplitEnumerator;
 import org.apache.flink.api.connector.source.SplitsAssignment;
 import org.apache.flink.api.connector.source.mocks.MockSplitEnumeratorContext;
 import org.apache.flink.table.data.RowData;
-import org.apache.flink.util.FlinkRuntimeException;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -200,11 +198,6 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
     }
 
     /**
-     * On {@link UnfinishedSplitEvent} the enumerator re-emits the split (so a transient leadership
-     * change recovers cleanly), but only up to a fixed budget. Past the budget it fails the job
-     * rather than hot-looping.
-     */
-    /**
      * When the master switch is off (default), bounded reads of a primary-key table without a lake
      * snapshot keep the pre-FIP-17 behavior of failing at startup, so existing users are not
      * silently flipped onto the new code path.
@@ -231,52 +224,6 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
             assertThatThrownBy(enumerator::start)
                     .isInstanceOf(UnsupportedOperationException.class)
                     .hasMessageContaining("Batch only supports when table option");
-        }
-    }
-
-    @Test
-    void testUnfinishedSplitEventRetryBudget() throws Throwable {
-        long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
-        Configuration enabled = new Configuration(flussConf);
-        enabled.set(ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED, true);
-        try (MockSplitEnumeratorContext<SourceSplitBase> context =
-                new MockSplitEnumeratorContext<>(1)) {
-            FlinkSourceEnumerator enumerator =
-                    new FlinkSourceEnumerator(
-                            DEFAULT_TABLE_PATH,
-                            enabled,
-                            true,
-                            false,
-                            context,
-                            OffsetsInitializer.full(),
-                            DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
-                            false, // bounded
-                            null,
-                            null,
-                            LeaseContext.DEFAULT,
-                            false);
-            enumerator.start();
-            registerReader(context, enumerator, 0);
-
-            TableBucket bucket = new TableBucket(tableId, 0);
-            KvBatchSplit split = new KvBatchSplit(bucket, null);
-            UnfinishedSplitEvent event =
-                    new UnfinishedSplitEvent(
-                            split.splitId(), bucket, null, "not leader or follower");
-
-            // 5 attempts succeed; each re-emits the split.
-            int initialAssignmentCount = context.getSplitsAssignmentSequence().size();
-            for (int i = 0; i < 5; i++) {
-                enumerator.handleSourceEvent(0, event);
-            }
-            assertThat(context.getSplitsAssignmentSequence().size() - initialAssignmentCount)
-                    .isEqualTo(5);
-
-            // 6th attempt exceeds the cap and fails the job.
-            assertThatThrownBy(() -> enumerator.handleSourceEvent(0, event))
-                    .isInstanceOf(FlinkRuntimeException.class)
-                    .hasMessageContaining("exceeded")
-                    .hasMessageContaining("re-assignment attempts");
         }
     }
 
