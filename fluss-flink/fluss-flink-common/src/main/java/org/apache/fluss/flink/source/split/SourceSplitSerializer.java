@@ -42,6 +42,7 @@ public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSp
 
     private static final byte HYBRID_SNAPSHOT_SPLIT_FLAG = 1;
     private static final byte LOG_SPLIT_FLAG = 2;
+    private static final byte KV_BATCH_SPLIT_FLAG = 3;
 
     private static final int CURRENT_VERSION = VERSION_0;
 
@@ -75,12 +76,15 @@ public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSp
                 out.writeBoolean(hybridSnapshotLogSplit.isSnapshotFinished());
                 // write log starting offset
                 out.writeLong(hybridSnapshotLogSplit.getLogStartingOffset());
-            } else {
+            } else if (split.isLogSplit()) {
                 LogSplit logSplit = split.asLogSplit();
                 // write starting offset
                 out.writeLong(logSplit.getStartingOffset());
                 // write stopping offset
                 out.writeLong(logSplit.getStoppingOffset().orElse(LogSplit.NO_STOPPING_OFFSET));
+            } else {
+                // KvBatchSplit
+                checkNotNull(split.asKvBatchSplit());
             }
         } else {
             LakeSplitSerializer lakeSplitSerializer =
@@ -144,6 +148,8 @@ public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSp
             long startingOffset = in.readLong();
             long stoppingOffset = in.readLong();
             return new LogSplit(tableBucket, partitionName, startingOffset, stoppingOffset);
+        } else if (splitKind == KV_BATCH_SPLIT_FLAG) {
+            return new KvBatchSplit(tableBucket, partitionName);
         } else {
             LakeSplitSerializer lakeSplitSerializer =
                     new LakeSplitSerializer(checkNotNull(lakeSource).getSplitSerializer());
