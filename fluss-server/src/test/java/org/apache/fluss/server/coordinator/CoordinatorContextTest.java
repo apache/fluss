@@ -19,6 +19,7 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -28,6 +29,9 @@ import org.apache.fluss.types.DataTypes;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
@@ -67,6 +71,78 @@ class CoordinatorContextTest {
 
         assertThat(context.allTables()).hasSize(3);
         assertThat(context.getLakeTableCount()).isEqualTo(2);
+    }
+
+    // ---- Inactive Leader Tracking Tests ----
+
+    @Test
+    void testMarkLeaderInactive() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TableBucket tb1 = new TableBucket(1L, 0);
+        TableBucket tb2 = new TableBucket(1L, 1);
+
+        assertThat(context.isLeaderActive(tb1)).isTrue();
+        assertThat(context.getInactiveLeaderBuckets()).isEmpty();
+
+        context.markLeaderInactive(tb1);
+        context.markLeaderInactive(tb2);
+
+        assertThat(context.isLeaderActive(tb1)).isFalse();
+        assertThat(context.isLeaderActive(tb2)).isFalse();
+        assertThat(context.getInactiveLeaderBuckets()).containsExactlyInAnyOrder(tb1, tb2);
+    }
+
+    @Test
+    void testMarkLeaderActive() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TableBucket tb1 = new TableBucket(1L, 0);
+        TableBucket tb2 = new TableBucket(1L, 1);
+
+        context.markLeadersInactive(Arrays.asList(tb1, tb2));
+
+        context.markLeaderActive(tb1);
+        assertThat(context.isLeaderActive(tb1)).isTrue();
+        assertThat(context.isLeaderActive(tb2)).isFalse();
+
+        context.markLeaderActive(tb2);
+        assertThat(context.getInactiveLeaderBuckets()).isEmpty();
+    }
+
+    @Test
+    void testMarkLeaderActiveForNonExistentBucket() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TableBucket tb1 = new TableBucket(1L, 0);
+
+        // Should not throw
+        context.markLeaderActive(tb1);
+        assertThat(context.isLeaderActive(tb1)).isTrue();
+    }
+
+    @Test
+    void testRemoveFromInactiveLeaders() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TableBucket tb1 = new TableBucket(1L, 0);
+        TableBucket tb2 = new TableBucket(1L, 1);
+        TableBucket tb3 = new TableBucket(2L, 0);
+
+        context.markLeadersInactive(Arrays.asList(tb1, tb2, tb3));
+
+        Set<TableBucket> toRemove = new HashSet<>(Arrays.asList(tb1, tb3));
+        context.removeFromInactiveLeaders(toRemove);
+
+        assertThat(context.isLeaderActive(tb1)).isTrue();
+        assertThat(context.isLeaderActive(tb2)).isFalse();
+        assertThat(context.isLeaderActive(tb3)).isTrue();
+    }
+
+    @Test
+    void testGetInactiveLeaderBucketsReturnsUnmodifiableSet() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TableBucket tb1 = new TableBucket(1L, 0);
+        context.markLeaderInactive(tb1);
+
+        Set<TableBucket> inactive = context.getInactiveLeaderBuckets();
+        assertThat(inactive).isUnmodifiable();
     }
 
     private TableInfo createTableInfo(long tableId, TablePath tablePath, boolean isLake) {

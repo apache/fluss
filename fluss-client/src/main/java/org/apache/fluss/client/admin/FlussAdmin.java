@@ -68,6 +68,7 @@ import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
 import org.apache.fluss.rpc.messages.DropTableRequest;
+import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.GetLakeSnapshotRequest;
@@ -894,6 +895,12 @@ public class FlussAdmin implements Admin {
                 bucketToOffsetMap.get(resp.getBucketId()).complete(resp.getOffset());
             }
         }
+    }
+
+    @Override
+    public CompletableFuture<ClusterHealth> getClusterHealth() {
+        return gateway.getClusterHealth(new GetClusterHealthRequest())
+                .thenApply(ClientRpcMessageUtils::toClusterHealth);
     }
 
     @VisibleForTesting

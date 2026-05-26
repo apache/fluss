@@ -448,7 +448,9 @@
                                         <exclude>org.apache.fluss.predicate.*</exclude>
                                         <!-- end exclude for lake source -->
                                         <exclude>org.apache.fluss.lake.source.*</exclude>
-                                        <!-- exclude for dummy class -->
+                                        <!-- exclude for dist CLI tools and dummy class -->
+                                        <exclude>org.apache.fluss.dist.ClusterHealthReadinessCheck</exclude>
+                                        <exclude>org.apache.fluss.dist.ClusterHealthReadinessCheck.*</exclude>
                                         <exclude>org.apache.fluss.dist.DummyClass</exclude>
                                         <exclude>org.apache.fluss.flink.DummyClass120</exclude>
                                         <exclude>org.apache.fluss.lake.batch.ArrowRecordBatch</exclude>

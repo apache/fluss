@@ -462,6 +462,12 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     }
 
     @Override
+    public CompletableFuture<org.apache.fluss.rpc.messages.GetClusterHealthResponse>
+            getClusterHealth(org.apache.fluss.rpc.messages.GetClusterHealthRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public CompletableFuture<RegisterProducerOffsetsResponse> registerProducerOffsets(
             RegisterProducerOffsetsRequest request) {
         throw new UnsupportedOperationException();

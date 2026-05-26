@@ -317,4 +317,9 @@ public class TestAdminAdapter implements Admin {
     public CompletableFuture<LakeSnapshot> getReadableLakeSnapshot(TablePath tablePath) {
         throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
     }
+
+    @Override
+    public CompletableFuture<org.apache.fluss.client.admin.ClusterHealth> getClusterHealth() {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
 }

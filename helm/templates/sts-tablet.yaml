@@ -25,6 +25,8 @@ metadata:
 spec:
   serviceName: tablet-server-hs
   replicas: {{ .Values.tablet.numberOfReplicas }}
+  updateStrategy:
+    type: RollingUpdate
   selector:
     matchLabels:
       {{- include "fluss.selectorLabels" . | nindent 6 }}
@@ -119,7 +121,7 @@ spec:
               echo "bind.listeners: ${BIND_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
               echo "advertised.listeners: ${ADVERTISED_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
 
-              bin/tablet-server.sh start-foreground
+              exec bin/tablet-server.sh start-foreground
           livenessProbe:
             failureThreshold: 100
             timeoutSeconds: 1
@@ -128,12 +130,21 @@ spec:
             tcpSocket:
               port: {{ .Values.listeners.client.port }}
           readinessProbe:
-            failureThreshold: 100
-            timeoutSeconds: 1
-            initialDelaySeconds: 10
-            periodSeconds: 3
-            tcpSocket:
-              port: {{ .Values.listeners.client.port }}
+            failureThreshold: {{ .Values.tablet.readinessProbe.failureThreshold | default 200 }}
+            timeoutSeconds: {{ .Values.tablet.readinessProbe.timeoutSeconds | default 10 }}
+            initialDelaySeconds: {{ .Values.tablet.readinessProbe.initialDelaySeconds | default 15 }}
+            periodSeconds: {{ .Values.tablet.readinessProbe.periodSeconds | default 5 }}
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  export FLUSS_SERVER_ID=${POD_NAME##*-}
+                  export READINESS_TIMEOUT_MS={{ .Values.tablet.readinessProbe.rpcTimeoutMs | default 5000 }}
+                  export READINESS_TCP_PORT={{ .Values.listeners.client.port }}
+                  export READINESS_BOOTSTRAP_SERVERS="coordinator-server-hs.${POD_NAMESPACE}.svc.cluster.local:{{ .Values.listeners.client.port }}"
+                  export READINESS_GRACE_SECS={{ .Values.tablet.readinessProbe.gracePeriodSecs | default 60 }}
+                  exec $FLUSS_HOME/bin/readiness-check.sh
           resources:
             {{- toYaml .Values.resources.tabletServer | nindent 12 }}
           volumeMounts:

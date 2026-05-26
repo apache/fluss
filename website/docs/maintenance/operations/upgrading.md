@@ -57,6 +57,44 @@ To upgrade the `TabletServers`, follow these steps one-by-one for each `TabletSe
 ./fluss-$FLUSS_VERSION$/bin/tablet-server.sh start
 ```
 
+**Wait for the cluster to recover before upgrading the next TabletServer**
+
+After restarting a TabletServer, you should wait for the cluster to fully recover before proceeding to the next one.
+Upgrading too quickly can cause multiple servers to be in an unrecovered state simultaneously, which may break min-ISR guarantees
+and affect data availability.
+
+You can use the **Cluster Health API** to monitor the cluster's health status:
+
+```java
+Admin admin = connection.getAdmin();
+
+ClusterHealth health = admin.getClusterHealth().get();
+System.out.println("Status: " + health.getStatus());
+System.out.println("Replicas: " + health.getInSyncReplicas() + "/" + health.getNumReplicas());
+System.out.println("Leaders: " + health.getActiveLeaderReplicas() + "/" + health.getNumLeaderReplicas());
+
+if (health.getStatus() == ClusterHealthStatus.GREEN) {
+    // Safe to proceed with the next TabletServer
+}
+```
+
+The API returns the following health metrics:
+
+| Field | Meaning |
+|-------|---------|
+| `status` | Cluster health: GREEN (all replicas in-sync, all leaders active), YELLOW (all leaders active, some followers not in-sync), RED (some leaders not active) |
+| `numReplicas` | Total number of assigned replicas across all buckets |
+| `inSyncReplicas` | Total number of in-sync replicas across all buckets |
+| `numLeaderReplicas` | Total number of leader slots (one per bucket) |
+| `activeLeaderReplicas` | Number of active leaders (leader alive and acknowledged) |
+
+Wait until the status is GREEN before upgrading the next TabletServer. GREEN means all replicas are in-sync and all leaders are active — fully recovered.
+
+:::tip
+For Kubernetes deployments, you can enable the Cluster Health API readiness probe in the Helm chart to automate this check.
+See [Deploying with Helm Charts — Cluster Health Readiness Probe](docs/install-deploy/deploying-with-helm.md#cluster-health-readiness-probe) for details.
+:::
+
 ### Upgrade the CoordinatorServer
 
 After all `TabletServers` have been upgraded, you can proceed to upgrade the `CoordinatorServer` by following these steps:

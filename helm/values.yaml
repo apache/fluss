@@ -43,6 +43,23 @@ tablet:
     enabled: false
     size: 1Gi
     storageClass:
+  # Readiness probe configuration for rolling upgrade gate.
+  # The probe calls the Coordinator's Cluster Health API to verify that
+  # cluster status is GREEN before marking the pod Ready. If the
+  # Coordinator does not support the API (older version), the probe
+  # automatically falls back to TCP-only after the grace period.
+  readinessProbe:
+    # Timeout in ms for the RPC call to Coordinator.
+    rpcTimeoutMs: 5000
+    # Grace period (seconds) before falling back to TCP-only when the
+    # Coordinator does not support the Cluster Health API (e.g., mixed-version
+    # upgrade). After this period, TCP port reachability is sufficient.
+    gracePeriodSecs: 60
+    # Standard Kubernetes probe parameters (tuned for recovery checks).
+    failureThreshold: 200
+    timeoutSeconds: 10
+    initialDelaySeconds: 15
+    periodSeconds: 5
   extraVolumes: []
   extraVolumeMounts: []
   initContainers: []

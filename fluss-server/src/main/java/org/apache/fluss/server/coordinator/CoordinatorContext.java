@@ -106,6 +106,13 @@ public class CoordinatorContext {
      */
     private final Map<Integer, Set<TableBucket>> replicasOnOffline = new HashMap<>();
 
+    /**
+     * Tracks leader buckets that are currently inactive — a leader is inactive from the moment we
+     * send NotifyLeaderAndIsr until the target server responds successfully confirming it is the
+     * leader. Also inactive when leader == NO_LEADER.
+     */
+    private final Set<TableBucket> inactiveLeaderBuckets = new HashSet<>();
+
     /** A mapping from tabletServers to server tag. */
     private final Map<Integer, ServerTag> serverTags = new HashMap<>();
 
@@ -216,6 +223,32 @@ public class CoordinatorContext {
 
     public void removeOfflineBucketInServer(int serverId) {
         replicasOnOffline.remove(serverId);
+    }
+
+    // ---- Inactive leader tracking (for Cluster Health API) ----
+
+    public void markLeaderInactive(TableBucket bucket) {
+        inactiveLeaderBuckets.add(bucket);
+    }
+
+    public void markLeadersInactive(Collection<TableBucket> buckets) {
+        inactiveLeaderBuckets.addAll(buckets);
+    }
+
+    public void markLeaderActive(TableBucket bucket) {
+        inactiveLeaderBuckets.remove(bucket);
+    }
+
+    public boolean isLeaderActive(TableBucket bucket) {
+        return !inactiveLeaderBuckets.contains(bucket);
+    }
+
+    public Set<TableBucket> getInactiveLeaderBuckets() {
+        return Collections.unmodifiableSet(inactiveLeaderBuckets);
+    }
+
+    public void removeFromInactiveLeaders(Set<TableBucket> buckets) {
+        inactiveLeaderBuckets.removeAll(buckets);
     }
 
     public Map<Long, TablePath> allTables() {
@@ -656,10 +689,16 @@ public class CoordinatorContext {
         tablesToBeDeleted.remove(tableId);
         Map<Integer, List<Integer>> assignment = tableAssignments.remove(tableId);
         if (assignment != null) {
-            // remove leadership info for each bucket from the context
+            Set<TableBucket> removedBuckets = new HashSet<>();
             assignment
                     .keySet()
-                    .forEach(bucket -> bucketLeaderAndIsr.remove(new TableBucket(tableId, bucket)));
+                    .forEach(
+                            bucket -> {
+                                TableBucket tb = new TableBucket(tableId, bucket);
+                                bucketLeaderAndIsr.remove(tb);
+                                removedBuckets.add(tb);
+                            });
+            removeFromInactiveLeaders(removedBuckets);
         }
 
         TablePath tablePath = tablePathById.remove(tableId);
@@ -673,16 +712,20 @@ public class CoordinatorContext {
         partitionsToBeDeleted.remove(tablePartition);
         Map<Integer, List<Integer>> assignment = partitionAssignments.remove(tablePartition);
         if (assignment != null) {
-            // remove leadership info for each bucket from the context
+            Set<TableBucket> removedBuckets = new HashSet<>();
             assignment
                     .keySet()
                     .forEach(
-                            bucket ->
-                                    bucketLeaderAndIsr.remove(
-                                            new TableBucket(
-                                                    tablePartition.getTableId(),
-                                                    tablePartition.getPartitionId(),
-                                                    bucket)));
+                            bucket -> {
+                                TableBucket tb =
+                                        new TableBucket(
+                                                tablePartition.getTableId(),
+                                                tablePartition.getPartitionId(),
+                                                bucket);
+                                bucketLeaderAndIsr.remove(tb);
+                                removedBuckets.add(tb);
+                            });
+            removeFromInactiveLeaders(removedBuckets);
         }
 
         PhysicalTablePath physicalTablePath =
@@ -717,6 +760,7 @@ public class CoordinatorContext {
         partitionAssignments.clear();
         bucketLeaderAndIsr.clear();
         replicasOnOffline.clear();
+        inactiveLeaderBuckets.clear();
         bucketStates.clear();
         replicaStates.clear();
         tablePathById.clear();

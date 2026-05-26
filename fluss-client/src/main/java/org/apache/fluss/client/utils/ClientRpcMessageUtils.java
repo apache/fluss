@@ -17,6 +17,8 @@
 
 package org.apache.fluss.client.utils;
 
+import org.apache.fluss.client.admin.ClusterHealth;
+import org.apache.fluss.client.admin.ClusterHealthStatus;
 import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.admin.ProducerOffsetsResult;
 import org.apache.fluss.client.lookup.LookupBatch;
@@ -51,6 +53,7 @@ import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CreatePartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionRequest;
+import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
 import org.apache.fluss.rpc.messages.GetLakeSnapshotResponse;
@@ -828,5 +831,27 @@ public class ClientRpcMessageUtils {
                                 })
                         .collect(Collectors.toList());
         return new GetTableStatsRequest().setTableId(tableId).addAllBucketsReqs(pbBuckets);
+    }
+
+    public static ClusterHealth toClusterHealth(GetClusterHealthResponse resp) {
+        return new ClusterHealth(
+                resp.getNumReplicas(),
+                resp.getInSyncReplicas(),
+                resp.getNumLeaderReplicas(),
+                resp.getActiveLeaderReplicas(),
+                toClusterHealthStatus(resp.getStatus()));
+    }
+
+    private static ClusterHealthStatus toClusterHealthStatus(int pbStatus) {
+        switch (pbStatus) {
+            case 0:
+                return ClusterHealthStatus.GREEN;
+            case 1:
+                return ClusterHealthStatus.YELLOW;
+            case 2:
+                return ClusterHealthStatus.RED;
+            default:
+                return ClusterHealthStatus.UNKNOWN;
+        }
     }
 }

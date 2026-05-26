@@ -1003,6 +1003,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // get the server that receives the response
         int serverId = notifyLeaderAndIsrResponseReceivedEvent.getResponseServerId();
         Set<TableBucketReplica> offlineReplicas = new HashSet<>();
+        List<TableBucket> succeededBuckets = new ArrayList<>();
         // get all the results for each bucket
         List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets =
                 notifyLeaderAndIsrResponseReceivedEvent.getNotifyLeaderAndIsrResultForBuckets();
@@ -1013,10 +1014,17 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 offlineReplicas.add(
                         new TableBucketReplica(
                                 notifyLeaderAndIsrResultForBucket.getTableBucket(), serverId));
+            } else {
+                succeededBuckets.add(notifyLeaderAndIsrResultForBucket.getTableBucket());
+            }
+        }
+        for (TableBucket tb : succeededBuckets) {
+            Optional<LeaderAndIsr> laiOpt = coordinatorContext.getBucketLeaderAndIsr(tb);
+            if (laiOpt.isPresent() && laiOpt.get().leader() == serverId) {
+                coordinatorContext.markLeaderActive(tb);
             }
         }
         if (!offlineReplicas.isEmpty()) {
-            // trigger replicas to offline
             onReplicaBecomeOffline(offlineReplicas);
         }
 
@@ -1169,6 +1177,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // process dead tablet server
         LOG.info("Tablet server failure callback for {}.", tabletServerId);
         coordinatorContext.removeOfflineBucketInServer(tabletServerId);
+
         coordinatorContext.removeLiveTabletServer(tabletServerId);
         coordinatorContext.shuttingDownTabletServers().remove(tabletServerId);
         coordinatorChannelManager.removeTabletServer(tabletServerId);

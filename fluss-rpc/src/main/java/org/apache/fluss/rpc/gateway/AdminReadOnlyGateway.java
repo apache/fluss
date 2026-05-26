@@ -22,6 +22,8 @@ import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsResponse;
+import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
+import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
@@ -192,4 +194,7 @@ public interface AdminReadOnlyGateway extends RpcGateway {
     @RPC(api = ApiKeys.DESCRIBE_CLUSTER_CONFIGS)
     CompletableFuture<DescribeClusterConfigsResponse> describeClusterConfigs(
             DescribeClusterConfigsRequest request);
+
+    @RPC(api = ApiKeys.GET_CLUSTER_HEALTH)
+    CompletableFuture<GetClusterHealthResponse> getClusterHealth(GetClusterHealthRequest request);
 }
