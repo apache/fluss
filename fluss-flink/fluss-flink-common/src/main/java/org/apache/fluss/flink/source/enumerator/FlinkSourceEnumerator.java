@@ -37,8 +37,10 @@ import org.apache.fluss.flink.source.FlinkSource;
 import org.apache.fluss.flink.source.event.FinishedKvSnapshotConsumeEvent;
 import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
 import org.apache.fluss.flink.source.event.PartitionsRemovedEvent;
+import org.apache.fluss.flink.source.event.UnfinishedSplitEvent;
 import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
+import org.apache.fluss.flink.source.split.KvBatchSplit;
 import org.apache.fluss.flink.source.split.LogSplit;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.flink.source.state.SourceEnumeratorState;
@@ -199,6 +201,16 @@ public class FlinkSourceEnumerator
 
     /** checkpointId -> tableBuckets who finished consume kv snapshots. */
     private final TreeMap<Long, Set<TableBucket>> consumedKvSnapshotMap = new TreeMap<>();
+
+    /**
+     * Per-split attempt counter for {@link KvBatchSplit}s that have been reported back via {@link
+     * UnfinishedSplitEvent}. Bounded by {@link #maxKvBatchRebalanceAttempts}. Keyed by {@code
+     * splitId}; not checkpointed (an enumerator restart resets the counter, which is acceptable
+     * because reassignment of an unresumable split is idempotent).
+     */
+    private final Map<String, Integer> kvBatchSplitAttempts = new HashMap<>();
+
+    private final int maxKvBatchRebalanceAttempts = 5;
 
     // Lazily instantiated or mutable fields.
     private Connection connection;
@@ -589,35 +601,69 @@ public class FlinkSourceEnumerator
                                     "No lake snapshot found for table {},"
                                             + " falling back to Fluss-only splits.",
                                     tablePath);
-                            if (isPartitioned) {
-                                Set<PartitionInfo> partitionInfos = listPartitions();
-                                Collection<Partition> partitions =
-                                        partitionInfos.stream()
-                                                .map(
-                                                        p ->
-                                                                new Partition(
-                                                                        p.getPartitionId(),
-                                                                        p.getPartitionName()))
-                                                .collect(Collectors.toList());
-                                // Use log-only splits to avoid generating mixed split
-                                // types (HybridSnapshotLogSplit + LogSplit) for
-                                // primary-key tables, which is not supported.
-                                splits =
-                                        this.initLogTablePartitionSplits(
-                                                partitions, startingOffsetsInitializer);
-                            } else {
-                                splits = this.getLogSplit(null, null);
-                            }
+                            splits = generateFlussOnlyBatchSplits();
                         }
                         return splits;
                     },
                     this::handleSplitsAdd);
+        } else if (hasPrimaryKey) {
+            context.callAsync(this::generateFlussOnlyBatchSplits, this::handleSplitsAdd);
         } else {
             throw new UnsupportedOperationException(
                     String.format(
                             "Batch only supports when table option '%s' is set to true.",
                             ConfigOptions.TABLE_DATALAKE_ENABLED));
         }
+    }
+
+    /**
+     * Builds bounded-mode Fluss-only splits when no lake snapshot is available:
+     *
+     * <ul>
+     *   <li>primary-key tables: one {@link KvBatchSplit} per bucket (server-side KV scan),
+     *   <li>log tables: existing log-only splits with a bounded stopping offset.
+     * </ul>
+     */
+    private List<SourceSplitBase> generateFlussOnlyBatchSplits() {
+        if (hasPrimaryKey) {
+            if (isPartitioned) {
+                Set<PartitionInfo> partitionInfos = listPartitions();
+                List<SourceSplitBase> splits = new ArrayList<>();
+                for (PartitionInfo partitionInfo : partitionInfos) {
+                    splits.addAll(
+                            buildKvBatchSplits(
+                                    partitionInfo.getPartitionId(),
+                                    partitionInfo.getPartitionName()));
+                }
+                return splits;
+            } else {
+                return buildKvBatchSplits(null, null);
+            }
+        } else {
+            if (isPartitioned) {
+                Set<PartitionInfo> partitionInfos = listPartitions();
+                Collection<Partition> partitions =
+                        partitionInfos.stream()
+                                .map(p -> new Partition(p.getPartitionId(), p.getPartitionName()))
+                                .collect(Collectors.toList());
+                return this.initLogTablePartitionSplits(partitions);
+            } else {
+                return this.getLogSplit(null, null);
+            }
+        }
+    }
+
+    private List<SourceSplitBase> buildKvBatchSplits(
+            @Nullable Long partitionId, @Nullable String partitionName) {
+        List<SourceSplitBase> splits = new ArrayList<>();
+        for (int bucketId = 0; bucketId < tableInfo.getNumBuckets(); bucketId++) {
+            TableBucket tb = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
+            if (ignoreTableBucket(tb)) {
+                continue;
+            }
+            splits.add(new KvBatchSplit(tb, partitionName));
+        }
+        return splits;
     }
 
     private void startInStreamModeForNonPartitionedTable() {
@@ -1390,7 +1436,41 @@ public class FlinkSourceEnumerator
             }
 
             tableBuckets.forEach(tableBucket -> addConsumedBucket(checkpointId, tableBucket));
+        } else if (sourceEvent instanceof UnfinishedSplitEvent) {
+            handleUnfinishedSplitEvent((UnfinishedSplitEvent) sourceEvent);
         }
+    }
+
+    /**
+     * Re-emits a {@link KvBatchSplit} reported back by a reader as unfinished (typically due to a
+     * transient leadership change on the tablet server). Bounded by {@link
+     * #maxKvBatchRebalanceAttempts}: once the budget is exhausted for a split, the job is failed to
+     * surface persistent failures rather than hot-loop.
+     */
+    private void handleUnfinishedSplitEvent(UnfinishedSplitEvent event) {
+        String splitId = event.getSplitId();
+        int attempts = kvBatchSplitAttempts.getOrDefault(splitId, 0) + 1;
+        if (attempts > maxKvBatchRebalanceAttempts) {
+            kvBatchSplitAttempts.remove(splitId);
+            throw new FlinkRuntimeException(
+                    String.format(
+                            "KvBatchSplit %s for bucket %s exceeded %d re-assignment attempts; "
+                                    + "giving up. Last failure reason: %s",
+                            splitId,
+                            event.getTableBucket(),
+                            maxKvBatchRebalanceAttempts,
+                            event.getReason()));
+        }
+        kvBatchSplitAttempts.put(splitId, attempts);
+        LOG.warn(
+                "Re-emitting KvBatchSplit {} for bucket {} (attempt {}/{}). Last failure: {}",
+                splitId,
+                event.getTableBucket(),
+                attempts,
+                maxKvBatchRebalanceAttempts,
+                event.getReason());
+        KvBatchSplit split = new KvBatchSplit(event.getTableBucket(), event.getPartitionName());
+        doHandleSplitsAdd(Collections.singletonList(split));
     }
 
     @VisibleForTesting

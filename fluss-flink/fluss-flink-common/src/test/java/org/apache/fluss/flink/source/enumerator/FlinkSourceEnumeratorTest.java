@@ -29,8 +29,10 @@ import org.apache.fluss.flink.source.FlinkSource;
 import org.apache.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
 import org.apache.fluss.flink.source.event.PartitionsRemovedEvent;
+import org.apache.fluss.flink.source.event.UnfinishedSplitEvent;
 import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
+import org.apache.fluss.flink.source.split.KvBatchSplit;
 import org.apache.fluss.flink.source.split.LogSplit;
 import org.apache.fluss.flink.source.split.SnapshotSplit;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
@@ -60,6 +62,7 @@ import org.apache.flink.api.connector.source.SplitEnumerator;
 import org.apache.flink.api.connector.source.SplitsAssignment;
 import org.apache.flink.api.connector.source.mocks.MockSplitEnumeratorContext;
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.util.FlinkRuntimeException;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -145,6 +148,100 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
 
             Map<Integer, List<SourceSplitBase>> actualAssignment = getReadersAssignments(context);
             assertThat(actualAssignment).isEqualTo(expectedAssignment);
+        }
+    }
+
+    @Test
+    void testBoundedPkTableEmitsKvBatchSplits() throws Throwable {
+        long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numSubtasks = DEFAULT_BUCKET_NUM;
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                new MockSplitEnumeratorContext<>(numSubtasks)) {
+            FlinkSourceEnumerator enumerator =
+                    new FlinkSourceEnumerator(
+                            DEFAULT_TABLE_PATH,
+                            flussConf,
+                            true,
+                            false,
+                            context,
+                            OffsetsInitializer.full(),
+                            DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                            false, // bounded
+                            null,
+                            null,
+                            LeaseContext.DEFAULT,
+                            false);
+
+            enumerator.start();
+            for (int i = 0; i < numSubtasks; i++) {
+                registerReader(context, enumerator, i);
+            }
+            assertThat(context.getSplitsAssignmentSequence()).isEmpty();
+
+            // Drive the bounded-mode async split generation.
+            context.runNextOneTimeCallable();
+
+            Map<Integer, List<SourceSplitBase>> expectedAssignment = new HashMap<>();
+            for (int bucket = 0; bucket < DEFAULT_BUCKET_NUM; bucket++) {
+                KvBatchSplit split = new KvBatchSplit(new TableBucket(tableId, bucket), null);
+                int owner = enumerator.getSplitOwner(split);
+                expectedAssignment.computeIfAbsent(owner, k -> new ArrayList<>()).add(split);
+            }
+            Map<Integer, List<SourceSplitBase>> actualAssignment = getReadersAssignments(context);
+            assertThat(actualAssignment).isEqualTo(expectedAssignment);
+            actualAssignment
+                    .values()
+                    .forEach(
+                            splits -> splits.forEach(s -> assertThat(s.isKvBatchSplit()).isTrue()));
+        }
+    }
+
+    /**
+     * On {@link UnfinishedSplitEvent} the enumerator re-emits the split (so a transient leadership
+     * change recovers cleanly), but only up to a fixed budget. Past the budget it fails the job
+     * rather than hot-looping.
+     */
+    @Test
+    void testUnfinishedSplitEventRetryBudget() throws Throwable {
+        long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                new MockSplitEnumeratorContext<>(1)) {
+            FlinkSourceEnumerator enumerator =
+                    new FlinkSourceEnumerator(
+                            DEFAULT_TABLE_PATH,
+                            flussConf,
+                            true,
+                            false,
+                            context,
+                            OffsetsInitializer.full(),
+                            DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                            false, // bounded
+                            null,
+                            null,
+                            LeaseContext.DEFAULT,
+                            false);
+            enumerator.start();
+            registerReader(context, enumerator, 0);
+
+            TableBucket bucket = new TableBucket(tableId, 0);
+            KvBatchSplit split = new KvBatchSplit(bucket, null);
+            UnfinishedSplitEvent event =
+                    new UnfinishedSplitEvent(
+                            split.splitId(), bucket, null, "not leader or follower");
+
+            // 5 attempts succeed; each re-emits the split.
+            int initialAssignmentCount = context.getSplitsAssignmentSequence().size();
+            for (int i = 0; i < 5; i++) {
+                enumerator.handleSourceEvent(0, event);
+            }
+            assertThat(context.getSplitsAssignmentSequence().size() - initialAssignmentCount)
+                    .isEqualTo(5);
+
+            // 6th attempt exceeds the cap and fails the job.
+            assertThatThrownBy(() -> enumerator.handleSourceEvent(0, event))
+                    .isInstanceOf(FlinkRuntimeException.class)
+                    .hasMessageContaining("exceeded")
+                    .hasMessageContaining("re-assignment attempts");
         }
     }
 

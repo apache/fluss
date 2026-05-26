@@ -17,7 +17,11 @@
 
 package org.apache.fluss.flink.source.event;
 
+import org.apache.fluss.metadata.TableBucket;
+
 import org.apache.flink.api.connector.source.SourceEvent;
+
+import javax.annotation.Nullable;
 
 import java.util.Objects;
 
@@ -27,24 +31,42 @@ import java.util.Objects;
  * re-assigned. Sent on transient failures whose recovery requires opening a fresh scanner session,
  * most notably {@code NOT_LEADER_OR_FOLLOWER} / {@code LeaderNotAvailableException}.
  *
- * <p>The enumerator is expected to refresh metadata and re-emit the split (possibly to a different
- * reader), bounded by a per-split attempt budget so a persistently failing bucket eventually fails
- * the job rather than hot-looping.
+ * <p>The event carries the bucket and partition name so the enumerator can reconstruct the split
+ * without keeping per-split state across its own restarts. The enumerator is expected to refresh
+ * metadata and re-emit the split (possibly to a different reader), bounded by a per-split attempt
+ * budget so a persistently failing bucket eventually fails the job rather than hot-looping.
  */
 public class UnfinishedSplitEvent implements SourceEvent {
 
     private static final long serialVersionUID = 1L;
 
     private final String splitId;
+    private final TableBucket tableBucket;
+    @Nullable private final String partitionName;
     private final String reason;
 
-    public UnfinishedSplitEvent(String splitId, String reason) {
+    public UnfinishedSplitEvent(
+            String splitId,
+            TableBucket tableBucket,
+            @Nullable String partitionName,
+            String reason) {
         this.splitId = splitId;
+        this.tableBucket = tableBucket;
+        this.partitionName = partitionName;
         this.reason = reason;
     }
 
     public String getSplitId() {
         return splitId;
+    }
+
+    public TableBucket getTableBucket() {
+        return tableBucket;
+    }
+
+    @Nullable
+    public String getPartitionName() {
+        return partitionName;
     }
 
     public String getReason() {
@@ -60,16 +82,27 @@ public class UnfinishedSplitEvent implements SourceEvent {
             return false;
         }
         UnfinishedSplitEvent that = (UnfinishedSplitEvent) o;
-        return Objects.equals(splitId, that.splitId) && Objects.equals(reason, that.reason);
+        return Objects.equals(splitId, that.splitId)
+                && Objects.equals(tableBucket, that.tableBucket)
+                && Objects.equals(partitionName, that.partitionName)
+                && Objects.equals(reason, that.reason);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(splitId, reason);
+        return Objects.hash(splitId, tableBucket, partitionName, reason);
     }
 
     @Override
     public String toString() {
-        return "UnfinishedSplitEvent{splitId='" + splitId + "', reason='" + reason + "'}";
+        return "UnfinishedSplitEvent{splitId='"
+                + splitId
+                + "', tableBucket="
+                + tableBucket
+                + ", partitionName='"
+                + partitionName
+                + "', reason='"
+                + reason
+                + "'}";
     }
 }

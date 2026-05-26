@@ -31,8 +31,8 @@ import javax.annotation.Nullable;
  * RocksDB state at the moment {@code ScanKv} opens the scan), but the client cannot resume an
  * expired or invalidated session, so progress is not checkpointed.
  *
- * <p>Unlike {@link HybridSnapshotLogSplit}, this split has no log handoff phase: when the bucket
- * is drained the split is marked finished.
+ * <p>Unlike {@link HybridSnapshotLogSplit}, this split has no log handoff phase: when the bucket is
+ * drained the split is marked finished.
  */
 public class KvBatchSplit extends SourceSplitBase {
 
