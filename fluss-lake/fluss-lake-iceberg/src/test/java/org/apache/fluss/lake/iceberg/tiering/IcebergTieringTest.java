@@ -22,6 +22,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
+import org.apache.fluss.lake.watermark.WatermarkExtractor;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.metadata.TableBucket;
@@ -246,6 +247,12 @@ class IcebergTieringTest {
                     @Override
                     public TableInfo tableInfo() {
                         return tableInfo;
+                    }
+
+                    @Nullable
+                    @Override
+                    public WatermarkExtractor watermarkExtractor() {
+                        return null;
                     }
                 });
     }

@@ -47,7 +47,8 @@ public class TestingValuesLakeCommitter
 
     @Override
     public TestingValuesCommittable toCommittable(
-            List<TestingValuesLakeWriter.TestingValuesWriteResult> valuesWriteResults)
+            List<TestingValuesLakeWriter.TestingValuesWriteResult> valuesWriteResults,
+            @Nullable Long watermark)
             throws IOException {
         return new TestingValuesCommittable(
                 valuesWriteResults.stream()

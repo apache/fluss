@@ -17,16 +17,34 @@
 
 package org.apache.fluss.flink.tiering;
 
+import org.apache.fluss.lake.writer.LakeWriteResult;
+
+import javax.annotation.Nullable;
+
 /** A WriteResult for testing purpose. */
-public class TestingWriteResult {
+public class TestingWriteResult implements LakeWriteResult {
+
+    private static final long serialVersionUID = 1L;
 
     private final int writeResult;
+    @Nullable private final Long watermark;
 
     public TestingWriteResult(int writeResult) {
+        this(writeResult, null);
+    }
+
+    public TestingWriteResult(int writeResult, @Nullable Long watermark) {
         this.writeResult = writeResult;
+        this.watermark = watermark;
     }
 
     public int getWriteResult() {
         return writeResult;
+    }
+
+    @Override
+    @Nullable
+    public Long getWatermark() {
+        return watermark;
     }
 }
