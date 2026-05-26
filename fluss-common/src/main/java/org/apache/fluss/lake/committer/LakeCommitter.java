@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.committer;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.lake.writer.LakeWriteResult;
 
 import javax.annotation.Nullable;
 
@@ -34,7 +35,8 @@ import java.util.Map;
  * @since 0.7
  */
 @PublicEvolving
-public interface LakeCommitter<WriteResult, CommittableT> extends AutoCloseable {
+public interface LakeCommitter<WriteResult extends LakeWriteResult, CommittableT>
+        extends AutoCloseable {
 
     /**
      * The property key used to store the file path of lake table bucket offsets in snapshot
@@ -43,13 +45,26 @@ public interface LakeCommitter<WriteResult, CommittableT> extends AutoCloseable 
     String FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY = "fluss-offsets";
 
     /**
+     * Converts a list of write results to a committable object with watermark.
+     *
+     * @param writeResults the list of write results
+     * @param watermark watermark to be committed
+     * @return the committable object
+     * @throws IOException if an I/O error occurs
+     */
+    CommittableT toCommittable(List<WriteResult> writeResults, @Nullable Long watermark)
+            throws IOException;
+
+    /**
      * Converts a list of write results to a committable object.
      *
      * @param writeResults the list of write results
      * @return the committable object
      * @throws IOException if an I/O error occurs
      */
-    CommittableT toCommittable(List<WriteResult> writeResults) throws IOException;
+    default CommittableT toCommittable(List<WriteResult> writeResults) throws IOException {
+        return toCommittable(writeResults, null);
+    }
 
     /**
      * Commits the given committable object.

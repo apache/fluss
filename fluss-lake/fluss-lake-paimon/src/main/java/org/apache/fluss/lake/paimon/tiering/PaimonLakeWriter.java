@@ -22,6 +22,7 @@ import org.apache.fluss.lake.batch.RecordBatch;
 import org.apache.fluss.lake.paimon.tiering.append.AppendOnlyWriter;
 import org.apache.fluss.lake.paimon.tiering.mergetree.MergeTreeWriter;
 import org.apache.fluss.lake.paimon.utils.PaimonUtils;
+import org.apache.fluss.lake.watermark.WatermarkExtractor;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.SupportsRecordBatchWrite;
 import org.apache.fluss.lake.writer.WriterInitContext;
@@ -33,6 +34,8 @@ import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.sink.CommitMessage;
+
+import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.Collections;
@@ -46,6 +49,8 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
 
     private final Catalog paimonCatalog;
     private final RecordWriter<?> recordWriter;
+    @Nullable private final WatermarkExtractor watermarkExtractor;
+    @Nullable private Long maxWatermark;
 
     public PaimonLakeWriter(
             PaimonCatalogProvider paimonCatalogProvider, WriterInitContext writerInitContext)
@@ -81,12 +86,20 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
                                 flussRowType,
                                 writerInitContext.ioTmpDirs(),
                                 paimonIncludingSystemColumns);
+
+        this.watermarkExtractor = writerInitContext.watermarkExtractor();
     }
 
     @Override
     public void write(LogRecord record) throws IOException {
         try {
             recordWriter.write(record);
+            if (watermarkExtractor != null) {
+                Long ts = watermarkExtractor.currentWatermark(record.getRow());
+                if (ts != null) {
+                    maxWatermark = maxWatermark == null ? ts : Math.max(maxWatermark, ts);
+                }
+            }
         } catch (Exception e) {
             throw new IOException("Failed to write Fluss record to Paimon.", e);
         }
@@ -119,7 +132,7 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
         } catch (Exception e) {
             throw new IOException("Failed to complete Paimon write.", e);
         }
-        return new PaimonWriteResult(commitMessage);
+        return new PaimonWriteResult(commitMessage, maxWatermark);
     }
 
     @Override

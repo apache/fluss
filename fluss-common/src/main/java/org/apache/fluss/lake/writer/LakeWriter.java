@@ -31,7 +31,7 @@ import java.io.IOException;
  * @since 0.7
  */
 @PublicEvolving
-public interface LakeWriter<WriteResult> extends Closeable {
+public interface LakeWriter<WriteResult extends LakeWriteResult> extends Closeable {
     /**
      * Writes a record to the lake.
      *

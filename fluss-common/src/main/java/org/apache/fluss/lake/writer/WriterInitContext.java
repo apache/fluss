@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.writer;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.lake.watermark.WatermarkExtractor;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -105,4 +106,12 @@ public interface WriterInitContext {
     default String[] ioTmpDirs() {
         return null;
     }
+
+    /**
+     * Returns the watermark extractor, or null if table does not define watermark.
+     *
+     * @return the watermark extractor, or null if table does not define watermark
+     */
+    @Nullable
+    WatermarkExtractor watermarkExtractor();
 }

@@ -20,6 +20,7 @@ package org.apache.fluss.flink.tiering.committer;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.tiering.source.TableBucketWriteResult;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
+import org.apache.fluss.lake.writer.LakeWriteResult;
 
 import org.apache.flink.streaming.api.operators.AbstractStreamOperatorFactory;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperatorFactory;
@@ -27,7 +28,7 @@ import org.apache.flink.streaming.api.operators.StreamOperator;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
 
 /** The factory to create {@link TieringCommitOperator}. */
-public class TieringCommitOperatorFactory<WriteResult, Committable>
+public class TieringCommitOperatorFactory<WriteResult extends LakeWriteResult, Committable>
         extends AbstractStreamOperatorFactory<CommittableMessage<Committable>>
         implements OneInputStreamOperatorFactory<
                 TableBucketWriteResult<WriteResult>, CommittableMessage<Committable>> {

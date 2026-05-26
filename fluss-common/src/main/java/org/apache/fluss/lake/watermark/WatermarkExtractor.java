@@ -15,34 +15,27 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.lake.paimon.tiering;
+package org.apache.fluss.lake.watermark;
 
-import org.apache.fluss.lake.writer.LakeWriteResult;
-
-import org.apache.paimon.table.sink.CommitMessage;
+import org.apache.fluss.row.InternalRow;
 
 import javax.annotation.Nullable;
 
-/** The write result of Paimon lake writer to pass to committer to commit. */
-public class PaimonWriteResult implements LakeWriteResult {
+/**
+ * Extracts watermark values from {@link InternalRow} for lake tiering.
+ *
+ * <p>The extracted value should be expressed in epoch milliseconds and should represent the
+ * watermark derived from the row's event-time field and watermark strategy.
+ */
+public interface WatermarkExtractor {
 
-    private static final long serialVersionUID = 2L;
-
-    private final CommitMessage commitMessage;
-    @Nullable private final Long maxWatermark;
-
-    public PaimonWriteResult(CommitMessage commitMessage, @Nullable Long maxWatermark) {
-        this.commitMessage = commitMessage;
-        this.maxWatermark = maxWatermark;
-    }
-
-    public CommitMessage commitMessage() {
-        return commitMessage;
-    }
-
+    /**
+     * Extracts the watermark for the given row.
+     *
+     * @param row the row to extract the watermark from
+     * @return the watermark in epoch milliseconds, or {@code null} if the row does not provide a
+     *     watermark value
+     */
     @Nullable
-    @Override
-    public Long getWatermark() {
-        return maxWatermark;
-    }
+    Long currentWatermark(InternalRow row);
 }

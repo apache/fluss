@@ -32,6 +32,7 @@ import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.committer.TieringStats;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
+import org.apache.fluss.lake.writer.LakeWriteResult;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -74,7 +75,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * <p>Finally, it will also commit the committed lake snapshot to Fluss cluster to make Fluss aware
  * of the tiering progress.
  */
-public class TieringCommitOperator<WriteResult, Committable>
+public class TieringCommitOperator<WriteResult extends LakeWriteResult, Committable>
         extends AbstractStreamOperator<CommittableMessage<Committable>>
         implements OneInputStreamOperator<
                 TableBucketWriteResult<WriteResult>, CommittableMessage<Committable>> {
@@ -202,6 +203,7 @@ public class TieringCommitOperator<WriteResult, Committable>
         // progress (e.g. splits skipped in this round) are excluded
         Map<TableBucket, Long> logEndOffsets = new HashMap<>();
         Map<TableBucket, Long> logMaxTieredTimestamps = new HashMap<>();
+        Long watermark = null;
         for (TableBucketWriteResult<WriteResult> writeResult : committableWriteResults) {
             if (writeResult.logEndOffset() < 0) {
                 continue;
@@ -210,6 +212,15 @@ public class TieringCommitOperator<WriteResult, Committable>
             logEndOffsets.put(tableBucket, writeResult.logEndOffset());
             if (writeResult.maxTimestamp() >= 0) {
                 logMaxTieredTimestamps.put(tableBucket, writeResult.maxTimestamp());
+            }
+            if (writeResult.writeResult() != null) {
+                Long writeResultWatermark = writeResult.writeResult().getWatermark();
+                if (writeResultWatermark != null) {
+                    watermark =
+                            watermark == null
+                                    ? writeResultWatermark
+                                    : Math.min(watermark, writeResultWatermark);
+                }
             }
         }
 
@@ -255,7 +266,7 @@ public class TieringCommitOperator<WriteResult, Committable>
                             .collect(Collectors.toList());
 
             // to committable
-            Committable committable = lakeCommitter.toCommittable(writeResults);
+            Committable committable = lakeCommitter.toCommittable(writeResults, watermark);
             // before commit to lake, check fluss not missing any lake snapshot committed by fluss
             LakeSnapshot flussCurrentLakeSnapshot = getLatestLakeSnapshot(tablePath);
             checkFlussNotMissingLakeSnapshot(
