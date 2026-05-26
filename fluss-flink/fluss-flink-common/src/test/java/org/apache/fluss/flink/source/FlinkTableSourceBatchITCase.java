@@ -51,6 +51,7 @@ import java.util.Map;
 
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectBatchRows;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
 import static org.apache.fluss.testutils.DataTestUtils.row;
@@ -327,6 +328,76 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
             expected.add(String.format("+I[%d, name%d]", i, i));
         }
         assertThat(actual).containsExactlyInAnyOrderElementsOf(expected);
+    }
+
+    @Test
+    void testKvBatchScanOnLogTableThrows() throws Exception {
+        String tableName = String.format("test_kv_batch_log_%s", RandomUtils.nextInt());
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + "  id int not null,"
+                                + "  name varchar)"
+                                + " with ("
+                                + "  'bucket.num' = '2',"
+                                + "  'client.scanner.kv.server-side.enabled' = 'true')",
+                        tableName));
+        // The KV scan option is meaningless for log tables; batch mode must still reject them.
+        assertThatThrownBy(() -> tEnv.executeSql(String.format("SELECT * FROM %s", tableName)))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("Batch mode requires either data-lake integration")
+                .hasMessageContaining(ConfigOptions.TABLE_DATALAKE_ENABLED.key())
+                .hasMessageContaining(ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED.key());
+    }
+
+    @Test
+    void testKvBatchScanWithProjection() throws Exception {
+        String tableName = String.format("test_kv_batch_proj_%s", RandomUtils.nextInt());
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + "  id int not null,"
+                                + "  name varchar,"
+                                + "  region varchar,"
+                                + "  primary key (id) NOT ENFORCED)"
+                                + " with ("
+                                + "  'bucket.num' = '3',"
+                                + "  'client.scanner.kv.server-side.enabled' = 'true')",
+                        tableName));
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            upsertWriter.upsert(row(1, "Alice", "us-east"));
+            upsertWriter.upsert(row(2, "Bob", "eu-west"));
+            upsertWriter.upsert(row(3, "Carol", "ap-south"));
+            upsertWriter.flush();
+        }
+
+        // Only project two of the three columns.
+        CloseableIterator<Row> collected =
+                tEnv.executeSql(String.format("SELECT id, name FROM %s", tableName)).collect();
+        List<String> expected = Arrays.asList("+I[1, Alice]", "+I[2, Bob]", "+I[3, Carol]");
+        assertResultsIgnoreOrder(collected, expected, true);
+    }
+
+    @Test
+    void testKvBatchScanOnEmptyTable() throws Exception {
+        String tableName = String.format("test_kv_batch_empty_%s", RandomUtils.nextInt());
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + "  id int not null,"
+                                + "  name varchar,"
+                                + "  primary key (id) NOT ENFORCED)"
+                                + " with ("
+                                + "  'bucket.num' = '3',"
+                                + "  'client.scanner.kv.server-side.enabled' = 'true')",
+                        tableName));
+        // No rows written — scan must complete naturally with an empty result set.
+        CloseableIterator<Row> collected =
+                tEnv.executeSql(String.format("SELECT * FROM %s", tableName)).collect();
+        List<String> actual = collectBatchRows(collected);
+        assertThat(actual).isEmpty();
     }
 
     @Test

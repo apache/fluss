@@ -231,6 +231,39 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
     }
 
     /**
+     * Enabling the server-side KV scan switch on a log table (no primary key) must not bypass the
+     * "batch not supported" guard — the enumerator should still throw {@link
+     * UnsupportedOperationException} because KV scan is only meaningful for primary-key tables.
+     */
+    @Test
+    void testKvBatchEnabledOnLogTableStillThrows() throws Throwable {
+        createTable(DEFAULT_TABLE_PATH, DEFAULT_LOG_TABLE_DESCRIPTOR);
+        Configuration enabled = new Configuration(flussConf);
+        enabled.set(ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED, true);
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                new MockSplitEnumeratorContext<>(1)) {
+            FlinkSourceEnumerator enumerator =
+                    new FlinkSourceEnumerator(
+                            DEFAULT_TABLE_PATH,
+                            enabled,
+                            false, // hasPrimaryKey = false (log table)
+                            false,
+                            context,
+                            OffsetsInitializer.full(),
+                            DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                            false,
+                            null,
+                            null,
+                            LeaseContext.DEFAULT,
+                            false);
+            assertThatThrownBy(enumerator::start)
+                    .isInstanceOf(UnsupportedOperationException.class)
+                    .hasMessageContaining("Batch mode requires either")
+                    .hasMessageContaining(ConfigOptions.TABLE_DATALAKE_ENABLED.key());
+        }
+    }
+
+    /**
      * With {@code kvBatchEnabled=true} and a partitioned primary-key table the enumerator must emit
      * one {@link KvBatchSplit} per (partition, bucket) pair — one for each auto-created partition
      * and each bucket within it.
@@ -296,77 +329,6 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         }
     }
 
-    /**
-     * When the table has data-lake enabled but no lake snapshot exists yet (freshly created table),
-     * and {@code kvBatchEnabled=true}, the enumerator must fall back to emitting {@link
-     * KvBatchSplit}s rather than log-only splits.
-     *
-     * <p>The server throws {@code LakeTableSnapshotNotExistException} for a fresh lake-enabled
-     * table, which causes {@code generateHybridLakeFlussSplits()} to return {@code null}.
-     */
-    @Test
-    void testLakeEnabledNoSnapshotFallsBackToKvBatchSplits() throws Throwable {
-        // Create a lake-enabled PK table. No snapshot will exist yet, so
-        // getReadableLakeSnapshot() will throw LakeTableSnapshotNotExistException and
-        // generateHybridLakeFlussSplits() will return null, triggering the KV-scan fallback.
-        TableDescriptor lakeEnabledPkDescriptor =
-                TableDescriptor.builder()
-                        .schema(DEFAULT_PK_TABLE_SCHEMA)
-                        .distributedBy(DEFAULT_BUCKET_NUM, "id")
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                        .build();
-        long tableId = createTable(DEFAULT_TABLE_PATH, lakeEnabledPkDescriptor);
-        int numSubtasks = DEFAULT_BUCKET_NUM;
-
-        Configuration enabled = new Configuration(flussConf);
-        enabled.set(ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED, true);
-
-        // A lake source is required when lakeEnabled=true; use a no-op testing instance.
-        LakeSource<LakeSplit> noopLakeSource =
-                new TestingLakeSource(DEFAULT_BUCKET_NUM, Collections.emptyList());
-
-        try (MockSplitEnumeratorContext<SourceSplitBase> context =
-                new MockSplitEnumeratorContext<>(numSubtasks)) {
-            FlinkSourceEnumerator enumerator =
-                    new FlinkSourceEnumerator(
-                            DEFAULT_TABLE_PATH,
-                            enabled,
-                            true,
-                            false,
-                            context,
-                            OffsetsInitializer.full(),
-                            DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
-                            false,
-                            null,
-                            noopLakeSource,
-                            LeaseContext.DEFAULT,
-                            false);
-
-            enumerator.start();
-            for (int i = 0; i < numSubtasks; i++) {
-                registerReader(context, enumerator, i);
-            }
-            // Drive the async callable that calls generateHybridLakeFlussSplits() and
-            // then falls back to generateFlussOnlyBatchSplits(true).
-            context.runNextOneTimeCallable();
-
-            List<SourceSplitBase> allAssigned =
-                    getReadersAssignments(context).values().stream()
-                            .flatMap(List::stream)
-                            .collect(Collectors.toList());
-
-            // Must have exactly one KvBatchSplit per bucket — not log splits.
-            assertThat(allAssigned).hasSize(DEFAULT_BUCKET_NUM);
-            allAssigned.forEach(s -> assertThat(s.isKvBatchSplit()).isTrue());
-            Set<Integer> buckets =
-                    allAssigned.stream()
-                            .map(s -> s.getTableBucket().getBucket())
-                            .collect(Collectors.toSet());
-            assertThat(buckets).hasSize(DEFAULT_BUCKET_NUM);
-            allAssigned.forEach(
-                    s -> assertThat(s.getTableBucket().getTableId()).isEqualTo(tableId));
-        }
-    }
 
     @Test
     void testSplitAssignmentBatchSize() throws Throwable {
