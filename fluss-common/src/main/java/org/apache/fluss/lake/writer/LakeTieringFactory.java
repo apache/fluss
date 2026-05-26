@@ -35,7 +35,8 @@ import java.io.Serializable;
  * @since 0.7
  */
 @PublicEvolving
-public interface LakeTieringFactory<WriteResult, CommittableT> extends Serializable {
+public interface LakeTieringFactory<WriteResult extends LakeWriteResult, CommittableT>
+        extends Serializable {
 
     String FLUSS_LAKE_TIERING_COMMIT_USER = "__fluss_lake_tiering";
 

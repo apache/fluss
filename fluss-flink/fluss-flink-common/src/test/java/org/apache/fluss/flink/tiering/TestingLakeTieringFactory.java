@@ -99,6 +99,7 @@ public class TestingLakeTieringFactory
             implements LakeCommitter<TestingWriteResult, TestingCommittable> {
 
         private long currentSnapshot;
+        @Nullable private Long watermark;
 
         @Nullable private final CommittedLakeSnapshot mockMissingCommittedLakeSnapshot;
 
@@ -110,9 +111,16 @@ public class TestingLakeTieringFactory
             this.mockMissingCommittedLakeSnapshot = mockMissingCommittedLakeSnapshot;
         }
 
+        @Nullable
+        public Long getWatermark() {
+            return watermark;
+        }
+
         @Override
-        public TestingCommittable toCommittable(List<TestingWriteResult> testingWriteResults)
+        public TestingCommittable toCommittable(
+                List<TestingWriteResult> testingWriteResults, @Nullable Long watermark)
                 throws IOException {
+            this.watermark = watermark;
             List<Integer> writeResults = new ArrayList<>();
             for (TestingWriteResult testingWriteResult : testingWriteResults) {
                 writeResults.add(testingWriteResult.getWriteResult());

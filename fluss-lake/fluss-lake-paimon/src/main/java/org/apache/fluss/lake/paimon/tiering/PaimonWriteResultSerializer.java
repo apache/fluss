@@ -19,15 +19,19 @@ package org.apache.fluss.lake.paimon.tiering;
 
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 
+import org.apache.paimon.io.DataInputDeserializer;
+import org.apache.paimon.io.DataInputView;
+import org.apache.paimon.io.DataOutputViewStreamWrapper;
 import org.apache.paimon.table.sink.CommitMessage;
 import org.apache.paimon.table.sink.CommitMessageSerializer;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 
 /** The {@link SimpleVersionedSerializer} for {@link PaimonWriteResult}. */
 public class PaimonWriteResultSerializer implements SimpleVersionedSerializer<PaimonWriteResult> {
 
-    private static final int CURRENT_VERSION = 1;
+    private static final int CURRENT_VERSION = 2;
 
     private final CommitMessageSerializer messageSer = new CommitMessageSerializer();
 
@@ -38,21 +42,58 @@ public class PaimonWriteResultSerializer implements SimpleVersionedSerializer<Pa
 
     @Override
     public byte[] serialize(PaimonWriteResult paimonWriteResult) throws IOException {
-        CommitMessage commitMessage = paimonWriteResult.commitMessage();
-        return messageSer.serialize(commitMessage);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        DataOutputViewStreamWrapper view = new DataOutputViewStreamWrapper(out);
+
+        Long watermark = paimonWriteResult.getWatermark();
+        if (watermark == null) {
+            view.writeBoolean(false);
+        } else {
+            view.writeBoolean(true);
+            view.writeLong(watermark);
+        }
+
+        byte[] messageBytes = messageSer.serialize(paimonWriteResult.commitMessage());
+        view.writeInt(messageBytes.length);
+        view.write(messageBytes);
+
+        return out.toByteArray();
     }
 
     @Override
     public PaimonWriteResult deserialize(int version, byte[] serialized) throws IOException {
-        if (version != CURRENT_VERSION) {
-            throw new UnsupportedOperationException(
-                    "Expecting PaimonWriteResult version to be "
-                            + CURRENT_VERSION
-                            + ", but found "
-                            + version
-                            + ".");
+        switch (version) {
+            case 1:
+                {
+                    CommitMessage commitMessage =
+                            messageSer.deserialize(messageSer.getVersion(), serialized);
+                    return new PaimonWriteResult(commitMessage, null);
+                }
+            case 2:
+                {
+                    DataInputView view = new DataInputDeserializer(serialized);
+
+                    Long watermark = null;
+                    boolean watermarkNonNull = view.readBoolean();
+                    if (watermarkNonNull) {
+                        watermark = view.readLong();
+                    }
+
+                    int len = view.readInt();
+                    byte[] messageBytes = new byte[len];
+                    view.read(messageBytes);
+                    CommitMessage commitMessage =
+                            messageSer.deserialize(messageSer.getVersion(), messageBytes);
+
+                    return new PaimonWriteResult(commitMessage, watermark);
+                }
+            default:
+                throw new UnsupportedOperationException(
+                        "Expecting PaimonWriteResult version to be less than or equal to "
+                                + CURRENT_VERSION
+                                + ", but found "
+                                + version
+                                + ".");
         }
-        CommitMessage commitMessage = messageSer.deserialize(messageSer.getVersion(), serialized);
-        return new PaimonWriteResult(commitMessage);
     }
 }

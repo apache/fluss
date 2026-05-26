@@ -194,6 +194,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                                 tableBucket,
                                 partitionIdAndNameEntry.getKey(),
                                 1,
+                                null,
                                 currentOffset,
                                 currentTimestamp,
                                 numberOfWriteResults));
@@ -356,6 +357,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                                 tableBucket,
                                 partitionName,
                                 3,
+                                null,
                                 3,
                                 3L,
                                 numberOfWriteResults));
@@ -389,6 +391,27 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                 tableBucket,
                 null,
                 writeResult,
+                null,
+                logEndOffset,
+                maxTimestamp,
+                numberOfWriteResults);
+    }
+
+    private StreamRecord<TableBucketWriteResult<TestingWriteResult>>
+            createTableBucketWriteResultStreamRecord(
+                    TablePath tablePath,
+                    TableBucket tableBucket,
+                    @Nullable Integer writeResult,
+                    @Nullable Long watermark,
+                    long logEndOffset,
+                    long maxTimestamp,
+                    int numberOfWriteResults) {
+        return createTableBucketWriteResultStreamRecord(
+                tablePath,
+                tableBucket,
+                null,
+                writeResult,
+                watermark,
                 logEndOffset,
                 maxTimestamp,
                 numberOfWriteResults);
@@ -400,6 +423,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                     TableBucket tableBucket,
                     @Nullable String partitionName,
                     @Nullable Integer writeResult,
+                    @Nullable Long watermark,
                     long logEndOffset,
                     long maxTimestamp,
                     int numberOfWriteResults) {
@@ -408,7 +432,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                         tablePath,
                         tableBucket,
                         partitionName,
-                        writeResult == null ? null : new TestingWriteResult(writeResult),
+                        writeResult == null ? null : new TestingWriteResult(writeResult, watermark),
                         logEndOffset,
                         maxTimestamp,
                         numberOfWriteResults);
@@ -503,6 +527,107 @@ class TieringCommitOperatorTest extends FlinkTestBase {
         assertThat(failedTieringEvent.failReason())
                 .contains("different from the table id")
                 .contains("dropped and recreated during tiering");
+    }
+
+    @Test
+    void testCommitWithWatermark() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_commit_with_watermark");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numberOfWriteResults = 3;
+
+        TestingLakeTieringFactory.TestingLakeCommitter testingLakeCommitter =
+                new TestingLakeTieringFactory.TestingLakeCommitter();
+        committerOperator =
+                new TieringCommitOperator<>(
+                        parameters,
+                        FLUSS_CLUSTER_EXTENSION.getClientConfig(),
+                        new org.apache.fluss.config.Configuration(),
+                        new TestingLakeTieringFactory(testingLakeCommitter));
+        committerOperator.open();
+
+        for (int bucket = 0; bucket < 3; bucket++) {
+            TableBucket tableBucket = new TableBucket(tableId, bucket);
+            long watermark = 1000L + bucket * 100;
+            committerOperator.processElement(
+                    createTableBucketWriteResultStreamRecord(
+                            tablePath,
+                            tableBucket,
+                            bucket + 1,
+                            watermark,
+                            bucket,
+                            bucket,
+                            numberOfWriteResults));
+        }
+
+        assertThat(testingLakeCommitter.getWatermark()).isEqualTo(1000L);
+    }
+
+    @Test
+    void testCommitWithoutWatermark() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_commit_without_watermark");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numberOfWriteResults = 3;
+
+        TestingLakeTieringFactory.TestingLakeCommitter testingLakeCommitter =
+                new TestingLakeTieringFactory.TestingLakeCommitter();
+        committerOperator =
+                new TieringCommitOperator<>(
+                        parameters,
+                        FLUSS_CLUSTER_EXTENSION.getClientConfig(),
+                        new org.apache.fluss.config.Configuration(),
+                        new TestingLakeTieringFactory(testingLakeCommitter));
+        committerOperator.open();
+
+        for (int bucket = 0; bucket < 3; bucket++) {
+            TableBucket tableBucket = new TableBucket(tableId, bucket);
+            committerOperator.processElement(
+                    createTableBucketWriteResultStreamRecord(
+                            tablePath,
+                            tableBucket,
+                            bucket + 1,
+                            bucket,
+                            bucket,
+                            numberOfWriteResults));
+        }
+
+        assertThat(testingLakeCommitter.getWatermark()).isNull();
+    }
+
+    @Test
+    void testCommitWithEmptyResultResetsWatermark() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_commit_empty_result_resets_watermark");
+        long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numberOfWriteResults = 3;
+
+        TestingLakeTieringFactory.TestingLakeCommitter testingLakeCommitter =
+                new TestingLakeTieringFactory.TestingLakeCommitter();
+        committerOperator =
+                new TieringCommitOperator<>(
+                        parameters,
+                        FLUSS_CLUSTER_EXTENSION.getClientConfig(),
+                        new org.apache.fluss.config.Configuration(),
+                        new TestingLakeTieringFactory(testingLakeCommitter));
+        committerOperator.open();
+
+        // bucket 0 and 1 have watermarks
+        for (int bucket = 0; bucket < 2; bucket++) {
+            TableBucket tableBucket = new TableBucket(tableId, bucket);
+            committerOperator.processElement(
+                    createTableBucketWriteResultStreamRecord(
+                            tablePath,
+                            tableBucket,
+                            bucket + 1,
+                            2000L + bucket * 100,
+                            bucket,
+                            (long) bucket,
+                            numberOfWriteResults));
+        }
+        // bucket 2 is empty (writeResult=null)
+        committerOperator.processElement(
+                createTableBucketWriteResultStreamRecord(
+                        tablePath, new TableBucket(tableId, 2), null, 2, 2L, numberOfWriteResults));
+
+        assertThat(testingLakeCommitter.getWatermark()).isNull();
     }
 
     private CommittedLakeSnapshot mockCommittedLakeSnapshot(

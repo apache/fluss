@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.tiering.source;
 
+import org.apache.fluss.lake.writer.LakeWriteResult;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
@@ -31,7 +32,7 @@ import java.io.Serializable;
  * one round of tiering. It'll be passed to downstream committer operator to collect all the write
  * results of a table and do commit.
  */
-public class TableBucketWriteResult<WriteResult> implements Serializable {
+public class TableBucketWriteResult<WriteResult extends LakeWriteResult> implements Serializable {
 
     private static final long serialVersionUID = 1L;
 

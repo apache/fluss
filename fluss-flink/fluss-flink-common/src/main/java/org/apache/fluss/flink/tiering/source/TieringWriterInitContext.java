@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.tiering.source;
 
+import org.apache.fluss.lake.watermark.WatermarkExtractor;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -31,16 +32,19 @@ public class TieringWriterInitContext implements WriterInitContext {
     private final TableBucket tableBucket;
     @Nullable private final String partition;
     private final TableInfo tableInfo;
+    @Nullable private final WatermarkExtractor watermarkExtractor;
 
     public TieringWriterInitContext(
             TablePath tablePath,
             TableBucket tableBucket,
             @Nullable String partition,
-            TableInfo tableInfo) {
+            TableInfo tableInfo,
+            @Nullable WatermarkExtractor watermarkExtractor) {
         this.tablePath = tablePath;
         this.tableBucket = tableBucket;
         this.partition = partition;
         this.tableInfo = tableInfo;
+        this.watermarkExtractor = watermarkExtractor;
     }
 
     @Override
@@ -62,5 +66,11 @@ public class TieringWriterInitContext implements WriterInitContext {
     @Override
     public TableInfo tableInfo() {
         return tableInfo;
+    }
+
+    @Nullable
+    @Override
+    public WatermarkExtractor watermarkExtractor() {
+        return watermarkExtractor;
     }
 }
