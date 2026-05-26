@@ -329,7 +329,6 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         }
     }
 
-
     @Test
     void testSplitAssignmentBatchSize() throws Throwable {
         long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
