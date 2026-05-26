@@ -587,6 +587,7 @@ public class FlinkSourceEnumerator
     }
 
     private void startInBatchMode() {
+        boolean kvBatchEnabled = flussConf.get(ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED);
         if (lakeEnabled) {
             if (lakeSource == null) {
                 throw new IllegalStateException(
@@ -595,19 +596,18 @@ public class FlinkSourceEnumerator
             context.callAsync(
                     () -> {
                         List<SourceSplitBase> splits = generateHybridLakeFlussSplits();
-                        // No lake snapshot exists, fall back to Fluss-only splits
                         if (splits == null) {
                             LOG.info(
                                     "No lake snapshot found for table {},"
                                             + " falling back to Fluss-only splits.",
                                     tablePath);
-                            splits = generateFlussOnlyBatchSplits();
+                            splits = generateFlussOnlyBatchSplits(kvBatchEnabled);
                         }
                         return splits;
                     },
                     this::handleSplitsAdd);
-        } else if (hasPrimaryKey) {
-            context.callAsync(this::generateFlussOnlyBatchSplits, this::handleSplitsAdd);
+        } else if (kvBatchEnabled && hasPrimaryKey) {
+            context.callAsync(() -> generateFlussOnlyBatchSplits(true), this::handleSplitsAdd);
         } else {
             throw new UnsupportedOperationException(
                     String.format(
@@ -616,16 +616,8 @@ public class FlinkSourceEnumerator
         }
     }
 
-    /**
-     * Builds bounded-mode Fluss-only splits when no lake snapshot is available:
-     *
-     * <ul>
-     *   <li>primary-key tables: one {@link KvBatchSplit} per bucket (server-side KV scan),
-     *   <li>log tables: existing log-only splits with a bounded stopping offset.
-     * </ul>
-     */
-    private List<SourceSplitBase> generateFlussOnlyBatchSplits() {
-        if (hasPrimaryKey) {
+    private List<SourceSplitBase> generateFlussOnlyBatchSplits(boolean kvBatchEnabled) {
+        if (kvBatchEnabled && hasPrimaryKey) {
             if (isPartitioned) {
                 Set<PartitionInfo> partitionInfos = listPartitions();
                 List<SourceSplitBase> splits = new ArrayList<>();
@@ -636,21 +628,18 @@ public class FlinkSourceEnumerator
                                     partitionInfo.getPartitionName()));
                 }
                 return splits;
-            } else {
-                return buildKvBatchSplits(null, null);
             }
-        } else {
-            if (isPartitioned) {
-                Set<PartitionInfo> partitionInfos = listPartitions();
-                Collection<Partition> partitions =
-                        partitionInfos.stream()
-                                .map(p -> new Partition(p.getPartitionId(), p.getPartitionName()))
-                                .collect(Collectors.toList());
-                return this.initLogTablePartitionSplits(partitions);
-            } else {
-                return this.getLogSplit(null, null);
-            }
+            return buildKvBatchSplits(null, null);
         }
+        if (isPartitioned) {
+            Set<PartitionInfo> partitionInfos = listPartitions();
+            Collection<Partition> partitions =
+                    partitionInfos.stream()
+                            .map(p -> new Partition(p.getPartitionId(), p.getPartitionName()))
+                            .collect(Collectors.toList());
+            return this.initLogTablePartitionSplits(partitions);
+        }
+        return this.getLogSplit(null, null);
     }
 
     private List<SourceSplitBase> buildKvBatchSplits(

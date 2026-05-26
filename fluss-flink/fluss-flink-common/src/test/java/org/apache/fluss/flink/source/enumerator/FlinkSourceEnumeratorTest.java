@@ -21,6 +21,7 @@ import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.client.write.HashBucketAssigner;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
@@ -155,12 +156,14 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
     void testBoundedPkTableEmitsKvBatchSplits() throws Throwable {
         long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
         int numSubtasks = DEFAULT_BUCKET_NUM;
+        Configuration enabled = new Configuration(flussConf);
+        enabled.set(ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED, true);
         try (MockSplitEnumeratorContext<SourceSplitBase> context =
                 new MockSplitEnumeratorContext<>(numSubtasks)) {
             FlinkSourceEnumerator enumerator =
                     new FlinkSourceEnumerator(
                             DEFAULT_TABLE_PATH,
-                            flussConf,
+                            enabled,
                             true,
                             false,
                             context,
@@ -201,15 +204,47 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
      * change recovers cleanly), but only up to a fixed budget. Past the budget it fails the job
      * rather than hot-looping.
      */
+    /**
+     * When the master switch is off (default), bounded reads of a primary-key table without a lake
+     * snapshot keep the pre-FIP-17 behavior of failing at startup, so existing users are not
+     * silently flipped onto the new code path.
+     */
     @Test
-    void testUnfinishedSplitEventRetryBudget() throws Throwable {
-        long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+    void testBoundedPkDisabledByDefaultThrows() throws Throwable {
+        createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
         try (MockSplitEnumeratorContext<SourceSplitBase> context =
                 new MockSplitEnumeratorContext<>(1)) {
             FlinkSourceEnumerator enumerator =
                     new FlinkSourceEnumerator(
                             DEFAULT_TABLE_PATH,
                             flussConf,
+                            true,
+                            false,
+                            context,
+                            OffsetsInitializer.full(),
+                            DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                            false,
+                            null,
+                            null,
+                            LeaseContext.DEFAULT,
+                            false);
+            assertThatThrownBy(enumerator::start)
+                    .isInstanceOf(UnsupportedOperationException.class)
+                    .hasMessageContaining("Batch only supports when table option");
+        }
+    }
+
+    @Test
+    void testUnfinishedSplitEventRetryBudget() throws Throwable {
+        long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+        Configuration enabled = new Configuration(flussConf);
+        enabled.set(ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED, true);
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                new MockSplitEnumeratorContext<>(1)) {
+            FlinkSourceEnumerator enumerator =
+                    new FlinkSourceEnumerator(
+                            DEFAULT_TABLE_PATH,
+                            enabled,
                             true,
                             false,
                             context,

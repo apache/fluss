@@ -1418,6 +1418,16 @@ public class ConfigOptions {
                                     + KV_SCANNER_MAX_BATCH_SIZE.key()
                                     + "'.");
 
+    public static final ConfigOption<Boolean> CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED =
+            key("client.scanner.kv.server-side.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Master switch for using the server-side KV scan (FIP-17) in bounded reads "
+                                    + "of primary-key tables when no KV snapshot file is available. When "
+                                    + "false (default), bounded primary-key reads fall back to the prior "
+                                    + "behavior (log-only when lake is enabled, or fail when lake is disabled).");
+
     public static final ConfigOption<Integer> CLIENT_LOOKUP_QUEUE_SIZE =
             key("client.lookup.queue-size")
                     .intType()
