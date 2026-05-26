@@ -17,13 +17,14 @@
 
 package org.apache.fluss.lake.lance.tiering;
 
+import org.apache.fluss.lake.writer.LakeWriteResult;
+
 import com.lancedb.lance.FragmentMetadata;
 
-import java.io.Serializable;
 import java.util.List;
 
 /** The write result of Lance lake writer to pass to committer to commit. */
-public class LanceWriteResult implements Serializable {
+public class LanceWriteResult implements LakeWriteResult {
     private static final long serialVersionUID = 1L;
 
     private final List<FragmentMetadata> commitMessage;

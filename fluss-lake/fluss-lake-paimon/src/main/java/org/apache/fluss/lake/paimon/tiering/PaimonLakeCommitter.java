@@ -90,9 +90,10 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
     }
 
     @Override
-    public PaimonCommittable toCommittable(List<PaimonWriteResult> paimonWriteResults)
+    public PaimonCommittable toCommittable(
+            List<PaimonWriteResult> paimonWriteResults, @Nullable Long watermark)
             throws IOException {
-        ManifestCommittable committable = new ManifestCommittable(COMMIT_IDENTIFIER);
+        ManifestCommittable committable = new ManifestCommittable(COMMIT_IDENTIFIER, watermark);
         for (PaimonWriteResult paimonWriteResult : paimonWriteResults) {
             committable.addFileCommittable(paimonWriteResult.commitMessage());
         }

@@ -21,13 +21,13 @@ package org.apache.fluss.lake.values.tiering;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.values.TestingValuesLake;
+import org.apache.fluss.lake.writer.LakeWriteResult;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.utils.InstantiationUtils;
 
 import java.io.IOException;
-import java.io.Serializable;
 import java.time.Duration;
 import java.util.UUID;
 
@@ -70,7 +70,7 @@ public class TestingValuesLakeWriter
     public void close() throws IOException {}
 
     /** Write result of {@link TestingValuesLake}. */
-    public static class TestingValuesWriteResult implements Serializable {
+    public static class TestingValuesWriteResult implements LakeWriteResult {
         private static final long serialVersionUID = 1L;
 
         private final String stageId;

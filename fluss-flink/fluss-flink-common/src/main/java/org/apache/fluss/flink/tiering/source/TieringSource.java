@@ -26,6 +26,7 @@ import org.apache.fluss.flink.tiering.source.split.TieringSplitSerializer;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorStateSerializer;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
+import org.apache.fluss.lake.writer.LakeWriteResult;
 import org.apache.fluss.shaded.guava32.com.google.common.hash.HashFunction;
 import org.apache.fluss.shaded.guava32.com.google.common.hash.Hasher;
 import org.apache.fluss.shaded.guava32.com.google.common.hash.Hashing;
@@ -53,7 +54,7 @@ import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.getClientS
  *
  * @param <WriteResult> the type of write lake result.
  */
-public class TieringSource<WriteResult>
+public class TieringSource<WriteResult extends LakeWriteResult>
         implements Source<
                 TableBucketWriteResult<WriteResult>, TieringSplit, TieringSourceEnumeratorState> {
 
@@ -129,7 +130,7 @@ public class TieringSource<WriteResult>
     }
 
     /** Builder for {@link TieringSource}. */
-    public static class Builder<WriteResult> {
+    public static class Builder<WriteResult extends LakeWriteResult> {
 
         private final Configuration flussConf;
         private final LakeTieringFactory<WriteResult, ?> lakeTieringFactory;
