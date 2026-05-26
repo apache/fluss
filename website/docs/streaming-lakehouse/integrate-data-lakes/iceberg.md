@@ -169,14 +169,14 @@ export HADOOP_CLASSPATH=`$HADOOP_HOME/bin/hadoop classpath`
 Follow the dependency management guidelines below for the [Prepare required jars](maintenance/tiered-storage/lakehouse-storage.md#prepare-required-jars) step:
 
 ##### 1. Core Fluss Components
-- **Fluss Flink Connector**: Put the Fluss Flink connector JAR into `${FLINK_HOME}/lib` — see [Dependencies](../../../engine-flink/getting-started.md#dependencies) for all supported Flink versions.
+- **Fluss Flink Connector**: Put the Fluss Flink connector JAR into `${FLINK_HOME}/lib` — see [Dependencies](../../engine-flink/getting-started.md#dependencies) for all supported Flink versions.
   - For Flink 1.20: [fluss-flink-1.20-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar)
 
 ##### 2. Remote Storage Support
 If you are using remote storage, download the corresponding Fluss filesystem JAR and place it into `${FLINK_HOME}/lib`:
-- **Amazon S3**: see [S3 Dependencies](../../../maintenance/filesystems/s3.md#dependencies)
-- **Aliyun OSS**: see [OSS Dependencies](../../../maintenance/filesystems/oss.md#dependencies)
-- **HDFS**: see [HDFS Dependencies](../../../maintenance/filesystems/hdfs.md#dependencies)
+- **Amazon S3**: see [S3 Dependencies](../../maintenance/filesystems/s3.md#dependencies)
+- **Aliyun OSS**: see [OSS Dependencies](../../maintenance/filesystems/oss.md#dependencies)
+- **HDFS**: see [HDFS Dependencies](../../maintenance/filesystems/hdfs.md#dependencies)
 
 ##### 3. Iceberg Lake Connector
 - **Fluss Lake Iceberg**: Put [fluss-lake-iceberg-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-lake-iceberg/$FLUSS_VERSION$/fluss-lake-iceberg-$FLUSS_VERSION$.jar) into `${FLINK_HOME}/lib`
