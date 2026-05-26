@@ -1,3 +1,4 @@
+
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
@@ -33,6 +34,7 @@ import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
 
+import static org.apache.fluss.metadata.DataLakeFormat.HUDI;
 import static org.apache.fluss.metadata.DataLakeFormat.ICEBERG;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -52,7 +54,7 @@ public class LakeFlinkCatalog implements AutoCloseable {
     }
 
     public Catalog getLakeCatalog(
-            Configuration tableOptions, Map<String, String> lakeCatalogProperties) {
+        Configuration tableOptions, Map<String, String> lakeCatalogProperties) {
         // TODO: Currently, a Fluss cluster only supports a single DataLake storage.
         // However, in the
         //  future, it may support multiple DataLakes. The following code assumes
@@ -64,31 +66,36 @@ public class LakeFlinkCatalog implements AutoCloseable {
             synchronized (this) {
                 if (catalog == null) {
                     DataLakeFormat lakeFormat =
-                            tableOptions.get(ConfigOptions.TABLE_DATALAKE_FORMAT);
+                        tableOptions.get(ConfigOptions.TABLE_DATALAKE_FORMAT);
                     if (lakeFormat == null) {
                         throw new IllegalArgumentException(
-                                "DataLake format is not specified in table options. "
-                                        + "Please ensure '"
-                                        + ConfigOptions.TABLE_DATALAKE_FORMAT.key()
-                                        + "' is set.");
+                            "DataLake format is not specified in table options. "
+                                + "Please ensure '"
+                                + ConfigOptions.TABLE_DATALAKE_FORMAT.key()
+                                + "' is set.");
                     }
                     Map<String, String> catalogProperties =
-                            new HashMap<>(DataLakeUtils.extractLakeCatalogProperties(tableOptions));
+                        new HashMap<>(DataLakeUtils.extractLakeCatalogProperties(tableOptions));
                     // properties in catalog are preferred
                     catalogProperties.putAll(
-                            PropertiesUtils.extractAndRemovePrefix(
-                                    lakeCatalogProperties, lakeFormat + "."));
+                        PropertiesUtils.extractAndRemovePrefix(
+                            lakeCatalogProperties, lakeFormat + "."));
                     if (lakeFormat == PAIMON) {
                         catalog =
-                                PaimonCatalogFactory.create(
-                                        catalogName, catalogProperties, classLoader);
+                            PaimonCatalogFactory.create(
+                                catalogName, catalogProperties, classLoader);
                         this.lakeFormat = PAIMON;
                     } else if (lakeFormat == ICEBERG) {
                         catalog = IcebergCatalogFactory.create(catalogName, catalogProperties);
                         this.lakeFormat = ICEBERG;
+                    } else if (lakeFormat == HUDI) {
+                        catalog =
+                            HudiCatalogFactory.create(
+                                catalogName, catalogProperties, classLoader);
+                        this.lakeFormat = HUDI;
                     } else {
                         throw new UnsupportedOperationException(
-                                "Unsupported data lake format: " + lakeFormat);
+                            "Unsupported data lake format: " + lakeFormat);
                     }
                 }
             }
@@ -98,8 +105,8 @@ public class LakeFlinkCatalog implements AutoCloseable {
 
     public DataLakeFormat getLakeFormat() {
         checkNotNull(
-                lakeFormat,
-                "DataLake format is null, must call getLakeCatalog first to initialize lake format.");
+            lakeFormat,
+            "DataLake format is null, must call getLakeCatalog first to initialize lake format.");
         return lakeFormat;
     }
 
@@ -121,14 +128,14 @@ public class LakeFlinkCatalog implements AutoCloseable {
         private PaimonCatalogFactory() {}
 
         public static Catalog create(
-                String catalogName,
-                Map<String, String> catalogProperties,
-                ClassLoader classLoader) {
+            String catalogName,
+            Map<String, String> catalogProperties,
+            ClassLoader classLoader) {
             return FlinkCatalogFactory.createCatalog(
-                    catalogName,
-                    CatalogContext.create(
-                            Options.fromMap(catalogProperties), null, new FlinkFileIOLoader()),
-                    classLoader);
+                catalogName,
+                CatalogContext.create(
+                    Options.fromMap(catalogProperties), null, new FlinkFileIOLoader()),
+                classLoader);
         }
     }
 
@@ -150,19 +157,109 @@ public class LakeFlinkCatalog implements AutoCloseable {
             }
             try {
                 Class<?> flinkCatalogFactoryClass =
-                        Class.forName("org.apache.iceberg.flink.FlinkCatalogFactory");
+                    Class.forName("org.apache.iceberg.flink.FlinkCatalogFactory");
                 Object factoryInstance =
-                        flinkCatalogFactoryClass.getDeclaredConstructor().newInstance();
+                    flinkCatalogFactoryClass.getDeclaredConstructor().newInstance();
 
                 Method createCatalogMethod =
-                        flinkCatalogFactoryClass.getMethod(
-                                "createCatalog", String.class, Map.class);
+                    flinkCatalogFactoryClass.getMethod(
+                        "createCatalog", String.class, Map.class);
                 return (Catalog)
-                        createCatalogMethod.invoke(factoryInstance, catalogName, catalogProperties);
+                    createCatalogMethod.invoke(factoryInstance, catalogName, catalogProperties);
             } catch (Exception e) {
                 throw new RuntimeException(
-                        "Failed to create Iceberg catalog using reflection. Please make sure iceberg-flink-runtime is on the classpath.",
-                        e);
+                    "Failed to create Iceberg catalog using reflection. Please make sure iceberg-flink-runtime is on the classpath.",
+                    e);
+            }
+        }
+    }
+
+    /**
+     * Factory using reflection to create Hudi Catalog instances.
+     *
+     * <p>Hudi is intentionally NOT a compile-time dependency of fluss-flink-common to avoid
+     * dragging the shaded {@code hudi-flink<major>-bundle} (which re-bundles hadoop / parquet /
+     * avro / jackson / guava) into every downstream consumer. The bundle is shipped as a plugin
+     * under {@code plugins/hudi/} and loaded via the plugin classloader at runtime, mirroring the
+     * Iceberg integration pattern.
+     *
+     * <p>Unlike Iceberg's {@code FlinkCatalogFactory}, which keeps a convenience overload {@code
+     * createCatalog(String, Map)}, Hudi's {@code HoodieCatalogFactory} only exposes the standard
+     * Flink SPI signature {@code createCatalog(CatalogFactory.Context)}. Since Fluss is not
+     * invoking the factory through Flink's SQL {@code CREATE CATALOG} path, no {@code Context} is
+     * provided to us — we have to build one ourselves. We do that by reflectively instantiating
+     * Flink's {@code FactoryUtil$DefaultCatalogContext}, the same internal implementation Flink
+     * itself uses in {@code FactoryUtil#createCatalog(...)} when bridging the legacy and new SPI
+     * stacks.
+     */
+    public static class HudiCatalogFactory {
+
+        private static final String HOODIE_CATALOG_FACTORY_CLASS =
+            "org.apache.hudi.table.catalog.HoodieCatalogFactory";
+        private static final String FLINK_CATALOG_FACTORY_CONTEXT_CLASS =
+            "org.apache.flink.table.factories.CatalogFactory$Context";
+        private static final String FLINK_DEFAULT_CATALOG_CONTEXT_CLASS =
+            "org.apache.flink.table.factories.FactoryUtil$DefaultCatalogContext";
+
+        private HudiCatalogFactory() {}
+
+        public static Catalog create(
+            String catalogName,
+            Map<String, String> catalogProperties,
+            ClassLoader classLoader) {
+            try {
+                // 1) Build Hudi's catalog factory instance via reflection.
+                Class<?> hoodieCatalogFactoryClass =
+                    Class.forName(HOODIE_CATALOG_FACTORY_CLASS, true, classLoader);
+                Object factoryInstance =
+                    hoodieCatalogFactoryClass.getDeclaredConstructor().newInstance();
+
+                // 2) Build a CatalogFactory.Context via Flink's internal default impl.
+                //    Constructor: DefaultCatalogContext(String name,
+                //                                       Map<String,String> options,
+                //                                       ReadableConfig configuration,
+                //                                       ClassLoader classLoader)
+                //    We have no real Flink ReadableConfig in this code path, so we pass an
+                //    empty Flink Configuration (which implements ReadableConfig) as a benign
+                //    placeholder — Hudi's factory only consumes 'options' / 'name' / classloader.
+                Class<?> defaultCatalogContextClass =
+                    Class.forName(FLINK_DEFAULT_CATALOG_CONTEXT_CLASS, true, classLoader);
+                Class<?> readableConfigClass =
+                    Class.forName(
+                        "org.apache.flink.configuration.ReadableConfig", true, classLoader);
+                Class<?> flinkConfigurationClass =
+                    Class.forName(
+                        "org.apache.flink.configuration.Configuration", true, classLoader);
+                Object emptyFlinkConfiguration =
+                    flinkConfigurationClass.getDeclaredConstructor().newInstance();
+
+                Object context =
+                    defaultCatalogContextClass
+                        .getDeclaredConstructor(
+                            String.class,
+                            Map.class,
+                            readableConfigClass,
+                            ClassLoader.class)
+                        .newInstance(
+                            catalogName,
+                            catalogProperties,
+                            emptyFlinkConfiguration,
+                            classLoader);
+
+                // 3) Invoke HoodieCatalogFactory#createCatalog(Context).
+                Class<?> contextInterface =
+                    Class.forName(FLINK_CATALOG_FACTORY_CONTEXT_CLASS, true, classLoader);
+                Method createCatalogMethod =
+                    hoodieCatalogFactoryClass.getMethod("createCatalog", contextInterface);
+                return (Catalog) createCatalogMethod.invoke(factoryInstance, context);
+            } catch (Exception e) {
+                throw new RuntimeException(
+                    "Failed to create Hudi catalog using reflection. Please make sure "
+                        + "hudi-flink-bundle (matching the current Flink version, "
+                        + "Hudi 1.0+) is on the classpath, typically under "
+                        + "plugins/hudi/, and that the catalog options include a valid "
+                        + "'mode' (supported: 'hms' or 'dfs').",
+                    e);
             }
         }
     }
