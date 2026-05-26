@@ -1423,7 +1423,7 @@ public class ConfigOptions {
                     .booleanType()
                     .defaultValue(false)
                     .withDescription(
-                            "Master switch for using the server-side KV scan (FIP-17) in bounded reads "
+                            "Master switch for using the server-side KV scan in bounded reads "
                                     + "of primary-key tables when no KV snapshot file is available. When "
                                     + "false (default), bounded primary-key reads fall back to the prior "
                                     + "behavior (log-only when lake is enabled, or fail when lake is disabled).");
