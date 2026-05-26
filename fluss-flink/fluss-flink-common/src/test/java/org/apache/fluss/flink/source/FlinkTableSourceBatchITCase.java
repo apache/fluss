@@ -40,6 +40,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
@@ -287,6 +288,39 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                         "+I[4, address4, name4]",
                         "+I[5, address5, name5]");
         assertResultsIgnoreOrder(collected, expected, true);
+    }
+
+    @Test
+    void testKvBatchScanReturnsAllRecords() throws Exception {
+        String tableName = String.format("test_kv_batch_100_%s", RandomUtils.nextInt());
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + "  id int not null,"
+                                + "  name varchar,"
+                                + "  primary key (id) NOT ENFORCED)"
+                                + " with ("
+                                + "  'bucket.num' = '3',"
+                                + "  'client.scanner.kv.server-side.enabled' = 'true')",
+                        tableName));
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            for (int i = 1; i <= 100; i++) {
+                upsertWriter.upsert(row(i, "name" + i));
+            }
+            upsertWriter.flush();
+        }
+
+        CloseableIterator<Row> collected =
+                tEnv.executeSql(String.format("SELECT * FROM %s", tableName)).collect();
+        List<String> actual = collectRowsWithTimeout(collected, 100);
+
+        List<String> expected = new ArrayList<>();
+        for (int i = 1; i <= 100; i++) {
+            expected.add(String.format("+I[%d, name%d]", i, i));
+        }
+        assertThat(actual).containsExactlyInAnyOrderElementsOf(expected);
     }
 
     @Test

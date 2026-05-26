@@ -440,8 +440,7 @@ public class FlinkTableSource
                     if (!isDataLakeEnabled
                             && !(hasPrimaryKey()
                                     && flussConfig.get(
-                                            ConfigOptions
-                                                    .CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED))) {
+                                            ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED))) {
                         throw new UnsupportedOperationException(
                                 "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
                     }
