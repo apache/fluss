@@ -743,8 +743,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                             "Failed to wait heartbeat response due to ",
                             new NetworkException("coordinator disconnected"));
             assertThatThrownBy(() -> enumerator.generateAndAssignSplits(null, networkError))
-                    .isInstanceOf(FlinkRuntimeException.class)
-                    .hasMessageContaining("failover");
+                    .isSameAs(networkError);
         }
     }
 
