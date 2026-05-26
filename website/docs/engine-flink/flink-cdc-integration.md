@@ -1,12 +1,12 @@
 ---
 sidebar_label: Flink CDC
 title: Flink CDC Integration
-sidebar_position: 9
+sidebar_position: 10
 ---
 
 # Flink CDC Integration
 
-[Flink CDC](https://nightlies.apache.org/flink/flink-cdc-docs-master/) is a streaming data integration tool built on top of Apache Flink that can capture real-time changes from various databases. Flink CDC supports Fluss as a [Pipeline Sink Connector](https://nightlies.apache.org/flink/flink-cdc-docs-master/docs/connectors/pipeline-connectors/fluss/), making it straightforward to sync CDC data from databases like PostgreSQL, MySQL, and Oracle into Fluss.
+[Flink CDC](https://nightlies.apache.org/flink/flink-cdc-docs-master/) is a streaming data integration tool built on top of Apache Flink that can capture real-time changes from various databases. Flink CDC supports Fluss as a [Pipeline Sink Connector](https://nightlies.apache.org/flink/flink-cdc-docs-master/docs/connectors/pipeline-connectors/fluss/), making it straightforward to sync CDC data from databases like MySQL, PostgreSQL, and Oracle into Fluss.
 
 There are two ways to sync database changes into Fluss using Flink CDC:
 
@@ -17,40 +17,46 @@ There are two ways to sync database changes into Fluss using Flink CDC:
 
 - A running **Fluss cluster** (CoordinatorServer + TabletServer). See [Deploying with Docker](../install-deploy/deploying-with-docker.md) for setup instructions.
 - A running **Flink cluster** with the required connector JARs. See [Getting Started with Flink](getting-started.md) for Flink setup.
-- The required connector JARs placed under `<FLINK_HOME>/lib/`. The examples below use MySQL as the source, but other databases (PostgreSQL, Oracle, etc.) are also supported — see [Further Reading](#further-reading) for the full list of connectors.
-  - For SQL approach: [flink-sql-connector-mysql-cdc](https://mvnrepository.com/artifact/org.apache.flink/flink-sql-connector-mysql-cdc) and the [Fluss Flink connector](getting-started.md)
+- The required connector JARs placed under `<FLINK_HOME>/lib/`. The examples below use PostgreSQL as the source, but other databases (MySQL, Oracle, etc.) are also supported — see [Further Reading](#further-reading) for the full list of connectors.
+  - For SQL approach: [flink-sql-connector-postgres-cdc](https://mvnrepository.com/artifact/org.apache.flink/flink-sql-connector-postgres-cdc) 
   - For Pipeline approach: [flink-cdc-pipeline-connector-fluss](https://mvnrepository.com/artifact/org.apache.flink/flink-cdc-pipeline-connector-fluss)
 
-## Example 1: Sync MySQL to Fluss with Flink SQL
+:::note
+The Pipeline approach (Example 2) uses `./bin/flink-cdc.sh`, which is part of the **standalone Flink CDC distribution** (`flink-cdc-<version>-bin.tar.gz`) — it is **not** included in the standard Flink release. Download it from the [Flink CDC releases page](https://github.com/apache/flink-cdc/releases) and extract it. You can point it to your Flink installation via the `--flink-home` flag when submitting the pipeline.
+:::
 
-This example shows how to capture changes from a MySQL table and write them into a Fluss primary-key table using Flink SQL.
+## Example 1: Sync PostgreSQL to Fluss with Flink SQL
 
-### Step 1: Start MySQL with Docker
+This example shows how to capture changes from a PostgreSQL table and write them into a Fluss primary-key table using Flink SQL.
 
-Start a MySQL instance with binlog enabled using the Debezium example image:
+### Step 1: Start PostgreSQL with Docker
 
-```shell
-docker run -d --name mysql \
-  -e MYSQL_ROOT_PASSWORD=123456 \
-  -e MYSQL_USER=mysqluser \
-  -e MYSQL_PASSWORD=mysqlpw \
-  -p 3306:3306 \
-  debezium/example-mysql:1.1
-```
-
-Wait for the container to start, then connect to MySQL:
+Start a PostgreSQL instance with logical replication enabled:
 
 ```shell
-docker exec -it mysql mysql -uroot -p123456
+docker run -d --name postgres \
+  -e POSTGRES_PASSWORD=postgres \
+  -p 5432:5432 \
+  postgres:15 \
+  postgres -c wal_level=logical
 ```
 
-Create a sample database and table:
+Wait for the container to start, then connect to PostgreSQL and create the database:
+
+```shell
+docker exec -it postgres psql -U postgres
+```
 
 ```sql
 CREATE DATABASE mydb;
-USE mydb;
+```
+
+Then create the table:
+
+
+```sql
 CREATE TABLE orders (
-  order_id INT AUTO_INCREMENT PRIMARY KEY,
+  order_id SERIAL PRIMARY KEY,
   customer_name VARCHAR(255),
   product VARCHAR(255),
   quantity INT,
@@ -63,12 +69,12 @@ INSERT INTO orders (customer_name, product, quantity) VALUES
   ('Charlie', 'Tablet', 3);
 ```
 
-### Step 2: Create a MySQL CDC Source Table in Flink SQL
+### Step 2: Create a PostgreSQL CDC Source Table in Flink SQL
 
-Open the Flink SQL CLI and create a CDC source table that captures changes from the MySQL `orders` table:
+Open the Flink SQL CLI and create a CDC source table that captures changes from the PostgreSQL `orders` table:
 
 ```sql title="Flink SQL"
-CREATE TABLE mysql_orders (
+CREATE TABLE pg_orders (
   order_id INT,
   customer_name STRING,
   product STRING,
@@ -76,13 +82,15 @@ CREATE TABLE mysql_orders (
   order_date TIMESTAMP(3),
   PRIMARY KEY (order_id) NOT ENFORCED
 ) WITH (
-  'connector' = 'mysql-cdc',
+  'connector' = 'postgres-cdc',
   'hostname' = 'localhost',
-  'port' = '3306',
-  'username' = 'root',
-  'password' = '123456',
+  'port' = '5432',
+  'username' = 'postgres',
+  'password' = 'postgres',
   'database-name' = 'mydb',
-  'table-name' = 'orders'
+  'schema-name' = 'public',
+  'table-name' = 'orders',
+  'slot.name' = 'flink_slot'
 );
 ```
 
@@ -118,10 +126,10 @@ Switch back to the default catalog and start the synchronization job:
 USE CATALOG default_catalog;
 
 INSERT INTO fluss_catalog.mydb.orders
-SELECT * FROM mysql_orders;
+SELECT * FROM pg_orders;
 ```
 
-This starts a streaming job that continuously captures changes from MySQL and writes them to Fluss.
+This starts a streaming job that continuously captures changes from PostgreSQL and writes them to Fluss.
 
 ### Step 5: Query the Data in Fluss
 
@@ -138,10 +146,10 @@ SELECT * FROM mydb.orders WHERE order_id = 1;
 SELECT * FROM mydb.orders;
 ```
 
-Try inserting or updating rows in MySQL — changes will be captured and reflected in Fluss in real time. Open a MySQL client:
+Try inserting or updating rows in PostgreSQL — changes will be captured and reflected in Fluss in real time. Open a PostgreSQL client:
 
 ```shell
-docker exec -it mysql mysql -uroot -p123456 mydb
+docker exec -it postgres psql -U postgres mydb
 ```
 
 Then execute:
@@ -151,28 +159,28 @@ INSERT INTO orders (customer_name, product, quantity) VALUES ('Dave', 'Monitor',
 UPDATE orders SET quantity = 5 WHERE customer_name = 'Alice';
 ```
 
-## Example 2: Sync MySQL to Fluss with Pipeline Connector
+## Example 2: Sync PostgreSQL to Fluss with Pipeline Connector
 
-For whole-database synchronization, the Flink CDC Pipeline Connector allows you to define a YAML pipeline that syncs all tables from a MySQL database into Fluss automatically — without writing any SQL.
+For whole-database synchronization, the Flink CDC Pipeline Connector allows you to define a YAML pipeline that syncs all tables from a PostgreSQL database into Fluss automatically — without writing any SQL.
 
 :::note
-This example reuses the MySQL container started in [Example 1](#example-1-sync-mysql-to-fluss-with-flink-sql). If you haven't started it yet, follow [Step 1](#step-1-start-mysql-with-docker) first.
+This example reuses the PostgreSQL container started in [Example 1](#example-1-sync-postgresql-to-fluss-with-flink-sql). If you haven't started it yet, follow [Step 1](#step-1-start-postgresql-with-docker) first.
 :::
 
 ### Step 1: Define the Pipeline YAML
 
-Create a file named `mysql-to-fluss.yaml`:
+Create a file named `postgres-to-fluss.yaml`:
 
 ```yaml
 source:
-  type: mysql
-  name: MySQL Source
+  type: postgres
+  name: PostgreSQL Source
   hostname: 127.0.0.1
-  port: 3306
-  username: root
-  password: 123456
-  tables: mydb.\.*
-  server-id: 5401-5404
+  port: 5432
+  username: postgres
+  password: postgres
+  tables: public.\.*
+  slot.name: flink_pipeline_slot
 
 sink:
   type: fluss
@@ -180,28 +188,36 @@ sink:
   bootstrap.servers: localhost:9123
 
 pipeline:
-  name: MySQL to Fluss Pipeline
+  name: PostgreSQL to Fluss Pipeline
   parallelism: 2
 ```
 
 ### Step 2: Submit the Pipeline
 
-Submit the pipeline using the Flink CDC CLI:
+Submit the pipeline using the Flink CDC CLI, passing `--flink-home` to point to your Flink installation:
 
 ```shell
-./bin/flink-cdc.sh mysql-to-fluss.yaml
+./bin/flink-cdc.sh --flink-home /path/to/flink postgres-to-fluss.yaml
 ```
 
-This will automatically create the corresponding tables in Fluss and start syncing data from all matching MySQL tables.
+This will automatically create the corresponding tables in Fluss and start syncing data from all matching PostgreSQL tables.
 
 For the full list of Pipeline Connector options, see the [Fluss Pipeline Connector Documentation](https://nightlies.apache.org/flink/flink-cdc-docs-master/docs/connectors/pipeline-connectors/fluss/).
 
 ## Clean Up
 
-After finishing the examples, stop and remove the MySQL container:
+Before stopping the container, drop the replication slots created by the examples. PostgreSQL replication slots are not removed automatically when a Flink job stops — leaving them active causes WAL files to accumulate and can exhaust disk space.
+
+```sql
+SELECT  pg_drop_replication_slot(slot_name) 
+FROM    pg_replication_slots
+WHERE   slot_name IN ('flink_slot', 'flink_pipeline_slot');
+```
+
+Then stop and remove the container:
 
 ```shell
-docker stop mysql && docker rm mysql
+docker stop postgres && docker rm postgres
 ```
 
 ## Further Reading
