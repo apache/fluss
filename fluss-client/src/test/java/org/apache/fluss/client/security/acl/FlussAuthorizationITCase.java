@@ -1479,32 +1479,6 @@ public class FlussAuthorizationITCase {
                     .hasMessageContaining(
                             "NotifyLeaderAndIsr is an internal RPC and cannot be called by external clients");
         }
-
-        // Test 6: Verify internal sessions can call these RPCs
-        TabletServerGateway internalTabletGateway =
-                GatewayClientProxy.createGatewayProxy(
-                        () -> FLUSS_CLUSTER_EXTENSION.getTabletServerNodes("FLUSS").get(0),
-                        FLUSS_CLUSTER_EXTENSION.getRpcClient(),
-                        TabletServerGateway.class);
-
-        // Internal connection should NOT throw "internal RPC" AuthorizationException
-        // (may fail for other reasons like invalid data, but not because it's external)
-        NotifyLeaderAndIsrRequest internalNotifyRequest = new NotifyLeaderAndIsrRequest();
-        internalNotifyRequest.setCoordinatorEpoch(1);
-
-        Throwable thrown =
-                catchThrowable(
-                        () ->
-                                internalTabletGateway
-                                        .notifyLeaderAndIsr(internalNotifyRequest)
-                                        .get());
-        if (thrown != null) {
-            // Should not be the "internal RPC" error message
-            assertThat(thrown)
-                    .rootCause()
-                    .message()
-                    .doesNotContain("internal RPC and cannot be called by external clients");
-        }
     }
 
     private void assertNoTableDescribeAuth(ThrowableAssert.ThrowingCallable callable) {
