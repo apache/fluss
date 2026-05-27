@@ -602,8 +602,8 @@ public class FlinkSourceEnumerator
                     String.format(
                             "Batch mode requires either '%s' = 'true' (data-lake integration) "
                                     + "or '%s' = 'true' (server-side KV scan, primary-key tables only).",
-                            ConfigOptions.TABLE_DATALAKE_ENABLED,
-                            ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED));
+                            ConfigOptions.TABLE_DATALAKE_ENABLED.key(),
+                            ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED.key()));
         }
     }
 
