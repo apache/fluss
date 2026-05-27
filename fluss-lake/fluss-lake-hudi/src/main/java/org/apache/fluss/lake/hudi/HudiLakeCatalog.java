@@ -31,11 +31,9 @@ import org.apache.fluss.utils.IOUtils;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.catalog.CatalogBaseTable;
-import org.apache.flink.table.catalog.CatalogDatabase;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.ObjectPath;
 import org.apache.flink.table.catalog.ResolvedSchema;
-import org.apache.flink.table.catalog.exceptions.DatabaseAlreadyExistException;
 import org.apache.flink.table.catalog.exceptions.DatabaseNotExistException;
 import org.apache.flink.table.catalog.exceptions.TableNotExistException;
 import org.apache.flink.table.types.DataType;
@@ -210,13 +208,20 @@ public class HudiLakeCatalog implements LakeCatalog {
 
     public void createDatabase(String databaseName) {
         try {
-            CatalogDatabase database =
-                    new org.apache.flink.table.catalog.CatalogDatabaseImpl(
-                            new HashMap<>(), "Hudi database");
-            // ignore if exists
-            hudiCatalog.createDatabase(databaseName, database, true);
-        } catch (DatabaseAlreadyExistException e) {
-            // do nothing, shouldn't throw since ignoreIfExists
+            if (!hudiCatalog.databaseExists(databaseName)) {
+                CatalogDatabase database =
+                        new org.apache.flink.table.catalog.CatalogDatabaseImpl(
+                                new HashMap<>(), "Hudi database");
+                hudiCatalog.createDatabase(databaseName, database, true);
+            }
+        } catch (UnsupportedOperationException e) {
+            throw new UnsupportedOperationException(
+                    String.format(
+                            "The underlying Hudi catalog does not support database operations for database '%s'. "
+                                    + "This typically occurs with a filesystem-based catalog (dfs mode). "
+                                    + "Consider using Hive Metastore (hms mode) instead.",
+                            databaseName),
+                    e);
         }
     }
 }
