@@ -19,6 +19,7 @@ package org.apache.fluss.row;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.row.columnar.VectorizedColumnBatch;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.MapType;
@@ -240,9 +241,9 @@ public interface InternalRow extends DataGetters {
      * position. Returns new objects (GenericArray/GenericMap/GenericRow) for nested array/map/row
      * types to prevent use-after-free when the underlying buffer is released.
      *
-     * <p>ARROW already deep copies strings in VectorizedColumnBatch, so copyStrings should be
-     * false. INDEXED and COMPACTED rows reference pooled network buffers, so copyStrings should be
-     * true to copy STRING/CHAR via BinaryString.copy().
+     * <p>For ARROW, pass copyStrings=false since {@link VectorizedColumnBatch} already copies
+     * strings. For INDEXED and COMPACTED, pass copyStrings=true to copy STRING/CHAR out of the
+     * pooled buffer they reference.
      */
     static FieldGetter createDeepFieldGetter(
             DataType fieldType, int fieldPos, boolean copyStrings) {
