@@ -48,6 +48,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metadata.TableStats;
 import org.apache.fluss.rpc.GatewayClientProxy;
+import org.apache.fluss.rpc.RetryableGatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
@@ -139,13 +140,21 @@ public class FlussAdmin implements Admin {
     private final AdminReadOnlyGateway readOnlyGateway;
     private final MetadataUpdater metadataUpdater;
 
+    private static final int READ_ONLY_GATEWAY_MAX_RETRIES = 3;
+
     public FlussAdmin(RpcClient client, MetadataUpdater metadataUpdater) {
         this.gateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getCoordinatorServer, client, AdminGateway.class);
-        this.readOnlyGateway =
+        AdminGateway rawReadOnlyGateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getRandomTabletServer, client, AdminGateway.class);
+        this.readOnlyGateway =
+                RetryableGatewayClientProxy.createRetryableGatewayProxy(
+                        rawReadOnlyGateway,
+                        () -> metadataUpdater.updateMetadata(null, null, null),
+                        READ_ONLY_GATEWAY_MAX_RETRIES,
+                        AdminGateway.class);
         this.metadataUpdater = metadataUpdater;
     }
 
