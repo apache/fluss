@@ -1733,6 +1733,56 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                         "Column 'content' of type 'BYTES' is not supported for statistics collection.");
     }
 
+    /**
+     * Tests that ALTER TABLE DROP COLUMN succeeds for a non-PK, non-autoincrement column and the
+     * resulting scan no longer exposes the dropped column.
+     */
+    @Test
+    void testAlterTableDropColumn() throws Exception {
+        tEnv.executeSql("create table drop_col_test " + "(id int, name varchar, age int)");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "drop_col_test");
+
+        // Write data
+        List<InternalRow> rows = new ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            rows.add(row(i, "name-" + i, i * 10));
+        }
+        writeRows(conn, tablePath, rows, true);
+
+        // Drop a column
+        tEnv.executeSql("alter table drop_col_test drop age");
+
+        List<String> expected = new ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            expected.add(String.format("+I[%d, name-%d]", i, i));
+        }
+        try (CloseableIterator<Row> iter =
+                tEnv.executeSql("select * from drop_col_test").collect()) {
+            assertResultsIgnoreOrder(iter, expected, true);
+        }
+    }
+
+    /**
+     * Tests that ALTER TABLE DROP COLUMN rejects primary key columns and auto-increment columns.
+     */
+    @Test
+    void testAlterTableDropColumnShouldFail() {
+        tEnv.executeSql(
+                "create table drop_col_reject_test "
+                        + "(id int not null, seq bigint, name varchar, "
+                        + "primary key (id) not enforced) "
+                        + "with ('auto-increment.fields' = 'seq')");
+
+        assertThatThrownBy(() -> tEnv.executeSql("alter table drop_col_reject_test drop id"))
+                .rootCause()
+                .hasMessageContaining(
+                        "Cannot drop column 'id' because it is part of the primary key.");
+
+        assertThatThrownBy(() -> tEnv.executeSql("alter table drop_col_reject_test drop seq"))
+                .rootCause()
+                .hasMessageContaining("Cannot drop auto-increment column 'seq'.");
+    }
+
     private List<String> writeRowsToTwoPartition(TablePath tablePath, Collection<String> partitions)
             throws Exception {
         List<InternalRow> rows = new ArrayList<>();

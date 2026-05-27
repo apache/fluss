@@ -433,15 +433,6 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                 admin.alterTable(
                                                 tablePath,
                                                 Collections.singletonList(
-                                                        TableChange.dropColumn("id")),
-                                                false)
-                                        .get())
-                .hasMessageContaining("Not support drop column now.");
-        assertThatThrownBy(
-                        () ->
-                                admin.alterTable(
-                                                tablePath,
-                                                Collections.singletonList(
                                                         TableChange.renameColumn("id", "id2")),
                                                 false)
                                         .get())
@@ -563,6 +554,61 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                                 false)
                                         .get())
                 .hasMessageContaining("Column nested_row already exists");
+    }
+
+    @Test
+    void testAlterTableDropColumn() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "alter_table_drop");
+        Schema schema =
+                Schema.newBuilder()
+                        .primaryKey("id")
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column("age", DataTypes.INT())
+                        .column("seq", DataTypes.BIGINT())
+                        .enableAutoIncrement("seq")
+                        .build();
+        admin.createTable(
+                        tablePath,
+                        TableDescriptor.builder().schema(schema).distributedBy(3, "id").build(),
+                        false)
+                .get();
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.dropColumn("id")),
+                                                false)
+                                        .get())
+                .hasMessageContaining(
+                        "Cannot drop column 'id' because it is part of the primary key.");
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.dropColumn("non-existent")),
+                                                false)
+                                        .get())
+                .hasMessageContaining("Column non-existent does not exist.");
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.dropColumn("seq")),
+                                                false)
+                                        .get())
+                .hasMessageContaining("Cannot drop auto-increment column 'seq'.");
+
+        admin.alterTable(tablePath, Collections.singletonList(TableChange.dropColumn("age")), false)
+                .get();
+        SchemaInfo schemaInfo = admin.getTableSchema(tablePath).get();
+        assertThat(schemaInfo.getSchema().getColumnNames()).doesNotContain("age");
     }
 
     @Test

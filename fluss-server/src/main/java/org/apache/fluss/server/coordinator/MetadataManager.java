@@ -432,6 +432,13 @@ public class MetadataManager {
 
             // validate the table column changes
             if (!schemaChanges.isEmpty()) {
+                // TODO: remove this guard once lake catalogs support dropping columns.
+                if (isDataLakeEnabled(tableDescriptor)
+                        && schemaChanges.stream()
+                                .anyMatch(change -> change instanceof TableChange.DropColumn)) {
+                    throw new InvalidAlterTableException(
+                            "Drop column is not yet supported for lake-tiered tables.");
+                }
                 Schema newSchema =
                         SchemaUpdate.applySchemaChanges(table.getSchema(), schemaChanges);
                 LakeCatalog.Context lakeCatalogContext =
