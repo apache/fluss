@@ -29,7 +29,20 @@ import scala.collection.JavaConverters._
 
 object FlussLakeUtils {
 
-  private val SPARK_CATALOG_PREFIX = "spark.sql.catalog."
+  /**
+   * Paimon DLF supports multiple authentication schemes (see
+   * https://paimon.apache.org/docs/1.3/concepts/rest/dlf/), allowing clients to freely choose the
+   * appropriate method based on their runtime environment. However, the Fluss server does not
+   * propagate auth configs for all scenarios. These keys are therefore overridden with the values
+   * from the Catalog configuration, replacing whatever the Fluss server provides, so that clients
+   * can use their preferred authentication method.
+   */
+  private val REMOVAL_KEYS = Set(
+    "dlf.access-key-id",
+    "dlf.access-key-secret",
+    "dlf.security-token",
+    "dlf.token-path",
+    "dlf.token-loader")
 
   def createLakeSource(
       catalogProperties: util.Map[String, String],
@@ -39,11 +52,14 @@ object FlussLakeUtils {
     val datalakeFormat = tableConfig.get(ConfigOptions.TABLE_DATALAKE_FORMAT)
     val dataLakePrefix = "table.datalake." + datalakeFormat + "."
 
+    val rewriteProperties =
+      PropertiesUtils.extractAndRemovePrefix(tableProperties, dataLakePrefix).asScala.filterNot {
+        case (k, _) => REMOVAL_KEYS(k)
+      } ++
+        catalogProperties.asScala.filter { case (k, _) => REMOVAL_KEYS(k) }
+
     val lakeConfig =
-      Configuration.fromMap(PropertiesUtils.extractAndRemovePrefix(tableProperties, dataLakePrefix))
-    catalogProperties.asScala.foreach {
-      case (k, v) => lakeConfig.setString(s"$SPARK_CATALOG_PREFIX$k", v)
-    }
+      Configuration.fromMap(rewriteProperties.asJava)
     val lakeStoragePlugin =
       LakeStoragePluginSetUp.fromDataLakeFormat(datalakeFormat.toString, null)
     val lakeStorage = lakeStoragePlugin.createLakeStorage(lakeConfig)
