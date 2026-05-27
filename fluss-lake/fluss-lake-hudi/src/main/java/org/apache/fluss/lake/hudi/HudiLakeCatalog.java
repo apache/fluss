@@ -19,6 +19,7 @@ package org.apache.fluss.lake.hudi;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.lake.hudi.utils.HudiConversions;
 import org.apache.fluss.lake.hudi.utils.catalog.CatalogDatabaseImpl;
 import org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils;
@@ -34,9 +35,10 @@ import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogDatabase;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.ObjectPath;
+import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.catalog.exceptions.DatabaseAlreadyExistException;
 import org.apache.flink.table.catalog.exceptions.DatabaseNotExistException;
-import org.apache.flink.table.catalog.exceptions.TableAlreadyExistException;
+import org.apache.flink.table.catalog.exceptions.TableNotExistException;
 import org.apache.flink.table.types.DataType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -81,7 +83,7 @@ public class HudiLakeCatalog implements LakeCatalog {
 
     @Override
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor, Context context)
-            throws org.apache.fluss.exception.TableAlreadyExistException {
+            throws TableAlreadyExistException {
         LOG.info("create the lake table for : {} with props: {}", tablePath, tableDescriptor);
 
         ObjectPath objectPath = HudiConversions.toHudiObjectPath(tablePath);
@@ -94,11 +96,11 @@ public class HudiLakeCatalog implements LakeCatalog {
 
         // Create table in Hudi catalog
         try {
-            createTable(objectPath, catalogTable);
+            createTable(objectPath, catalogTable, context.isCreatingFlussTable());
         } catch (DatabaseNotExistException e) {
             createDatabase(tablePath.getDatabaseName());
             try {
-                createTable(objectPath, catalogTable);
+                createTable(objectPath, catalogTable, context.isCreatingFlussTable());
             } catch (DatabaseNotExistException t) {
                 // shouldn't happen in normal cases
                 throw new RuntimeException(
@@ -118,15 +120,86 @@ public class HudiLakeCatalog implements LakeCatalog {
                 "Alter table is not supported for Hudi at the moment");
     }
 
-    private void createTable(ObjectPath tablePath, CatalogBaseTable catalogTable)
+    private void createTable(
+            ObjectPath tablePath, CatalogBaseTable catalogTable, boolean isCreatingFlussTable)
             throws DatabaseNotExistException {
         try {
-            hudiCatalog.createTable(tablePath, catalogTable, true);
+            hudiCatalog.createTable(tablePath, catalogTable, false);
             LOG.info("Table {} created successfully.", tablePath);
         } catch (TableAlreadyExistException e) {
-            throw new org.apache.fluss.exception.TableAlreadyExistException(
-                    "Table " + tablePath + " already exists.");
+            // table already exists, check schema compatibility for idempotency
+            try {
+                CatalogBaseTable existingTable = hudiCatalog.getTable(tablePath);
+                if (!isHudiSchemaCompatible(existingTable, catalogTable)) {
+                    throw new TableAlreadyExistException(
+                            String.format(
+                                    "The table %s already exists in Hudi catalog, but the table schema is not compatible. "
+                                            + "Please first drop the table in Hudi catalog or use a new table name.",
+                                    tablePath));
+                }
+                // if creating a new fluss table, we should ensure the lake table is empty
+                // TODO: add emptiness check for Hudi table once LakeTieringFactory is implemented
+                if (isCreatingFlussTable) {
+                    LOG.warn(
+                            "Table {} already exists in Hudi catalog with compatible schema. "
+                                    + "Skipping creation as the table may not be empty.",
+                            tablePath);
+                }
+            } catch (TableNotExistException tableNotExistException) {
+                // shouldn't happen in normal cases
+                throw new RuntimeException(
+                        String.format(
+                                "Failed to create table %s in Hudi. The table already existed "
+                                        + "during the initial creation attempt, but subsequently "
+                                        + "could not be found when trying to get it. "
+                                        + "Please check whether the Hudi table was manually deleted, and try again.",
+                                tablePath));
+            }
         }
+    }
+
+    /**
+     * Checks whether the existing Hudi table schema is compatible with the expected schema.
+     *
+     * <p>Compatibility means the column names, types, and nullability match. This is used for
+     * crash-recovery idempotency: if the table already exists with a compatible schema, the
+     * creation is considered successful.
+     */
+    @VisibleForTesting
+    boolean isHudiSchemaCompatible(CatalogBaseTable existingTable, CatalogBaseTable expectedTable) {
+        ResolvedSchema existingSchema;
+        ResolvedSchema expectedSchema;
+        try {
+            existingSchema = existingTable.getResolvedSchema();
+            expectedSchema = expectedTable.getResolvedSchema();
+        } catch (Exception e) {
+            // Fallback: if resolved schema is not available, compare unresolved columns
+            List<String> existingColumns =
+                    existingTable.getSchema().getColumns().stream()
+                            .map(org.apache.flink.table.api.Schema.UnresolvedColumn::getName)
+                            .toList();
+            List<String> expectedColumns =
+                    expectedTable.getSchema().getColumns().stream()
+                            .map(org.apache.flink.table.api.Schema.UnresolvedColumn::getName)
+                            .toList();
+            return existingColumns.equals(expectedColumns);
+        }
+
+        if (existingSchema.getColumns().size() != expectedSchema.getColumns().size()) {
+            return false;
+        }
+
+        for (int i = 0; i < existingSchema.getColumns().size(); i++) {
+            org.apache.flink.table.catalog.Column existingCol =
+                    existingSchema.getColumns().get(i);
+            org.apache.flink.table.catalog.Column expectedCol =
+                    expectedSchema.getColumns().get(i);
+            if (!existingCol.getName().equals(expectedCol.getName())
+                    || !existingCol.getDataType().equals(expectedCol.getDataType())) {
+                return false;
+            }
+        }
+        return true;
     }
 
     @Override

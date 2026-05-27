@@ -63,7 +63,17 @@ public class HudiConversions {
     private static final String DELIMITER = ",";
 
     /** Hudi config options set by Fluss should not be set by users. */
-    @VisibleForTesting public static final Set<String> HUDI_UNSETTABLE_OPTIONS = new HashSet<>();
+    @VisibleForTesting
+    public static final Set<String> HUDI_UNSETTABLE_OPTIONS = new HashSet<>();
+
+    static {
+        HUDI_UNSETTABLE_OPTIONS.add(FlinkOptions.TABLE_TYPE.key());
+        HUDI_UNSETTABLE_OPTIONS.add(FlinkOptions.RECORD_KEY_FIELD.key());
+        HUDI_UNSETTABLE_OPTIONS.add(FlinkOptions.INDEX_TYPE.key());
+        HUDI_UNSETTABLE_OPTIONS.add(FlinkOptions.INDEX_KEY_FIELD.key());
+        HUDI_UNSETTABLE_OPTIONS.add(FlinkOptions.BUCKET_INDEX_NUM_BUCKETS.key());
+        HUDI_UNSETTABLE_OPTIONS.add(FlinkOptions.PARTITION_PATH_FIELD.key());
+    }
 
     /**
      * Converts a Fluss TablePath to a Hudi ObjectPath.
@@ -76,10 +86,16 @@ public class HudiConversions {
     }
 
     public static ResolvedSchema convertToFlinkResolvedSchema(
-            TableDescriptor tableDescriptor, boolean isPkTable) {
+            TableDescriptor tableDescriptor, boolean isPkTable, String catalogMode) {
         // validate hudi options first
         validateHudiOptions(tableDescriptor.getProperties());
         validateHudiOptions(tableDescriptor.getCustomProperties());
+
+        // choose the correct converter based on catalog mode
+        FlussDataTypeToHudiDataType converter =
+                HIVE_META_STORE_TYPE.equals(catalogMode)
+                        ? FlussDataTypeToHudiDataType.HMS_INSTANCE
+                        : FlussDataTypeToHudiDataType.DFS_INSTANCE;
 
         List<Column> columns = new ArrayList<>();
 
@@ -96,7 +112,7 @@ public class HudiConversions {
             columns.add(
                     Column.physical(
                             columnName,
-                            column.getDataType().accept(FlussDataTypeToHudiDataType.DFS_INSTANCE)));
+                            column.getDataType().accept(converter)));
         }
 
         // add system metadata columns to schema
@@ -196,7 +212,8 @@ public class HudiConversions {
      */
     public static CatalogTable createHudiCatalogTable(
             TableDescriptor tableDescriptor, boolean isPkTable, String catalogMode) {
-        ResolvedSchema resolvedSchema = convertToFlinkResolvedSchema(tableDescriptor, isPkTable);
+        ResolvedSchema resolvedSchema =
+                convertToFlinkResolvedSchema(tableDescriptor, isPkTable, catalogMode);
         Schema schema = Schema.newBuilder().fromResolvedSchema(resolvedSchema).build();
         List<String> partitionKeys = tableDescriptor.getPartitionKeys();
         Map<String, String> options = buildHudiTableProperties(tableDescriptor, isPkTable);
