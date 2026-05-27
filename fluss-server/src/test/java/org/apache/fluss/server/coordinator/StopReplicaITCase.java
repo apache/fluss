@@ -23,7 +23,6 @@ import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
-import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
@@ -34,12 +33,9 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.testutils.RpcMessageTestUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
-import org.apache.fluss.server.zk.data.PartitionAssignment;
-import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -51,8 +47,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
-import java.util.Optional;
 
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
@@ -188,19 +182,144 @@ public class StopReplicaITCase {
                         RpcMessageTestUtils.newDropTableRequest(
                                 tablePath.getDatabaseName(), tablePath.getTableName(), false))
                 .get();
-        assertThat(zkClient.tableExist(tablePath)).isFalse();
 
         FLUSS_CLUSTER_EXTENSION.startTabletServer(offlineServerId);
         FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(3);
 
-        // Both the log directory (with data files) and the table parent directory
-        // should be cleaned at startup via the SchemaNotExistException handler.
         retry(
                 Duration.ofMinutes(1),
                 () -> {
                     assertThat(offlineTsLogDir).doesNotExist();
                     assertThat(offlineTsTableDir).doesNotExist();
                 });
+    }
+
+    /**
+     * when a tablet server is already offline at the time {@code dropTable} is invoked, deletion
+     * must NOT throw and must NOT get stuck. Replicas on the dead tablet server should be parked in
+     * {@code ReplicaDeletionIneligible} and the table marked ineligible; once the tablet server
+     * reconnects, deletion completes.
+     */
+    @Test
+    void testDropTableNotStuckWhenTabletServerDeadAtKickoff() throws Exception {
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(3);
+
+        TablePath tablePath = TablePath.of("test_db_stop_replica", "test_drop_dead_kickoff");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .column("b", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 3)
+                        .build();
+        long tableId =
+                RpcMessageTestUtils.createTable(
+                        FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
+        TableBucket tb = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+
+        List<Integer> isr = waitAndGetIsr(tb);
+        List<Path> tableDirs = assertReplicaExistAndGetTableOrPartitionDirs(tb, isr, false);
+
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        int offlineServerId =
+                isr.stream().filter(id -> id != leader).findFirst().orElse(isr.get(0));
+
+        ReplicaManager replicaManager =
+                FLUSS_CLUSTER_EXTENSION.getTabletServerById(offlineServerId).getReplicaManager();
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        Path offlineTsTableDir = replica.getTabletParentDir();
+        File offlineTsLogDir = replica.getLogTablet().getLogDir();
+
+        FLUSS_CLUSTER_EXTENSION.stopTabletServer(offlineServerId);
+        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(2);
+
+        coordinatorGateway
+                .dropTable(
+                        RpcMessageTestUtils.newDropTableRequest(
+                                tablePath.getDatabaseName(), tablePath.getTableName(), false))
+                .get();
+        assertThat(zkClient.tableExist(tablePath)).isFalse();
+
+        FLUSS_CLUSTER_EXTENSION.startTabletServer(offlineServerId);
+        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(3);
+
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    assertThat(offlineTsLogDir).doesNotExist();
+                    assertThat(offlineTsTableDir).doesNotExist();
+                });
+    }
+
+    /**
+     * Verifies that the {@code tableCount} metric (driven by {@code
+     * coordinatorContext.allTables().size()}) correctly decreases after a table is dropped, even
+     * when a tablet server is temporarily offline and the deletion is initially paused.
+     */
+    @Test
+    void testTableCountMetricDecreasesAfterDropWithOfflineTabletServer() throws Exception {
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(3);
+
+        CoordinatorContext coordinatorContext =
+                FLUSS_CLUSTER_EXTENSION
+                        .getCoordinatorServer()
+                        .getCoordinatorEventProcessor()
+                        .getCoordinatorContext();
+
+        int initialTableCount = coordinatorContext.allTables().size();
+
+        TablePath tablePath = TablePath.of("test_db_stop_replica", "test_table_count_metric");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .column("b", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 3)
+                        .build();
+        long tableId =
+                RpcMessageTestUtils.createTable(
+                        FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
+        TableBucket tb = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+
+        assertThat(coordinatorContext.allTables().size()).isEqualTo(initialTableCount + 1);
+
+        List<Integer> isr = waitAndGetIsr(tb);
+
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        int offlineServerId =
+                isr.stream().filter(id -> id != leader).findFirst().orElse(isr.get(0));
+
+        FLUSS_CLUSTER_EXTENSION.stopTabletServer(offlineServerId);
+        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(2);
+
+        coordinatorGateway
+                .dropTable(
+                        RpcMessageTestUtils.newDropTableRequest(
+                                tablePath.getDatabaseName(), tablePath.getTableName(), false))
+                .get();
+        assertThat(zkClient.tableExist(tablePath)).isFalse();
+
+        FLUSS_CLUSTER_EXTENSION.startTabletServer(offlineServerId);
+        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(3);
+
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(coordinatorContext.allTables().size())
+                                .as(
+                                        "tableCount should return to initial value after "
+                                                + "deletion completes")
+                                .isEqualTo(initialTableCount));
     }
 
     @Test
@@ -267,7 +386,7 @@ public class StopReplicaITCase {
 
         FLUSS_CLUSTER_EXTENSION.startTabletServer(offlineServerId);
         FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(3);
-        
+
         retry(
                 Duration.ofMinutes(1),
                 () -> {

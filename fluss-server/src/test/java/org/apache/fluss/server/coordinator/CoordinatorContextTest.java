@@ -288,9 +288,9 @@ class CoordinatorContextTest {
         assertThat(context.isTableIneligibleForDeletion(unqueuedTableId)).isFalse();
         assertThat(context.isPartitionIneligibleForDeletion(unqueuedPartition)).isFalse();
 
-        // (d) markEligibleForDeletion removes the ineligible flag
-        context.markTableEligibleForDeletion(queuedTableId);
-        context.markPartitionEligibleForDeletion(queuedPartition);
+        // (d) removeFromIneligibleForDeletion removes the ineligible flag
+        context.removeTableFromIneligibleForDeletion(queuedTableId);
+        context.removePartitionFromIneligibleForDeletion(queuedPartition);
         assertThat(context.isTableIneligibleForDeletion(queuedTableId)).isFalse();
         assertThat(context.isPartitionIneligibleForDeletion(queuedPartition)).isFalse();
 

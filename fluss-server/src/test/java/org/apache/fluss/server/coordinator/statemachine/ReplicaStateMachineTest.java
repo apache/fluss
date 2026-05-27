@@ -33,6 +33,7 @@ import org.apache.fluss.server.coordinator.TestCoordinatorChannelManager;
 import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
 import org.apache.fluss.server.entity.DeleteReplicaResultForBucket;
 import org.apache.fluss.server.metadata.ServerInfo;
+import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -365,7 +366,10 @@ class ReplicaStateMachineTest {
                         new CoordinatorChannelManager(
                                 RpcClient.create(
                                         new Configuration(),
-                                        TestingClientMetricGroup.newInstance())),
+                                        TestingClientMetricGroup.newInstance()),
+                                () -> 0,
+                                new Configuration(),
+                                TestingMetricGroups.COORDINATOR_METRICS),
                         (event) -> {
                             // do nothing
                         },

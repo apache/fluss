@@ -503,7 +503,7 @@ class TableManagerTest {
         }
 
         // simulate the TS-reconnect / eligibility-restore path
-        coordinatorContext.markTableEligibleForDeletion(tableId);
+        coordinatorContext.removeTableFromIneligibleForDeletion(tableId);
 
         testingEventManager.clearEvents();
         tableManager.resumeDeletions();
