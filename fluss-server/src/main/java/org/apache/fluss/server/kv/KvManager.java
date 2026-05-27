@@ -25,7 +25,6 @@ import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.KvStorageException;
-import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.memory.LazyMemorySegmentPool;
 import org.apache.fluss.memory.MemorySegmentPool;
@@ -128,10 +127,6 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
     /** The memory segment pool to allocate memorySegment. */
     private final MemorySegmentPool memorySegmentPool;
 
-    private final FsPath remoteKvDir;
-
-    private final FileSystem remoteFileSystem;
-
     /**
      * The shared rate limiter for all RocksDB instances to control flush and compaction write rate.
      */
@@ -148,16 +143,13 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
             ZooKeeperClient zkClient,
             int recoveryThreadsPerDataDir,
             LogManager logManager,
-            TabletServerMetricGroup tabletServerMetricGroup)
-            throws IOException {
+            TabletServerMetricGroup tabletServerMetricGroup) {
         super(TabletType.KV, localDiskManager.dataDirs(), conf, recoveryThreadsPerDataDir);
         this.localDiskManager = localDiskManager;
         this.logManager = logManager;
         this.arrowBufferAllocator = BufferAllocatorUtil.createBufferAllocator(null);
         this.memorySegmentPool = LazyMemorySegmentPool.createServerBufferPool(conf);
         this.zkClient = zkClient;
-        this.remoteKvDir = FlussPaths.remoteKvDir(conf);
-        this.remoteFileSystem = remoteKvDir.getFileSystem();
         this.serverMetricGroup = tabletServerMetricGroup;
         this.sharedRocksDBRateLimiter = createSharedRateLimiter(conf);
         this.currentSharedRateLimitBytesPerSec =
@@ -413,12 +405,13 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
     }
 
     public void deleteRemoteKvSnapshot(
-            PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
+            String remoteDataDir, PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
         FsPath remoteKvTabletDir =
-                FlussPaths.remoteKvTabletDir(remoteKvDir, physicalTablePath, tableBucket);
+                FlussPaths.remoteKvTabletDir(
+                        FlussPaths.remoteKvDir(remoteDataDir), physicalTablePath, tableBucket);
         try {
-            if (remoteFileSystem.exists(remoteKvTabletDir)) {
-                remoteFileSystem.delete(remoteKvTabletDir, true);
+            if (remoteKvTabletDir.getFileSystem().exists(remoteKvTabletDir)) {
+                remoteKvTabletDir.getFileSystem().delete(remoteKvTabletDir, true);
                 LOG.info("Delete table's remote bucket snapshot dir of {} success.", tableBucket);
             }
         } catch (Exception e) {

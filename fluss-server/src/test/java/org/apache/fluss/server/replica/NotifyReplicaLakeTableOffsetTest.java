@@ -29,8 +29,6 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 
-import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
-
 /** Test for notify replica lakehouse data info. */
 class NotifyReplicaLakeTableOffsetTest extends ReplicaTestBase {
 
@@ -74,18 +72,6 @@ class NotifyReplicaLakeTableOffsetTest extends ReplicaTestBase {
                 .isEqualTo(endOffset);
         AssertionsForClassTypes.assertThat(replica.getLogTablet().getLakeMaxTimestamp())
                 .isEqualTo(maxTimestamp);
-    }
-
-    private TableBucket makeTableBucket(boolean partitionTable) {
-        return makeTableBucket(DATA1_TABLE_ID, partitionTable);
-    }
-
-    private TableBucket makeTableBucket(long tableId, boolean partitionTable) {
-        if (partitionTable) {
-            return new TableBucket(tableId, 0L, 0);
-        } else {
-            return new TableBucket(tableId, 0);
-        }
     }
 
     private NotifyLakeTableOffsetData getNotifyLakeTableOffset(

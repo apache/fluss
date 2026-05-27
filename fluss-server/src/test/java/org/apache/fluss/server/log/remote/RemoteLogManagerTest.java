@@ -19,6 +19,8 @@ package org.apache.fluss.server.log.remote;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
+import org.apache.fluss.fs.FSDataOutputStream;
+import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
@@ -34,6 +36,8 @@ import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.testutils.ServerTestTags;
+import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
+import org.apache.fluss.utils.FlussPaths;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
@@ -44,11 +48,13 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -369,7 +375,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testCleanupLocalSegments(boolean partitionTable) throws Exception {
-        TableBucket tb = makeTableBucket(partitionTable);
+        TableBucket tb = makeTableBucket(partitionTable, true);
         // Need to make leader by ReplicaManager.
         makeKvTableAsLeader(tb, DATA1_TABLE_PATH_PK, INITIAL_LEADER_EPOCH, partitionTable);
         LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
@@ -720,16 +726,76 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
                                 .collect(Collectors.toSet()));
     }
 
-    private TableBucket makeTableBucket(boolean partitionTable) {
-        return makeTableBucket(DATA1_TABLE_ID, partitionTable);
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testRegisterReplicaWithOldManifestWithoutRemoteLogDir(boolean partitionTable)
+            throws Exception {
+        TableBucket tb = makeTableBucket(partitionTable);
+        makeLogTableAsLeader(tb, partitionTable);
+        LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        List<RemoteLogSegment> remoteLogSegmentList =
+                remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        assertThat(remoteLogSegmentList).hasSize(4);
+
+        // Read the current manifest from remote storage and strip remote_log_dir fields
+        // to simulate an old-version manifest.
+        Optional<RemoteLogManifestHandle> handleOpt = zkClient.getRemoteLogManifestHandle(tb);
+        assertThat(handleOpt).isPresent();
+        FsPath manifestPath = handleOpt.get().getRemoteLogManifestPath();
+        FileSystem fs = manifestPath.getFileSystem();
+
+        RemoteLogManifest currentManifest =
+                remoteLogStorage.readRemoteLogManifestSnapshot(manifestPath);
+        byte[] currentJson = currentManifest.toJsonBytes();
+        byte[] oldFormatJson = stripRemoteLogDirFromJson(currentJson);
+
+        // Overwrite the manifest file with the old-format JSON (without remote_log_dir)
+        fs.delete(manifestPath, false);
+        try (FSDataOutputStream out = fs.create(manifestPath, FileSystem.WriteMode.NO_OVERWRITE)) {
+            out.write(oldFormatJson);
+        }
+
+        // Verify the written file indeed has no remote_log_dir
+        RemoteLogManifest oldManifest =
+                remoteLogStorage.readRemoteLogManifestSnapshot(manifestPath);
+        assertThat(oldManifest.getRemoteLogDir()).isNull();
+        for (RemoteLogSegment seg : oldManifest.getRemoteLogSegmentList()) {
+            assertThat(seg.remoteLogDir()).isNull();
+        }
+
+        // Rebuild replicaManager to trigger registerReplica with the old manifest
+        replicaManager.shutdown();
+        replicaManager = buildReplicaManager(new TestCoordinatorGateway());
+        makeLogTableAsLeader(tb, partitionTable);
+
+        // Verify the manifest was fixed with the correct remoteLogDir
+        RemoteLogTablet remoteLogTablet = remoteLogManager.remoteLogTablet(tb);
+        assertThat(remoteLogTablet).isNotNull();
+        FsPath expectedRemoteLogDir = FlussPaths.remoteLogDir(conf);
+        assertThat(remoteLogTablet.getRemoteLogDir()).isEqualTo(expectedRemoteLogDir);
+        assertThat(remoteLogTablet.currentManifest().getRemoteLogDir())
+                .isEqualTo(expectedRemoteLogDir);
+
+        // Verify all segments in the manifest also have remoteLogDir set
+        List<RemoteLogSegment> fixedSegments = remoteLogTablet.allRemoteLogSegments();
+        assertThat(fixedSegments).hasSize(4);
+        for (RemoteLogSegment seg : fixedSegments) {
+            assertThat(seg.remoteLogDir()).isEqualTo(expectedRemoteLogDir);
+        }
+
+        // Verify subsequent tiering still works after the fix
+        addMultiSegmentsToLogTablet(replicaManager.getReplicaOrException(tb).getLogTablet(), 3);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        assertThat(remoteLogTablet.allRemoteLogSegments().size()).isGreaterThan(4);
     }
 
-    private TableBucket makeTableBucket(long tableId, boolean partitionTable) {
-        if (partitionTable) {
-            return new TableBucket(tableId, 0L, 0);
-        } else {
-            return new TableBucket(tableId, 0);
-        }
+    private static byte[] stripRemoteLogDirFromJson(byte[] json) {
+        String jsonStr = new String(json, StandardCharsets.UTF_8);
+        return jsonStr.replaceAll(",\"remote_log_dir\":\"[^\"]*\"", "")
+                .getBytes(StandardCharsets.UTF_8);
     }
 
     private static Stream<Arguments> stopArgs() {
