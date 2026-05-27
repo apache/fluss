@@ -51,13 +51,15 @@ public class HudiCatalogUtils {
 
     public static Catalog createHudiCatalog(Configuration configuration) {
         Map<String, String> hudiProps = configuration.toMap();
-        configuration.setString(CatalogOptions.DEFAULT_DATABASE.key(), "tmp");
-        configuration.setString(CatalogOptions.TABLE_EXTERNAL.key(), "true");
+        // copy the configuration to avoid modifying the original
+        Configuration copiedConfig = new Configuration(configuration);
+        copiedConfig.setString(CatalogOptions.DEFAULT_DATABASE.key(), "tmp");
+        copiedConfig.setString(CatalogOptions.TABLE_EXTERNAL.key(), "true");
         String catalogName = hudiProps.getOrDefault(CATALOG_NAME_CONFIG, HUDI_CATALOG_DEFAULT_NAME);
         return buildHudiCatalog(
                 catalogName,
                 hudiProps,
-                org.apache.flink.configuration.Configuration.fromMap(configuration.toMap()));
+                org.apache.flink.configuration.Configuration.fromMap(copiedConfig.toMap()));
     }
 
     public static Catalog buildHudiCatalog(

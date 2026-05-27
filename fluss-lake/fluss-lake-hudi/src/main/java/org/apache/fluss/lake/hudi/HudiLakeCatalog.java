@@ -21,7 +21,6 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.lake.hudi.utils.HudiConversions;
-import org.apache.fluss.lake.hudi.utils.catalog.CatalogDatabaseImpl;
 import org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.metadata.TableChange;
@@ -211,7 +210,9 @@ public class HudiLakeCatalog implements LakeCatalog {
 
     public void createDatabase(String databaseName) {
         try {
-            CatalogDatabase database = new CatalogDatabaseImpl(new HashMap<>(), "Hudi database");
+            CatalogDatabase database =
+                    new org.apache.flink.table.catalog.CatalogDatabaseImpl(
+                            new HashMap<>(), "Hudi database");
             // ignore if exists
             hudiCatalog.createDatabase(databaseName, database, true);
         } catch (DatabaseAlreadyExistException e) {

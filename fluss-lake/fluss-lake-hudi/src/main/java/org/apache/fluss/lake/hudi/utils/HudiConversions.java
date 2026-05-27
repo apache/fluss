@@ -123,11 +123,9 @@ public class HudiConversions {
         UniqueConstraint constraint = null;
         // Set primary key if this is a PK table
         if (isPkTable && tableDescriptor.hasPrimaryKey()) {
-            List<String> primaryKeys = new ArrayList<>();
-            for (int pkIndex : tableDescriptor.getSchema().getPrimaryKeyIndexes()) {
-                primaryKeys.add(tableDescriptor.getSchema().getColumns().get(pkIndex).getName());
-            }
-            constraint = UniqueConstraint.primaryKey("primaryKey", primaryKeys);
+            constraint =
+                    UniqueConstraint.primaryKey(
+                            "primaryKey", extractPrimaryKeyColumns(tableDescriptor));
         }
 
         return new ResolvedSchema(columns, Collections.emptyList(), constraint);
@@ -150,11 +148,9 @@ public class HudiConversions {
         // Set table type based on whether it's a PK table
         if (isPkTable) {
             hudiProperties.put(FlinkOptions.TABLE_TYPE.key(), HoodieTableType.MERGE_ON_READ.name());
-            List<String> primaryKeys = new ArrayList<>();
-            for (int pkIndex : tableDescriptor.getSchema().getPrimaryKeyIndexes()) {
-                primaryKeys.add(tableDescriptor.getSchema().getColumns().get(pkIndex).getName());
-            }
-            hudiProperties.put(FlinkOptions.RECORD_KEY_FIELD.key(), String.join(",", primaryKeys));
+            hudiProperties.put(
+                    FlinkOptions.RECORD_KEY_FIELD.key(),
+                    String.join(DELIMITER, extractPrimaryKeyColumns(tableDescriptor)));
         } else {
             hudiProperties.put(FlinkOptions.TABLE_TYPE.key(), HoodieTableType.COPY_ON_WRITE.name());
             // set primary key for Fluss Log Table.
@@ -250,5 +246,19 @@ public class HudiConversions {
                                         k));
                     }
                 });
+    }
+
+    /**
+     * Extracts the primary key column names from a Fluss TableDescriptor.
+     *
+     * @param tableDescriptor the Fluss table descriptor
+     * @return list of primary key column names
+     */
+    private static List<String> extractPrimaryKeyColumns(TableDescriptor tableDescriptor) {
+        List<String> primaryKeys = new ArrayList<>();
+        for (int pkIndex : tableDescriptor.getSchema().getPrimaryKeyIndexes()) {
+            primaryKeys.add(tableDescriptor.getSchema().getColumns().get(pkIndex).getName());
+        }
+        return primaryKeys;
     }
 }
