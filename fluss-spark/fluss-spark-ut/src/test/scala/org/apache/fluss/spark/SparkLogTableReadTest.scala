@@ -487,6 +487,7 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
                          |WHERE dt = '2026-01-02' AND amount > 603 ORDER BY orderId""".stripMargin)
       checkAnswer(query, Row(900L) :: Nil)
       assert(partitionPredicate(query).isDefined)
+      assert(pushedPredicates(query).nonEmpty)
     }
   }
 

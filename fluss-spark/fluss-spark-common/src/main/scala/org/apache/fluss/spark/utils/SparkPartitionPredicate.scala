@@ -28,25 +28,40 @@ import scala.jdk.CollectionConverters._
 /** Extracts a partition-key predicate and prunes the partition list at planning time. */
 object SparkPartitionPredicate {
 
-  def extract(tableInfo: TableInfo, predicates: Seq[Predicate]): Option[FlussPredicate] = {
+  def extract(
+      tableInfo: TableInfo,
+      predicates: Seq[Predicate]): (Seq[Predicate], Option[FlussPredicate]) = {
     val partitionKeys = tableInfo.getPartitionKeys
-    if (partitionKeys.isEmpty) return None
+    if (partitionKeys.isEmpty) {
+      return (predicates, None)
+    }
 
     val rowType = PartitionUtils.partitionRowType(tableInfo)
     val onlyPartitionKeys = new PartitionPredicateVisitor(partitionKeys)
 
-    val converted = predicates.flatMap {
+    // Separate predicates: those that can be converted and only touch partition keys
+    val (partitionPredicates, nonPartitionPredicates) = predicates.partition {
+      sparkPredicate =>
+        SparkPredicateConverter
+          .convert(rowType, sparkPredicate)
+          .exists(_.visit(onlyPartitionKeys))
+    }
+
+    // Convert partition predicates to FlussPredicate
+    val converted = partitionPredicates.flatMap {
       sparkPredicate =>
         SparkPredicateConverter
           .convert(rowType, sparkPredicate)
           .filter(_.visit(onlyPartitionKeys))
     }
 
-    converted match {
+    val partitionPredicate = converted match {
       case Seq() => None
       case Seq(single) => Some(single)
       case many => Some(PredicateBuilder.and(many.asJava))
     }
+
+    (nonPartitionPredicates, partitionPredicate)
   }
 
   def filterPartitions(

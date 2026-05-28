@@ -52,8 +52,10 @@ trait FlussSupportsPushDownPartitionFilters
   protected var partitionPredicate: Option[FlussPredicate] = None
 
   override def pushPredicates(predicates: Array[Predicate]): Array[Predicate] = {
-    partitionPredicate = SparkPartitionPredicate.extract(tableInfo, predicates.toSeq)
-    predicates
+    val (nonPartitionPred, partitionPred) =
+      SparkPartitionPredicate.extract(tableInfo, predicates.toSeq)
+    partitionPredicate = partitionPred
+    nonPartitionPred.toArray
   }
 
   override def pushedPredicates(): Array[Predicate] = Array.empty
@@ -73,12 +75,12 @@ trait FlussSupportsPushDownV2Filters extends FlussSupportsPushDownPartitionFilte
   }
 
   override def pushPredicates(predicates: Array[Predicate]): Array[Predicate] = {
-    super.pushPredicates(predicates)
+    val nonPartitionPredicates = super.pushPredicates(predicates)
     // Server-side batch filter only supports ARROW; other log formats reject it.
     if (tableInfo.getTableConfig.getLogFormat == LogFormat.ARROW) {
-      convertAndStorePredicates(predicates)
+      convertAndStorePredicates(nonPartitionPredicates)
     }
-    predicates
+    nonPartitionPredicates
   }
 
   override def pushedPredicates(): Array[Predicate] = acceptedPredicates
@@ -96,8 +98,11 @@ trait FlussLakeSupportsPushDownV2Filters extends FlussSupportsPushDownV2Filters 
   def flussConfig: FlussConfiguration
 
   override def pushPredicates(predicates: Array[Predicate]): Array[Predicate] = {
+    val nonPartitionPredicates = super.pushPredicates(predicates)
     val pairs =
-      SparkPredicateConverter.convertPerPredicate(tableInfo.getRowType, predicates.toSeq)
+      SparkPredicateConverter.convertPerPredicate(
+        tableInfo.getRowType,
+        nonPartitionPredicates.toSeq)
     val (acceptedSpark, acceptedFluss) = if (pairs.isEmpty) {
       (Seq.empty[Predicate], Seq.empty[FlussPredicate])
     } else {
@@ -112,7 +117,7 @@ trait FlussLakeSupportsPushDownV2Filters extends FlussSupportsPushDownV2Filters 
     }
     pushedPredicate = SparkPredicateConverter.combineAnd(acceptedFluss)
     acceptedPredicates = acceptedSpark.toArray
-    predicates
+    nonPartitionPredicates
   }
 }
 

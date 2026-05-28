@@ -23,6 +23,8 @@ import org.apache.fluss.metadata.{TableBucket, TablePath}
 import org.apache.fluss.spark.read.{FlussMetrics, FlussScan, FlussUpsertInputPartition, FlussUpsertScan}
 
 import org.apache.spark.sql.{DataFrame, Row}
+import org.apache.spark.sql.execution.{FilterExec, SparkPlan}
+import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanExec
 import org.apache.spark.sql.execution.datasources.v2.{BatchScanExec, DataSourceV2ScanRelation}
 import org.assertj.core.api.Assertions.assertThat
 
@@ -429,6 +431,29 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
       assert(withDesc.contains("[PartitionFilter:"))
       assert(withDesc.contains("dt"))
       assert(!noDesc.contains("PartitionFilter"))
+    }
+  }
+
+  test("Spark Read: mixed partition and non-partition filter (PK table)") {
+    withPkPartitionedTable {
+      val query = sql(
+        s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01' AND amount > 601")
+      checkAnswer(query, Row(700L, 22L, 602, "addr2", "2026-01-01") :: Nil)
+      // Partition predicate extracted for partition pruning
+      assert(partitionPredicate(query).isDefined)
+      // Non-partition predicate (amount > 601) remains as a Filter node in the plan
+      val executedPlan = query.queryExecution.executedPlan match {
+        case aqe: AdaptiveSparkPlanExec => aqe.executedPlan
+        case e: SparkPlan => e
+      }
+      assert(
+        executedPlan.exists(_.isInstanceOf[FilterExec]),
+        s"Expected Filter node in plan for non-partition predicate, got: $executedPlan")
+
+      val numRowsRead = executedPlan
+        .collectFirst { case b: BatchScanExec => b.metrics(FlussMetrics.NUM_ROWS_READ).value }
+        .getOrElse(0L)
+      assert(numRowsRead == 2L, s"Expected 2 rows read for single partition, got $numRowsRead")
     }
   }
 
