@@ -269,6 +269,7 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
                 DEFAULT_SINK_TABLE_PATH,
                 configuration,
                 tableRowType,
+                tableRowType,
                 mailboxExecutor,
                 serializationSchema);
     }
