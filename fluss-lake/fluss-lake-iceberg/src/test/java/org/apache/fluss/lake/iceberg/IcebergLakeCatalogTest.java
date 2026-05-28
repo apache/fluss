@@ -279,8 +279,8 @@ class IcebergLakeCatalogTest {
                                         tablePath,
                                         tableDescriptor,
                                         new TestingLakeCatalogContext()))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("Only one bucket key is supported for Iceberg");
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Iceberg format supports at most one bucket key");
     }
 
     @Test
@@ -431,8 +431,8 @@ class IcebergLakeCatalogTest {
                                         tablePath,
                                         tableDescriptor,
                                         new TestingLakeCatalogContext()))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("Only one bucket key is supported for Iceberg");
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Iceberg format supports at most one bucket key");
     }
 
     @ParameterizedTest
