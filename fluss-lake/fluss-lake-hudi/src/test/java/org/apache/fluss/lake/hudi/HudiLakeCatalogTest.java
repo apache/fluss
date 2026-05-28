@@ -187,71 +187,79 @@ class HudiLakeCatalogTest {
     @Test
     void testIsHudiSchemaCompatibleWithSameSchema() {
         // Build two catalog tables with identical schema
-        CatalogTable table1 = buildTestCatalogTable(
-                new String[]{"id", "name"},
-                new org.apache.flink.table.api.DataTypes[]{
-                        org.apache.flink.table.api.DataTypes.INT().notNull(),
-                        org.apache.flink.table.api.DataTypes.STRING()
-                });
-        CatalogTable table2 = buildTestCatalogTable(
-                new String[]{"id", "name"},
-                new org.apache.flink.table.api.DataTypes[]{
-                        org.apache.flink.table.api.DataTypes.INT().notNull(),
-                        org.apache.flink.table.api.DataTypes.STRING()
-                });
+        CatalogTable table1 =
+                buildTestCatalogTable(
+                        new String[] {"id", "name"},
+                        new org.apache.flink.table.api.DataTypes[] {
+                            org.apache.flink.table.api.DataTypes.INT().notNull(),
+                            org.apache.flink.table.api.DataTypes.STRING()
+                        });
+        CatalogTable table2 =
+                buildTestCatalogTable(
+                        new String[] {"id", "name"},
+                        new org.apache.flink.table.api.DataTypes[] {
+                            org.apache.flink.table.api.DataTypes.INT().notNull(),
+                            org.apache.flink.table.api.DataTypes.STRING()
+                        });
 
         assertThat(flussHudiLakeCatalog.isHudiSchemaCompatible(table1, table2)).isTrue();
     }
 
     @Test
     void testIsHudiSchemaCompatibleWithDifferentColumnCount() {
-        CatalogTable table1 = buildTestCatalogTable(
-                new String[]{"id", "name"},
-                new org.apache.flink.table.api.DataTypes[]{
-                        org.apache.flink.table.api.DataTypes.INT().notNull(),
-                        org.apache.flink.table.api.DataTypes.STRING()
-                });
-        CatalogTable table2 = buildTestCatalogTable(
-                new String[]{"id"},
-                new org.apache.flink.table.api.DataTypes[]{
-                        org.apache.flink.table.api.DataTypes.INT().notNull()
-                });
+        CatalogTable table1 =
+                buildTestCatalogTable(
+                        new String[] {"id", "name"},
+                        new org.apache.flink.table.api.DataTypes[] {
+                            org.apache.flink.table.api.DataTypes.INT().notNull(),
+                            org.apache.flink.table.api.DataTypes.STRING()
+                        });
+        CatalogTable table2 =
+                buildTestCatalogTable(
+                        new String[] {"id"},
+                        new org.apache.flink.table.api.DataTypes[] {
+                            org.apache.flink.table.api.DataTypes.INT().notNull()
+                        });
 
         assertThat(flussHudiLakeCatalog.isHudiSchemaCompatible(table1, table2)).isFalse();
     }
 
     @Test
     void testIsHudiSchemaCompatibleWithDifferentColumnName() {
-        CatalogTable table1 = buildTestCatalogTable(
-                new String[]{"id", "name"},
-                new org.apache.flink.table.api.DataTypes[]{
-                        org.apache.flink.table.api.DataTypes.INT().notNull(),
-                        org.apache.flink.table.api.DataTypes.STRING()
-                });
-        CatalogTable table2 = buildTestCatalogTable(
-                new String[]{"id", "value"},
-                new org.apache.flink.table.api.DataTypes[]{
-                        org.apache.flink.table.api.DataTypes.INT().notNull(),
-                        org.apache.flink.table.api.DataTypes.STRING()
-                });
+        CatalogTable table1 =
+                buildTestCatalogTable(
+                        new String[] {"id", "name"},
+                        new org.apache.flink.table.api.DataTypes[] {
+                            org.apache.flink.table.api.DataTypes.INT().notNull(),
+                            org.apache.flink.table.api.DataTypes.STRING()
+                        });
+        CatalogTable table2 =
+                buildTestCatalogTable(
+                        new String[] {"id", "value"},
+                        new org.apache.flink.table.api.DataTypes[] {
+                            org.apache.flink.table.api.DataTypes.INT().notNull(),
+                            org.apache.flink.table.api.DataTypes.STRING()
+                        });
 
         assertThat(flussHudiLakeCatalog.isHudiSchemaCompatible(table1, table2)).isFalse();
     }
 
     @Test
     void testIsHudiSchemaCompatibleWithDifferentColumnType() {
-        CatalogTable table1 = buildTestCatalogTable(
-                new String[]{"id", "name"},
-                new org.apache.flink.table.api.DataTypes[]{
-                        org.apache.flink.table.api.DataTypes.INT().notNull(),
-                        org.apache.flink.table.api.DataTypes.STRING()
-                });
-        CatalogTable table2 = buildTestCatalogTable(
-                new String[]{"id", "name"},
-                new org.apache.flink.table.api.DataTypes[]{
-                        org.apache.flink.table.api.DataTypes.INT().notNull(),
-                        org.apache.flink.table.api.DataTypes.BIGINT()
-                });
+        CatalogTable table1 =
+                buildTestCatalogTable(
+                        new String[] {"id", "name"},
+                        new org.apache.flink.table.api.DataTypes[] {
+                            org.apache.flink.table.api.DataTypes.INT().notNull(),
+                            org.apache.flink.table.api.DataTypes.STRING()
+                        });
+        CatalogTable table2 =
+                buildTestCatalogTable(
+                        new String[] {"id", "name"},
+                        new org.apache.flink.table.api.DataTypes[] {
+                            org.apache.flink.table.api.DataTypes.INT().notNull(),
+                            org.apache.flink.table.api.DataTypes.BIGINT()
+                        });
 
         assertThat(flussHudiLakeCatalog.isHudiSchemaCompatible(table1, table2)).isFalse();
     }
@@ -286,7 +294,9 @@ class HudiLakeCatalogTest {
 
         // Verify the table still exists and has correct schema
         CatalogBaseTable table =
-                flussHudiLakeCatalog.getHudiCatalog().getTable(HudiConversions.toHudiObjectPath(tablePath));
+                flussHudiLakeCatalog
+                        .getHudiCatalog()
+                        .getTable(HudiConversions.toHudiObjectPath(tablePath));
         assertThat(table).isNotNull();
     }
 
@@ -321,7 +331,10 @@ class HudiLakeCatalogTest {
         TableDescriptor tableDescriptor2 =
                 TableDescriptor.builder().schema(flussSchema2).distributedBy(4, "id").build();
 
-        assertThatThrownBy(() -> flussHudiLakeCatalog.createTable(tablePath, tableDescriptor2, context))
+        assertThatThrownBy(
+                        () ->
+                                flussHudiLakeCatalog.createTable(
+                                        tablePath, tableDescriptor2, context))
                 .isInstanceOf(TableAlreadyExistException.class)
                 .hasMessageContaining("not compatible");
     }
@@ -346,7 +359,8 @@ class HudiLakeCatalogTest {
         TablePath tablePath = TablePath.of("test_db", "protected_option_table");
         TestingLakeCatalogContext context = new TestingLakeCatalogContext();
 
-        assertThatThrownBy(() -> flussHudiLakeCatalog.createTable(tablePath, tableDescriptor, context))
+        assertThatThrownBy(
+                        () -> flussHudiLakeCatalog.createTable(tablePath, tableDescriptor, context))
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining("hoodie.datasource.write.table.type")
                 .hasMessageContaining("should not be set manually");
@@ -371,7 +385,8 @@ class HudiLakeCatalogTest {
         TablePath tablePath = TablePath.of("test_db", "protected_custom_table");
         TestingLakeCatalogContext context = new TestingLakeCatalogContext();
 
-        assertThatThrownBy(() -> flussHudiLakeCatalog.createTable(tablePath, tableDescriptor, context))
+        assertThatThrownBy(
+                        () -> flussHudiLakeCatalog.createTable(tablePath, tableDescriptor, context))
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining("hoodie.datasource.write.recordkey.field")
                 .hasMessageContaining("should not be set manually");
@@ -397,7 +412,9 @@ class HudiLakeCatalogTest {
         flussHudiLakeCatalog.createTable(tablePath, tableDescriptor, context);
 
         CatalogBaseTable table =
-                flussHudiLakeCatalog.getHudiCatalog().getTable(HudiConversions.toHudiObjectPath(tablePath));
+                flussHudiLakeCatalog
+                        .getHudiCatalog()
+                        .getTable(HudiConversions.toHudiObjectPath(tablePath));
         assertThat(table).isNotNull();
         assertThat(table.getOptions()).containsEntry("precombine.field", "id");
     }
@@ -421,7 +438,8 @@ class HudiLakeCatalogTest {
         TablePath tablePath = TablePath.of("test_db", "bucket_conflict_table");
         TestingLakeCatalogContext context = new TestingLakeCatalogContext();
 
-        assertThatThrownBy(() -> flussHudiLakeCatalog.createTable(tablePath, tableDescriptor, context))
+        assertThatThrownBy(
+                        () -> flussHudiLakeCatalog.createTable(tablePath, tableDescriptor, context))
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining("__bucket")
                 .hasMessageContaining("system column");
@@ -442,7 +460,8 @@ class HudiLakeCatalogTest {
         TablePath tablePath = TablePath.of("test_db", "offset_conflict_table");
         TestingLakeCatalogContext context = new TestingLakeCatalogContext();
 
-        assertThatThrownBy(() -> flussHudiLakeCatalog.createTable(tablePath, tableDescriptor, context))
+        assertThatThrownBy(
+                        () -> flussHudiLakeCatalog.createTable(tablePath, tableDescriptor, context))
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining("__offset")
                 .hasMessageContaining("system column");
@@ -463,7 +482,8 @@ class HudiLakeCatalogTest {
         TablePath tablePath = TablePath.of("test_db", "timestamp_conflict_table");
         TestingLakeCatalogContext context = new TestingLakeCatalogContext();
 
-        assertThatThrownBy(() -> flussHudiLakeCatalog.createTable(tablePath, tableDescriptor, context))
+        assertThatThrownBy(
+                        () -> flussHudiLakeCatalog.createTable(tablePath, tableDescriptor, context))
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining("__timestamp")
                 .hasMessageContaining("system column");

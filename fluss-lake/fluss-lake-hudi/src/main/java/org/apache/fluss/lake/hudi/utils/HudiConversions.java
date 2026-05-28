@@ -63,8 +63,7 @@ public class HudiConversions {
     private static final String DELIMITER = ",";
 
     /** Hudi config options set by Fluss should not be set by users. */
-    @VisibleForTesting
-    public static final Set<String> HUDI_UNSETTABLE_OPTIONS = new HashSet<>();
+    @VisibleForTesting public static final Set<String> HUDI_UNSETTABLE_OPTIONS = new HashSet<>();
 
     static {
         HUDI_UNSETTABLE_OPTIONS.add(FlinkOptions.TABLE_TYPE.key());
@@ -109,10 +108,7 @@ public class HudiConversions {
                                 + columnName
                                 + " conflicts with a system column name of hudi table, please rename the column.");
             }
-            columns.add(
-                    Column.physical(
-                            columnName,
-                            column.getDataType().accept(converter)));
+            columns.add(Column.physical(columnName, column.getDataType().accept(converter)));
         }
 
         // add system metadata columns to schema

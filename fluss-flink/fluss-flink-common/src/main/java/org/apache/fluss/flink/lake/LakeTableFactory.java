@@ -36,24 +36,24 @@ public class LakeTableFactory {
     }
 
     public DynamicTableSource createDynamicTableSource(
-        DynamicTableFactory.Context context, String tableName) {
+            DynamicTableFactory.Context context, String tableName) {
         ObjectIdentifier originIdentifier = context.getObjectIdentifier();
         ObjectIdentifier lakeIdentifier =
-            ObjectIdentifier.of(
-                originIdentifier.getCatalogName(),
-                originIdentifier.getDatabaseName(),
-                tableName);
+                ObjectIdentifier.of(
+                        originIdentifier.getCatalogName(),
+                        originIdentifier.getDatabaseName(),
+                        tableName);
 
         // For Iceberg, Hudi and Paimon, pass the table name as-is to their factory.
         // Metadata tables will be handled internally by their respective factories.
         DynamicTableFactory.Context newContext =
-            new FactoryUtil.DefaultDynamicTableContext(
-                lakeIdentifier,
-                context.getCatalogTable(),
-                context.getEnrichmentOptions(),
-                context.getConfiguration(),
-                context.getClassLoader(),
-                context.isTemporary());
+                new FactoryUtil.DefaultDynamicTableContext(
+                        lakeIdentifier,
+                        context.getCatalogTable(),
+                        context.getEnrichmentOptions(),
+                        context.getConfiguration(),
+                        context.getClassLoader(),
+                        context.isTemporary());
 
         // Get the appropriate factory based on connector type
         DynamicTableSourceFactory factory = getLakeTableFactory();
@@ -70,9 +70,9 @@ public class LakeTableFactory {
                 return getHudiFactory();
             default:
                 throw new UnsupportedOperationException(
-                    "Unsupported lake connector: "
-                        + lakeFlinkCatalog.getLakeFormat()
-                        + ". Only 'paimon', 'iceberg' and 'hudi' are supported.");
+                        "Unsupported lake connector: "
+                                + lakeFlinkCatalog.getLakeFormat()
+                                + ". Only 'paimon', 'iceberg' and 'hudi' are supported.");
         }
     }
 
@@ -84,23 +84,23 @@ public class LakeTableFactory {
         try {
             // Get catalog with explicit ICEBERG format
             org.apache.flink.table.catalog.Catalog catalog =
-                lakeFlinkCatalog.getLakeCatalog(
-                    // we can pass empty configuration to get catalog
-                    // since the catalog should already be initialized
-                    new Configuration(), Collections.emptyMap());
+                    lakeFlinkCatalog.getLakeCatalog(
+                            // we can pass empty configuration to get catalog
+                            // since the catalog should already be initialized
+                            new Configuration(), Collections.emptyMap());
 
             // Create FlinkDynamicTableFactory with the catalog
             Class<?> icebergFactoryClass =
-                Class.forName("org.apache.iceberg.flink.FlinkDynamicTableFactory");
+                    Class.forName("org.apache.iceberg.flink.FlinkDynamicTableFactory");
             Class<?> flinkCatalogClass = Class.forName("org.apache.iceberg.flink.FlinkCatalog");
             return (DynamicTableSourceFactory)
-                icebergFactoryClass
-                    .getDeclaredConstructor(flinkCatalogClass)
-                    .newInstance(catalog);
+                    icebergFactoryClass
+                            .getDeclaredConstructor(flinkCatalogClass)
+                            .newInstance(catalog);
         } catch (Exception e) {
             throw new RuntimeException(
-                "Failed to create Iceberg table factory. Please ensure iceberg-flink-runtime is on the classpath.",
-                e);
+                    "Failed to create Iceberg table factory. Please ensure iceberg-flink-runtime is on the classpath.",
+                    e);
         }
     }
 
@@ -108,13 +108,13 @@ public class LakeTableFactory {
         try {
             Class<?> hudiFactoryClass = Class.forName("org.apache.hudi.table.HoodieTableFactory");
             return (DynamicTableSourceFactory)
-                hudiFactoryClass.getDeclaredConstructor().newInstance();
+                    hudiFactoryClass.getDeclaredConstructor().newInstance();
         } catch (Exception e) {
             throw new RuntimeException(
-                "Failed to create Hudi table factory. Please ensure hudi-flink-bundle "
-                    + "(matching the current Flink version) is on the classpath, "
-                    + "typically under plugins/hudi/.",
-                e);
+                    "Failed to create Hudi table factory. Please ensure hudi-flink-bundle "
+                            + "(matching the current Flink version) is on the classpath, "
+                            + "typically under plugins/hudi/.",
+                    e);
         }
     }
 }

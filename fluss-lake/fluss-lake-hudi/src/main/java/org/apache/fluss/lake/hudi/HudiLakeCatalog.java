@@ -187,10 +187,8 @@ public class HudiLakeCatalog implements LakeCatalog {
         }
 
         for (int i = 0; i < existingSchema.getColumns().size(); i++) {
-            org.apache.flink.table.catalog.Column existingCol =
-                    existingSchema.getColumns().get(i);
-            org.apache.flink.table.catalog.Column expectedCol =
-                    expectedSchema.getColumns().get(i);
+            org.apache.flink.table.catalog.Column existingCol = existingSchema.getColumns().get(i);
+            org.apache.flink.table.catalog.Column expectedCol = expectedSchema.getColumns().get(i);
             if (!existingCol.getName().equals(expectedCol.getName())
                     || !existingCol.getDataType().equals(expectedCol.getDataType())) {
                 return false;
