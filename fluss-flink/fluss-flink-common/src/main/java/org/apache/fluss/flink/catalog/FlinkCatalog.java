@@ -48,11 +48,13 @@ import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogDatabase;
 import org.apache.flink.table.catalog.CatalogDatabaseImpl;
 import org.apache.flink.table.catalog.CatalogFunction;
+import org.apache.flink.table.catalog.CatalogFunctionImpl;
 import org.apache.flink.table.catalog.CatalogMaterializedTable;
 import org.apache.flink.table.catalog.CatalogPartition;
 import org.apache.flink.table.catalog.CatalogPartitionSpec;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.CatalogView;
+import org.apache.flink.table.catalog.FunctionLanguage;
 import org.apache.flink.table.catalog.ObjectPath;
 import org.apache.flink.table.catalog.ResolvedCatalogBaseTable;
 import org.apache.flink.table.catalog.ResolvedCatalogMaterializedTable;
@@ -133,6 +135,18 @@ public class FlinkCatalog extends AbstractCatalog {
     protected final Supplier<Map<String, String>> lakeCatalogPropertiesSupplier;
     protected Connection connection;
     protected Admin admin;
+
+    private static final Map<String, String> BUILTIN_BITMAP_FUNCTIONS;
+
+    static {
+        BUILTIN_BITMAP_FUNCTIONS = new HashMap<>();
+        BUILTIN_BITMAP_FUNCTIONS.put(
+                "rb_build_agg", "org.apache.fluss.flink.functions.bitmap.RbBuildAggFunction");
+        BUILTIN_BITMAP_FUNCTIONS.put(
+                "rb_or_agg", "org.apache.fluss.flink.functions.bitmap.RbOrAggFunction");
+        BUILTIN_BITMAP_FUNCTIONS.put(
+                "rb_and_agg", "org.apache.fluss.flink.functions.bitmap.RbAndAggFunction");
+    }
 
     public FlinkCatalog(
             String name,
@@ -746,19 +760,24 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     @Override
-    public List<String> listFunctions(String s) throws DatabaseNotExistException, CatalogException {
-        return Collections.emptyList();
+    public List<String> listFunctions(String dbName)
+            throws DatabaseNotExistException, CatalogException {
+        return new ArrayList<>(BUILTIN_BITMAP_FUNCTIONS.keySet());
+    }
+
+    @Override
+    public boolean functionExists(ObjectPath objectPath) throws CatalogException {
+        return BUILTIN_BITMAP_FUNCTIONS.containsKey(objectPath.getObjectName().toLowerCase());
     }
 
     @Override
     public CatalogFunction getFunction(ObjectPath functionPath)
             throws FunctionNotExistException, CatalogException {
-        throw new FunctionNotExistException(getName(), functionPath);
-    }
-
-    @Override
-    public boolean functionExists(ObjectPath objectPath) throws CatalogException {
-        return false;
+        String className = BUILTIN_BITMAP_FUNCTIONS.get(functionPath.getObjectName().toLowerCase());
+        if (className == null) {
+            throw new FunctionNotExistException(getName(), functionPath);
+        }
+        return new CatalogFunctionImpl(className, FunctionLanguage.JAVA);
     }
 
     @Override
