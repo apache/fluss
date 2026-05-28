@@ -43,6 +43,9 @@ public final class TargetColumns {
         if (fieldCount == 0) {
             return targetColumns.length == 0;
         }
+        if (targetColumns.length < fieldCount) {
+            return false;
+        }
         BitSet covered = new BitSet(fieldCount);
         for (int col : targetColumns) {
             if (col < 0 || col >= fieldCount) {
