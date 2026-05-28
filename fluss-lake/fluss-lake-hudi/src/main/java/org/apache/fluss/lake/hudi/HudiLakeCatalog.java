@@ -28,22 +28,28 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.IOUtils;
 
 import org.apache.flink.table.api.DataTypes;
-import org.apache.flink.table.api.TableSchema;
+import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogDatabase;
 import org.apache.flink.table.catalog.CatalogTable;
+import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.catalog.ObjectPath;
+import org.apache.flink.table.catalog.ResolvedCatalogBaseTable;
+import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.catalog.exceptions.DatabaseAlreadyExistException;
 import org.apache.flink.table.catalog.exceptions.DatabaseNotExistException;
 import org.apache.flink.table.catalog.exceptions.TableNotExistException;
+import org.apache.flink.table.types.AbstractDataType;
 import org.apache.flink.table.types.DataType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Objects;
 
 import static org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils.HIVE_META_STORE_TYPE;
 import static org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils.HUDI_CATALOG_DEFAULT_NAME;
@@ -166,25 +172,62 @@ public class HudiLakeCatalog implements LakeCatalog {
      */
     @VisibleForTesting
     boolean isHudiSchemaCompatible(CatalogBaseTable existingTable, CatalogBaseTable expectedTable) {
-        TableSchema existingSchema = existingTable.getSchema();
-        TableSchema expectedSchema = expectedTable.getSchema();
-        String[] existingFieldNames = existingSchema.getFieldNames();
-        String[] expectedFieldNames = expectedSchema.getFieldNames();
-        DataType[] existingFieldDataTypes = existingSchema.getFieldDataTypes();
-        DataType[] expectedFieldDataTypes = expectedSchema.getFieldDataTypes();
+        return extractColumns(existingTable).equals(extractColumns(expectedTable));
+    }
 
-        if (existingFieldNames.length != expectedFieldNames.length
-                || existingFieldDataTypes.length != expectedFieldDataTypes.length) {
-            return false;
+    private static List<ColumnSignature> extractColumns(CatalogBaseTable table) {
+        if (table instanceof ResolvedCatalogBaseTable) {
+            ResolvedSchema resolvedSchema =
+                    ((ResolvedCatalogBaseTable<?>) table).getResolvedSchema();
+            List<ColumnSignature> columns = new ArrayList<>();
+            for (Column column : resolvedSchema.getColumns()) {
+                columns.add(new ColumnSignature(column.getName(), column.getDataType()));
+            }
+            return columns;
         }
 
-        for (int i = 0; i < existingFieldNames.length; i++) {
-            if (!existingFieldNames[i].equals(expectedFieldNames[i])
-                    || !existingFieldDataTypes[i].equals(expectedFieldDataTypes[i])) {
+        Schema schema = table.getUnresolvedSchema();
+        List<ColumnSignature> columns = new ArrayList<>();
+        for (Schema.UnresolvedColumn column : schema.getColumns()) {
+            columns.add(new ColumnSignature(column.getName(), getDataType(column)));
+        }
+        return columns;
+    }
+
+    private static AbstractDataType<?> getDataType(Schema.UnresolvedColumn column) {
+        if (column instanceof Schema.UnresolvedPhysicalColumn) {
+            return ((Schema.UnresolvedPhysicalColumn) column).getDataType();
+        } else if (column instanceof Schema.UnresolvedMetadataColumn) {
+            return ((Schema.UnresolvedMetadataColumn) column).getDataType();
+        }
+        return null;
+    }
+
+    private static class ColumnSignature {
+        private final String name;
+        private final AbstractDataType<?> dataType;
+
+        private ColumnSignature(String name, AbstractDataType<?> dataType) {
+            this.name = name;
+            this.dataType = dataType;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof ColumnSignature)) {
                 return false;
             }
+            ColumnSignature that = (ColumnSignature) o;
+            return Objects.equals(name, that.name) && Objects.equals(dataType, that.dataType);
         }
-        return true;
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(name, dataType);
+        }
     }
 
     @Override

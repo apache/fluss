@@ -61,12 +61,14 @@ public class HudiConversions {
     private static final String HUDI_CONF_PREFIX = "hudi.";
 
     private static final String DELIMITER = ",";
+    private static final String HUDI_TABLE_TYPE_KEY = "hoodie.datasource.write.table.type";
 
     /** Hudi config options set by Fluss should not be set by users. */
     @VisibleForTesting public static final Set<String> HUDI_UNSETTABLE_OPTIONS = new HashSet<>();
 
     static {
         HUDI_UNSETTABLE_OPTIONS.add(FlinkOptions.TABLE_TYPE.key());
+        HUDI_UNSETTABLE_OPTIONS.add(HUDI_TABLE_TYPE_KEY);
         HUDI_UNSETTABLE_OPTIONS.add(FlinkOptions.RECORD_KEY_FIELD.key());
         HUDI_UNSETTABLE_OPTIONS.add(FlinkOptions.INDEX_TYPE.key());
         HUDI_UNSETTABLE_OPTIONS.add(FlinkOptions.INDEX_KEY_FIELD.key());
@@ -87,8 +89,8 @@ public class HudiConversions {
     public static ResolvedSchema convertToFlinkResolvedSchema(
             TableDescriptor tableDescriptor, boolean isPkTable, String catalogMode) {
         // validate hudi options first
-        validateHudiOptions(tableDescriptor.getProperties());
-        validateHudiOptions(tableDescriptor.getCustomProperties());
+        validateHudiOptions(tableDescriptor.getProperties(), isPkTable);
+        validateHudiOptions(tableDescriptor.getCustomProperties(), isPkTable);
 
         // choose the correct converter based on catalog mode
         FlussDataTypeToHudiDataType converter =
@@ -150,10 +152,7 @@ public class HudiConversions {
         } else {
             hudiProperties.put(FlinkOptions.TABLE_TYPE.key(), HoodieTableType.COPY_ON_WRITE.name());
             // set primary key for Fluss Log Table.
-            String recordKeyField =
-                    tableDescriptor
-                            .getCustomProperties()
-                            .get(HUDI_CONF_PREFIX + FlinkOptions.RECORD_KEY_FIELD.key());
+            String recordKeyField = getRecordKeyField(tableDescriptor);
             if (recordKeyField == null || recordKeyField.isEmpty()) {
                 throw new IllegalArgumentException("Record key field should be set.");
             }
@@ -227,12 +226,24 @@ public class HudiConversions {
         }
     }
 
-    private static void validateHudiOptions(Map<String, String> properties) {
+    private static String getRecordKeyField(TableDescriptor tableDescriptor) {
+        String recordKeyOption = HUDI_CONF_PREFIX + FlinkOptions.RECORD_KEY_FIELD.key();
+        String recordKeyField = tableDescriptor.getCustomProperties().get(recordKeyOption);
+        if (recordKeyField == null) {
+            recordKeyField = tableDescriptor.getProperties().get(recordKeyOption);
+        }
+        return recordKeyField;
+    }
+
+    private static void validateHudiOptions(Map<String, String> properties, boolean isPkTable) {
         properties.forEach(
                 (k, v) -> {
                     String hudiKey = k;
                     if (k.startsWith(HUDI_CONF_PREFIX)) {
                         hudiKey = k.substring(HUDI_CONF_PREFIX.length());
+                    }
+                    if (!isPkTable && FlinkOptions.RECORD_KEY_FIELD.key().equals(hudiKey)) {
+                        return;
                     }
                     if (HUDI_UNSETTABLE_OPTIONS.contains(hudiKey)) {
                         throw new InvalidConfigException(
