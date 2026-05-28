@@ -21,8 +21,10 @@ import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.metadata.DataLakeFormat
 import org.apache.fluss.spark.SparkConnectorOptions.{BUCKET_NUMBER, PRIMARY_KEY}
 import org.apache.fluss.spark.read.FlussUpsertInputPartition
+import org.apache.fluss.spark.read.FlussMetrics
 
 import org.apache.spark.sql.Row
+import org.apache.spark.sql.execution.datasources.v2.BatchScanExec
 
 import java.nio.file.Files
 
@@ -482,6 +484,14 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
       val query =
         sql(s"SELECT id, score FROM $DEFAULT_DATABASE.t_pk_union_limit LIMIT 2")
       assert(flussScan(query).flatMap(_.limit).distinct == Seq(2))
+
+      // Verify limit pushdown actually reduces rows read via metrics
+      query.collect()
+      val batchScanExec = query.queryExecution.executedPlan.collectFirst {
+        case b: BatchScanExec => b
+      }.get
+      val numRowsRead = batchScanExec.metrics(FlussMetrics.NUM_ROWS_READ).value
+      assert(numRowsRead == 2L, s"Expected 2 rows read with limit pushdown, got $numRowsRead")
     }
   }
 

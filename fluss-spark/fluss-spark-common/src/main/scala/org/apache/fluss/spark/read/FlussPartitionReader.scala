@@ -60,7 +60,7 @@ abstract class FlussPartitionReader(
   def next0(): Boolean
 
   override def next(): Boolean = {
-    if (limit.isDefined && numRowsRead >= limit.get) {
+    if (limit.exists(numRowsRead >= _)) {
       return false
     }
     val hasNext = next0()

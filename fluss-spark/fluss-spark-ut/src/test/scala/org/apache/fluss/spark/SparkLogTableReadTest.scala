@@ -657,6 +657,14 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
 
       val dfLimit = sql(s"SELECT * FROM $DEFAULT_DATABASE.t LIMIT 2")
       assert(flussAppendScans(dfLimit).flatMap(_.limit).distinct == Seq(2))
+
+      // Verify limit pushdown actually reduces rows read via metrics
+      dfLimit.collect()
+      val batchScanExec = dfLimit.queryExecution.executedPlan.collectFirst {
+        case b: BatchScanExec => b
+      }.get
+      val numRowsRead = batchScanExec.metrics(FlussMetrics.NUM_ROWS_READ).value
+      assert(numRowsRead == 2L, s"Expected 2 rows read with limit pushdown, got $numRowsRead")
     }
   }
 }
