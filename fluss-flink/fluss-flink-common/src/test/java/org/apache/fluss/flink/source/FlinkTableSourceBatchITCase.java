@@ -253,7 +253,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         assertThatThrownBy(() -> tEnv.explainSql(query))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessage(
-                        "Batch mode requires either data-lake integration"
+                        "Batch mode requires either datalake enabled"
                                 + " (set '"
                                 + ConfigOptions.TABLE_DATALAKE_ENABLED.key()
                                 + "' = 'true') or server-side KV scan on a"
@@ -345,7 +345,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         // The KV scan option is meaningless for log tables; batch mode must still reject them.
         assertThatThrownBy(() -> tEnv.executeSql(String.format("SELECT * FROM %s", tableName)))
                 .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("Batch mode requires either data-lake integration")
+                .hasMessageContaining("Batch mode requires either datalake enabled")
                 .hasMessageContaining(ConfigOptions.TABLE_DATALAKE_ENABLED.key())
                 .hasMessageContaining(ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED.key());
     }
@@ -566,7 +566,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                 tEnv.explainSql(
                                         String.format("SELECT COUNT(address) FROM %s", tableName)))
                 .hasMessageContaining(
-                        "Batch mode requires either data-lake integration"
+                        "Batch mode requires either datalake enabled"
                                 + " (set '"
                                 + ConfigOptions.TABLE_DATALAKE_ENABLED.key()
                                 + "' = 'true') or server-side KV scan on a"
@@ -581,7 +581,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                                 "SELECT COUNT(DISTINCT address) FROM %s",
                                                 tableName)))
                 .hasMessageContaining(
-                        "Batch mode requires either data-lake integration"
+                        "Batch mode requires either datalake enabled"
                                 + " (set '"
                                 + ConfigOptions.TABLE_DATALAKE_ENABLED.key()
                                 + "' = 'true') or server-side KV scan on a"
@@ -598,7 +598,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                                         tableName))
                                         .wait())
                 .hasMessageContaining(
-                        "Batch mode requires either data-lake integration"
+                        "Batch mode requires either datalake enabled"
                                 + " (set '"
                                 + ConfigOptions.TABLE_DATALAKE_ENABLED.key()
                                 + "' = 'true') or server-side KV scan on a"
@@ -659,7 +659,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                 tEnv.explainSql(
                                         String.format("SELECT COUNT(address) FROM %s", tableName)))
                 .hasMessageContaining(
-                        "Batch mode requires either data-lake integration"
+                        "Batch mode requires either datalake enabled"
                                 + " (set '"
                                 + ConfigOptions.TABLE_DATALAKE_ENABLED.key()
                                 + "' = 'true') or server-side KV scan on a"
@@ -673,7 +673,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                                 "SELECT COUNT(DISTINCT address) FROM %s",
                                                 tableName)))
                 .hasMessageContaining(
-                        "Batch mode requires either data-lake integration"
+                        "Batch mode requires either datalake enabled"
                                 + " (set '"
                                 + ConfigOptions.TABLE_DATALAKE_ENABLED.key()
                                 + "' = 'true') or server-side KV scan on a"
@@ -690,7 +690,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                                         tableName))
                                         .wait())
                 .hasMessageContaining(
-                        "Batch mode requires either data-lake integration"
+                        "Batch mode requires either datalake enabled"
                                 + " (set '"
                                 + ConfigOptions.TABLE_DATALAKE_ENABLED.key()
                                 + "' = 'true') or server-side KV scan on a"
