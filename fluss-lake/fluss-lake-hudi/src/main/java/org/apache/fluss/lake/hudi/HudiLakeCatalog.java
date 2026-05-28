@@ -19,7 +19,6 @@ package org.apache.fluss.lake.hudi;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.lake.hudi.utils.HudiConversions;
 import org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
@@ -29,11 +28,13 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.IOUtils;
 
 import org.apache.flink.table.api.DataTypes;
+import org.apache.flink.table.api.TableSchema;
 import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.catalog.CatalogBaseTable;
+import org.apache.flink.table.catalog.CatalogDatabase;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.ObjectPath;
-import org.apache.flink.table.catalog.ResolvedSchema;
+import org.apache.flink.table.catalog.exceptions.DatabaseAlreadyExistException;
 import org.apache.flink.table.catalog.exceptions.DatabaseNotExistException;
 import org.apache.flink.table.catalog.exceptions.TableNotExistException;
 import org.apache.flink.table.types.DataType;
@@ -80,7 +81,7 @@ public class HudiLakeCatalog implements LakeCatalog {
 
     @Override
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor, Context context)
-            throws TableAlreadyExistException {
+            throws org.apache.fluss.exception.TableAlreadyExistException {
         LOG.info("create the lake table for : {} with props: {}", tablePath, tableDescriptor);
 
         ObjectPath objectPath = HudiConversions.toHudiObjectPath(tablePath);
@@ -123,16 +124,17 @@ public class HudiLakeCatalog implements LakeCatalog {
         try {
             hudiCatalog.createTable(tablePath, catalogTable, false);
             LOG.info("Table {} created successfully.", tablePath);
-        } catch (TableAlreadyExistException e) {
+        } catch (org.apache.flink.table.catalog.exceptions.TableAlreadyExistException e) {
             // table already exists, check schema compatibility for idempotency
             try {
                 CatalogBaseTable existingTable = hudiCatalog.getTable(tablePath);
                 if (!isHudiSchemaCompatible(existingTable, catalogTable)) {
-                    throw new TableAlreadyExistException(
+                    throw new org.apache.fluss.exception.TableAlreadyExistException(
                             String.format(
                                     "The table %s already exists in Hudi catalog, but the table schema is not compatible. "
                                             + "Please first drop the table in Hudi catalog or use a new table name.",
-                                    tablePath));
+                                    tablePath),
+                            e);
                 }
                 // if creating a new fluss table, we should ensure the lake table is empty
                 // TODO: add emptiness check for Hudi table once LakeTieringFactory is implemented
@@ -164,33 +166,21 @@ public class HudiLakeCatalog implements LakeCatalog {
      */
     @VisibleForTesting
     boolean isHudiSchemaCompatible(CatalogBaseTable existingTable, CatalogBaseTable expectedTable) {
-        ResolvedSchema existingSchema;
-        ResolvedSchema expectedSchema;
-        try {
-            existingSchema = existingTable.getResolvedSchema();
-            expectedSchema = expectedTable.getResolvedSchema();
-        } catch (Exception e) {
-            // Fallback: if resolved schema is not available, compare unresolved columns
-            List<String> existingColumns =
-                    existingTable.getSchema().getColumns().stream()
-                            .map(org.apache.flink.table.api.Schema.UnresolvedColumn::getName)
-                            .toList();
-            List<String> expectedColumns =
-                    expectedTable.getSchema().getColumns().stream()
-                            .map(org.apache.flink.table.api.Schema.UnresolvedColumn::getName)
-                            .toList();
-            return existingColumns.equals(expectedColumns);
-        }
+        TableSchema existingSchema = existingTable.getSchema();
+        TableSchema expectedSchema = expectedTable.getSchema();
+        String[] existingFieldNames = existingSchema.getFieldNames();
+        String[] expectedFieldNames = expectedSchema.getFieldNames();
+        DataType[] existingFieldDataTypes = existingSchema.getFieldDataTypes();
+        DataType[] expectedFieldDataTypes = expectedSchema.getFieldDataTypes();
 
-        if (existingSchema.getColumns().size() != expectedSchema.getColumns().size()) {
+        if (existingFieldNames.length != expectedFieldNames.length
+                || existingFieldDataTypes.length != expectedFieldDataTypes.length) {
             return false;
         }
 
-        for (int i = 0; i < existingSchema.getColumns().size(); i++) {
-            org.apache.flink.table.catalog.Column existingCol = existingSchema.getColumns().get(i);
-            org.apache.flink.table.catalog.Column expectedCol = expectedSchema.getColumns().get(i);
-            if (!existingCol.getName().equals(expectedCol.getName())
-                    || !existingCol.getDataType().equals(expectedCol.getDataType())) {
+        for (int i = 0; i < existingFieldNames.length; i++) {
+            if (!existingFieldNames[i].equals(expectedFieldNames[i])
+                    || !existingFieldDataTypes[i].equals(expectedFieldDataTypes[i])) {
                 return false;
             }
         }
@@ -212,6 +202,8 @@ public class HudiLakeCatalog implements LakeCatalog {
                                 new HashMap<>(), "Hudi database");
                 hudiCatalog.createDatabase(databaseName, database, true);
             }
+        } catch (DatabaseAlreadyExistException e) {
+            LOG.debug("Database {} already exists in Hudi catalog.", databaseName, e);
         } catch (UnsupportedOperationException e) {
             throw new UnsupportedOperationException(
                     String.format(
