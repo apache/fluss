@@ -442,7 +442,7 @@ public class FlinkTableSource
                                     && flussConfig.get(
                                             ConfigOptions.CLIENT_SCANNER_KV_SERVER_SIDE_ENABLED))) {
                         throw new UnsupportedOperationException(
-                                "Batch mode requires either data-lake integration"
+                                "Batch mode requires either datalake enabled"
                                         + " (set '"
                                         + ConfigOptions.TABLE_DATALAKE_ENABLED.key()
                                         + "' = 'true') or server-side KV scan on a"
