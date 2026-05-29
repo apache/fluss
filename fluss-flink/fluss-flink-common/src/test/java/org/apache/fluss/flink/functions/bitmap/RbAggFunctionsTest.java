@@ -17,6 +17,8 @@
 
 package org.apache.fluss.flink.functions.bitmap;
 
+import org.apache.flink.api.common.ExecutionConfig;
+import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.core.memory.DataInputDeserializer;
 import org.apache.flink.core.memory.DataOutputSerializer;
 import org.junit.jupiter.api.Test;
@@ -232,5 +234,110 @@ class RbAggFunctionsTest {
         DataInputDeserializer in = new DataInputDeserializer(out.getCopyOfBuffer());
         RbAndAggFunction.Accumulator restored = ser.deserialize(in);
         assertThat(restored.initialized).isFalse();
+    }
+
+    // -------------------------------------------------------------------------
+    // RbAndAggFunction inner class coverage
+    // -------------------------------------------------------------------------
+
+    @Test
+    void testAndAggAccumulatorTypeInfoProperties() {
+        RbAndAggFunction.AccumulatorTypeInfo info = RbAndAggFunction.AccumulatorTypeInfo.INSTANCE;
+        assertThat(info.getTypeClass()).isEqualTo(RbAndAggFunction.Accumulator.class);
+        assertThat(info.isBasicType()).isFalse();
+        assertThat(info.isTupleType()).isFalse();
+        assertThat(info.getArity()).isEqualTo(1);
+        assertThat(info.getTotalFields()).isEqualTo(1);
+        assertThat(info.isKeyType()).isFalse();
+        assertThat(info.toString()).isEqualTo("RbAndAccumulatorTypeInfo");
+        assertThat(info.hashCode()).isNotZero();
+        assertThat(info.equals(info)).isTrue();
+        assertThat(info.equals("other")).isFalse();
+        assertThat(info.canEqual(info)).isTrue();
+        assertThat(info.canEqual("other")).isFalse();
+    }
+
+    @Test
+    void testAndAggAccumulatorTypeInfoCreateSerializer() {
+        TypeSerializer<RbAndAggFunction.Accumulator> s =
+                RbAndAggFunction.AccumulatorTypeInfo.INSTANCE.createSerializer(
+                        new ExecutionConfig());
+        assertThat(s).isInstanceOf(RbAndAggFunction.AccumulatorSerializer.class);
+    }
+
+    @Test
+    void testAndAggAccumulatorSerializerCreateInstance() {
+        RbAndAggFunction.AccumulatorSerializer ser =
+                RbAndAggFunction.AccumulatorSerializer.INSTANCE;
+        RbAndAggFunction.Accumulator acc = ser.createInstance();
+        assertThat(acc.initialized).isFalse();
+        assertThat(acc.value.isEmpty()).isTrue();
+    }
+
+    @Test
+    void testAndAggAccumulatorSerializerIsNotImmutable() {
+        assertThat(RbAndAggFunction.AccumulatorSerializer.INSTANCE.isImmutableType()).isFalse();
+    }
+
+    @Test
+    void testAndAggAccumulatorSerializerGetLength() {
+        assertThat(RbAndAggFunction.AccumulatorSerializer.INSTANCE.getLength()).isEqualTo(-1);
+    }
+
+    @Test
+    void testAndAggAccumulatorSerializerCopy() {
+        RbAndAggFunction.AccumulatorSerializer ser =
+                RbAndAggFunction.AccumulatorSerializer.INSTANCE;
+        RbAndAggFunction.Accumulator original = new RbAndAggFunction.Accumulator();
+        original.initialized = true;
+        original.value = RoaringBitmap.bitmapOf(1, 2, 3);
+
+        RbAndAggFunction.Accumulator copy = ser.copy(original);
+        assertThat(copy.initialized).isTrue();
+        assertThat(copy.value).isEqualTo(original.value);
+        // Verify deep copy
+        copy.value.add(999);
+        assertThat(original.value.contains(999)).isFalse();
+    }
+
+    @Test
+    void testAndAggAccumulatorSerializerCopyWithReuse() {
+        RbAndAggFunction.AccumulatorSerializer ser =
+                RbAndAggFunction.AccumulatorSerializer.INSTANCE;
+        RbAndAggFunction.Accumulator original = new RbAndAggFunction.Accumulator();
+        original.initialized = true;
+        original.value = RoaringBitmap.bitmapOf(10, 20);
+
+        RbAndAggFunction.Accumulator reuse = new RbAndAggFunction.Accumulator();
+        RbAndAggFunction.Accumulator copy = ser.copy(original, reuse);
+        assertThat(copy.initialized).isTrue();
+        assertThat(copy.value).isEqualTo(original.value);
+    }
+
+    @Test
+    void testAndAggAccumulatorSerializerCopyStream() throws Exception {
+        RbAndAggFunction.AccumulatorSerializer ser =
+                RbAndAggFunction.AccumulatorSerializer.INSTANCE;
+        RbAndAggFunction.Accumulator original = new RbAndAggFunction.Accumulator();
+        original.initialized = true;
+        original.value = RoaringBitmap.bitmapOf(5, 10, 15);
+
+        DataOutputSerializer out = new DataOutputSerializer(256);
+        ser.serialize(original, out);
+
+        DataInputDeserializer in = new DataInputDeserializer(out.getCopyOfBuffer());
+        DataOutputSerializer copied = new DataOutputSerializer(256);
+        ser.copy(in, copied);
+
+        DataInputDeserializer copiedIn = new DataInputDeserializer(copied.getCopyOfBuffer());
+        RbAndAggFunction.Accumulator restored = ser.deserialize(copiedIn);
+        assertThat(restored.initialized).isTrue();
+        assertThat(restored.value).isEqualTo(original.value);
+    }
+
+    @Test
+    void testAndAggAccumulatorSerializerSnapshotNotNull() {
+        assertThat(RbAndAggFunction.AccumulatorSerializer.INSTANCE.snapshotConfiguration())
+                .isNotNull();
     }
 }
