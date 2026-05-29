@@ -1376,7 +1376,8 @@ public class FlussAuthorizationITCase {
 
     @Test
     void testSnapshotManagementAuthorization() throws Exception {
-        // These RPCs are internal-only, so we test via direct gateway access
+        // These RPCs are internal-only and should reject all external sessions,
+        // regardless of permissions
         try (RpcClient rpcClient =
                 RpcClient.create(guestConf, TestingClientMetricGroup.newInstance())) {
 
@@ -1392,7 +1393,7 @@ public class FlussAuthorizationITCase {
                             rpcClient,
                             CoordinatorGateway.class);
 
-            // Test 1: notifyKvSnapshotOffset without WRITE permission
+            // Test 1: notifyKvSnapshotOffset should reject external sessions
             NotifyKvSnapshotOffsetRequest notifyKvRequest = new NotifyKvSnapshotOffsetRequest();
             notifyKvRequest.setTableId(1L);
             notifyKvRequest.setBucketId(0);
@@ -1403,11 +1404,9 @@ public class FlussAuthorizationITCase {
                     .rootCause()
                     .isInstanceOf(AuthorizationException.class)
                     .hasMessageContaining(
-                            String.format(
-                                    "Principal %s have no authorization to operate WRITE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
-                                    guestPrincipal));
+                            "NotifyKvSnapshotOffset is an internal RPC and cannot be called by external clients");
 
-            // Test 2: notifyLakeTableOffset without WRITE permission
+            // Test 2: notifyLakeTableOffset should reject external sessions
             NotifyLakeTableOffsetRequest notifyLakeRequest = new NotifyLakeTableOffsetRequest();
             notifyLakeRequest.setCoordinatorEpoch(1);
             assertThatThrownBy(
@@ -1415,11 +1414,9 @@ public class FlussAuthorizationITCase {
                     .rootCause()
                     .isInstanceOf(AuthorizationException.class)
                     .hasMessageContaining(
-                            String.format(
-                                    "Principal %s have no authorization to operate WRITE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
-                                    guestPrincipal));
+                            "NotifyLakeTableOffset is an internal RPC and cannot be called by external clients");
 
-            // Test 3: commitKvSnapshot without WRITE permission
+            // Test 3: commitKvSnapshot should reject external sessions
             CommitKvSnapshotRequest commitKvRequest = new CommitKvSnapshotRequest();
             commitKvRequest.setCompletedSnapshot(new byte[0]);
             commitKvRequest.setCoordinatorEpoch(1);
@@ -1429,11 +1426,9 @@ public class FlussAuthorizationITCase {
                     .rootCause()
                     .isInstanceOf(AuthorizationException.class)
                     .hasMessageContaining(
-                            String.format(
-                                    "Principal %s have no authorization to operate WRITE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
-                                    guestPrincipal));
+                            "CommitKvSnapshot is an internal RPC and cannot be called by external clients");
 
-            // Test 4: commitLakeTableSnapshot without WRITE permission
+            // Test 4: commitLakeTableSnapshot should reject external sessions
             CommitLakeTableSnapshotRequest commitLakeRequest = new CommitLakeTableSnapshotRequest();
             assertThatThrownBy(
                             () ->
@@ -1443,155 +1438,38 @@ public class FlussAuthorizationITCase {
                     .rootCause()
                     .isInstanceOf(AuthorizationException.class)
                     .hasMessageContaining(
-                            String.format(
-                                    "Principal %s have no authorization to operate WRITE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
-                                    guestPrincipal));
+                            "CommitLakeTableSnapshot is an internal RPC and cannot be called by external clients");
         }
 
-        // Test 5: Grant CLUSTER/WRITE permission and verify operations succeed
-        List<AclBinding> aclBindings =
-                Collections.singletonList(
-                        new AclBinding(
-                                Resource.cluster(),
-                                new AccessControlEntry(
-                                        guestPrincipal,
-                                        "*",
-                                        OperationType.WRITE,
-                                        PermissionType.ALLOW)));
-        rootAdmin.createAcls(aclBindings).all().get();
-        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+        // Test 5: Even root user (super user) cannot call these RPCs from external sessions
+        Configuration rootClientConf =
+                new Configuration(FLUSS_CLUSTER_EXTENSION.getClientConfig("CLIENT"));
+        rootClientConf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "sasl");
+        rootClientConf.set(ConfigOptions.CLIENT_SASL_MECHANISM, "plain");
+        rootClientConf.setString("client.security.sasl.username", "root");
+        rootClientConf.setString("client.security.sasl.password", "password");
 
-        try (RpcClient authorizedRpcClient =
-                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance())) {
+        try (RpcClient rootRpcClient =
+                RpcClient.create(rootClientConf, TestingClientMetricGroup.newInstance())) {
 
-            TabletServerGateway authorizedTabletGateway =
+            TabletServerGateway rootTabletGateway =
                     GatewayClientProxy.createGatewayProxy(
                             () -> FLUSS_CLUSTER_EXTENSION.getTabletServerNodes("CLIENT").get(0),
-                            authorizedRpcClient,
+                            rootRpcClient,
                             TabletServerGateway.class);
 
-            CoordinatorGateway authorizedCoordinatorGateway =
-                    GatewayClientProxy.createGatewayProxy(
-                            () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("CLIENT"),
-                            authorizedRpcClient,
-                            CoordinatorGateway.class);
-
-            // Test notifyKvSnapshotOffset with permission
             NotifyKvSnapshotOffsetRequest notifyKvRequest = new NotifyKvSnapshotOffsetRequest();
             notifyKvRequest.setTableId(1L);
             notifyKvRequest.setBucketId(0);
             notifyKvRequest.setCoordinatorEpoch(1);
             notifyKvRequest.setMinRetainOffset(0L);
-            Throwable thrown1 =
-                    catchThrowable(
-                            () ->
-                                    authorizedTabletGateway
-                                            .notifyKvSnapshotOffset(notifyKvRequest)
-                                            .get());
-            if (thrown1 != null) {
-                assertThat(thrown1).rootCause().isNotInstanceOf(AuthorizationException.class);
-            }
-
-            // Test notifyLakeTableOffset with permission
-            NotifyLakeTableOffsetRequest notifyLakeRequest = new NotifyLakeTableOffsetRequest();
-            notifyLakeRequest.setCoordinatorEpoch(1);
-            Throwable thrown2 =
-                    catchThrowable(
-                            () ->
-                                    authorizedTabletGateway
-                                            .notifyLakeTableOffset(notifyLakeRequest)
-                                            .get());
-            if (thrown2 != null) {
-                assertThat(thrown2).rootCause().isNotInstanceOf(AuthorizationException.class);
-            }
-
-            // Test commitKvSnapshot with permission
-            CommitKvSnapshotRequest commitKvRequest = new CommitKvSnapshotRequest();
-            commitKvRequest.setCompletedSnapshot(new byte[0]);
-            commitKvRequest.setCoordinatorEpoch(1);
-            commitKvRequest.setBucketLeaderEpoch(1);
-            Throwable thrown3 =
-                    catchThrowable(
-                            () ->
-                                    authorizedCoordinatorGateway
-                                            .commitKvSnapshot(commitKvRequest)
-                                            .get());
-            if (thrown3 != null) {
-                assertThat(thrown3).rootCause().isNotInstanceOf(AuthorizationException.class);
-            }
-
-            // Test commitLakeTableSnapshot with permission
-            CommitLakeTableSnapshotRequest commitLakeRequest = new CommitLakeTableSnapshotRequest();
-            Throwable thrown4 =
-                    catchThrowable(
-                            () ->
-                                    authorizedCoordinatorGateway
-                                            .commitLakeTableSnapshot(commitLakeRequest)
-                                            .get());
-            if (thrown4 != null) {
-                assertThat(thrown4).rootCause().isNotInstanceOf(AuthorizationException.class);
-            }
+            assertThatThrownBy(
+                            () -> rootTabletGateway.notifyKvSnapshotOffset(notifyKvRequest).get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            "NotifyKvSnapshotOffset is an internal RPC and cannot be called by external clients");
         }
-
-        // Test 6: Verify internal sessions bypass authorization
-        TabletServerGateway internalTabletGateway =
-                GatewayClientProxy.createGatewayProxy(
-                        () -> FLUSS_CLUSTER_EXTENSION.getTabletServerNodes("FLUSS").get(0),
-                        FLUSS_CLUSTER_EXTENSION.getRpcClient(),
-                        TabletServerGateway.class);
-
-        CoordinatorGateway internalCoordinatorGateway =
-                GatewayClientProxy.createGatewayProxy(
-                        () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("FLUSS"),
-                        FLUSS_CLUSTER_EXTENSION.getRpcClient(),
-                        CoordinatorGateway.class);
-
-        // Internal connections should NOT throw AuthorizationException
-        NotifyKvSnapshotOffsetRequest notifyKvRequest = new NotifyKvSnapshotOffsetRequest();
-        notifyKvRequest.setTableId(1L);
-        notifyKvRequest.setBucketId(0);
-        notifyKvRequest.setCoordinatorEpoch(1);
-        notifyKvRequest.setMinRetainOffset(0L);
-        Throwable thrown5 =
-                catchThrowable(
-                        () -> internalTabletGateway.notifyKvSnapshotOffset(notifyKvRequest).get());
-        if (thrown5 != null) {
-            assertThat(thrown5).rootCause().isNotInstanceOf(AuthorizationException.class);
-        }
-
-        NotifyLakeTableOffsetRequest notifyLakeRequest = new NotifyLakeTableOffsetRequest();
-        notifyLakeRequest.setCoordinatorEpoch(1);
-        Throwable thrown6 =
-                catchThrowable(
-                        () -> internalTabletGateway.notifyLakeTableOffset(notifyLakeRequest).get());
-        if (thrown6 != null) {
-            assertThat(thrown6).rootCause().isNotInstanceOf(AuthorizationException.class);
-        }
-
-        CommitKvSnapshotRequest commitKvRequest = new CommitKvSnapshotRequest();
-        commitKvRequest.setCompletedSnapshot(new byte[0]);
-        commitKvRequest.setCoordinatorEpoch(1);
-        commitKvRequest.setBucketLeaderEpoch(1);
-        Throwable thrown7 =
-                catchThrowable(
-                        () -> internalCoordinatorGateway.commitKvSnapshot(commitKvRequest).get());
-        if (thrown7 != null) {
-            assertThat(thrown7).rootCause().isNotInstanceOf(AuthorizationException.class);
-        }
-
-        CommitLakeTableSnapshotRequest commitLakeRequest = new CommitLakeTableSnapshotRequest();
-        Throwable thrown8 =
-                catchThrowable(
-                        () ->
-                                internalCoordinatorGateway
-                                        .commitLakeTableSnapshot(commitLakeRequest)
-                                        .get());
-        if (thrown8 != null) {
-            assertThat(thrown8).rootCause().isNotInstanceOf(AuthorizationException.class);
-        }
-
-        // Cleanup
-        rootAdmin.dropAcls(Collections.singletonList(AclBindingFilter.ANY)).all().get();
     }
 
     private static Configuration initConfig() {

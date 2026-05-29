@@ -27,6 +27,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.ApiException;
+import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
@@ -198,7 +199,6 @@ import static org.apache.fluss.config.ConfigOptions.CURRENT_KV_FORMAT_VERSION;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
-import static org.apache.fluss.security.acl.OperationType.WRITE;
 import static org.apache.fluss.server.coordinator.rebalance.goal.GoalUtils.getGoalByType;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.addTableOffsetsToResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.fromTablePath;
@@ -771,8 +771,13 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<CommitKvSnapshotResponse> commitKvSnapshot(
             CommitKvSnapshotRequest request) {
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), WRITE, Resource.cluster());
+        // This is an internal-only RPC, reject all external sessions
+        if (!currentSession().isInternal()) {
+            CompletableFuture<CommitKvSnapshotResponse> failedFuture = new CompletableFuture<>();
+            failedFuture.completeExceptionally(
+                    new AuthorizationException(
+                            "CommitKvSnapshot is an internal RPC and cannot be called by external clients"));
+            return failedFuture;
         }
         CompletableFuture<CommitKvSnapshotResponse> response = new CompletableFuture<>();
         // parse completed snapshot from request
@@ -874,8 +879,14 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<CommitLakeTableSnapshotResponse> commitLakeTableSnapshot(
             CommitLakeTableSnapshotRequest request) {
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), WRITE, Resource.cluster());
+        // This is an internal-only RPC, reject all external sessions
+        if (!currentSession().isInternal()) {
+            CompletableFuture<CommitLakeTableSnapshotResponse> failedFuture =
+                    new CompletableFuture<>();
+            failedFuture.completeExceptionally(
+                    new AuthorizationException(
+                            "CommitLakeTableSnapshot is an internal RPC and cannot be called by external clients"));
+            return failedFuture;
         }
         CompletableFuture<CommitLakeTableSnapshotResponse> response = new CompletableFuture<>();
         eventManagerSupplier
