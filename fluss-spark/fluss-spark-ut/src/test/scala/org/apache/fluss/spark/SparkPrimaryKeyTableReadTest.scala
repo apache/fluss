@@ -436,8 +436,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
 
   test("Spark Read: mixed partition and non-partition filter (PK table)") {
     withPkPartitionedTable {
-      val query = sql(
-        s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01' AND amount > 601")
+      val query = sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01' AND amount > 601")
       checkAnswer(query, Row(700L, 22L, 602, "addr2", "2026-01-01") :: Nil)
       // Partition predicate extracted for partition pruning
       assert(partitionPredicate(query).isDefined)
