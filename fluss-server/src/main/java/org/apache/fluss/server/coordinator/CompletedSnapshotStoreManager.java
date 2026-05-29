@@ -18,6 +18,7 @@
 package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.MetricNames;
@@ -35,9 +36,13 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -244,6 +249,54 @@ public class CompletedSnapshotStoreManager {
                 completedSnapshotHandleStore,
                 ioExecutor,
                 snapshotInUseChecker);
+    }
+
+    /**
+     * Returns active snapshot IDs per bucket for the given (tableId, partitionId) scope. For
+     * buckets with an in-memory {@link CompletedSnapshotStore}, the cached active set is returned.
+     * For other buckets, snapshot IDs are read directly from ZK metadata (lightweight — no
+     * _METADATA file parsing) and the retention limit is applied.
+     */
+    public Map<Integer, Set<Long>> getActiveSnapshotIdsByBucket(
+            long tableId, @Nullable Long partitionId, int numBuckets) {
+        Map<Integer, Set<Long>> result = new HashMap<>();
+        for (int i = 0; i < numBuckets; i++) {
+            TableBucket tb = new TableBucket(tableId, partitionId, i);
+            CompletedSnapshotStore store = bucketCompletedSnapshotStores.get(tb);
+            Set<Long> ids;
+            if (store != null) {
+                ids = store.getActiveSnapshotIds();
+            } else {
+                ids = readActiveSnapshotIdsFromZk(tb);
+            }
+            if (!ids.isEmpty()) {
+                result.put(i, ids);
+            }
+        }
+        return result;
+    }
+
+    private Set<Long> readActiveSnapshotIdsFromZk(TableBucket tableBucket) {
+        List<ZooKeeperClient.BucketSnapshotIdAndData> snapshots;
+        try {
+            snapshots = zooKeeperClient.listBucketSnapshots(tableBucket);
+        } catch (Exception e) {
+            throw new ApiException(
+                    "Failed to read snapshot IDs from ZK for "
+                            + tableBucket
+                            + ": "
+                            + e.getMessage(),
+                    e);
+        }
+        if (snapshots.isEmpty()) {
+            return Collections.emptySet();
+        }
+        int retainCount = Math.min(snapshots.size(), maxNumberOfSnapshotsToRetain);
+        Set<Long> ids = new HashSet<>(retainCount);
+        for (int i = snapshots.size() - retainCount; i < snapshots.size(); i++) {
+            ids.add(snapshots.get(i).getSnapshotId());
+        }
+        return ids;
     }
 
     @VisibleForTesting

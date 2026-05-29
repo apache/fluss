@@ -104,8 +104,12 @@ import org.apache.fluss.rpc.messages.GetProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsResponse;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
+import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
+import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
+import org.apache.fluss.rpc.messages.ListRemoteLogManifestsRequest;
+import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
@@ -115,6 +119,7 @@ import org.apache.fluss.rpc.messages.PbKvSnapshotLeaseForTable;
 import org.apache.fluss.rpc.messages.PbLakeTieringStats;
 import org.apache.fluss.rpc.messages.PbPrepareLakeTableRespForTable;
 import org.apache.fluss.rpc.messages.PbProducerTableOffsets;
+import org.apache.fluss.rpc.messages.PbRemoteLogManifestEntry;
 import org.apache.fluss.rpc.messages.PbTableBucket;
 import org.apache.fluss.rpc.messages.PbTableOffsets;
 import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotRequest;
@@ -187,6 +192,7 @@ import javax.annotation.Nullable;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -238,6 +244,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final Supplier<Integer> coordinatorEpochSupplier;
     private final CoordinatorMetadataCache metadataCache;
 
+    private final Supplier<CompletedSnapshotStoreManager> snapshotStoreManagerSupplier;
+    private final Supplier<CoordinatorContext> coordinatorContextSupplier;
     private final LakeTableTieringManager lakeTableTieringManager;
     private final LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
     private final ExecutorService ioExecutor;
@@ -278,6 +286,10 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEventManager();
         this.coordinatorEpochSupplier =
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEpoch();
+        this.snapshotStoreManagerSupplier =
+                () -> coordinatorEventProcessorSupplier.get().completedSnapshotStoreManager();
+        this.coordinatorContextSupplier =
+                () -> coordinatorEventProcessorSupplier.get().getCoordinatorContext();
         this.lakeTableTieringManager = lakeTableTieringManager;
         this.metadataCache = metadataCache;
         this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
@@ -783,6 +795,139 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                                 zkClient, metadataManager, ctx)));
         eventManagerSupplier.get().put(metadataResponseAccessContextEvent);
         return metadataResponseAccessContextEvent.getResultFuture();
+    }
+
+    @Override
+    public CompletableFuture<ListRemoteLogManifestsResponse> listRemoteLogManifests(
+            ListRemoteLogManifestsRequest request) {
+        long tableId = request.getTableId();
+        // Capture session before entering async block since currentSession() is thread-local
+        Session session = authorizer != null ? currentSession() : null;
+        return CompletableFuture.supplyAsync(
+                () -> {
+                    if (authorizer != null) {
+                        authorizeTableWithSession(session, OperationType.DESCRIBE, tableId);
+                    }
+                    Long partitionId = request.hasPartitionId() ? request.getPartitionId() : null;
+                    ListRemoteLogManifestsResponse response = new ListRemoteLogManifestsResponse();
+                    try {
+                        List<ZooKeeperClient.TableBucketAndManifest> entries =
+                                zkClient.listRemoteLogManifestHandles(tableId, partitionId);
+                        for (ZooKeeperClient.TableBucketAndManifest entry : entries) {
+                            PbRemoteLogManifestEntry pb = response.addManifest();
+                            PbTableBucket pbTb = pb.setTableBucket();
+                            pbTb.setTableId(entry.getTableBucket().getTableId());
+                            if (entry.getTableBucket().getPartitionId() != null) {
+                                pbTb.setPartitionId(entry.getTableBucket().getPartitionId());
+                            }
+                            pbTb.setBucketId(entry.getTableBucket().getBucket());
+                            pb.setRemoteLogManifestPath(
+                                    entry.getManifestHandle()
+                                            .getRemoteLogManifestPath()
+                                            .toString());
+                            pb.setRemoteLogEndOffset(
+                                    entry.getManifestHandle().getRemoteLogEndOffset());
+                        }
+                    } catch (ApiException e) {
+                        throw e;
+                    } catch (Exception e) {
+                        throw new UnknownServerException(
+                                "Failed to list remote log manifests for tableId=" + tableId, e);
+                    }
+                    return response;
+                },
+                ioExecutor);
+    }
+
+    @Override
+    public CompletableFuture<ListKvSnapshotsResponse> listKvSnapshots(
+            ListKvSnapshotsRequest request) {
+        long tableId = request.getTableId();
+        Session session = authorizer != null ? currentSession() : null;
+        return CompletableFuture.supplyAsync(
+                () -> {
+                    if (authorizer != null) {
+                        authorizeTableWithSession(session, OperationType.DESCRIBE, tableId);
+                    }
+                    Long partitionId = request.hasPartitionId() ? request.getPartitionId() : null;
+
+                    // Resolve table metadata: prefer in-memory context, fallback to ZK assignment
+                    // (single getData) to handle the race between createTable and context sync.
+                    CoordinatorContext context = coordinatorContextSupplier.get();
+                    TablePath tablePath = context.getTablePathById(tableId);
+                    int numBuckets;
+                    if (tablePath != null) {
+                        TableInfo tableInfo = context.getTableInfoById(tableId);
+                        if (tableInfo == null) {
+                            throw new ApiException(
+                                    "Table metadata not yet available for table " + tableId);
+                        }
+                        numBuckets = tableInfo.getNumBuckets();
+                    } else {
+                        try {
+                            if (partitionId != null) {
+                                Optional<PartitionAssignment> pAssignment =
+                                        zkClient.getPartitionAssignment(partitionId);
+                                if (!pAssignment.isPresent()) {
+                                    throw new ApiException(
+                                            "Partition " + partitionId + " does not exist");
+                                }
+                                numBuckets = pAssignment.get().getBuckets().size();
+                            } else {
+                                Optional<TableAssignment> assignment =
+                                        zkClient.getTableAssignment(tableId);
+                                if (!assignment.isPresent()) {
+                                    throw new ApiException("Table " + tableId + " does not exist");
+                                }
+                                numBuckets = assignment.get().getBuckets().size();
+                            }
+                        } catch (ApiException e) {
+                            throw e;
+                        } catch (Exception e) {
+                            throw new ApiException(
+                                    "Failed to resolve table " + tableId + ": " + e.getMessage());
+                        }
+                    }
+
+                    CompletedSnapshotStoreManager storeManager = snapshotStoreManagerSupplier.get();
+                    Map<Integer, Set<Long>> activeByBucket =
+                            storeManager.getActiveSnapshotIdsByBucket(
+                                    tableId, partitionId, numBuckets);
+                    Map<Integer, Set<Long>> stillInUse =
+                            kvSnapshotLeaseManager.getStillInUseSnapshotIds(tableId, partitionId);
+
+                    ListKvSnapshotsResponse response =
+                            new ListKvSnapshotsResponse().setTableId(tableId);
+                    if (partitionId != null) {
+                        response.setPartitionId(partitionId);
+                    }
+
+                    Set<Integer> allBucketIds = new HashSet<>(activeByBucket.keySet());
+                    allBucketIds.addAll(stillInUse.keySet());
+
+                    for (int bucketId : allBucketIds) {
+                        Set<Long> activeIds =
+                                activeByBucket.getOrDefault(bucketId, Collections.emptySet());
+                        for (Long snapId : activeIds) {
+                            appendActiveSnapshot(response, bucketId, snapId);
+                        }
+                        Set<Long> stillInUseIds =
+                                stillInUse.getOrDefault(bucketId, Collections.emptySet());
+                        for (Long snapId : stillInUseIds) {
+                            if (activeIds.contains(snapId)) {
+                                continue;
+                            }
+                            appendActiveSnapshot(response, bucketId, snapId);
+                        }
+                    }
+                    return response;
+                },
+                ioExecutor);
+    }
+
+    private static void appendActiveSnapshot(
+            ListKvSnapshotsResponse response, int bucketId, long snapshotId) {
+        response.addActiveSnapshot().setBucketId(bucketId).setSnapshotId(snapshotId);
     }
 
     @Override

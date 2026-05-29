@@ -125,6 +125,27 @@ public class CompletedSnapshotStore {
     }
 
     /**
+     * Returns the union of retained and still-in-use snapshot IDs (pure in-memory). Only the most
+     * recent {@code maxNumberOfSnapshotsToRetain} snapshots from the deque are included; older
+     * entries that have not yet been subsumed (e.g. after a fresh restore from ZK) are excluded.
+     */
+    public Set<Long> getActiveSnapshotIds() {
+        return inLock(
+                lock,
+                () -> {
+                    int retainCount =
+                            Math.min(completedSnapshots.size(), maxNumberOfSnapshotsToRetain);
+                    Set<Long> ids = new HashSet<>(retainCount + stillInUseSnapshots.size());
+                    Iterator<CompletedSnapshot> descIter = completedSnapshots.descendingIterator();
+                    for (int i = 0; i < retainCount && descIter.hasNext(); i++) {
+                        ids.add(descIter.next().getSnapshotID());
+                    }
+                    ids.addAll(stillInUseSnapshots.keySet());
+                    return ids;
+                });
+    }
+
+    /**
      * Synchronously writes the new snapshots to snapshot handle store and asynchronously removes
      * older ones.
      *

@@ -38,6 +38,7 @@
         <module>fluss-flink-1.18</module>
         <module>fluss-flink-2.2</module>
         <module>fluss-flink-tiering</module>
+        <module>fluss-flink-action</module>
     </modules>
 
     <!-- override these root dependencies as 'provided', so they don't end up

@@ -17,6 +17,7 @@
 
 package org.apache.fluss.client.admin;
 
+import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
@@ -67,6 +68,8 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metadata.TableStats;
+import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
+import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
 
@@ -796,4 +799,26 @@ public interface Admin extends AutoCloseable {
      * @since 1.0
      */
     CompletableFuture<ClusterHealth> getClusterHealth();
+
+    /**
+     * List per-bucket remote log manifest entries for a table or partition scope.
+     *
+     * @param tableId the table to query
+     * @param partitionId optional partition id (null for non-partitioned tables)
+     * @return per-bucket manifest paths and end offsets
+     */
+    @Internal
+    CompletableFuture<ListRemoteLogManifestsResponse> listRemoteLogManifests(
+            long tableId, @Nullable Long partitionId);
+
+    /**
+     * List per-bucket active KV snapshot ids for a table or partition scope.
+     *
+     * @param tableId the table to query
+     * @param partitionId optional partition id (null for non-partitioned tables)
+     * @return per-bucket active snapshot entries
+     */
+    @Internal
+    CompletableFuture<ListKvSnapshotsResponse> listKvSnapshots(
+            long tableId, @Nullable Long partitionId);
 }

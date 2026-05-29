@@ -74,7 +74,7 @@ public class FlussPaths {
     public static final String REMOTE_LOG_DIR_NAME = "log";
 
     /** The directory name for storing metadata files (e.g., manifest) for a log tablet. */
-    private static final String REMOTE_LOG_METADATA_DIR_NAME = "metadata";
+    public static final String REMOTE_LOG_METADATA_DIR_NAME = "metadata";
 
     /** Suffix of a manifest file. */
     private static final String REMOTE_LOG_MANIFEST_FILE_SUFFIX = ".manifest";

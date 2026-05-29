@@ -536,6 +536,17 @@ public class ClientRpcMessageUtils {
         return request;
     }
 
+    public static PbTableBucket toPbTableBucket(TableBucket tableBucket) {
+        PbTableBucket pbTableBucket =
+                new PbTableBucket()
+                        .setTableId(tableBucket.getTableId())
+                        .setBucketId(tableBucket.getBucket());
+        if (tableBucket.getPartitionId() != null) {
+            pbTableBucket.setPartitionId(tableBucket.getPartitionId());
+        }
+        return pbTableBucket;
+    }
+
     public static Optional<RebalanceProgress> toRebalanceProgress(
             ListRebalanceProgressResponse response) {
         if (!response.hasRebalanceId()) {

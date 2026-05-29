@@ -67,6 +67,11 @@ public class LocalFileStatus implements FileStatus {
         return this.path;
     }
 
+    @Override
+    public long getModificationTime() {
+        return this.file.lastModified();
+    }
+
     public File getFile() {
         return this.file;
     }

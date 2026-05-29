@@ -81,10 +81,14 @@ import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.ListAclsRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
+import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
+import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
+import org.apache.fluss.rpc.messages.ListRemoteLogManifestsRequest;
+import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
@@ -390,6 +394,38 @@ public class FlussAdmin implements Admin {
         return readOnlyGateway
                 .listPartitionInfos(request)
                 .thenApply(ClientRpcMessageUtils::toPartitionInfos);
+    }
+
+    /**
+     * Returns per-bucket remote log manifest path for the given table or partition.
+     *
+     * <p>Used by the orphan cleanup action to construct the active manifest path set without
+     * relying on FS LIST + mtime selection.
+     */
+    @Override
+    public CompletableFuture<ListRemoteLogManifestsResponse> listRemoteLogManifests(
+            long tableId, @Nullable Long partitionId) {
+        ListRemoteLogManifestsRequest request = new ListRemoteLogManifestsRequest();
+        request.setTableId(tableId);
+        if (partitionId != null) {
+            request.setPartitionId(partitionId);
+        }
+        return gateway.listRemoteLogManifests(request);
+    }
+
+    /**
+     * Returns per-bucket active KV snapshot dirs (retained_N + still-in-use) for the given table or
+     * partition. Used by the orphan cleanup action to construct the complete KV active set.
+     */
+    @Override
+    public CompletableFuture<ListKvSnapshotsResponse> listKvSnapshots(
+            long tableId, @Nullable Long partitionId) {
+        ListKvSnapshotsRequest request = new ListKvSnapshotsRequest();
+        request.setTableId(tableId);
+        if (partitionId != null) {
+            request.setPartitionId(partitionId);
+        }
+        return gateway.listKvSnapshots(request);
     }
 
     @Override
