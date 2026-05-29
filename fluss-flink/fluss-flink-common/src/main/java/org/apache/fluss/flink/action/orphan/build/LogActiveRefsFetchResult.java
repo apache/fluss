@@ -24,9 +24,7 @@ import javax.annotation.Nullable;
 
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * Result of log active-refs fetch for one {@code (tableId, partitionId|null)} target.
@@ -141,16 +139,5 @@ public final class LogActiveRefsFetchResult {
             throw new IllegalStateException("Bucket " + bucketId + " is not READ_FAILED");
         }
         return reason;
-    }
-
-    /**
-     * Bucket ids for which the RPC returned an entry (i.e. RESOLVED or READ_FAILED). Buckets
-     * enumerated from table metadata but absent from this set are {@link
-     * ManifestReadStatus#NOT_LISTED}.
-     */
-    public Set<Integer> respondedBucketIds() {
-        Set<Integer> ids = new HashSet<>(resolved.keySet());
-        ids.addAll(readFailures.keySet());
-        return Collections.unmodifiableSet(ids);
     }
 }

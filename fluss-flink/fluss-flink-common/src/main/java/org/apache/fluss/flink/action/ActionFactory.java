@@ -18,8 +18,7 @@
 package org.apache.fluss.flink.action;
 
 import org.apache.fluss.annotation.Internal;
-
-import org.apache.flink.api.java.utils.MultipleParameterTool;
+import org.apache.fluss.flink.adapter.MultipleParameterToolAdapter;
 
 import java.util.Optional;
 
@@ -34,7 +33,7 @@ public interface ActionFactory {
     String identifier();
 
     /** Construct the action from parsed CLI parameters. Empty when {@code --help} is requested. */
-    Optional<Action> create(MultipleParameterTool params);
+    Optional<Action> create(MultipleParameterToolAdapter params);
 
     /** Help text printed when {@code --help} is passed. */
     default String help() {

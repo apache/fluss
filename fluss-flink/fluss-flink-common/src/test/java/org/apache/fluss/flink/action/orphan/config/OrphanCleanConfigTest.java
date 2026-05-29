@@ -17,7 +17,8 @@
 
 package org.apache.fluss.flink.action.orphan.config;
 
-import org.apache.flink.api.java.utils.MultipleParameterTool;
+import org.apache.fluss.flink.adapter.MultipleParameterToolAdapter;
+
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -38,7 +39,7 @@ class OrphanCleanConfigTest {
         long beforeParse = System.currentTimeMillis();
         OrphanCleanConfig config =
                 OrphanCleanConfig.fromParams(
-                        MultipleParameterTool.fromArgs(
+                        MultipleParameterToolAdapter.fromArgs(
                                 new String[] {"--bootstrap-server", "h:9123", "--all-databases"}));
         long afterParse = System.currentTimeMillis();
 
@@ -59,7 +60,7 @@ class OrphanCleanConfigTest {
         assertThatThrownBy(
                         () ->
                                 OrphanCleanConfig.fromParams(
-                                        MultipleParameterTool.fromArgs(
+                                        MultipleParameterToolAdapter.fromArgs(
                                                 new String[] {
                                                     "--bootstrap-server",
                                                     "h:9123",
@@ -77,7 +78,7 @@ class OrphanCleanConfigTest {
         assertThatThrownBy(
                         () ->
                                 OrphanCleanConfig.fromParams(
-                                        MultipleParameterTool.fromArgs(
+                                        MultipleParameterToolAdapter.fromArgs(
                                                 new String[] {
                                                     "--bootstrap-server",
                                                     "h:9123",
@@ -94,7 +95,7 @@ class OrphanCleanConfigTest {
         assertThatThrownBy(
                         () ->
                                 OrphanCleanConfig.fromParams(
-                                        MultipleParameterTool.fromArgs(
+                                        MultipleParameterToolAdapter.fromArgs(
                                                 new String[] {
                                                     "--bootstrap-server",
                                                     "h:9123",
@@ -111,7 +112,7 @@ class OrphanCleanConfigTest {
         assertThatThrownBy(
                         () ->
                                 OrphanCleanConfig.fromParams(
-                                        MultipleParameterTool.fromArgs(
+                                        MultipleParameterToolAdapter.fromArgs(
                                                 new String[] {"--all-databases"})))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("bootstrap-server");
@@ -121,7 +122,7 @@ class OrphanCleanConfigTest {
     void optInFlagsParsed() {
         OrphanCleanConfig cfg =
                 OrphanCleanConfig.fromParams(
-                        MultipleParameterTool.fromArgs(
+                        MultipleParameterToolAdapter.fromArgs(
                                 new String[] {
                                     "--bootstrap-server",
                                     "x:1",
@@ -139,7 +140,7 @@ class OrphanCleanConfigTest {
     void extraConfigsParsed() {
         OrphanCleanConfig cfg =
                 OrphanCleanConfig.fromParams(
-                        MultipleParameterTool.fromArgs(
+                        MultipleParameterToolAdapter.fromArgs(
                                 new String[] {
                                     "--bootstrap-server",
                                     "h:9123",
@@ -162,7 +163,7 @@ class OrphanCleanConfigTest {
     void extraConfigsEmptyWhenNotProvided() {
         OrphanCleanConfig cfg =
                 OrphanCleanConfig.fromParams(
-                        MultipleParameterTool.fromArgs(
+                        MultipleParameterToolAdapter.fromArgs(
                                 new String[] {"--bootstrap-server", "h:9123", "--all-databases"}));
         assertThat(cfg.extraConfigs()).isEmpty();
     }
@@ -172,7 +173,7 @@ class OrphanCleanConfigTest {
         assertThatThrownBy(
                         () ->
                                 OrphanCleanConfig.fromParams(
-                                        MultipleParameterTool.fromArgs(
+                                        MultipleParameterToolAdapter.fromArgs(
                                                 new String[] {
                                                     "--bootstrap-server",
                                                     "h:9123",

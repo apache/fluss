@@ -60,6 +60,13 @@ class RuleDispatcherTest {
                 .isEqualTo(RuleId.UNKNOWN);
     }
 
+    @Test
+    void unknownRuleSkipsConservatively() {
+        FileRule rule = dispatcher.dispatch(file("/random/path/file.bin"));
+        assertThat(rule.evaluate(file("/random/path/file.bin"), BucketActiveRefs.empty(), 0L))
+                .isEqualTo(Decision.SKIP_UNKNOWN);
+    }
+
     private static FileMeta file(String path) {
         return new FileMeta(new FsPath(path), 0L, 0L);
     }

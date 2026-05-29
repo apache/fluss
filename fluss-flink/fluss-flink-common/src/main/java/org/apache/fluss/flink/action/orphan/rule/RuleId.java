@@ -34,11 +34,6 @@ public enum RuleId {
         this.auditTag = auditTag;
     }
 
-    /** Stable string written to audit logs. */
-    public String auditTag() {
-        return auditTag;
-    }
-
     @Override
     public String toString() {
         return auditTag;

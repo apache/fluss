@@ -61,7 +61,8 @@ class ActiveRefsFetcherTest {
         LogActiveRefsFetchResult result = builder.fetchLogActiveRefsByBucket(7L, null);
 
         assertThat(result.listOk()).isTrue();
-        assertThat(result.respondedBucketIds()).isEmpty();
+        assertThat(result.statusFor(0))
+                .isEqualTo(LogActiveRefsFetchResult.ManifestReadStatus.NOT_LISTED);
         // Empty success must NOT trigger a retry — lock down call count.
         assertThat(rpcCalls.get()).isEqualTo(1);
     }

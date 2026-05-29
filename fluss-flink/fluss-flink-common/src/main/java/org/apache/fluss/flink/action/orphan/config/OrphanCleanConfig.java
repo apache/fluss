@@ -18,9 +18,8 @@
 package org.apache.fluss.flink.action.orphan.config;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.flink.adapter.MultipleParameterToolAdapter;
 import org.apache.fluss.utils.StringUtils;
-
-import org.apache.flink.api.java.utils.MultipleParameterTool;
 
 import javax.annotation.Nullable;
 
@@ -110,7 +109,7 @@ public final class OrphanCleanConfig implements Serializable {
     }
 
     /** Parses a cleanup config from CLI parameters. */
-    public static OrphanCleanConfig fromParams(MultipleParameterTool params) {
+    public static OrphanCleanConfig fromParams(MultipleParameterToolAdapter params) {
         String bootstrapServer = params.get("bootstrap-server");
         if (StringUtils.isNullOrWhitespaceOnly(bootstrapServer)) {
             throw new IllegalArgumentException("--bootstrap-server is required");

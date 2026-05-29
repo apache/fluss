@@ -23,6 +23,7 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.action.orphan.config.OrphanCleanConfig;
+import org.apache.fluss.flink.adapter.MultipleParameterToolAdapter;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionInfo;
@@ -42,7 +43,6 @@ import org.apache.fluss.server.zk.data.ZkData.PartitionZNode;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.FlussPaths;
 
-import org.apache.flink.api.java.utils.MultipleParameterTool;
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.core.LogEvent;
@@ -160,6 +160,82 @@ class OrphanFilesCleanITCase {
     }
 
     private static final Duration OLD_ENOUGH = Duration.ofDays(2);
+
+    @Test
+    void mixedOrphanAndActiveFilesInSameBucket() throws Exception {
+        String dbName = newDatabaseName("mixed");
+        TablePath tablePath = createLogTable(dbName, "mixed_bucket");
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), 0);
+        FsPath remoteLogTabletDir =
+                FlussPaths.remoteLogTabletDir(
+                        new FsPath(remoteDataRoot().resolve("log").toUri().toString()),
+                        PhysicalTablePath.of(tablePath),
+                        tableBucket);
+
+        // Two active segments registered in manifest
+        String activeId1 = UUID.randomUUID().toString();
+        String activeId2 = UUID.randomUUID().toString();
+        FsPath manifestPath =
+                new FsPath(
+                        localPath(remoteLogTabletDir)
+                                .resolve("metadata/p0.manifest")
+                                .toUri()
+                                .toString());
+        Path manifest = localPath(manifestPath);
+        Files.createDirectories(manifest.getParent());
+        String manifestContent =
+                "{\"remote_log_segments\":["
+                        + "{\"segment_id\":\""
+                        + activeId1
+                        + "\",\"start_offset\":0,\"end_offset\":99},"
+                        + "{\"segment_id\":\""
+                        + activeId2
+                        + "\",\"start_offset\":100,\"end_offset\":199}"
+                        + "]}";
+        Files.write(manifest, manifestContent.getBytes(StandardCharsets.UTF_8));
+        makeOld(manifest);
+        upsertManifest(tableBucket, manifestPath, 199L);
+
+        Path activeFile1 = writeSegmentFile(remoteLogTabletDir, activeId1, 0L);
+        Path activeFile2 = writeSegmentFile(remoteLogTabletDir, activeId2, 100L);
+
+        // Two orphan segments NOT in manifest
+        String orphanId1 = UUID.randomUUID().toString();
+        String orphanId2 = UUID.randomUUID().toString();
+        Path orphanFile1 = writeSegmentFile(remoteLogTabletDir, orphanId1, 500L);
+        Path orphanFile2 = writeSegmentFile(remoteLogTabletDir, orphanId2, 600L);
+
+        runCleanerForDatabase(false, dbName);
+
+        // Active files must survive
+        assertThat(Files.exists(activeFile1)).as("active segment 1 must survive cleanup").isTrue();
+        assertThat(Files.exists(activeFile2)).as("active segment 2 must survive cleanup").isTrue();
+
+        // Orphan files must be deleted
+        assertThat(Files.exists(orphanFile1)).as("orphan segment 1 must be deleted").isFalse();
+        assertThat(Files.exists(orphanFile2)).as("orphan segment 2 must be deleted").isFalse();
+
+        // Audit confirms deletions for both orphans
+        assertThat(auditMessages())
+                .anyMatch(
+                        m ->
+                                m.contains("action=deleted")
+                                        && m.contains("rule=log-segment")
+                                        && m.contains(orphanFile1.toString()));
+        assertThat(auditMessages())
+                .anyMatch(
+                        m ->
+                                m.contains("action=deleted")
+                                        && m.contains("rule=log-segment")
+                                        && m.contains(orphanFile2.toString()));
+
+        // No deletion audit for active files
+        assertThat(auditMessages())
+                .noneMatch(m -> m.contains("action=deleted") && m.contains(activeFile1.toString()));
+        assertThat(auditMessages())
+                .noneMatch(m -> m.contains("action=deleted") && m.contains(activeFile2.toString()));
+    }
 
     @Test
     void happyPathDeletesOrphanSegment() throws Exception {
@@ -957,6 +1033,18 @@ class OrphanFilesCleanITCase {
         return logFile;
     }
 
+    private Path writeSegmentFile(FsPath remoteLogTabletDir, String segmentId, long startOffset)
+            throws Exception {
+        FsPath segmentDir = new FsPath(remoteLogTabletDir, segmentId);
+        Path localSegmentDir = localPath(segmentDir);
+        Files.createDirectories(localSegmentDir);
+        Path logFile =
+                localSegmentDir.resolve(FlussPaths.filenamePrefixFromOffset(startOffset) + ".log");
+        Files.write(logFile, new byte[] {0x55});
+        makeOld(logFile);
+        return logFile;
+    }
+
     private void upsertManifest(TableBucket tableBucket, FsPath manifestPath, long endOffset)
             throws Exception {
         FLUSS_CLUSTER_EXTENSION
@@ -975,7 +1063,8 @@ class OrphanFilesCleanITCase {
         appendCommonArgs(args, dryRun, extraArgs);
         OrphanCleanConfig config =
                 OrphanCleanConfig.fromParams(
-                        MultipleParameterTool.fromArgs(args.toArray(new String[args.size()])));
+                        MultipleParameterToolAdapter.fromArgs(
+                                args.toArray(new String[args.size()])));
         new OrphanFilesCleanAction(config).run();
     }
 
@@ -987,7 +1076,8 @@ class OrphanFilesCleanITCase {
         appendCommonArgs(args, dryRun, extraArgs);
         OrphanCleanConfig config =
                 OrphanCleanConfig.fromParams(
-                        MultipleParameterTool.fromArgs(args.toArray(new String[args.size()])));
+                        MultipleParameterToolAdapter.fromArgs(
+                                args.toArray(new String[args.size()])));
         new OrphanFilesCleanAction(config).run();
     }
 

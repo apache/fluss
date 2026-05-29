@@ -56,6 +56,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 
 import static org.apache.fluss.flink.action.orphan.OrphanCleanUtils.enumerateBuckets;
@@ -374,19 +375,25 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
             for (String topLevel : TOP_LEVEL_DIRS) {
                 FsPath dbDir = remoteSubDir(root, topLevel + "/" + dbState.dbName);
                 if (emit) {
-                    emitOrphanDirsUnderParent(
+                    forEachOrphanDirUnderParent(
                             dbDir,
                             dirName ->
                                     OrphanDirDetector.isOrphanTable(
                                             dirName, activeTableIds, maxKnownTableId),
-                            out);
+                            dir ->
+                                    out.collect(
+                                            new OrphanDirCleanTask(
+                                                    dir.toString(),
+                                                    config.olderThanMillis(),
+                                                    config.dryRun(),
+                                                    config.allowDeleteManifest())));
                 } else {
-                    logSkippedOrphanDirsUnderParent(
+                    forEachOrphanDirUnderParent(
                             dbDir,
                             dirName ->
                                     OrphanDirDetector.isOrphanTable(
                                             dirName, activeTableIds, maxKnownTableId),
-                            audit);
+                            dir -> audit.logSkipOrphanTable(dir, "default-conservative"));
                 }
             }
         }
@@ -413,26 +420,32 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
                                 liveTable.tablePath,
                                 liveTable.tableId);
                 if (emit) {
-                    emitOrphanDirsUnderParent(
+                    forEachOrphanDirUnderParent(
                             tableDir,
                             dirName ->
                                     OrphanDirDetector.isOrphanPartition(
                                             dirName, activePartitionIds, maxKnownPartitionId),
-                            out);
+                            dir ->
+                                    out.collect(
+                                            new OrphanDirCleanTask(
+                                                    dir.toString(),
+                                                    config.olderThanMillis(),
+                                                    config.dryRun(),
+                                                    config.allowDeleteManifest())));
                 } else {
-                    logSkippedOrphanPartitionDirsUnderParent(
+                    forEachOrphanDirUnderParent(
                             tableDir,
                             dirName ->
                                     OrphanDirDetector.isOrphanPartition(
                                             dirName, activePartitionIds, maxKnownPartitionId),
-                            audit);
+                            dir -> audit.logSkipOrphanPartition(dir, "default-conservative"));
                 }
             }
         }
     }
 
-    private void emitOrphanDirsUnderParent(
-            FsPath parentDir, Predicate<String> isOrphan, Collector<CleanTask> out)
+    private void forEachOrphanDirUnderParent(
+            FsPath parentDir, Predicate<String> isOrphan, Consumer<FsPath> action)
             throws IOException {
         FileSystem fs = getFileSystemIfExists(parentDir);
         if (fs == null) {
@@ -449,54 +462,7 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
             if (!isOrphan.test(entry.getPath().getName())) {
                 continue;
             }
-            out.collect(
-                    new OrphanDirCleanTask(
-                            entry.getPath().toString(),
-                            config.olderThanMillis(),
-                            config.dryRun(),
-                            config.allowDeleteManifest()));
-        }
-    }
-
-    private void logSkippedOrphanDirsUnderParent(
-            FsPath parentDir, Predicate<String> isOrphan, AuditLogger audit) throws IOException {
-        FileSystem fs = getFileSystemIfExists(parentDir);
-        if (fs == null) {
-            return;
-        }
-        FileStatus[] entries = listStatuses(fs, parentDir);
-        if (entries == null) {
-            return;
-        }
-        for (FileStatus entry : entries) {
-            if (!entry.isDir()) {
-                continue;
-            }
-            if (!isOrphan.test(entry.getPath().getName())) {
-                continue;
-            }
-            audit.logSkipOrphanTable(entry.getPath(), "default-conservative");
-        }
-    }
-
-    private void logSkippedOrphanPartitionDirsUnderParent(
-            FsPath parentDir, Predicate<String> isOrphan, AuditLogger audit) throws IOException {
-        FileSystem fs = getFileSystemIfExists(parentDir);
-        if (fs == null) {
-            return;
-        }
-        FileStatus[] entries = listStatuses(fs, parentDir);
-        if (entries == null) {
-            return;
-        }
-        for (FileStatus entry : entries) {
-            if (!entry.isDir()) {
-                continue;
-            }
-            if (!isOrphan.test(entry.getPath().getName())) {
-                continue;
-            }
-            audit.logSkipOrphanPartition(entry.getPath(), "default-conservative");
+            action.accept(entry.getPath());
         }
     }
 

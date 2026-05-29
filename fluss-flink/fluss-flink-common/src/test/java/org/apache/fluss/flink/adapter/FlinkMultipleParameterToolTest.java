@@ -37,4 +37,33 @@ abstract class FlinkMultipleParameterToolTest {
         assertThat(adapter.toMap()).containsEntry("multi1", "multiValue3");
         assertThat(adapter.toMap()).containsEntry("multi2", "multiValue2");
     }
+
+    @Test
+    public void testHas() {
+        String[] args = new String[] {"--key1", "value1", "--key2", "value2"};
+        MultipleParameterToolAdapter adapter = MultipleParameterToolAdapter.fromArgs(args);
+
+        assertThat(adapter.has("key1")).isTrue();
+        assertThat(adapter.has("key2")).isTrue();
+        assertThat(adapter.has("nonexistent")).isFalse();
+    }
+
+    @Test
+    public void testGet() {
+        String[] args = new String[] {"--key1", "value1", "--key2", "value2"};
+        MultipleParameterToolAdapter adapter = MultipleParameterToolAdapter.fromArgs(args);
+
+        assertThat(adapter.get("key1")).isEqualTo("value1");
+        assertThat(adapter.get("key2")).isEqualTo("value2");
+        assertThat(adapter.get("nonexistent")).isNull();
+    }
+
+    @Test
+    public void testGetMultiParameter() {
+        String[] args = new String[] {"--multi", "val1", "--multi", "val2", "--single", "only"};
+        MultipleParameterToolAdapter adapter = MultipleParameterToolAdapter.fromArgs(args);
+
+        assertThat(adapter.getMultiParameter("multi")).containsExactly("val1", "val2");
+        assertThat(adapter.getMultiParameter("single")).containsExactly("only");
+    }
 }

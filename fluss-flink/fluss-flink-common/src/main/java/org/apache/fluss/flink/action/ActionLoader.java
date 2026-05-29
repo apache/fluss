@@ -18,8 +18,7 @@
 package org.apache.fluss.flink.action;
 
 import org.apache.fluss.annotation.Internal;
-
-import org.apache.flink.api.java.utils.MultipleParameterTool;
+import org.apache.fluss.flink.adapter.MultipleParameterToolAdapter;
 
 import java.util.Arrays;
 import java.util.Optional;
@@ -56,7 +55,7 @@ public final class ActionLoader {
                                                         + args[0]
                                                         + ". Run with --help for available actions."));
         String[] remaining = Arrays.copyOfRange(args, 1, args.length);
-        MultipleParameterTool params = MultipleParameterTool.fromArgs(remaining);
+        MultipleParameterToolAdapter params = MultipleParameterToolAdapter.fromArgs(remaining);
         if (params.has("help")) {
             System.out.println(factory.help());
             return Optional.empty();

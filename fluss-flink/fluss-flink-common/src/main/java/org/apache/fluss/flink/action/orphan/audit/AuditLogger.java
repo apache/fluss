@@ -80,10 +80,6 @@ public final class AuditLogger {
         AUDIT.warn("action=skip_unknown rule={} path={} ts={}", ruleId, path, Instant.now());
     }
 
-    public void logDeferred(FsPath path, RuleId ruleId) {
-        AUDIT.debug("action=deferred rule={} path={}", ruleId, path);
-    }
-
     public void logBucketAborted(String bucketStr, String reason) {
         AUDIT.error(
                 "action=bucket_aborted bucket={} reason={} ts={}",

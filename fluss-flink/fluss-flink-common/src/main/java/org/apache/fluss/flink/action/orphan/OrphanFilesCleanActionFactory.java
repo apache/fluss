@@ -21,8 +21,7 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.flink.action.Action;
 import org.apache.fluss.flink.action.ActionFactory;
 import org.apache.fluss.flink.action.orphan.config.OrphanCleanConfig;
-
-import org.apache.flink.api.java.utils.MultipleParameterTool;
+import org.apache.fluss.flink.adapter.MultipleParameterToolAdapter;
 
 import java.util.Optional;
 
@@ -36,7 +35,7 @@ public class OrphanFilesCleanActionFactory implements ActionFactory {
     }
 
     @Override
-    public Optional<Action> create(MultipleParameterTool params) {
+    public Optional<Action> create(MultipleParameterToolAdapter params) {
         return Optional.<Action>of(
                 new OrphanFilesCleanAction(OrphanCleanConfig.fromParams(params)));
     }
