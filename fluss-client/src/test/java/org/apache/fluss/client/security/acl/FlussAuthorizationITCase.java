@@ -1375,7 +1375,8 @@ public class FlussAuthorizationITCase {
 
     @Test
     void testRemoteLogAndTieringAuthorization() throws Exception {
-        // These RPCs are internal-only, so we test via direct gateway access
+        // These RPCs are internal-only and should reject all external sessions,
+        // regardless of permissions
         try (RpcClient rpcClient =
                 RpcClient.create(guestConf, TestingClientMetricGroup.newInstance())) {
 
@@ -1391,7 +1392,7 @@ public class FlussAuthorizationITCase {
                             rpcClient,
                             CoordinatorGateway.class);
 
-            // Test 1: notifyRemoteLogOffsets without WRITE permission
+            // Test 1: notifyRemoteLogOffsets should reject external sessions
             NotifyRemoteLogOffsetsRequest notifyRemoteRequest = new NotifyRemoteLogOffsetsRequest();
             notifyRemoteRequest.setTableId(1L);
             notifyRemoteRequest.setBucketId(0);
@@ -1406,11 +1407,9 @@ public class FlussAuthorizationITCase {
                     .rootCause()
                     .isInstanceOf(AuthorizationException.class)
                     .hasMessageContaining(
-                            String.format(
-                                    "Principal %s have no authorization to operate WRITE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
-                                    guestPrincipal));
+                            "NotifyRemoteLogOffsets is an internal RPC and cannot be called by external clients");
 
-            // Test 2: commitRemoteLogManifest without WRITE permission
+            // Test 2: commitRemoteLogManifest should reject external sessions
             CommitRemoteLogManifestRequest commitManifestRequest =
                     new CommitRemoteLogManifestRequest();
             commitManifestRequest.setTableId(1L);
@@ -1428,11 +1427,9 @@ public class FlussAuthorizationITCase {
                     .rootCause()
                     .isInstanceOf(AuthorizationException.class)
                     .hasMessageContaining(
-                            String.format(
-                                    "Principal %s have no authorization to operate WRITE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
-                                    guestPrincipal));
+                            "CommitRemoteLogManifest is an internal RPC and cannot be called by external clients");
 
-            // Test 3: lakeTieringHeartbeat without WRITE permission
+            // Test 3: lakeTieringHeartbeat should reject external sessions
             LakeTieringHeartbeatRequest heartbeatRequest = new LakeTieringHeartbeatRequest();
             assertThatThrownBy(
                             () ->
@@ -1442,150 +1439,42 @@ public class FlussAuthorizationITCase {
                     .rootCause()
                     .isInstanceOf(AuthorizationException.class)
                     .hasMessageContaining(
-                            String.format(
-                                    "Principal %s have no authorization to operate WRITE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
-                                    guestPrincipal));
+                            "LakeTieringHeartbeat is an internal RPC and cannot be called by external clients");
         }
 
-        // Test 4: Grant CLUSTER/WRITE permission and verify operations succeed
-        List<AclBinding> aclBindings =
-                Collections.singletonList(
-                        new AclBinding(
-                                Resource.cluster(),
-                                new AccessControlEntry(
-                                        guestPrincipal,
-                                        "*",
-                                        OperationType.WRITE,
-                                        PermissionType.ALLOW)));
-        rootAdmin.createAcls(aclBindings).all().get();
-        FLUSS_CLUSTER_EXTENSION.waitUntilAuthenticationSync(aclBindings, true);
+        // Test 4: Even root user (super user) cannot call these RPCs from external sessions
+        Configuration rootClientConf =
+                new Configuration(FLUSS_CLUSTER_EXTENSION.getClientConfig("CLIENT"));
+        rootClientConf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "sasl");
+        rootClientConf.set(ConfigOptions.CLIENT_SASL_MECHANISM, "plain");
+        rootClientConf.setString("client.security.sasl.username", "root");
+        rootClientConf.setString("client.security.sasl.password", "password");
 
-        try (RpcClient authorizedRpcClient =
-                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance())) {
+        try (RpcClient rootRpcClient =
+                RpcClient.create(rootClientConf, TestingClientMetricGroup.newInstance())) {
 
-            TabletServerGateway authorizedTabletGateway =
+            TabletServerGateway rootTabletGateway =
                     GatewayClientProxy.createGatewayProxy(
                             () -> FLUSS_CLUSTER_EXTENSION.getTabletServerNodes("CLIENT").get(0),
-                            authorizedRpcClient,
+                            rootRpcClient,
                             TabletServerGateway.class);
 
-            CoordinatorGateway authorizedCoordinatorGateway =
-                    GatewayClientProxy.createGatewayProxy(
-                            () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("CLIENT"),
-                            authorizedRpcClient,
-                            CoordinatorGateway.class);
-
-            // Test notifyRemoteLogOffsets with permission
             NotifyRemoteLogOffsetsRequest notifyRemoteRequest = new NotifyRemoteLogOffsetsRequest();
             notifyRemoteRequest.setTableId(1L);
             notifyRemoteRequest.setBucketId(0);
             notifyRemoteRequest.setCoordinatorEpoch(1);
             notifyRemoteRequest.setRemoteStartOffset(0L);
             notifyRemoteRequest.setRemoteEndOffset(100L);
-            Throwable thrown1 =
-                    catchThrowable(
+            assertThatThrownBy(
                             () ->
-                                    authorizedTabletGateway
+                                    rootTabletGateway
                                             .notifyRemoteLogOffsets(notifyRemoteRequest)
-                                            .get());
-            if (thrown1 != null) {
-                assertThat(thrown1).rootCause().isNotInstanceOf(AuthorizationException.class);
-            }
-
-            // Test commitRemoteLogManifest with permission
-            CommitRemoteLogManifestRequest commitManifestRequest =
-                    new CommitRemoteLogManifestRequest();
-            commitManifestRequest.setTableId(1L);
-            commitManifestRequest.setBucketId(0);
-            commitManifestRequest.setRemoteLogManifestPath("/path/to/manifest");
-            commitManifestRequest.setRemoteLogStartOffset(0L);
-            commitManifestRequest.setRemoteLogEndOffset(100L);
-            commitManifestRequest.setCoordinatorEpoch(1);
-            commitManifestRequest.setBucketLeaderEpoch(1);
-            Throwable thrown2 =
-                    catchThrowable(
-                            () ->
-                                    authorizedCoordinatorGateway
-                                            .commitRemoteLogManifest(commitManifestRequest)
-                                            .get());
-            if (thrown2 != null) {
-                assertThat(thrown2).rootCause().isNotInstanceOf(AuthorizationException.class);
-            }
-
-            // Test lakeTieringHeartbeat with permission
-            LakeTieringHeartbeatRequest heartbeatRequest = new LakeTieringHeartbeatRequest();
-            Throwable thrown3 =
-                    catchThrowable(
-                            () ->
-                                    authorizedCoordinatorGateway
-                                            .lakeTieringHeartbeat(heartbeatRequest)
-                                            .get());
-            if (thrown3 != null) {
-                assertThat(thrown3).rootCause().isNotInstanceOf(AuthorizationException.class);
-            }
+                                            .get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            "NotifyRemoteLogOffsets is an internal RPC and cannot be called by external clients");
         }
-
-        // Test 5: Verify internal sessions bypass authorization
-        TabletServerGateway internalTabletGateway =
-                GatewayClientProxy.createGatewayProxy(
-                        () -> FLUSS_CLUSTER_EXTENSION.getTabletServerNodes("FLUSS").get(0),
-                        FLUSS_CLUSTER_EXTENSION.getRpcClient(),
-                        TabletServerGateway.class);
-
-        CoordinatorGateway internalCoordinatorGateway =
-                GatewayClientProxy.createGatewayProxy(
-                        () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("FLUSS"),
-                        FLUSS_CLUSTER_EXTENSION.getRpcClient(),
-                        CoordinatorGateway.class);
-
-        // Internal connections should NOT throw AuthorizationException
-        NotifyRemoteLogOffsetsRequest notifyRemoteRequest = new NotifyRemoteLogOffsetsRequest();
-        notifyRemoteRequest.setTableId(1L);
-        notifyRemoteRequest.setBucketId(0);
-        notifyRemoteRequest.setCoordinatorEpoch(1);
-        notifyRemoteRequest.setRemoteStartOffset(0L);
-        notifyRemoteRequest.setRemoteEndOffset(100L);
-        Throwable thrown4 =
-                catchThrowable(
-                        () ->
-                                internalTabletGateway
-                                        .notifyRemoteLogOffsets(notifyRemoteRequest)
-                                        .get());
-        if (thrown4 != null) {
-            assertThat(thrown4).rootCause().isNotInstanceOf(AuthorizationException.class);
-        }
-
-        CommitRemoteLogManifestRequest commitManifestRequest = new CommitRemoteLogManifestRequest();
-        commitManifestRequest.setTableId(1L);
-        commitManifestRequest.setBucketId(0);
-        commitManifestRequest.setRemoteLogManifestPath("/path/to/manifest");
-        commitManifestRequest.setRemoteLogStartOffset(0L);
-        commitManifestRequest.setRemoteLogEndOffset(100L);
-        commitManifestRequest.setCoordinatorEpoch(1);
-        commitManifestRequest.setBucketLeaderEpoch(1);
-        Throwable thrown5 =
-                catchThrowable(
-                        () ->
-                                internalCoordinatorGateway
-                                        .commitRemoteLogManifest(commitManifestRequest)
-                                        .get());
-        if (thrown5 != null) {
-            assertThat(thrown5).rootCause().isNotInstanceOf(AuthorizationException.class);
-        }
-
-        LakeTieringHeartbeatRequest heartbeatRequest = new LakeTieringHeartbeatRequest();
-        Throwable thrown6 =
-                catchThrowable(
-                        () ->
-                                internalCoordinatorGateway
-                                        .lakeTieringHeartbeat(heartbeatRequest)
-                                        .get());
-        if (thrown6 != null) {
-            assertThat(thrown6).rootCause().isNotInstanceOf(AuthorizationException.class);
-        }
-
-        // Cleanup
-        rootAdmin.dropAcls(Collections.singletonList(AclBindingFilter.ANY)).all().get();
     }
 
     private static Configuration initConfig() {

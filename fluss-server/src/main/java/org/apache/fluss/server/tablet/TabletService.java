@@ -423,8 +423,14 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<NotifyRemoteLogOffsetsResponse> notifyRemoteLogOffsets(
             NotifyRemoteLogOffsetsRequest request) {
-        if (authorizer != null) {
-            authorizer.authorize(currentSession(), WRITE, Resource.cluster());
+        // This is an internal-only RPC, reject all external sessions
+        if (!currentSession().isInternal()) {
+            CompletableFuture<NotifyRemoteLogOffsetsResponse> failedFuture =
+                    new CompletableFuture<>();
+            failedFuture.completeExceptionally(
+                    new AuthorizationException(
+                            "NotifyRemoteLogOffsets is an internal RPC and cannot be called by external clients"));
+            return failedFuture;
         }
         CompletableFuture<NotifyRemoteLogOffsetsResponse> response = new CompletableFuture<>();
         replicaManager.notifyRemoteLogOffsets(
