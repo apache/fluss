@@ -24,6 +24,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
+import org.apache.fluss.flink.sink.serializer.SinkOperationMode;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.Schema;
@@ -264,7 +265,7 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
                         new LogicalType[] {new IntType(), new CharType(10)},
                         new String[] {"id", "name"});
         RowDataSerializationSchema serializationSchema =
-                new RowDataSerializationSchema(true, false);
+                new RowDataSerializationSchema(SinkOperationMode.appendOnly(false));
         return new AppendSinkWriter<>(
                 DEFAULT_SINK_TABLE_PATH,
                 configuration,

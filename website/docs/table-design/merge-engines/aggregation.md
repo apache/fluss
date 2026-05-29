@@ -513,6 +513,25 @@ TableDescriptor.builder()
 
 **Key behavior:** Null values overwrite existing values, treating null as a valid value to be stored.
 
+:::warning Retract Behavior Warning
+When using `last_value` with retract semantics (e.g., in Flink streaming aggregations):
+
+- **No history tracking**: `last_value` does not maintain historical values. When a retract (`UPDATE_BEFORE`) is received, it unconditionally clears the accumulator to `null`, regardless of whether the retracted value matches the current state.
+- **Best-effort semantic**: This is a simplified implementation aligned with Paimon. Precise retraction is not possible without full history.
+- **Use case limitation**: Only suitable for scenarios where each key receives exactly one update. If multiple updates occur before a retract, the result may be incorrect (the field becomes `null` instead of reverting to a previous value).
+- **Alternative**: If you need accurate retract behavior, consider using `sum` or other mathematically reversible functions instead.
+
+**Example of incorrect retract scenario:**
+```
+Initial:    INSERT (id=1, status='A')        → status='A'
+Update 1:   UPDATE (id=1, status='B')        → status='B'
+Update 2:   UPDATE (id=1, status='C')        → status='C'
+Retract:    RETRACT (id=1, status='B')       → status=null (WRONG! Expected 'C')
+```
+
+In this example, retracting 'B' when the current value is 'C' results in `null` instead of the expected 'C', because `last_value` has no memory of the intermediate state.
+:::
+
 ### last_value_ignore_nulls
 
 Replaces the previous value with the latest non-null value. This is the **default aggregate function** when no function is specified.
@@ -816,11 +835,6 @@ SELECT * FROM test_string_agg WHERE id = 1;
 <TabItem value="java-client" label="Java Client">
 
 ```java
-Schema schema = Schema.newBuilder()
-    .column("id", DataTypes.BIGINT())
-    .column("tags", DataTypes.STRING(), AggFunctions.STRING_AGG(";"))  // Specify delimiter inline
-    .primaryKey("id")
-    .build();
 Schema schema = Schema.newBuilder()
     .column("id", DataTypes.BIGINT())
     .column("tags1", DataTypes.STRING(), AggFunctions.STRING_AGG())
@@ -1137,12 +1151,13 @@ partialWriter.delete(primaryKeyRow);
 ```
 
 :::note
-**Current Limitation**: The aggregation merge engine does not support retraction semantics (e.g., subtracting from a sum, reverting a max). 
+**Retract Support**: The aggregation merge engine supports retract semantics for aggregate functions that have a retract implementation. Retract quality varies by function — `sum` provides exact inverse (subtraction), while others are best-effort. When using Flink SQL with a retract-compatible aggregation table, `UPDATE_BEFORE` rows are automatically treated as retract operations rather than deletes.
 
-- **Full update mode**: Delete operations can only remove the entire record
-- **Partial update mode**: Delete operations can only null out target columns, not retract aggregated values
-
-Future versions may support fine-grained retraction by enhancing the protocol to carry row data with delete operations.
+- **Strict inverse**: `sum` — subtraction is mathematically exact.
+- **Best-effort**: `last_value` (unconditionally clears to null), `last_value_ignore_nulls` (clears to null when retracting a non-null value). These do not reconstruct prior history.
+- Retract is only supported when **all** target aggregation fields use retract-capable functions.
+- **Undo vs Retract**: Undo recovery (used during Flink failover) restores exact checkpoint state via OVERWRITE mode. Retract applies inverse aggregation during normal streaming. These are independent mechanisms.
+- **Non-retract-capable functions** (e.g., `max`, `min`, `first_value`, `listagg`, `bool_and`, `bool_or`): These functions throw `UnsupportedOperationException` on retract. They cannot be used in retract-enabled tables.
 :::
 
 ## Limitations

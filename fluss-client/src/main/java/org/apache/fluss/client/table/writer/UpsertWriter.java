@@ -39,6 +39,22 @@ public interface UpsertWriter extends TableWriter {
     CompletableFuture<UpsertResult> upsert(InternalRow record);
 
     /**
+     * Retracts a previous aggregation contribution for the given row. The row must contain the
+     * primary key fields and the old aggregation values to retract.
+     *
+     * <p>This is used when a Flink aggregate operator emits UPDATE_BEFORE (retract old value) for a
+     * key. The retract record is sent independently with {@link
+     * org.apache.fluss.record.MutationType#RETRACT} mutation type.
+     *
+     * @param row the old aggregation value to retract (UPDATE_BEFORE).
+     * @return A {@link CompletableFuture} that returns upsert result when complete normally.
+     */
+    default CompletableFuture<UpsertResult> retract(InternalRow row) {
+        throw new UnsupportedOperationException(
+                "retract() is not supported by this UpsertWriter implementation.");
+    }
+
+    /**
      * Delete a certain record from the Fluss table. The input must contain the primary key fields.
      *
      * @param record the record to delete.

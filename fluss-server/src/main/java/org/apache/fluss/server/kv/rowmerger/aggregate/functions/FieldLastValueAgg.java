@@ -37,4 +37,20 @@ public class FieldLastValueAgg extends FieldAggregator {
     public Object agg(Object accumulator, Object inputField) {
         return inputField;
     }
+
+    @Override
+    public boolean supportsRetract() {
+        return true;
+    }
+
+    /**
+     * Retracts by unconditionally clearing the accumulator to {@code null}, regardless of whether
+     * {@code retractField} matches the current accumulator. This is a best-effort semantic aligned
+     * with Paimon: since {@code last_value} does not maintain history, precise retraction is not
+     * possible.
+     */
+    @Override
+    public Object retract(Object accumulator, Object retractField) {
+        return null;
+    }
 }

@@ -208,6 +208,66 @@ class RowMergerCreateTest {
     }
 
     @Test
+    void testDefaultRowMergerRetractThrows() {
+        Configuration conf = new Configuration();
+        TableConfig tableConfig = new TableConfig(conf);
+
+        RowMerger merger =
+                RowMerger.create(tableConfig, KvFormat.COMPACTED, createSchemaGetter(TEST_SCHEMA));
+
+        assertThat(merger).isInstanceOf(DefaultRowMerger.class);
+
+        BinaryRow row = compactedRow(TEST_SCHEMA.getRowType(), new Object[] {1, 10L});
+        assertThatThrownBy(() -> merger.retract(toBinaryValue(row), toBinaryValue(row)))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("does not support retract");
+    }
+
+    @Test
+    void testFirstRowRowMergerRetractThrows() {
+        Configuration conf = new Configuration();
+        conf.setString(ConfigOptions.TABLE_MERGE_ENGINE.key(), MergeEngineType.FIRST_ROW.name());
+        TableConfig tableConfig = new TableConfig(conf);
+
+        RowMerger merger =
+                RowMerger.create(tableConfig, KvFormat.COMPACTED, createSchemaGetter(TEST_SCHEMA));
+
+        assertThat(merger).isInstanceOf(FirstRowRowMerger.class);
+
+        BinaryRow row = compactedRow(TEST_SCHEMA.getRowType(), new Object[] {1, 10L});
+        assertThatThrownBy(() -> merger.retract(toBinaryValue(row), toBinaryValue(row)))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("does not support retract");
+    }
+
+    @Test
+    void testVersionedRowMergerRetractThrows() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("version", DataTypes.BIGINT())
+                        .column("value", DataTypes.STRING())
+                        .primaryKey("id")
+                        .build();
+
+        Configuration conf = new Configuration();
+        conf.setString(ConfigOptions.TABLE_MERGE_ENGINE.key(), MergeEngineType.VERSIONED.name());
+        conf.setString(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key(), "version");
+        TableConfig tableConfig = new TableConfig(conf);
+
+        RowMerger merger =
+                RowMerger.create(tableConfig, KvFormat.COMPACTED, createSchemaGetter(schema));
+        merger.configureTargetColumns(null, SCHEMA_ID, schema);
+
+        assertThat(merger).isInstanceOf(VersionedRowMerger.class);
+
+        BinaryRow row = compactedRow(schema.getRowType(), new Object[] {1, 1L, "hello"});
+        assertThatThrownBy(() -> merger.retract(toBinaryValue(row), toBinaryValue(row)))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("does not support retract");
+    }
+
+    @Test
     void testCreateAggregateRowMergerCaseInsensitive() {
         Configuration conf = new Configuration();
         // Test case-insensitive merge engine type

@@ -61,6 +61,22 @@ public abstract class FieldAggregator implements Serializable {
         return agg(inputField, accumulator);
     }
 
+    /**
+     * Retracts a previously aggregated value from the accumulator. By default throws {@link
+     * UnsupportedOperationException}. Subclasses that support retraction should override.
+     */
+    public Object retract(Object accumulator, Object retractField) {
+        throw new UnsupportedOperationException(
+                String.format(
+                        "Aggregate function '%s' does not support retraction.",
+                        this.getClass().getSimpleName()));
+    }
+
+    /** Returns whether this aggregator supports retract operations. */
+    public boolean supportsRetract() {
+        return false;
+    }
+
     /** Resets the aggregator to a clean start state. */
     public void reset() {}
 }

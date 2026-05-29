@@ -19,6 +19,7 @@ package org.apache.fluss.flink.sink;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
+import org.apache.fluss.flink.sink.serializer.SinkOperationMode;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.flink.sink.writer.FlinkSinkWriter;
 import org.apache.fluss.flink.utils.PushdownUtils;
@@ -87,6 +88,23 @@ public class FlinkTableSink
     private final @Nullable DataLakeFormat lakeFormat;
     @Nullable private final String producerId;
 
+    /**
+     * Whether the table uses the AGGREGATION merge engine. Used to enable undo recovery for
+     * aggregation tables. Note: this does NOT control UPDATE_BEFORE admission — that is gated by
+     * {@link #schemaSupportsRetract}, which additionally requires all non-PK aggregation columns to
+     * support retract.
+     */
+    private final boolean isAggregationTable;
+
+    /**
+     * Whether all non-PK aggregation columns in the full schema support retract. This is the
+     * planner-time safety gate for accepting update changelog into an aggregation table.
+     */
+    private final boolean schemaSupportsRetract;
+
+    /** Non-PK aggregation columns whose effective aggregation function is not retract-capable. */
+    private final Set<String> nonRetractableColumns;
+
     private boolean appliedUpdates = false;
     @Nullable private GenericRow deleteRow;
 
@@ -104,7 +122,8 @@ public class FlinkTableSink
             int numBucket,
             List<String> bucketKeys,
             DistributionMode distributionMode,
-            @Nullable String producerId) {
+            @Nullable String producerId,
+            Set<String> nonRetractableColumns) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableRowType = tableRowType;
@@ -119,27 +138,46 @@ public class FlinkTableSink
         this.distributionMode = distributionMode;
         this.lakeFormat = lakeFormat;
         this.producerId = producerId;
+        this.isAggregationTable = mergeEngineType == MergeEngineType.AGGREGATION;
+        this.nonRetractableColumns = new HashSet<>(nonRetractableColumns);
+        this.schemaSupportsRetract = isAggregationTable && this.nonRetractableColumns.isEmpty();
     }
 
     @Override
     public ChangelogMode getChangelogMode(ChangelogMode requestedMode) {
         if (!streaming) {
             return ChangelogMode.insertOnly();
-        } else {
-            if (primaryKeyIndexes.length > 0 || sinkIgnoreDelete) {
-                // primary-key table or ignore_delete mode can accept RowKind.DELETE
-                ChangelogMode.Builder builder = ChangelogMode.newBuilder();
-                for (RowKind kind : requestedMode.getContainedKinds()) {
-                    // optimize out the update_before messages
-                    if (kind != RowKind.UPDATE_BEFORE) {
-                        builder.addContainedKind(kind);
-                    }
-                }
-                return builder.build();
-            } else {
-                return ChangelogMode.insertOnly();
-            }
         }
+
+        if (isAggregationTable
+                && !schemaSupportsRetract
+                && containsUpdateChangelog(requestedMode)) {
+            throw new ValidationException(
+                    String.format(
+                            "Table %s uses the 'aggregation' merge engine with non-retractable aggregation columns %s. "
+                                    + "It cannot consume UPDATE changelog safely. Please use append-only input or change those columns to retract-capable aggregate functions.",
+                            tablePath, sortedNonRetractable()));
+        }
+
+        if (primaryKeyIndexes.length > 0 || sinkIgnoreDelete) {
+            // Accept UPDATE_BEFORE in two cases:
+            // 1. writerSupportsRetract=true: retract-then-aggregate semantics
+            // 2. sink.ignore-delete=true on non-aggregation tables: serializer drops UPDATE_BEFORE
+            //    and DELETE as IGNORE
+            if (schemaSupportsRetract || sinkIgnoreDelete) {
+                return requestedMode;
+            }
+            // primary-key table without retract or ignore-delete: strip UPDATE_BEFORE
+            ChangelogMode.Builder builder = ChangelogMode.newBuilder();
+            for (RowKind kind : requestedMode.getContainedKinds()) {
+                if (kind != RowKind.UPDATE_BEFORE) {
+                    builder.addContainedKind(kind);
+                }
+            }
+            return builder.build();
+        }
+
+        return ChangelogMode.insertOnly();
     }
 
     @Override
@@ -208,7 +246,8 @@ public class FlinkTableSink
 
     private FlinkSink<RowData> getFlinkSink(int[] targetColumnIndexes) {
         // Enable undo recovery for aggregation tables
-        boolean enableUndoRecovery = mergeEngineType == MergeEngineType.AGGREGATION;
+        boolean enableUndoRecovery = isAggregationTable;
+        boolean writerSupportsRetract = supportsRetract(targetColumnIndexes);
 
         FlinkSink.SinkWriterBuilder<? extends FlinkSinkWriter, RowData> flinkSinkWriterBuilder =
                 (primaryKeyIndexes.length > 0)
@@ -222,9 +261,14 @@ public class FlinkTableSink
                                 partitionKeys,
                                 lakeFormat,
                                 distributionMode,
-                                new RowDataSerializationSchema(false, sinkIgnoreDelete),
+                                new RowDataSerializationSchema(
+                                        isAggregationTable
+                                                ? SinkOperationMode.aggregation(
+                                                        sinkIgnoreDelete, writerSupportsRetract)
+                                                : SinkOperationMode.upsert(sinkIgnoreDelete)),
                                 enableUndoRecovery,
-                                producerId)
+                                producerId,
+                                writerSupportsRetract)
                         : new FlinkSink.AppendSinkWriterBuilder<>(
                                 tablePath,
                                 flussConfig,
@@ -234,7 +278,8 @@ public class FlinkTableSink
                                 partitionKeys,
                                 lakeFormat,
                                 distributionMode,
-                                new RowDataSerializationSchema(true, sinkIgnoreDelete));
+                                new RowDataSerializationSchema(
+                                        SinkOperationMode.appendOnly(sinkIgnoreDelete)));
 
         return new FlinkSink<>(flinkSinkWriterBuilder, tablePath);
     }
@@ -245,6 +290,32 @@ public class FlinkTableSink
             columns.add(tableRowType.getFieldNames().get(columnIndex));
         }
         return columns;
+    }
+
+    private boolean supportsRetract(@Nullable int[] targetColumnIndexes) {
+        if (!isAggregationTable) {
+            return false;
+        }
+        if (targetColumnIndexes == null
+                || targetColumnIndexes.length == tableRowType.getFieldCount()) {
+            return schemaSupportsRetract;
+        }
+
+        for (String column : columns(targetColumnIndexes)) {
+            if (nonRetractableColumns.contains(column)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean containsUpdateChangelog(ChangelogMode requestedMode) {
+        return requestedMode.contains(RowKind.UPDATE_BEFORE)
+                || requestedMode.contains(RowKind.UPDATE_AFTER);
+    }
+
+    private List<String> sortedNonRetractable() {
+        return nonRetractableColumns.stream().sorted().collect(Collectors.toList());
     }
 
     @Override
@@ -264,7 +335,8 @@ public class FlinkTableSink
                         numBucket,
                         bucketKeys,
                         distributionMode,
-                        producerId);
+                        producerId,
+                        nonRetractableColumns);
         sink.appliedUpdates = appliedUpdates;
         sink.deleteRow = deleteRow;
         return sink;

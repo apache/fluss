@@ -105,6 +105,16 @@ public final class AggFunction implements Serializable {
     }
 
     /**
+     * Returns whether this aggregation function supports retract (UPDATE_BEFORE) records.
+     *
+     * @return true if this function supports retract, false otherwise
+     * @see AggFunctionType#supportsRetract()
+     */
+    public boolean supportsRetract() {
+        return type.supportsRetract();
+    }
+
+    /**
      * Validates data type of this aggregation function. This method checks that the field data type
      * is valid
      *

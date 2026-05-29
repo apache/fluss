@@ -39,6 +39,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
+import static org.apache.fluss.client.write.WriteBatch.AppendResult;
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
@@ -75,14 +76,15 @@ public class CompactedLogWriteBatchTest {
                 (writeLimit - recordBatchHeaderSize(CURRENT_LOG_MAGIC_VALUE))
                         / estimatedSizeInBytes;
         for (int i = 0; i < maxRecordsPerBatch; i++) {
-            boolean appendResult =
+            AppendResult appendResult =
                     logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
-            assertThat(appendResult).isTrue();
+            assertThat(appendResult).isEqualTo(AppendResult.APPENDED);
         }
 
         // batch full.
-        boolean appendResult = logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
-        assertThat(appendResult).isFalse();
+        AppendResult appendResult =
+                logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
+        assertThat(appendResult).isEqualTo(AppendResult.BATCH_FULL);
     }
 
     @Test
@@ -90,8 +92,9 @@ public class CompactedLogWriteBatchTest {
         int bucketId = 0;
         CompactedLogWriteBatch logProducerBatch =
                 createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId), 0L);
-        boolean appendResult = logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
-        assertThat(appendResult).isTrue();
+        AppendResult appendResult =
+                logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
+        assertThat(appendResult).isEqualTo(AppendResult.APPENDED);
 
         logProducerBatch.close();
         BytesView bytesView = logProducerBatch.build();
@@ -106,8 +109,9 @@ public class CompactedLogWriteBatchTest {
         int bucketId = 0;
         CompactedLogWriteBatch logWriteBatch =
                 createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId), 0L);
-        boolean appendResult = logWriteBatch.tryAppend(createWriteRecord(), newWriteCallback());
-        assertThat(appendResult).isTrue();
+        AppendResult appendResult =
+                logWriteBatch.tryAppend(createWriteRecord(), newWriteCallback());
+        assertThat(appendResult).isEqualTo(AppendResult.APPENDED);
 
         assertThat(logWriteBatch.complete()).isTrue();
         assertThatThrownBy(logWriteBatch::complete)
@@ -121,8 +125,9 @@ public class CompactedLogWriteBatchTest {
         int bucketId = 0;
         CompactedLogWriteBatch logWriteBatch =
                 createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId), 0L);
-        boolean appendResult = logWriteBatch.tryAppend(createWriteRecord(), newWriteCallback());
-        assertThat(appendResult).isTrue();
+        AppendResult appendResult =
+                logWriteBatch.tryAppend(createWriteRecord(), newWriteCallback());
+        assertThat(appendResult).isEqualTo(AppendResult.APPENDED);
 
         assertThat(logWriteBatch.completeExceptionally(new IllegalStateException("test failed.")))
                 .isTrue();
@@ -136,14 +141,15 @@ public class CompactedLogWriteBatchTest {
         int bucketId = 0;
         CompactedLogWriteBatch logProducerBatch =
                 createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId), 0L);
-        boolean appendResult = logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
-        assertThat(appendResult).isTrue();
+        AppendResult appendResult =
+                logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
+        assertThat(appendResult).isEqualTo(AppendResult.APPENDED);
 
         logProducerBatch.close();
         assertThat(logProducerBatch.isClosed()).isTrue();
 
         appendResult = logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
-        assertThat(appendResult).isFalse();
+        assertThat(appendResult).isEqualTo(AppendResult.BATCH_FULL);
     }
 
     @Test

@@ -1334,7 +1334,11 @@ public class ReplicaManager implements ServerReconfigurable {
                 tableMetrics.totalPutKvRequests().inc();
                 LogAppendInfo appendInfo =
                         replica.putRecordsToLeader(
-                                entry.getValue(), targetColumns, mergeMode, requiredAcks);
+                                entry.getValue(),
+                                targetColumns,
+                                mergeMode,
+                                requiredAcks,
+                                apiVersion);
                 LOG.trace(
                         "Written to local kv for {}, and the cdc log beginning at offset {} and ending at offset {}",
                         tb,

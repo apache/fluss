@@ -105,4 +105,24 @@ public class RowWithOpTest {
 
         assertThat(rowWithOp1.hashCode()).isEqualTo(rowWithOp2.hashCode());
     }
+
+    // --- RowWithOp equality/hashCode with RETRACT ---
+
+    @Test
+    void testRowWithOpEqualityWithRetract() {
+        GenericRow row1 = new GenericRow(2);
+        GenericRow row2 = new GenericRow(2);
+        RowWithOp a = new RowWithOp(row1, OperationType.RETRACT);
+        RowWithOp b = new RowWithOp(row2, OperationType.RETRACT);
+        assertThat(a).isEqualTo(b);
+        assertThat(a.hashCode()).isEqualTo(b.hashCode());
+    }
+
+    @Test
+    void testRowWithOpRetractNotEqualToDelete() {
+        InternalRow row = new GenericRow(2);
+        RowWithOp retractOp = new RowWithOp(row, OperationType.RETRACT);
+        RowWithOp deleteOp = new RowWithOp(row, OperationType.DELETE);
+        assertThat(retractOp).isNotEqualTo(deleteOp);
+    }
 }

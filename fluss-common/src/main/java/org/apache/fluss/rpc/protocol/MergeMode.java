@@ -19,6 +19,9 @@ package org.apache.fluss.rpc.protocol;
 
 import org.apache.fluss.annotation.PublicEvolving;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * Merge mode for write operations on tables with merge engines.
  *
@@ -60,6 +63,8 @@ public enum MergeMode {
      */
     OVERWRITE(1);
 
+    private static final Logger LOG = LoggerFactory.getLogger(MergeMode.class);
+
     private final int value;
 
     MergeMode(int value) {
@@ -92,7 +97,8 @@ public enum MergeMode {
      * Converts an integer value to a MergeMode enum.
      *
      * @param value the integer value
-     * @return the corresponding MergeMode, or DEFAULT if the value is invalid
+     * @return the corresponding MergeMode
+     * @throws IllegalArgumentException if the value is unknown
      */
     public static MergeMode fromValue(int value) {
         switch (value) {
@@ -101,19 +107,37 @@ public enum MergeMode {
             case 1:
                 return OVERWRITE;
             default:
-                return DEFAULT;
+                throw new IllegalArgumentException("Unknown MergeMode value: " + value);
         }
     }
 
     /**
      * Converts a proto value to a MergeMode enum.
      *
-     * <p>This is an alias for {@link #fromValue(int)} for clarity when working with proto messages.
+     * <p>Unlike {@link #fromValue(int)}, this method is lenient: unknown values return {@link
+     * #DEFAULT} with a warning log, providing backward compatibility when a newer server sends an
+     * unrecognized merge mode to an older client.
      *
      * @param protoValue the proto value
-     * @return the corresponding MergeMode, or DEFAULT if the value is invalid
+     * @return the corresponding MergeMode, or {@link #DEFAULT} for unknown values
      */
+    private static volatile boolean unknownMergeModeWarned = false;
+
     public static MergeMode fromProtoValue(int protoValue) {
-        return fromValue(protoValue);
+        switch (protoValue) {
+            case 0:
+                return DEFAULT;
+            case 1:
+                return OVERWRITE;
+            default:
+                if (!unknownMergeModeWarned) {
+                    unknownMergeModeWarned = true;
+                    LOG.warn(
+                            "Unknown MergeMode proto value: {}, falling back to DEFAULT. "
+                                    + "This warning is logged only once.",
+                            protoValue);
+                }
+                return DEFAULT;
+        }
     }
 }
