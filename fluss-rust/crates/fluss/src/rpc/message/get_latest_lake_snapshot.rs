@@ -30,16 +30,18 @@ use prost::Message;
 
 #[derive(Debug)]
 pub struct GetLatestLakeSnapshotRequest {
-    pub inner_request: proto::GetLatestLakeSnapshotRequest,
+    pub inner_request: proto::GetLakeSnapshotRequest,
 }
 
 impl GetLatestLakeSnapshotRequest {
     pub fn new(table_path: &TablePath) -> Self {
-        let inner_request = proto::GetLatestLakeSnapshotRequest {
+        let inner_request = proto::GetLakeSnapshotRequest {
             table_path: PbTablePath {
                 database_name: table_path.database().to_string(),
                 table_name: table_path.table().to_string(),
             },
+            snapshot_id: None,
+            readable: None,
         };
 
         Self { inner_request }
@@ -47,9 +49,9 @@ impl GetLatestLakeSnapshotRequest {
 }
 
 impl RequestBody for GetLatestLakeSnapshotRequest {
-    type ResponseBody = proto::GetLatestLakeSnapshotResponse;
+    type ResponseBody = proto::GetLakeSnapshotResponse;
     const API_KEY: ApiKey = ApiKey::GetLatestLakeSnapshot;
 }
 
 impl_write_type!(GetLatestLakeSnapshotRequest);
-impl_read_type!(proto::GetLatestLakeSnapshotResponse);
+impl_read_type!(proto::GetLakeSnapshotResponse);

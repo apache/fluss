@@ -16,15 +16,26 @@
 // under the License.
 
 use std::io::Result;
+use std::path::Path;
 
 fn main() -> Result<()> {
     let mut config = prost_build::Config::new();
     config.bytes([
-        ".proto.PbProduceLogReqForBucket.records",
-        ".proto.PbPutKvReqForBucket.records",
-        ".proto.PbLookupReqForBucket.key",
-        ".proto.PbPrefixLookupReqForBucket.keys",
+        ".fluss.PbProduceLogReqForBucket.records",
+        ".fluss.PbPutKvReqForBucket.records",
+        ".fluss.PbLookupReqForBucket.keys",
+        ".fluss.PbPrefixLookupReqForBucket.keys",
     ]);
-    config.compile_protos(&["src/proto/fluss_api.proto"], &["src/proto"])?;
+    // Published crates vendor the proto under proto/ (scripts/vendor-proto.sh);
+    // monorepo builds read the canonical proto directly from fluss-rpc.
+    let (proto, include_dir) = if Path::new("proto/FlussApi.proto").exists() {
+        ("proto/FlussApi.proto", "proto")
+    } else {
+        (
+            "../../../fluss-rpc/src/main/proto/FlussApi.proto",
+            "../../../fluss-rpc/src/main/proto",
+        )
+    };
+    config.compile_protos(&[proto], &[include_dir])?;
     Ok(())
 }

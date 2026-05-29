@@ -1,0 +1,180 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Publish the fluss Python binding to PyPI.
+# Trigger: push tag only (e.g. v0.1.0).
+# Pre-release tags (containing '-') publish to TestPyPI; release tags publish to PyPI.
+#
+# Token auth: add secrets PYPI_API_TOKEN / TEST_PYPI_API_TOKEN for publishing.
+
+name: Release Python
+
+on:
+  push:
+    tags:
+      - "v*"  # Only version-like tags (e.g. v0.1.0, v0.1.0-rc1); avoids running on arbitrary tags
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  version-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/verify-tag-version
+
+  sdist:
+    runs-on: ubuntu-latest
+    needs: [version-check]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      # Vendor the canonical proto so the sdist builds standalone from source.
+      - name: Vendor canonical proto into the crate
+        working-directory: fluss-rust
+        run: scripts/vendor-proto.sh
+
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: fluss-rust/bindings/python
+          command: sdist
+          args: -o dist
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@v7
+        with:
+          name: wheels-sdist
+          path: fluss-rust/bindings/python/dist
+
+  wheels:
+    runs-on: ${{ matrix.os }}
+    needs: [version-check]
+    strategy:
+      matrix:
+        include:
+          - { os: windows-latest }
+          - { os: macos-15-intel, target: "x86_64-apple-darwin" }
+          - { os: macos-15, target: "aarch64-apple-darwin" }
+          - { os: ubuntu-latest, target: "x86_64" }
+          - { os: ubuntu-latest, target: "aarch64", manylinux: "manylinux_2_28" }
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install protoc (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install protoc (macOS)
+        if: runner.os == 'macOS'
+        run: brew install protobuf
+
+      - name: Install protoc (Windows)
+        if: runner.os == 'Windows'
+        run: choco install protoc -y
+        shell: pwsh
+
+      # Install protoc in manylinux container (x86_64/aarch64); script shared via YAML anchor
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: fluss-rust/bindings/python
+          target: ${{ matrix.target }}
+          command: build
+          args: --release -o dist -i python3.9
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+          before-script-linux: &protoc-install |
+            set -e
+            ARCH=$(uname -m)
+            case "$ARCH" in
+              x86_64)  ZIP=protoc-27.1-linux-x86_64.zip ;;
+              aarch64) ZIP=protoc-27.1-linux-aarch_64.zip ;;
+              *) echo "Unsupported arch $ARCH"; exit 1 ;;
+            esac
+            curl -sLO "https://github.com/protocolbuffers/protobuf/releases/download/v27.1/${ZIP}"
+            python3 -c "import zipfile; zipfile.ZipFile('${ZIP}').extractall('/tmp/protoc_install')"
+            chmod +x /tmp/protoc_install/bin/protoc
+            rm -f "${ZIP}"
+            export PATH="/tmp/protoc_install/bin:$PATH"
+            export PROTOC=/tmp/protoc_install/bin/protoc
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: fluss-rust/bindings/python
+          target: ${{ matrix.target }}
+          command: build
+          args: --release -o dist -i python3.10
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+          before-script-linux: *protoc-install
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: fluss-rust/bindings/python
+          target: ${{ matrix.target }}
+          command: build
+          args: --release -o dist -i python3.11
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+          before-script-linux: *protoc-install
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: fluss-rust/bindings/python
+          target: ${{ matrix.target }}
+          command: build
+          args: --release -o dist -i python3.12
+          manylinux: ${{ matrix.manylinux || 'auto' }}
+          before-script-linux: *protoc-install
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v7
+        with:
+          name: wheels-${{ matrix.os }}-${{ matrix.target || 'native' }}
+          path: fluss-rust/bindings/python/dist
+
+  release:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    needs: [version-check, sdist, wheels]
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: fluss-rust/bindings/python/dist
+
+      - name: Publish to TestPyPI
+        if: contains(github.ref, '-')
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+          packages-dir: fluss-rust/bindings/python/dist
+          password: ${{ secrets.TEST_PYPI_API_TOKEN }}
+
+      - name: Publish to PyPI
+        if: ${{ !contains(github.ref, '-') }}
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e
+        with:
+          skip-existing: true
+          packages-dir: fluss-rust/bindings/python/dist
+          password: ${{ secrets.PYPI_API_TOKEN }}

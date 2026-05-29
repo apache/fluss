@@ -32,6 +32,7 @@ Implement the change according to the Code Style and Quality (refer to the [Flin
 
 1. Only start working on the implementation if there is consensus on the approach (e.g. you are assigned to the ticket)
 2. If you are newer, can refer to [ide setup](/community/dev/ide-setup) to setup a Fluss dev environment.
+3. For Rust client changes (under `fluss-rust/`), see [Building the Rust client](/community/dev/building) and the [RustRover IDE setup](/community/dev/ide-setup).
 
 ### Review
 Create the pull request and work with the reviewer. 
@@ -53,7 +54,7 @@ Considerations before opening a pull request:
 
 - Fill out the pull request template to describe the changes contributed by the pull request. Please describe it such that the reviewer understands the problem and solution from the description, not only from the code. That will give reviewers the context they need to do the review.
 
-- Make sure that the change passes the automated tests, i.e., `mvn clean verify` passes.
+- Make sure that the change passes the automated tests, i.e., `mvn clean verify` passes. For Rust client changes under `fluss-rust/`, make sure `cargo build`, `cargo test`, `cargo fmt --all -- --check`, and `cargo clippy --all-targets -- -D warnings` pass (see [Building the Rust client](/community/dev/building)).
 
 - Each pull request should address only one issue, not mix up code from multiple issues.
 

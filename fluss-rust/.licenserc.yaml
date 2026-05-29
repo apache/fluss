@@ -20,16 +20,20 @@ header:
     spdx-id: Apache-2.0
     copyright-owner: Apache Software Foundation
 
+  paths:
+    - 'fluss-rust/**'
+
   paths-ignore:
+    # bare (gitignore-style) patterns match the basename at any depth
     - '.gitignore'
     - 'Cargo.lock'
     - 'LICENSE'
     - 'NOTICE'
     - 'DISCLAIMER'
-    - 'bindings/python/fluss/py.typed'
-    - '**/mix.lock'
-    - 'website/**'
+    - 'fluss-rust/bindings/python/fluss/py.typed'
+    - 'fluss-rust/**/mix.lock'
+    - 'fluss-rust/website/**'
     - '**/*.md'
-    - '**/DEPENDENCIES.*.tsv'
-    - '**/*.env'
+    - 'fluss-rust/**/DEPENDENCIES.*.tsv'
+    - 'fluss-rust/**/*.env'
   comment: on-failure

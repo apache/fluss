@@ -300,6 +300,7 @@ impl PartitionInfo {
         PbPartitionInfo {
             partition_id: self.partition_id,
             partition_spec: self.partition_spec.to_pb(),
+            remote_data_dir: None,
         }
     }
 

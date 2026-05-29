@@ -210,6 +210,28 @@ which tar
 ```
 
 
+## Rust, Python, and C++ client publishing
+
+A unified release also publishes the Rust, Python, and C++ clients (under `fluss-rust/`). As release manager, make sure the following access and CI secrets are in place.
+
+### Registry access
+
+- **crates.io** (`fluss-rs`): your account must be an owner of the crate. Verify with `cargo login <token>`, then `cargo publish -p fluss-rs --dry-run`.
+- **PyPI / TestPyPI** (`pyfluss`): confirm you are a maintainer at https://pypi.org/project/pyfluss/, and generate API tokens on both PyPI and TestPyPI.
+- **Hex.pm** (Elixir `fluss`): post-1.0 only — not published yet.
+
+### GitHub Actions secrets
+
+Publishing is automated by the `rust-release.yml` and `python-release.yml` workflows when a version tag is pushed. Configure these repository secrets:
+
+- `CARGO_REGISTRY_TOKEN` — crates.io API token
+- `PYPI_API_TOKEN` — PyPI token (final release)
+- `TEST_PYPI_API_TOKEN` — TestPyPI token (release candidates)
+
+### Toolchain for the dependency audit
+
+Regenerating the Rust dependency/license list (an ASF requirement) needs the toolchain in `fluss-rust/rust-toolchain.toml`, [cargo-deny](https://embarkstudios.github.io/cargo-deny/), and Python 3.11+ (for `fluss-rust/scripts/dependencies.py`).
+
 ## Further reading
 
 It's recommended but not mandatory to read following documents before making a release to know more details about apache release:

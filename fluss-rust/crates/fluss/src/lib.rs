@@ -147,5 +147,7 @@ pub type PartitionId = i64;
 pub type BucketId = i32;
 
 pub mod proto {
-    include!(concat!(env!("OUT_DIR"), "/proto.rs"));
+    // generated from the canonical proto; its doc comments aren't clippy-clean
+    #![allow(clippy::doc_lazy_continuation)]
+    include!(concat!(env!("OUT_DIR"), "/fluss.rs"));
 }

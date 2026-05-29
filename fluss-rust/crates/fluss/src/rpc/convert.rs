@@ -73,6 +73,7 @@ mod tests {
             host: "127.0.0.1".to_string(),
             port: 9092,
             listeners: None,
+            rack: None,
         };
         let node = from_pb_server_node(pb, ServerType::TabletServer);
         assert_eq!(node.id(), 7);
@@ -84,6 +85,7 @@ mod tests {
             host: "localhost".to_string(),
             port: 8123,
             listeners: None,
+            rack: None,
         };
         let node = from_pb_server_node(pb, ServerType::CoordinatorServer);
         assert_eq!(node.uid(), "cs-3");

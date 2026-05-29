@@ -42,7 +42,7 @@ impl LookupRequest {
                 |(bucket_id, partition_id, keys)| proto::PbLookupReqForBucket {
                     partition_id,
                     bucket_id,
-                    key: keys,
+                    keys,
                 },
             )
             .collect();
@@ -50,6 +50,9 @@ impl LookupRequest {
         let request = proto::LookupRequest {
             table_id,
             buckets_req,
+            insert_if_not_exists: None,
+            acks: None,
+            timeout_ms: None,
         };
 
         Self {

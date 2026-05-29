@@ -23,7 +23,7 @@ homepage = "https://clients.fluss.apache.org/"
 license = "Apache-2.0"
 repository = "https://github.com/apache/fluss-rust"
 rust-version = "1.85"
-version = "0.2.0"
+version = "1.0.0"
 keywords = ["fluss", "streaming-storage", "datalake"]
 
 [workspace]
@@ -31,7 +31,7 @@ resolver = "2"
 members = ["crates/fluss", "crates/fluss-test-cluster", "crates/examples", "bindings/python", "bindings/cpp", "bindings/elixir/native/fluss_nif"]
 
 [workspace.dependencies]
-fluss = { package = "fluss-rs", version = "0.2.0", path = "crates/fluss", features = ["storage-all"] }
+fluss = { package = "fluss-rs", version = "1.0.0", path = "crates/fluss", features = ["storage-all"] }
 tokio = { version = "1.44.2", features = ["full"] }
 clap = { version = "4.5.37", features = ["derive"] }
 arrow = { version = "57.0.0", features = ["ipc_compression", "ffi"] }

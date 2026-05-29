@@ -32,7 +32,9 @@ pub struct ListDatabasesRequest {
 impl ListDatabasesRequest {
     pub fn new() -> Self {
         ListDatabasesRequest {
-            inner_request: proto::ListDatabasesRequest {},
+            inner_request: proto::ListDatabasesRequest {
+                include_summary: None,
+            },
         }
     }
 }

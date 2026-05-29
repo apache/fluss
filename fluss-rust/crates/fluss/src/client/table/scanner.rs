@@ -1956,6 +1956,8 @@ impl LogFetcher {
                         projection_pushdown_enabled: projection_enabled,
                         projected_fields: projected_fields.clone(),
                         buckets_req: feq_for_buckets,
+                        filter_predicate: None,
+                        filter_schema_id: None,
                     };
 
                     let fetch_log_request = FetchLogRequest {
@@ -2306,6 +2308,7 @@ mod tests {
                     log_start_offset: None,
                     remote_log_fetch_info: None,
                     records: None,
+                    filtered_end_offset: None,
                 }],
             }],
         };
@@ -2362,6 +2365,7 @@ mod tests {
                     log_start_offset: None,
                     remote_log_fetch_info: None,
                     records: None,
+                    filtered_end_offset: None,
                 }],
             }],
         };
@@ -2699,6 +2703,7 @@ mod tests {
                             log_start_offset: Some(0),
                             remote_log_fetch_info: None,
                             records: None,
+                            filtered_end_offset: None,
                         }],
                     }],
                 };
