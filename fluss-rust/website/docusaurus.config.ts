@@ -46,7 +46,7 @@ const config: Config = {
         docs: {
           routeBasePath: '/',
           sidebarPath: './sidebars.ts',
-          editUrl: 'https://github.com/apache/fluss-rust/edit/main/website/',
+          editUrl: 'https://github.com/apache/fluss/edit/main/fluss-rust/website/',
         },
         blog: false,
         theme: {
@@ -81,7 +81,7 @@ const config: Config = {
           position: 'left',
         },
         {
-          href: 'https://github.com/apache/fluss-rust',
+          href: 'https://github.com/apache/fluss',
           position: 'right',
           className: 'header-github-link',
           'aria-label': 'GitHub repository',

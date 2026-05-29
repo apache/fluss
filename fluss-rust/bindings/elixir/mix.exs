@@ -18,7 +18,7 @@
 defmodule Fluss.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "1.0.0"
 
   def project do
     [
@@ -76,7 +76,7 @@ defmodule Fluss.MixProject do
     [
       licenses: ["Apache-2.0"],
       links: %{
-        "GitHub" => "https://github.com/apache/fluss-rust"
+        "GitHub" => "https://github.com/apache/fluss"
       }
     ]
   end

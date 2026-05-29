@@ -4,7 +4,7 @@ sidebar_position: 4
 
 # Creating a Fluss Rust Client Release
 
-This document describes in detail how to create a release of the **Fluss clients** (fluss-rust, fluss-python, fluss-cpp) from the [fluss-rust](https://github.com/apache/fluss-rust) repository. It is based on the [Creating a Fluss Release](https://fluss.apache.org/community/how-to-release/creating-a-fluss-release/) guide of the Apache Fluss project and the [release guide of Apache OpenDAL](https://nightlies.apache.org/opendal/opendal-docs-stable/community/release/); releases are source archives plus CI-published crates.io and PyPI.
+This document describes in detail how to create a release of the **Fluss clients** (fluss-rust, fluss-python, fluss-cpp) from the [fluss-rust](https://github.com/apache/fluss) repository. It is based on the [Creating a Fluss Release](https://fluss.apache.org/community/how-to-release/creating-a-fluss-release/) guide of the Apache Fluss project and the [release guide of Apache OpenDAL](https://nightlies.apache.org/opendal/opendal-docs-stable/community/release/); releases are source archives plus CI-published crates.io and PyPI.
 
 Publishing software has legal consequences. This guide complements the foundation-wide [Product Release Policy](https://www.apache.org/legal/release-policy.html) and [Release Distribution Policy](https://infra.apache.org/release-distribution.html).
 
@@ -49,7 +49,7 @@ For GitHub Actions publishing, configure the repository secret `CARGO_REGISTRY_T
 
 ### 1. Install Rust (and optional: just)
 
-The release script (`just release` or `./scripts/release.sh`) uses `git archive` and `gpg`; building or verifying the project locally requires **Rust**. Install the [Rust toolchain](https://rustup.rs/) (the version should match [rust-toolchain.toml](https://github.com/apache/fluss-rust/blob/main/rust-toolchain.toml) in the repo). The dependency list script (`scripts/dependencies.py`) requires **Python 3.11+**.
+The release script (`just release` or `./scripts/release.sh`) uses `git archive` and `gpg`; building or verifying the project locally requires **Rust**. Install the [Rust toolchain](https://rustup.rs/) (the version should match [rust-toolchain.toml](https://github.com/apache/fluss/blob/main/fluss-rust/rust-toolchain.toml) in the repo). The dependency list script (`scripts/dependencies.py`) requires **Python 3.11+**.
 
 ```bash
 rustc --version
@@ -71,7 +71,7 @@ Check open issues that might block the release. Resolve, defer to the next miles
 Use a clean clone to avoid local changes affecting the release.
 
 ```bash
-git clone https://github.com/apache/fluss-rust.git
+git clone https://github.com/apache/fluss.git
 cd fluss-rust
 ```
 
@@ -114,10 +114,10 @@ To only check licenses (no file update): `python3 scripts/dependencies.py check`
 
 ### 7. Optional: Start a [DISCUSS] thread
 
-On [Fluss Discussions](https://github.com/apache/fluss-rust/discussions) or the dev list:
+On [Fluss Discussions](https://github.com/apache/fluss/discussions) or the dev list:
 
 - **Subject:** `[DISCUSS] Release Apache Fluss clients (fluss-rust, fluss-python, fluss-cpp) $RELEASE_VERSION`
-- **Body:** Short rationale; if there is a previous release, add compare link: `https://github.com/apache/fluss-rust/compare/v${LAST_VERSION}...main`. Ask for comments.
+- **Body:** Short rationale; if there is a previous release, add compare link: `https://github.com/apache/fluss/compare/v${LAST_VERSION}...main`. Ask for comments.
 
 ### 8. Create a release branch
 
@@ -194,7 +194,7 @@ git tag -s $RC_TAG -m "${RC_TAG}"
 git push origin $RC_TAG
 ```
 
-Check CI: [Actions](https://github.com/apache/fluss-rust/actions) (Release Rust, Release Python).
+Check CI: [Actions](https://github.com/apache/fluss/actions) (Release Rust, Release Python).
 
 ### 3. Create source release artifacts
 
@@ -268,7 +268,7 @@ KEYS for signature verification:
 * https://downloads.apache.org/incubator/fluss/KEYS
 
 Git tag:
-* https://github.com/apache/fluss-rust/releases/tag/$RC_TAG
+* https://github.com/apache/fluss/releases/tag/$RC_TAG
 
 PyPI (release) / TestPyPI (RC):
 * https://pypi.org/project/pyfluss/
@@ -364,7 +364,7 @@ svn commit -m "Remove RC after release fluss-rust ${RELEASE_VERSION}"
 
 ### 5. Create GitHub Release
 
-1. Go to [Releases → New release](https://github.com/apache/fluss-rust/releases/new).
+1. Go to [Releases → New release](https://github.com/apache/fluss/releases/new).
 2. Choose tag `$RELEASE_TAG`.
 3. Set the target to the release branch `release-${RELEASE_VERSION}` (i.e., the branch/commit used to create `$RELEASE_TAG`).
 4. Click **Generate release notes**, then add: notable changes, breaking changes (if any) from component upgrade docs, **official download link** (source archive and verification), and install instructions for fluss-rust, fluss-python, fluss-cpp.
@@ -395,7 +395,7 @@ Merge the pull requests for the release blog and download page that were created
 Wait at least 24 hours after finalizing, per [ASF release policy](https://www.apache.org/legal/release-policy.html#release-announcements).
 
 - Announce on the dev mailing list that the release is complete.
-- Announce on [Fluss Discussions – Announcements](https://github.com/apache/fluss-rust/discussions) (if that category exists).
+- Announce on [Fluss Discussions – Announcements](https://github.com/apache/fluss/discussions) (if that category exists).
 - Send the release announcement to **announce@apache.org**.
 
 Use the `@apache.org` email address and **plain text** for the body; otherwise the list may reject the message.
@@ -418,7 +418,7 @@ Rust:    cargo add fluss-rs
 Python:  pip install pyfluss
 C++:     build from source (see project documentation)
 
-Release notes: https://github.com/apache/fluss-rust/releases/tag/$RELEASE_TAG
+Release notes: https://github.com/apache/fluss/releases/tag/$RELEASE_TAG
 
 Thanks to all contributors!
 

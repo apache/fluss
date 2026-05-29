@@ -42,8 +42,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://clients.fluss.apache.org/user-guide/python/installation/"
-Repository = "https://github.com/apache/fluss-rust"
+Homepage = "https://fluss.apache.org/docs/apis/python/installation/"
+Repository = "https://github.com/apache/fluss"
 
 [project.optional-dependencies]
 dev = [

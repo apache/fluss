@@ -503,6 +503,28 @@ This ensures that the **Quickstart guide** in the documentation references the c
 git push origin $TAG
 ```
 
+### 9. Publish client RC artifacts (crates.io / PyPI)
+
+The Rust, Python, and C++ clients live in `fluss-rust/` and release from this repository under the **same version and tag** — there is no separate client release.
+
+Before tagging, make sure the client versions match `${RELEASE_VERSION}`:
+
+```bash
+# Rust workspace version (also drives the python/cpp/elixir-NIF crates via version.workspace)
+fluss-rust/scripts/bump-version.sh <previous_version> ${RELEASE_VERSION}
+# The Elixir binding has its own version attribute — set @version "${RELEASE_VERSION}" in
+#   fluss-rust/bindings/elixir/mix.exs
+# Regenerate the Rust dependency/license audit (cargo-deny):
+(cd fluss-rust && python3 scripts/dependencies.py)
+```
+
+Pushing the **RC tag** (`v${RELEASE_VERSION}-rc${RC_NUM}`) triggers the client workflows:
+
+- `python-release.yml` builds the wheels + sdist and publishes them to **TestPyPI**.
+- `rust-release.yml` runs `cargo publish --dry-run` to validate the crate. The canonical proto is vendored into the crate automatically (`fluss-rust/scripts/vendor-proto.sh`), because `build.rs` reads it from the in-repo `fluss-rpc`.
+
+The final publish to **crates.io** and **PyPI** happens when the release tag is pushed (see the **Git tag** step under [Finalize the release](#finalize-the-release)). Publishing uses the CI secrets `CARGO_REGISTRY_TOKEN`, `PYPI_API_TOKEN`, and `TEST_PYPI_API_TOKEN`.
+
 -------------
 
 **Checklist to proceed to the next step**
@@ -512,6 +534,7 @@ git push origin $TAG
 - RC Docker images pushed to DockerHub ([apache/fluss](https://hub.docker.com/r/apache/fluss/tags), [apache/fluss-quickstart-flink](https://hub.docker.com/r/apache/fluss-quickstart-flink/tags))
 - RC tag pushed to the [official repository](https://github.com/apache/fluss/tags)
 - Updated `dockerVersion` in `fluss-versions.json` on `main` branch
+- Client RC artifacts published to TestPyPI, and `cargo publish --dry-run` for `fluss-rs` is green
 
 
 ## Vote on the release candidate
@@ -773,6 +796,8 @@ Create and push a new Git tag for the released version by copying the tag for th
 git tag -s "v${RELEASE_VERSION}" refs/tags/${TAG}^{} -m "Release Fluss ${RELEASE_VERSION}"
 git push origin refs/tags/v${RELEASE_VERSION}
 ```
+
+Pushing the `v${RELEASE_VERSION}` tag also triggers the client release workflows: `rust-release.yml` publishes `fluss-rs` to **crates.io**, and `python-release.yml` publishes the wheels + sdist to **PyPI**.
 
 ### 5. Publish Docker Images
 

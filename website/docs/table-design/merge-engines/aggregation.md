@@ -1166,4 +1166,4 @@ For detailed information about Exactly-Once implementation, please refer to: [FI
 - [FirstRow Merge Engine](table-design/merge-engines/first-row.md)
 - [Versioned Merge Engine](table-design/merge-engines/versioned.md)
 - [Primary Key Tables](table-design/table-types/pk-table.md)
-- [Fluss Client API](apis/java-client.md)
+- [Fluss Client API](../../apis/java/index.md)

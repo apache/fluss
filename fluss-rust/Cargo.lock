@@ -1079,7 +1079,7 @@ dependencies = [
 
 [[package]]
 name = "fluss-cpp"
-version = "0.2.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -1092,7 +1092,7 @@ dependencies = [
 
 [[package]]
 name = "fluss-examples"
-version = "0.2.0"
+version = "1.0.0"
 dependencies = [
  "clap",
  "fluss-rs",
@@ -1104,7 +1104,7 @@ dependencies = [
 
 [[package]]
 name = "fluss-rs"
-version = "0.2.0"
+version = "1.0.0"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -1145,7 +1145,7 @@ dependencies = [
 
 [[package]]
 name = "fluss-test-cluster"
-version = "0.2.0"
+version = "1.0.0"
 dependencies = [
  "clap",
  "fluss-rs",
@@ -1157,7 +1157,7 @@ dependencies = [
 
 [[package]]
 name = "fluss_nif"
-version = "0.2.0"
+version = "1.0.0"
 dependencies = [
  "bigdecimal",
  "fluss-rs",
@@ -1167,7 +1167,7 @@ dependencies = [
 
 [[package]]
 name = "fluss_python"
-version = "0.2.0"
+version = "1.0.0"
 dependencies = [
  "arrow",
  "arrow-array",

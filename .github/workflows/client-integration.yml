@@ -1,0 +1,416 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Client integration tests against a SAME-REVISION server (FIP-40 §3.2).
+# Builds the Fluss server image from this source tree ONCE, caches + saves it,
+# then fans out the Rust / Python / C++ / Elixir integration suites against that
+# fluss:dev image (build-once-fan-out, à la Temporal/PyFlink). The image build is
+# cached on server/proto hashes, so client-only PRs reuse it instead of rebuilding.
+
+name: Client Integration
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'fluss-rpc/src/main/proto/**'
+      - 'fluss-server/**'
+      - 'fluss-common/**'
+      - 'fluss-dist/**'
+      - 'docker/fluss/**'
+      - 'fluss-rust/crates/**'
+      - 'fluss-rust/bindings/**'
+      - 'fluss-rust/Cargo.toml'
+      - 'fluss-rust/Cargo.lock'
+      - '.github/workflows/client-integration.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'fluss-rpc/src/main/proto/**'
+      - 'fluss-server/**'
+      - 'fluss-common/**'
+      - 'fluss-dist/**'
+      - 'docker/fluss/**'
+      - 'fluss-rust/crates/**'
+      - 'fluss-rust/bindings/**'
+      - 'fluss-rust/Cargo.toml'
+      - 'fluss-rust/Cargo.lock'
+      - '.github/workflows/client-integration.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  # Decide which client suites to run, mirroring the per-binding scoping the
+  # standalone fluss-rust repo had: a binding suite runs only when its own
+  # binding, the core fluss-rs crate, or the server/proto changed. On non-PR
+  # events (push to main, manual) everything runs.
+  detect-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      python: ${{ steps.filter.outputs.python }}
+      cpp: ${{ steps.filter.outputs.cpp }}
+      elixir: ${{ steps.filter.outputs.elixir }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - id: filter
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            all=true; changed=""
+          else
+            all=false
+            changed=$(git diff --name-only "${{ github.event.pull_request.base.sha }}...HEAD")
+          fi
+          echo "Changed files:"; echo "$changed"
+          has() { echo "$changed" | grep -qE "$1"; }
+          protocol=false; core=false; py=false; cpp=false; ex=false
+          has '^(fluss-rpc/src/main/proto/|fluss-server/|fluss-common/|fluss-dist/|docker/fluss/)' && protocol=true || true
+          has '^(fluss-rust/crates/|fluss-rust/Cargo\.)' && core=true || true
+          has '^fluss-rust/bindings/python/' && py=true || true
+          has '^fluss-rust/bindings/cpp/' && cpp=true || true
+          has '^fluss-rust/bindings/elixir/' && ex=true || true
+          # a suite runs if: non-PR (all) OR core crate OR server/proto OR its own binding changed
+          gate() { if [ "$all" = true ] || [ "$core" = true ] || [ "$protocol" = true ] || [ "$1" = true ]; then echo true; else echo false; fi; }
+          {
+            echo "rust=$(gate false)"
+            echo "python=$(gate $py)"
+            echo "cpp=$(gate $cpp)"
+            echo "elixir=$(gate $ex)"
+          } >> "$GITHUB_OUTPUT"
+
+  # Build the server image from THIS source tree once; cache it on server/proto
+  # hashes so client-only PRs restore it instead of rebuilding. The saved image
+  # is uploaded as an artifact and loaded by every client integration job.
+  build-server-image:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.rust == 'true' || needs.detect-changes.outputs.python == 'true' || needs.detect-changes.outputs.cpp == 'true' || needs.detect-changes.outputs.elixir == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Cache server image
+        id: image-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/fluss-dev.tar
+          key: fluss-dev-image-${{ hashFiles('fluss-server/**', 'fluss-common/**', 'fluss-rpc/**', 'fluss-dist/**', 'docker/fluss/**', 'pom.xml') }}
+
+      - name: Set up JDK 17
+        if: steps.image-cache.outputs.cache-hit != 'true'
+        uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build server image (fluss:dev) from source
+        if: steps.image-cache.outputs.cache-hit != 'true'
+        run: |
+          ./mvnw -B --no-transfer-progress clean package -pl fluss-dist -am -DskipTests
+          rm -rf docker/fluss/build-target
+          mkdir -p docker/fluss/build-target
+          cp -r build-target/* docker/fluss/build-target/
+          docker build -t fluss:dev docker/fluss
+          docker save fluss:dev -o /tmp/fluss-dev.tar
+
+      - name: Upload server image
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluss-dev-image
+          path: /tmp/fluss-dev.tar
+          retention-days: 1
+
+  rust-integration:
+    needs: [detect-changes, build-server-image]
+    if: needs.detect-changes.outputs.rust == 'true'
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fluss-rust
+    env:
+      FLUSS_IMAGE: fluss
+      FLUSS_VERSION: dev
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: fluss-dev-image
+          path: /tmp
+      - name: Load server image
+        run: docker load -i /tmp/fluss-dev.tar
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: fluss-rust
+      - name: Integration tests
+        run: cargo test --features integration_tests --test test_fluss -p fluss-rs
+        env:
+          RUST_LOG: DEBUG
+          RUST_BACKTRACE: full
+
+  python-integration:
+    needs: [detect-changes, build-server-image]
+    if: needs.detect-changes.outputs.python == 'true'
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.10", "3.11", "3.12"]
+    defaults:
+      run:
+        working-directory: fluss-rust
+    env:
+      FLUSS_TEST_CLUSTER_BIN: ${{ github.workspace }}/fluss-rust/target/debug/fluss-test-cluster
+      FLUSS_IMAGE: fluss
+      FLUSS_VERSION: dev
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: fluss-dev-image
+          path: /tmp
+      - name: Load server image
+        run: docker load -i /tmp/fluss-dev.tar
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: fluss-rust
+      - name: Build fluss-test-cluster binary
+        run: cargo build -p fluss-test-cluster
+      - name: Build Python bindings
+        working-directory: fluss-rust/bindings/python
+        run: |
+          uv sync --extra dev --no-install-project
+          uv run --no-sync maturin develop --uv
+      - name: Run tests (parallel)
+        working-directory: fluss-rust/bindings/python
+        run: uv run --no-sync pytest test/ -v -n 2 --dist=loadfile
+        env:
+          RUST_LOG: DEBUG
+          RUST_BACKTRACE: full
+          FLUSS_SKIP_CLUSTER_TEARDOWN: "1"
+      - name: Dump fluss cluster container logs
+        if: always()
+        run: |
+          mkdir -p cluster-logs
+          for c in $(docker ps -a --filter "name=shared-test" --format '{{.Names}}'); do
+            docker logs "$c" > "cluster-logs/$c.log" 2>&1 || true
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cluster-logs-${{ matrix.python }}
+          path: fluss-rust/cluster-logs/
+          if-no-files-found: ignore
+          retention-days: 3
+
+  python-stubtest:
+    # Stub-drift check only needs the module importable, so it runs without the
+    # test cluster or server image.
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.python == 'true'
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fluss-rust
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: fluss-rust
+      - name: Build Python bindings
+        working-directory: fluss-rust/bindings/python
+        run: |
+          uv sync --extra dev --no-install-project
+          uv run --no-sync maturin develop --uv
+      - name: Check stub drift (stubtest)
+        working-directory: fluss-rust/bindings/python
+        run: |
+          uv run --no-sync python -m mypy.stubtest fluss \
+            --mypy-config-file pyproject.toml \
+            --allowlist stubtest-allowlist.txt
+
+  cpp-integration:
+    needs: [detect-changes, build-server-image]
+    if: needs.detect-changes.outputs.cpp == 'true'
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fluss-rust
+    env:
+      FLUSS_TEST_CLUSTER_BIN: ${{ github.workspace }}/fluss-rust/target/debug/fluss-test-cluster
+      FLUSS_IMAGE: fluss
+      FLUSS_VERSION: dev
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: fluss-dev-image
+          path: /tmp
+      - name: Load server image
+        run: docker load -i /tmp/fluss-dev.tar
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Apache Arrow C++
+        run: |
+          sudo apt-get install -y -V ca-certificates lsb-release wget
+          wget https://apache.jfrog.io/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
+          sudo apt-get install -y -V ./apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
+          sudo apt-get update
+          sudo apt-get install -y -V libarrow-dev
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: fluss-rust
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - name: Build fluss-test-cluster binary
+        run: cargo build -p fluss-test-cluster
+      - name: Build C++ bindings and tests
+        working-directory: fluss-rust/bindings/cpp
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+        run: |
+          cmake -B build \
+            -DFLUSS_ENABLE_TESTING=ON \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          cmake --build build --parallel
+          sccache --show-stats
+      - name: Run C++ integration tests (parallel)
+        working-directory: fluss-rust/bindings/cpp
+        run: cd build && ctest -j$(nproc) --output-on-failure --timeout 300
+        env:
+          RUST_LOG: DEBUG
+          RUST_BACKTRACE: full
+
+  elixir-integration:
+    needs: [detect-changes, build-server-image]
+    if: needs.detect-changes.outputs.elixir == 'true'
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fluss-rust
+    env:
+      OTP_VERSION: "28.5.0.2"
+      ELIXIR_VERSION: "1.19.5"
+      FLUSS_TEST_CLUSTER_BIN: ${{ github.workspace }}/fluss-rust/target/debug/fluss-test-cluster
+      MIX_ENV: test
+      FLUSS_IMAGE: fluss
+      FLUSS_VERSION: dev
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: fluss-dev-image
+          path: /tmp
+      - name: Load server image
+        run: docker load -i /tmp/fluss-dev.tar
+      - name: Set up BEAM
+        uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1.24.0
+        with:
+          otp-version: ${{ env.OTP_VERSION }}
+          elixir-version: ${{ env.ELIXIR_VERSION }}
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: fluss-rust
+      - name: Cache Mix deps and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            fluss-rust/bindings/elixir/deps
+            fluss-rust/bindings/elixir/_build
+          key: ${{ runner.os }}-mix-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-${{ hashFiles('fluss-rust/bindings/elixir/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-
+      - name: Build fluss-test-cluster binary
+        run: cargo build -p fluss-test-cluster
+      - name: Fetch Elixir deps
+        working-directory: fluss-rust/bindings/elixir
+        run: mix deps.get
+      - name: Check formatting
+        working-directory: fluss-rust/bindings/elixir
+        run: mix format --check-formatted
+      - name: Compile (warnings as errors)
+        working-directory: fluss-rust/bindings/elixir
+        run: mix compile --warnings-as-errors
+      - name: Credo
+        working-directory: fluss-rust/bindings/elixir
+        run: mix credo
+      - name: Cache PLT
+        uses: actions/cache@v4
+        with:
+          path: fluss-rust/bindings/elixir/priv/plts/
+          key: ${{ runner.os }}-mix-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-${{ hashFiles('fluss-rust/bindings/elixir/mix.lock') }}-plt
+          restore-keys: |
+            ${{ runner.os }}-mix-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-
+      - name: Dialyzer
+        working-directory: fluss-rust/bindings/elixir
+        run: mix dialyzer
+      - name: Run unit tests
+        working-directory: fluss-rust/bindings/elixir
+        run: mix test
+      - name: Run integration tests
+        working-directory: fluss-rust/bindings/elixir
+        run: mix test --include integration --only integration
+        env:
+          RUST_LOG: DEBUG
+          RUST_BACKTRACE: full

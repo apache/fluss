@@ -1,6 +1,6 @@
 # How to Verify a Release Candidate
 
-This document describes how to verify a release candidate (RC) of the **Fluss clients** (fluss-rust, fluss-python, fluss-cpp) from the [fluss-rust](https://github.com/apache/fluss-rust) repository. It is intended for anyone participating in the release vote (binding or non-binding) and is based on [Verifying a Fluss Release](https://fluss.apache.org/community/how-to-release/verifying-a-fluss-release/) of the Apache Fluss project, adapted for the fluss-rust source distribution and tooling (Rust, Python, C++).
+This document describes how to verify a release candidate (RC) of the **Fluss clients** (fluss-rust, fluss-python, fluss-cpp) from the [fluss-rust](https://github.com/apache/fluss) repository. It is intended for anyone participating in the release vote (binding or non-binding) and is based on [Verifying a Fluss Release](https://fluss.apache.org/community/how-to-release/verifying-a-fluss-release/) of the Apache Fluss project, adapted for the fluss-rust source distribution and tooling (Rust, Python, C++).
 
 ## Validating distributions
 
@@ -62,7 +62,7 @@ fluss-rust-0.1.0-incubating.tgz: OK
 
 ## Verifying build
 
-Extract the source release archive and verify that it builds (and optionally that tests pass). You need **Rust** (see [rust-toolchain.toml](https://github.com/apache/fluss-rust/blob/main/rust-toolchain.toml) for the expected version) and, for full builds, **protobuf** and **Python 3.9+** for bindings.
+Extract the source release archive and verify that it builds (and optionally that tests pass). You need **Rust** (see [rust-toolchain.toml](https://github.com/apache/fluss/blob/main/fluss-rust/rust-toolchain.toml) for the expected version) and, for full builds, **protobuf** and **Python 3.9+** for bindings.
 
 ```bash
 tar -xzf fluss-rust-${RELEASE_VERSION}-incubating.tgz
@@ -75,7 +75,7 @@ Build the workspace:
 cargo build --workspace --release
 ```
 
-For Python bindings, see the project [README](https://github.com/apache/fluss-rust#readme) and [Development Guide](https://github.com/apache/fluss-rust/blob/main/DEVELOPMENT.md). For C++ bindings, see `bindings/cpp/`.
+For Python bindings, see the project [README](https://github.com/apache/fluss/tree/main/fluss-rust#readme) and [Development Guide](https://github.com/apache/fluss/blob/main/fluss-rust/DEVELOPMENT.md). For C++ bindings, see `bindings/cpp/`.
 
 ## Verifying LICENSE and NOTICE
 
@@ -94,7 +94,7 @@ For any user-facing feature included in a release, we aim to ensure it is functi
 
 **Per-language verification:** For **Rust** and **C++**, build from the source release and write your own test cases to verify. For **Python**, the RC is published to **TestPyPI**; install the client from TestPyPI and write your own test cases (e.g. connect, create table, read/write) to verify. Use the README in each component as the entry point:
 
-- **Rust client:** You can depend on the RC via its git tag (e.g. in your `Cargo.toml`: `fluss-rs = { git = "https://github.com/apache/fluss-rust", tag = "v${RELEASE_VERSION}-rc${RC_NUM}" }`) and build your own test project to verify. Alternatively, build from the source release; see [Rust Installation Guide](../user-guide/rust/installation.md).
+- **Rust client:** You can depend on the RC via its git tag (e.g. in your `Cargo.toml`: `fluss-rs = { git = "https://github.com/apache/fluss", tag = "v${RELEASE_VERSION}-rc${RC_NUM}" }`) and build your own test project to verify. Alternatively, build from the source release; see [Rust Installation Guide](../user-guide/rust/installation.md).
 - **Python bindings:** See [Python Installation Guide](../user-guide/python/installation.md) for how to add the Python client (for an RC, install from **TestPyPI**: `pip install -i https://test.pypi.org/simple/ pyfluss==${RELEASE_VERSION}`); then write test cases to verify.
 - **C++ bindings:** See [C++ Installation Guide](../user-guide/cpp/installation.md) for how to build and link the C++ client; then write test cases to verify.
 

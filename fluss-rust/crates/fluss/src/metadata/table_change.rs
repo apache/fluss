@@ -66,6 +66,10 @@ impl AddColumn {
             data_type_json: self.data_type_json.clone(),
             comment: self.comment.clone(),
             column_position_type: self.position.to_i32(),
+            // aggregation columns (added server-side in #3459) aren't modeled by the
+            // client AddColumn API yet; a plain ADD COLUMN carries no aggregation.
+            agg_function_type: None,
+            agg_function_params: Vec::new(),
         }
     }
 

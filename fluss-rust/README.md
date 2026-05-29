@@ -59,7 +59,7 @@ Key concepts:
 | **Data Types**  | Int, BigInt, String, Float, Double, Boolean, Bytes, Decimal, Date, Time, Timestamp, TimestampLTZ, Char, Binary |
 | **Config**      | Batch sizing, buffering, retries, compression, timeouts, prefetch, concurrency |
 | **Storage**     | Memory, Filesystem, S3, OSS (via [OpenDAL](https://opendal.apache.org/)) |
-| **Observability** | Connection, writer, and scanner [metrics](https://clients.fluss.apache.org/docs/user-guide/rust/metrics/) via the [`metrics`](https://docs.rs/metrics) facade (Prometheus, StatsD, etc.) |
+| **Observability** | Connection, writer, and scanner [metrics](https://fluss.apache.org/docs/apis/rust/metrics/) via the [`metrics`](https://docs.rs/metrics) facade (Prometheus, StatsD, etc.) |
 | **WASM**        | Compiles for `wasm32` target                                             |
 
 ### Language Bindings
@@ -271,7 +271,7 @@ Configuration can be set programmatically or via CLI flags (using [`clap`](https
 
 ## Documentation
 
-- **[User Guide](https://clients.fluss.apache.org/)** — Full documentation for Rust, Python, C++, and Elixir clients
+- **[User Guide](https://fluss.apache.org/docs/apis/)** — Full documentation for Rust, Python, C++, and Elixir clients
 - **[API Docs (docs.rs)](https://docs.rs/fluss-rs/)** — Rust crate API reference
 - **[Development Guide](DEVELOPMENT.md)** — Build, test, and contribute
 - **[Release Guide](website/docs/release/create-release.md)** — How to create an official release

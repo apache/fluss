@@ -40,6 +40,7 @@ impl CreatePartitionRequest {
             inner_request: proto::CreatePartitionRequest {
                 table_path: to_table_path(table_path),
                 partition_spec: partition_spec.to_pb(),
+                // canonical proto field is misnamed; it carries the "ignore if exists" flag
                 ignore_if_not_exists: ignore_if_exists,
             },
         }

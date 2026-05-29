@@ -1,6 +1,6 @@
 # Generate Release Note
 
-Use GitHub's **Generate release notes** to produce a draft from merged PRs between tags. Categories (Added, Fixed, Docs, etc.) are configured in [.github/release.yml](https://github.com/apache/fluss-rust/blob/main/.github/release.yml).
+Use GitHub's **Generate release notes** to produce a draft from merged PRs between tags. Categories (Added, Fixed, Docs, etc.) are configured in [.github/release.yml](https://github.com/apache/fluss/blob/main/.github/release.yml).
 
 1. Go to [Creating a Fluss Client Release](create-release.md).
 2. In **Choose a tag**, pick the release tag (e.g. `v0.1.0`).

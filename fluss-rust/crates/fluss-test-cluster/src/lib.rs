@@ -176,8 +176,9 @@ impl FlussTestingClusterBuilder {
             sasl_users: Vec::new(),
             coordinator_host_port: 9123,
             plain_client_port: None,
-            image: FLUSS_IMAGE.to_string(),
-            image_tag: FLUSS_VERSION.to_string(),
+            // runtime env overrides the compile-time default (server-compat CI lane)
+            image: std::env::var("FLUSS_IMAGE").unwrap_or_else(|_| FLUSS_IMAGE.to_string()),
+            image_tag: std::env::var("FLUSS_VERSION").unwrap_or_else(|_| FLUSS_VERSION.to_string()),
         }
     }
 

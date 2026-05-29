@@ -147,7 +147,9 @@ pub type PartitionId = i64;
 pub type BucketId = i32;
 
 pub(crate) mod proto {
-    // Generated; not every 1.x message is wired up to a caller yet.
+    // Generated from the canonical proto; not every 1.x message is wired up to a
+    // caller yet, and the generated doc comments aren't clippy-clean.
     #![allow(dead_code)]
-    include!(concat!(env!("OUT_DIR"), "/proto.rs"));
+    #![allow(clippy::doc_lazy_continuation)]
+    include!(concat!(env!("OUT_DIR"), "/fluss.rs"));
 }

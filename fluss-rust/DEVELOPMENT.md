@@ -22,7 +22,7 @@ We recommend [RustRover](https://www.jetbrains.com/rust/) IDE to work with fluss
 
 1. On your terminal, clone fluss-rust project from GitHub
    ```bash
-   git clone https://github.com/apache/fluss-rust.git
+   git clone https://github.com/apache/fluss.git
    ```
 1. Open RustRover, on `Projects` tab, click `Open` and navigate to the root directory of fluss-rust
 1. Click `Open`

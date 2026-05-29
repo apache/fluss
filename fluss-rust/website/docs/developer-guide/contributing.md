@@ -4,7 +4,7 @@ Welcome to the development guide for `fluss-rust`! This project builds the Fluss
 
 ## Prerequisites
 
-- Rust 1.85+ (see [rust-toolchain.toml](https://github.com/apache/fluss-rust/blob/main/rust-toolchain.toml))
+- Rust 1.85+ (see [rust-toolchain.toml](https://github.com/apache/fluss/blob/main/fluss-rust/rust-toolchain.toml))
 - Protobuf compiler (`protoc`)
 
 Install using your preferred package/version manager:
@@ -29,7 +29,7 @@ We recommend [RustRover](https://www.jetbrains.com/rust/) IDE.
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/apache/fluss-rust.git
+   git clone https://github.com/apache/fluss.git
    ```
 2. Open RustRover, go to the `Projects` tab, click `Open`, and navigate to the root directory.
 3. Click `Open`.

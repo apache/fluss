@@ -19,27 +19,28 @@ use crate::proto;
 use crate::proto::PbTablePath;
 use crate::rpc::api_key::ApiKey;
 use crate::rpc::frame::WriteError;
-use crate::rpc::message::{ReadType, RequestBody, WriteType};
+use crate::rpc::message::{RequestBody, WriteType};
 
 use crate::metadata::TablePath;
-use crate::rpc::frame::ReadError;
 
-use crate::{impl_read_type, impl_write_type};
-use bytes::{Buf, BufMut};
+use crate::impl_write_type;
+use bytes::BufMut;
 use prost::Message;
 
 #[derive(Debug)]
 pub struct GetLatestLakeSnapshotRequest {
-    pub(crate) inner_request: proto::GetLatestLakeSnapshotRequest,
+    pub(crate) inner_request: proto::GetLakeSnapshotRequest,
 }
 
 impl GetLatestLakeSnapshotRequest {
     pub fn new(table_path: &TablePath) -> Self {
-        let inner_request = proto::GetLatestLakeSnapshotRequest {
+        let inner_request = proto::GetLakeSnapshotRequest {
             table_path: PbTablePath {
                 database_name: table_path.database().to_string(),
                 table_name: table_path.table().to_string(),
             },
+            snapshot_id: None,
+            readable: None,
         };
 
         Self { inner_request }
@@ -47,9 +48,8 @@ impl GetLatestLakeSnapshotRequest {
 }
 
 impl RequestBody for GetLatestLakeSnapshotRequest {
-    type ResponseBody = proto::GetLatestLakeSnapshotResponse;
+    type ResponseBody = proto::GetLakeSnapshotResponse;
     const API_KEY: ApiKey = ApiKey::GetLakeSnapshot;
 }
 
 impl_write_type!(GetLatestLakeSnapshotRequest);
-impl_read_type!(proto::GetLatestLakeSnapshotResponse);
