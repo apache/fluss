@@ -1627,6 +1627,13 @@ public class ConfigOptions {
                     .withDescription(
                             "If true, compaction will be triggered automatically when tiering service writes to the datalake. It is disabled by default.");
 
+    public static final ConfigOption<Integer> TABLE_DATALAKE_AUTO_COMPACTION_MIN_INPUT_FILES =
+            key("table.datalake.auto-compaction.min-input-files")
+                    .intType()
+                    .defaultValue(3)
+                    .withDescription(
+                            "The minimum number of small files in a bucket required to trigger automatic compaction.");
+
     public static final ConfigOption<Boolean> TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT =
             key("table.datalake.auto-expire-snapshot")
                     .booleanType()

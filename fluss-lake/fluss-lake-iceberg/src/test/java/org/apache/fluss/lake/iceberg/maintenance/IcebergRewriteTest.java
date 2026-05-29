@@ -55,6 +55,7 @@ import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 import static org.apache.fluss.utils.Preconditions.checkState;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Unit test to verify compaction via {@link IcebergRewriteDataFiles}. */
 class IcebergRewriteTest {
@@ -157,6 +158,44 @@ class IcebergRewriteTest {
         table.refresh();
         filesAfterBucket1 = countFilesForBucket(table, 1);
         assertThat(filesAfterBucket1).isEqualTo(1);
+    }
+
+    @Test
+    void testMinInputFilesIsConfigurable() throws Exception {
+        TablePath tablePath = TablePath.of("iceberg", "min_input_files_table");
+        createTable(tablePath);
+        Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
+
+        // Seed only 2 tiny files — below the default threshold of 3.
+        appendTinyFilesWithRowsAndBucket(icebergTable, 2, 3, 6000, 0);
+        icebergTable.refresh();
+        assertThat(countDataFiles(icebergTable)).isEqualTo(2);
+
+        // Default minInputFiles (3) should skip rewrite.
+        assertThat(createIcebergRewriteDataFiles(icebergTable, 0).execute()).isNull();
+
+        // Lowering minInputFiles to 2 should now trigger a rewrite.
+        RewriteDataFileResult result =
+                createIcebergRewriteDataFiles(icebergTable, 0).minInputFiles(2).execute();
+        assertThat(result).isNotNull();
+        assertThat(result.deletedDataFiles()).hasSize(2);
+        assertThat(result.addedDataFiles()).hasSize(1);
+
+        commitRewrite(icebergTable, result);
+        icebergTable.refresh();
+        assertThat(countDataFiles(icebergTable)).isEqualTo(1);
+    }
+
+    @Test
+    void testMinInputFilesRejectsInvalidValue() {
+        TablePath tablePath = TablePath.of("iceberg", "min_input_files_validation");
+        createTable(tablePath);
+        Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
+        IcebergRewriteDataFiles rewriter = createIcebergRewriteDataFiles(icebergTable, 0);
+
+        assertThatThrownBy(() -> rewriter.minInputFiles(0))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("minInputFiles must be >= 1");
     }
 
     private IcebergRewriteDataFiles createIcebergRewriteDataFiles(Table table, int bucket) {

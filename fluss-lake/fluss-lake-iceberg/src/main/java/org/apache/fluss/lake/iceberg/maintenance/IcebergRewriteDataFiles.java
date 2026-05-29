@@ -52,6 +52,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toFilterExpression;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
@@ -62,14 +63,12 @@ public class IcebergRewriteDataFiles {
 
     private static final Logger LOG = LoggerFactory.getLogger(IcebergRewriteDataFiles.class);
 
-    // TODO: make compaction strategy configurable
-    private static final int MIN_FILES_TO_COMPACT = 3;
-
     private final Table table;
     private final String partition;
     private final TableBucket bucket;
     private final Expression filter;
     private long targetSizeInBytes = 128 * 1024 * 1024; // 128MB default
+    private int minInputFiles;
 
     public IcebergRewriteDataFiles(Table table, @Nullable String partition, TableBucket bucket) {
         this.table = table;
@@ -80,6 +79,12 @@ public class IcebergRewriteDataFiles {
 
     public IcebergRewriteDataFiles targetSizeInBytes(long targetSize) {
         this.targetSizeInBytes = targetSize;
+        return this;
+    }
+
+    public IcebergRewriteDataFiles minInputFiles(int minInputFiles) {
+        checkArgument(minInputFiles >= 1, "minInputFiles must be >= 1, but was %s", minInputFiles);
+        this.minInputFiles = minInputFiles;
         return this;
     }
 
@@ -95,11 +100,11 @@ public class IcebergRewriteDataFiles {
             tasks.forEach(fileScanTasks::add);
         }
 
-        // the files < targetSizeInBytes is less than MIN_FILES_TO_COMPACT, don't compact
+        // if the number of files < targetSizeInBytes is less than minInputFiles, don't compact
         if (fileScanTasks.stream()
                         .filter(fileScanTask -> fileScanTask.length() < targetSizeInBytes)
                         .count()
-                < MIN_FILES_TO_COMPACT) {
+                < minInputFiles) {
             // return empty file group
             return Collections.emptyList();
         }

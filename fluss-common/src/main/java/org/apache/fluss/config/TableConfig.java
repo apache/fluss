@@ -113,6 +113,13 @@ public class TableConfig {
         return config.get(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION);
     }
 
+    /**
+     * Gets the minimum number of small files per bucket required to trigger automatic compaction.
+     */
+    public int getDataLakeAutoCompactionMinInputFiles() {
+        return config.get(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION_MIN_INPUT_FILES);
+    }
+
     /** Whether auto expire snapshot is enabled. */
     public boolean isDataLakeAutoExpireSnapshot() {
         return config.get(ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT);

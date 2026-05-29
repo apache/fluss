@@ -166,7 +166,12 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
                                                         table,
                                                         writerInitContext.partition(),
                                                         writerInitContext.tableBucket())
-                                                .targetSizeInBytes(compactionTargetSize(table));
+                                                .targetSizeInBytes(compactionTargetSize(table))
+                                                .minInputFiles(
+                                                        writerInitContext
+                                                                .tableInfo()
+                                                                .getTableConfig()
+                                                                .getDataLakeAutoCompactionMinInputFiles());
                                 return rewriter.execute();
                             } catch (Exception e) {
                                 LOG.info("Fail to compact iceberg data files.", e);
