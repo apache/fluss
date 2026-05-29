@@ -732,6 +732,8 @@ public final class RecordAccumulator {
             }
 
             final WriteBatch batch;
+            List<WriteBatch> staleBatches = null;
+            long oldStaleTableId = -1L;
             synchronized (deque) {
                 WriteBatch first = deque.peekFirst();
                 if (first == null) {
@@ -739,72 +741,94 @@ public final class RecordAccumulator {
                 }
 
                 if (tableBucket.getTableId() != first.tableId()) {
-                    LOG.warn(
-                            "Table {} has been dropped and re-created with a new table ID. Old ID: {}, New ID: {}. "
-                                    + "Aborting pending batches for the old table instance.",
-                            physicalTablePath,
-                            first.tableId(),
-                            tableBucket.getTableId());
-                    TableNotExistException reason =
-                            new TableNotExistException(
-                                    String.format(
-                                            "Table '%s' has been dropped and re-created with a new table ID (old: %d, new: %d). "
-                                                    + "Further writes to the old table instance cannot proceed. "
-                                                    + "Please recreate the writer with the new table metadata.",
-                                            physicalTablePath,
-                                            first.tableId(),
-                                            tableBucket.getTableId()),
-                                    null,
-                                    true);
-                    abortBatch(reason, deque.pollFirst());
-                    continue;
-                }
-
-                // TODO retry back off check.
-
-                if (size + first.estimatedSizeInBytes() > maxSize && !ready.isEmpty()) {
-                    // there is a rare case that a single batch size is larger than the request size
-                    // due to compression; in this case we will still eventually send this batch in
-                    // a single request.
-                    break;
+                    // Table has been dropped and re-created with a new table id. Drain ALL
+                    // consecutive head batches that belong to the old table instance in one
+                    // pass under the lock, then abort them outside the lock with a single
+                    // aggregated WARN line.
+                    oldStaleTableId = first.tableId();
+                    staleBatches = new ArrayList<>();
+                    while (first != null
+                            && first.tableId() == oldStaleTableId
+                            && first.tableId() != tableBucket.getTableId()) {
+                        staleBatches.add(deque.pollFirst());
+                        first = deque.peekFirst();
+                    }
+                    batch = null;
                 } else {
-                    if (shouldStopDrainBatchesForBucket(first, tableBucket)) {
+                    // TODO retry back off check.
+
+                    if (size + first.estimatedSizeInBytes() > maxSize && !ready.isEmpty()) {
+                        // there is a rare case that a single batch size is larger than the
+                        // request size due to compression; in this case we will still
+                        // eventually send this batch in a single request.
+                        break;
+                    } else if (shouldStopDrainBatchesForBucket(first, tableBucket)) {
                         // Buckets are independent — skip this one, keep draining others.
                         continue;
                     }
-                }
 
-                batch = deque.pollFirst();
-                long writerId =
-                        idempotenceManager.idempotenceEnabled()
-                                ? idempotenceManager.writerId()
-                                : NO_WRITER_ID;
-                if (writerId != NO_WRITER_ID && !batch.hasBatchSequence()) {
-                    // If writer id of the bucket do not match the latest one of writer,
-                    // we update it and reset the batch sequence. This should be only done when all
-                    // its in-flight batches have completed. This is guarantee in
-                    // `shouldStopDrainBatchesForBucket`.
-                    idempotenceManager.maybeUpdateWriterId(tableBucket);
+                    batch = deque.pollFirst();
+                    long writerId =
+                            idempotenceManager.idempotenceEnabled()
+                                    ? idempotenceManager.writerId()
+                                    : NO_WRITER_ID;
+                    if (writerId != NO_WRITER_ID && !batch.hasBatchSequence()) {
+                        // If writer id of the bucket do not match the latest one of writer,
+                        // we update it and reset the batch sequence. This should be only done when
+                        // all
+                        // its in-flight batches have completed. This is guarantee in
+                        // `shouldStopDrainBatchesForBucket`.
+                        idempotenceManager.maybeUpdateWriterId(tableBucket);
 
-                    // If the batch already has an assigned batch sequence, then we should not
-                    // change writer id and batch sequence, since this may introduce
-                    // duplicates. In particular, the previous attempt may actually have been
-                    // accepted, and if we change writer id and sequence here, this attempt
-                    // will also be accepted, causing a duplicate.
-                    //
-                    // Additionally, we update the next batch sequence bound for the table bucket,
-                    // and also have the writerStateManager track the batch to ensure
-                    // that sequence ordering is maintained even if we receive out of order
-                    // responses.
-                    batch.setWriterState(writerId, idempotenceManager.nextSequence(tableBucket));
-                    idempotenceManager.incrementBatchSequence(tableBucket);
-                    LOG.debug(
-                            "Assigner writerId {} to batch with batch sequence {} being sent to table bucket {}",
-                            writerId,
-                            batch.batchSequence(),
-                            tableBucket);
-                    idempotenceManager.addInFlightBatch(batch, tableBucket);
+                        // If the batch already has an assigned batch sequence, then we should not
+                        // change writer id and batch sequence, since this may introduce
+                        // duplicates. In particular, the previous attempt may actually have been
+                        // accepted, and if we change writer id and sequence here, this attempt
+                        // will also be accepted, causing a duplicate.
+                        //
+                        // Additionally, we update the next batch sequence bound for the table
+                        // bucket,
+                        // and also have the writerStateManager track the batch to ensure
+                        // that sequence ordering is maintained even if we receive out of order
+                        // responses.
+                        batch.setWriterState(
+                                writerId, idempotenceManager.nextSequence(tableBucket));
+                        idempotenceManager.incrementBatchSequence(tableBucket);
+                        LOG.debug(
+                                "Assigner writerId {} to batch with batch sequence {} being sent to table bucket {}",
+                                writerId,
+                                batch.batchSequence(),
+                                tableBucket);
+                        idempotenceManager.addInFlightBatch(batch, tableBucket);
+                    }
                 }
+            }
+
+            // Abort stale batches *outside* the deque lock so user callbacks (alien methods)
+            // and memory deallocation never run while holding it. Aggregate to a single WARN.
+            if (staleBatches != null) {
+                LOG.warn(
+                        "Table {} has been dropped and re-created with a new table ID. "
+                                + "Old ID: {}, New ID: {}. Aborting {} pending batches for the old table instance.",
+                        physicalTablePath,
+                        oldStaleTableId,
+                        tableBucket.getTableId(),
+                        staleBatches.size());
+                TableNotExistException reason =
+                        new TableNotExistException(
+                                String.format(
+                                        "Table '%s' has been dropped and re-created with a new table ID (old: %d, new: %d). "
+                                                + "Further writes to the old table instance cannot proceed. "
+                                                + "Please recreate the writer with the new table metadata.",
+                                        physicalTablePath,
+                                        oldStaleTableId,
+                                        tableBucket.getTableId()),
+                                null,
+                                true);
+                for (WriteBatch staleBatch : staleBatches) {
+                    abortBatch(reason, staleBatch);
+                }
+                continue;
             }
 
             // the rest of the work by processing outside the lock close() is particularly expensive
