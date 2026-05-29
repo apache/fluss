@@ -131,6 +131,15 @@ abstract class BinlogVirtualTableITCase {
 
     // init table environment from savepointPath
     private StreamTableEnvironment initTableEnvironment(@Nullable String savepointPath) {
+        return initTableEnvironment(savepointPath, EnvironmentSettings.inStreamingMode());
+    }
+
+    private StreamTableEnvironment initBatchTableEnvironment() {
+        return initTableEnvironment(null, EnvironmentSettings.inBatchMode());
+    }
+
+    private StreamTableEnvironment initTableEnvironment(
+            @Nullable String savepointPath, EnvironmentSettings environmentSettings) {
         org.apache.flink.configuration.Configuration conf =
                 new org.apache.flink.configuration.Configuration();
         if (savepointPath != null) {
@@ -140,8 +149,7 @@ abstract class BinlogVirtualTableITCase {
                 StreamExecutionEnvironment.getExecutionEnvironment(conf);
         execEnv.setParallelism(1);
         execEnv.enableCheckpointing(1000);
-        StreamTableEnvironment tEnv =
-                StreamTableEnvironment.create(execEnv, EnvironmentSettings.inStreamingMode());
+        StreamTableEnvironment tEnv = StreamTableEnvironment.create(execEnv, environmentSettings);
         String bootstrapServers = String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
         // crate catalog using sql
         tEnv.executeSql(
@@ -225,6 +233,22 @@ abstract class BinlogVirtualTableITCase {
         // $binlog should fail for log tables
         assertThatThrownBy(() -> tEnv.executeSql("DESCRIBE log_table$binlog").collect())
                 .hasMessageContaining("only supported for primary key tables");
+    }
+
+    @Test
+    public void testBatchReadBinlogTableFailsFast() throws Exception {
+        tEnv.executeSql(
+                "CREATE TABLE batch_binlog_test ("
+                        + "  id INT NOT NULL,"
+                        + "  name STRING,"
+                        + "  PRIMARY KEY (id) NOT ENFORCED"
+                        + ") WITH ('bucket.num' = '1')");
+
+        tEnv = initBatchTableEnvironment();
+
+        assertThatThrownBy(() -> tEnv.explainSql("SELECT * FROM batch_binlog_test$binlog"))
+                .hasRootCauseInstanceOf(UnsupportedOperationException.class)
+                .hasRootCauseMessage("$binlog virtual tables only support streaming mode.");
     }
 
     @Test
