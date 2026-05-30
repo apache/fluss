@@ -506,10 +506,7 @@ class IcebergTieringTest {
         lakeTieringConfig.setString(
                 ConfigOptions.LAKE_ICEBERG_EXPIRE_SNAPSHOT_MIN_INTERVAL_MS.key(), "0ms");
 
-        // Use a ManualClock well past epoch so the time gate is always satisfied
         ManualClock manualClock = new ManualClock(System.currentTimeMillis());
-
-        // Write 9 commits using a shared committer with the ManualClock
         CommitterInitContext initContext =
                 buildCommitterInitContext(tablePath, tableInfo, lakeTieringConfig);
         try (IcebergLakeCommitter committer =
@@ -546,8 +543,7 @@ class IcebergTieringTest {
 
     /**
      * Verifies that the time-based throttle gate blocks expiration until enough time has elapsed,
-     * and that expiration eventually fires once the time gate is satisfied. Uses {@link
-     * ManualClock} for deterministic time control — no {@link Thread#sleep} needed.
+     * and that expiration eventually fires once the time gate is satisfied.
      */
     @Test
     void testSnapshotExpirationThrottlingTimeGate() throws Exception {
@@ -582,7 +578,6 @@ class IcebergTieringTest {
         lakeTieringConfig.setString(
                 ConfigOptions.LAKE_ICEBERG_EXPIRE_SNAPSHOT_MIN_INTERVAL_MS.key(), "10min");
 
-        // ManualClock at t=0 so the 10-minute time gate is not yet satisfied on first commits
         ManualClock manualClock = new ManualClock(0);
 
         CommitterInitContext initContext =
