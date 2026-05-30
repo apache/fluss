@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.iceberg.tiering;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
@@ -24,6 +25,8 @@ import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.clock.SystemClock;
 
 import org.apache.iceberg.AppendFiles;
 import org.apache.iceberg.CatalogUtil;
@@ -65,11 +68,25 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
     private final Catalog icebergCatalog;
     private final Table icebergTable;
     private final boolean isAutoSnapshotExpiration;
+    private final long minIntervalCommits;
+    private final long minIntervalMs;
+    private final Clock clock;
+    private long commitsSinceLastExpire = 0;
+    private long lastExpireTimestampMs = 0;
     private static final ThreadLocal<Long> currentCommitSnapshotId = new ThreadLocal<>();
 
     public IcebergLakeCommitter(
             IcebergCatalogProvider icebergCatalogProvider,
             CommitterInitContext committerInitContext)
+            throws IOException {
+        this(icebergCatalogProvider, committerInitContext, SystemClock.getInstance());
+    }
+
+    @VisibleForTesting
+    IcebergLakeCommitter(
+            IcebergCatalogProvider icebergCatalogProvider,
+            CommitterInitContext committerInitContext,
+            Clock clock)
             throws IOException {
         this.icebergCatalog = icebergCatalogProvider.get();
         this.icebergTable = getTable(committerInitContext.tablePath());
@@ -78,6 +95,16 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
                         || committerInitContext
                                 .lakeTieringConfig()
                                 .get(ConfigOptions.LAKE_TIERING_AUTO_EXPIRE_SNAPSHOT);
+        this.minIntervalCommits =
+                committerInitContext
+                        .lakeTieringConfig()
+                        .get(ConfigOptions.LAKE_ICEBERG_EXPIRE_SNAPSHOT_MIN_INTERVAL_COMMITS);
+        this.minIntervalMs =
+                committerInitContext
+                        .lakeTieringConfig()
+                        .get(ConfigOptions.LAKE_ICEBERG_EXPIRE_SNAPSHOT_MIN_INTERVAL_MS)
+                        .toMillis();
+        this.clock = clock;
         // register iceberg listener
         Listeners.register(new IcebergSnapshotCreateListener(), CreateSnapshotEvent.class);
     }
@@ -153,9 +180,14 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
                 }
             }
 
-            // Expire old snapshots if auto-expire-snapshot is enabled
+            // Expire old snapshots if auto-expire-snapshot is enabled, subject to throttle gates
             if (isAutoSnapshotExpiration) {
-                expireSnapshots();
+                commitsSinceLastExpire++;
+                if (shouldExpireSnapshots()) {
+                    expireSnapshots();
+                    commitsSinceLastExpire = 0;
+                    lastExpireTimestampMs = clock.milliseconds();
+                }
             }
 
             // Iceberg does not provide cumulative table stats API yet; leave stats as -1 (unknown).
@@ -283,6 +315,23 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
         } catch (Exception e) {
             throw new IOException("Failed to close IcebergLakeCommitter.", e);
         }
+    }
+
+    /**
+     * Returns true when both throttle gates are satisfied (AND logic):
+     *
+     * <ul>
+     *   <li>At least {@code minIntervalCommits} commits have occurred since the last expiration.
+     *   <li>At least {@code minIntervalMs} milliseconds have elapsed since the last expiration.
+     * </ul>
+     *
+     * <p>On the very first call {@code lastExpireTimestampMs} is 0, so the time gate is trivially
+     * satisfied and expiration fires as soon as the commit-count threshold is reached.
+     */
+    private boolean shouldExpireSnapshots() {
+        boolean countThresholdMet = commitsSinceLastExpire >= minIntervalCommits;
+        boolean timeThresholdMet = (clock.milliseconds() - lastExpireTimestampMs) >= minIntervalMs;
+        return countThresholdMet && timeThresholdMet;
     }
 
     /**
