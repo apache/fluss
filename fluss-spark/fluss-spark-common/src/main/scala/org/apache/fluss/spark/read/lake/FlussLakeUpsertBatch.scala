@@ -25,6 +25,7 @@ import org.apache.fluss.lake.source.LakeSplit
 import org.apache.fluss.metadata.{ResolvedPartitionSpec, TableBucket, TableInfo, TablePath}
 import org.apache.fluss.predicate.{Predicate => FlussPredicate}
 import org.apache.fluss.spark.read._
+import org.apache.fluss.spark.utils.SparkPartitionPredicate
 import org.apache.fluss.utils.ExceptionUtils
 
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReaderFactory}
@@ -43,6 +44,7 @@ class FlussLakeUpsertBatch(
     tableInfo: TableInfo,
     readSchema: StructType,
     pushedPredicate: Option[FlussPredicate],
+    partitionPredicate: Option[FlussPredicate],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussLakeBatch(tablePath, tableInfo, readSchema, options, flussConfig) {
@@ -141,18 +143,24 @@ class FlussLakeUpsertBatch(
     val tableId = tableInfo.getTableId
     val buckets = (0 until tableInfo.getNumBuckets).toSeq
 
+    // Filter Fluss-known partitions using the partition predicate to skip non-matching ones
+    val filteredPartitionInfos = SparkPartitionPredicate.filterPartitions(
+      tableInfo,
+      partitionInfos.asScala.toSeq,
+      partitionPredicate)
+
     val flussPartitionIdByName = mutable.LinkedHashMap.empty[String, Long]
-    partitionInfos.asScala.foreach {
+    filteredPartitionInfos.foreach {
       pi => flussPartitionIdByName(pi.getPartitionName) = pi.getPartitionId
     }
 
     val lakeSplitsByPartition = groupLakeSplitsByPartition(lakeSplits)
 
     val lakePartitions = lakeSplitsByPartition.flatMap {
-      case (partitionName, splitsByBucket) =>
+      case (partitionName, (partitionValues, splitsByBucket)) =>
         flussPartitionIdByName.remove(partitionName) match {
           case Some(partitionId) =>
-            // Partition in both lake and Fluss
+            // Partition in both lake and Fluss (already passed the predicate filter above)
             val stoppingOffsets = getBucketOffsets(
               stoppingOffsetsInitializer,
               partitionName,
@@ -173,13 +181,21 @@ class FlussLakeUpsertBatch(
             }
 
           case None =>
-            // Partition only in lake (expired in Fluss)
-            buckets.flatMap {
-              bucketId =>
-                val tableBucket = new TableBucket(tableId, -1, bucketId)
-                splitsByBucket.getOrElse(bucketId, Seq.empty).map {
-                  lakeSplit => FlussLakeInputPartition(tableBucket, lakeSplit)
-                }
+            // Partition only in lake (expired in Fluss). Apply the partition predicate directly
+            // on the resolved partition values to avoid round-tripping through partition names.
+            if (
+              SparkPartitionPredicate
+                .matchesPartition(tableInfo, partitionValues, partitionPredicate)
+            ) {
+              buckets.flatMap {
+                bucketId =>
+                  val tableBucket = new TableBucket(tableId, -1, bucketId)
+                  splitsByBucket.getOrElse(bucketId, Seq.empty).map {
+                    lakeSplit => FlussLakeInputPartition(tableBucket, lakeSplit)
+                  }
+              }
+            } else {
+              Seq.empty
             }
         }
     }
@@ -216,18 +232,25 @@ class FlussLakeUpsertBatch(
     (lakePartitions ++ flussOnlyPartitions).toArray
   }
 
+  /**
+   * Group lake splits by partition. Each entry stores the resolved partition values along with
+   * splits keyed by bucket id, so callers can both look up Fluss partitions by name and evaluate
+   * the partition predicate directly on the values without re-parsing the joined name.
+   */
   private def groupLakeSplitsByPartition(
-      lakeSplits: Seq[LakeSplit]): Map[String, mutable.Map[Int, Seq[LakeSplit]]] = {
-    val grouped = mutable.LinkedHashMap.empty[String, mutable.Map[Int, Seq[LakeSplit]]]
+      lakeSplits: Seq[LakeSplit]): Map[String, (Seq[String], mutable.Map[Int, Seq[LakeSplit]])] = {
+    val grouped =
+      mutable.LinkedHashMap.empty[String, (Seq[String], mutable.Map[Int, Seq[LakeSplit]])]
     lakeSplits.foreach {
       split =>
-        val partitionName = if (split.partition() == null || split.partition().isEmpty) {
-          ""
-        } else {
-          split.partition().asScala.mkString(ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR)
-        }
+        val partitionValues =
+          if (split.partition() == null) Seq.empty[String] else split.partition().asScala.toSeq
+        val partitionName =
+          if (partitionValues.isEmpty) ""
+          else partitionValues.mkString(ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR)
+        val (_, bucketMap) =
+          grouped.getOrElseUpdate(partitionName, (partitionValues, mutable.Map.empty))
         val bucketId = split.bucket()
-        val bucketMap = grouped.getOrElseUpdate(partitionName, mutable.Map.empty)
         val splits = bucketMap.getOrElse(bucketId, Seq.empty)
         bucketMap(bucketId) = splits :+ split
     }
@@ -271,7 +294,13 @@ class FlussLakeUpsertBatch(
     val bucketOffsetsRetriever = new BucketOffsetsRetrieverImpl(admin, tablePath)
 
     if (tableInfo.isPartitioned) {
-      partitionInfos.asScala.flatMap {
+      // Filter partitions using partition predicate early to skip non-matching partitions
+      val filteredPartitionInfos = SparkPartitionPredicate.filterPartitions(
+        tableInfo,
+        partitionInfos.asScala.toSeq,
+        partitionPredicate)
+
+      filteredPartitionInfos.flatMap {
         pi =>
           val partitionName = pi.getPartitionName
           val kvSnapshots = admin.getLatestKvSnapshots(tablePath, partitionName).get()

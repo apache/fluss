@@ -106,6 +106,7 @@ case class FlussLakeAppendScan(
     tableInfo: TableInfo,
     requiredSchema: Option[StructType],
     pushedPredicate: Option[FlussPredicate],
+    override val partitionPredicate: Option[FlussPredicate],
     override val pushedSparkPredicates: Seq[Predicate],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
@@ -119,6 +120,7 @@ case class FlussLakeAppendScan(
       tableInfo,
       readSchema,
       pushedPredicate,
+      partitionPredicate,
       options,
       flussConfig)
   }
@@ -167,6 +169,7 @@ case class FlussLakeUpsertScan(
     tableInfo: TableInfo,
     requiredSchema: Option[StructType],
     pushedPredicate: Option[FlussPredicate],
+    override val partitionPredicate: Option[FlussPredicate],
     override val pushedSparkPredicates: Seq[Predicate],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
@@ -180,6 +183,7 @@ case class FlussLakeUpsertScan(
       tableInfo,
       readSchema,
       pushedPredicate,
+      partitionPredicate,
       options,
       flussConfig)
   }

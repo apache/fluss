@@ -20,6 +20,7 @@ package org.apache.fluss.spark.lake
 import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.metadata.DataLakeFormat
 import org.apache.fluss.spark.SparkConnectorOptions.{BUCKET_NUMBER, PRIMARY_KEY}
+import org.apache.fluss.spark.read.FlussUpsertInputPartition
 
 import org.apache.spark.sql.Row
 
@@ -117,7 +118,7 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
              |""".stripMargin)
 
       val df = sql(s"SELECT * FROM $DEFAULT_DATABASE.t_fb_hybrid ORDER BY id")
-      val partitions = lakeUpsertInputPartitions(df)
+      val partitions = lakeInputPartitions(df).map(_.asInstanceOf[FlussUpsertInputPartition])
       assert(
         partitions.exists(_.snapshotId >= 0),
         s"Expected at least one hybrid partition with snapshotId >= 0, got: ${partitions.mkString(", ")}")
@@ -157,7 +158,7 @@ abstract class SparkLakePrimaryKeyTableReadTestBase extends SparkLakeTableReadTe
              |""".stripMargin)
 
       val df = sql(s"SELECT * FROM $DEFAULT_DATABASE.t_fb_hybrid_partitioned ORDER BY id")
-      val partitions = lakeUpsertInputPartitions(df)
+      val partitions = lakeInputPartitions(df).map(_.asInstanceOf[FlussUpsertInputPartition])
       assert(
         partitions.exists(_.snapshotId >= 0),
         s"Expected at least one hybrid partition with snapshotId >= 0, got: ${partitions.mkString(", ")}")

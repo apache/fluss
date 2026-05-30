@@ -78,4 +78,19 @@ object SparkPartitionPredicate {
               PartitionUtils.toPartitionRow(p.getResolvedPartitionSpec.getPartitionValues, rowType))
         }
     }
+
+  /**
+   * Tests whether a partition (described by its ordered partition values) matches the given
+   * predicate. Returns true when no predicate is provided.
+   */
+  def matchesPartition(
+      tableInfo: TableInfo,
+      partitionValues: Seq[String],
+      partitionPredicate: Option[FlussPredicate]): Boolean =
+    partitionPredicate match {
+      case None => true
+      case Some(predicate) =>
+        val rowType = PartitionUtils.partitionRowType(tableInfo)
+        predicate.test(PartitionUtils.toPartitionRow(partitionValues.asJava, rowType))
+    }
 }

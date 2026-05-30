@@ -156,6 +156,7 @@ class FlussLakeAppendScanBuilder(
       tableInfo,
       requiredSchema,
       pushedPredicate,
+      partitionPredicate,
       acceptedPredicates.toSeq,
       options,
       flussConfig)
@@ -189,6 +190,7 @@ class FlussLakeUpsertScanBuilder(
       tableInfo,
       requiredSchema,
       pushedPredicate,
+      partitionPredicate,
       acceptedPredicates.toSeq,
       options,
       flussConfig)

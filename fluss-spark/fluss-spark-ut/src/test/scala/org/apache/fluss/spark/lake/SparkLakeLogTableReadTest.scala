@@ -473,6 +473,99 @@ abstract class SparkLakeLogTableReadTest extends SparkLakeTableReadTestBase {
     }
   }
 
+  test("Spark Lake Read: log table partition filter pushdown prunes partitions") {
+    withTable("t_pd_part_lake") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_pd_part_lake
+             |  (id INT, name STRING, dt STRING)
+             | PARTITIONED BY (dt)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      // Lake-only partitions: tier all data, then filter by partition key.
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_pd_part_lake VALUES
+             |(1, 'alpha', '2026-01-01'),
+             |(2, 'beta', '2026-01-01'),
+             |(3, 'gamma', '2026-01-02'),
+             |(4, 'delta', '2026-01-03')
+             |""".stripMargin)
+      tierToLake("t_pd_part_lake")
+
+      val lakeOnlyDf = sql(s"""
+                              |SELECT * FROM $DEFAULT_DATABASE.t_pd_part_lake
+                              |WHERE dt = '2026-01-02' ORDER BY id""".stripMargin)
+      checkAnswer(lakeOnlyDf, Row(3, "gamma", "2026-01-02") :: Nil)
+      assert(
+        lakeInputPartitions(lakeOnlyDf).length == 1,
+        s"Expected 1 input partition after partition pruning"
+      )
+
+      // Append more data after tiering so the planner mixes lake splits and Fluss log tail.
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_pd_part_lake VALUES
+             |(5, 'epsilon', '2026-01-01'),
+             |(6, 'zeta', '2026-01-04')
+             |""".stripMargin)
+
+      val unionDf = sql(s"""
+                           |SELECT * FROM $DEFAULT_DATABASE.t_pd_part_lake
+                           |WHERE dt = '2026-01-01' ORDER BY id""".stripMargin)
+      checkAnswer(
+        unionDf,
+        Row(1, "alpha", "2026-01-01") ::
+          Row(2, "beta", "2026-01-01") ::
+          Row(5, "epsilon", "2026-01-01") :: Nil
+      )
+      // Only one partition should be planned: lake split + log tail for dt='2026-01-01'.
+      val unionParts = lakeInputPartitions(unionDf)
+      assert(
+        unionParts.length == 2,
+        s"Expected 2 input partitions (one lake split + one log tail) after pruning, " +
+          s"got ${unionParts.length}")
+
+      // Check the description carries the partition filter for visibility in EXPLAIN output.
+      assert(
+        unionDf.queryExecution.executedPlan.toString.contains("PartitionFilter"),
+        s"Plan should contain PartitionFilter:\n${unionDf.queryExecution.executedPlan}"
+      )
+    }
+  }
+
+  test("Spark Lake Read: log table partition filter pushdown in fallback (no lake snapshot)") {
+    withTable("t_pd_part_fb") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_pd_part_fb
+             |  (id INT, name STRING, dt STRING)
+             | PARTITIONED BY (dt)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_pd_part_fb VALUES
+             |(1, 'alpha', '2026-01-01'),
+             |(2, 'beta', '2026-01-02'),
+             |(3, 'gamma', '2026-01-03')
+             |""".stripMargin)
+
+      // No tiering performed -> falls back to reading directly from Fluss.
+      val df = sql(s"""
+                      |SELECT * FROM $DEFAULT_DATABASE.t_pd_part_fb
+                      |WHERE dt = '2026-01-02' ORDER BY id""".stripMargin)
+      checkAnswer(df, Row(2, "beta", "2026-01-02") :: Nil)
+      assert(
+        lakeInputPartitions(df).length == 1,
+        s"Expected fallback to plan 1 input partition after pruning"
+      )
+    }
+  }
+
   test("Spark Lake Read: filter pushdown — partitioned lake table") {
     withTable("t_pd_partitioned") {
       sql(s"""

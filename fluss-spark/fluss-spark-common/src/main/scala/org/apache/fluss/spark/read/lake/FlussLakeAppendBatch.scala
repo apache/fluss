@@ -25,6 +25,7 @@ import org.apache.fluss.lake.source.{LakeSource, LakeSplit}
 import org.apache.fluss.metadata.{LogFormat, ResolvedPartitionSpec, TableBucket, TableInfo, TablePath}
 import org.apache.fluss.predicate.{Predicate => FlussPredicate}
 import org.apache.fluss.spark.read._
+import org.apache.fluss.spark.utils.SparkPartitionPredicate
 import org.apache.fluss.utils.ExceptionUtils
 
 import org.apache.spark.sql.connector.read.{InputPartition, PartitionReaderFactory}
@@ -40,6 +41,7 @@ class FlussLakeAppendBatch(
     tableInfo: TableInfo,
     readSchema: StructType,
     pushedPredicate: Option[FlussPredicate],
+    partitionPredicate: Option[FlussPredicate],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
   extends FlussLakeBatch(tablePath, tableInfo, readSchema, options, flussConfig) {
@@ -146,8 +148,14 @@ class FlussLakeAppendBatch(
       bucketOffsetsRetriever: BucketOffsetsRetrieverImpl): Array[InputPartition] = {
     val tableId = tableInfo.getTableId
 
+    // Filter Fluss-known partitions using the partition predicate to skip non-matching ones
+    val filteredPartitionInfos = SparkPartitionPredicate.filterPartitions(
+      tableInfo,
+      partitionInfos.asScala.toSeq,
+      partitionPredicate)
+
     val flussPartitionIdByName = mutable.LinkedHashMap.empty[String, Long]
-    partitionInfos.asScala.foreach {
+    filteredPartitionInfos.foreach {
       pi => flussPartitionIdByName(pi.getPartitionName) = pi.getPartitionId
     }
 
@@ -155,7 +163,7 @@ class FlussLakeAppendBatch(
     var lakeSplitPartitionId = -1L
 
     val lakeAndLogPartitions = lakeSplitsByPartition.flatMap {
-      case (partitionName, splits) =>
+      case (partitionName, (partitionValues, splits)) =>
         flussPartitionIdByName.remove(partitionName) match {
           case Some(partitionId) =>
             // Partition in both lake and Fluss — lake splits + log tail
@@ -176,10 +184,18 @@ class FlussLakeAppendBatch(
             lakePartitions ++ logPartitions
 
           case None =>
-            // Partition only in lake (expired in Fluss) — lake splits only
-            val pid = lakeSplitPartitionId
-            lakeSplitPartitionId -= 1
-            createLakePartitions(splits.toSeq, tableId, Some(pid))
+            // Partition only in lake (expired in Fluss). Apply the partition predicate directly
+            // on the resolved partition values to avoid round-tripping through partition names.
+            if (
+              SparkPartitionPredicate
+                .matchesPartition(tableInfo, partitionValues, partitionPredicate)
+            ) {
+              val pid = lakeSplitPartitionId
+              lakeSplitPartitionId -= 1
+              createLakePartitions(splits.toSeq, tableId, Some(pid))
+            } else {
+              Seq.empty
+            }
         }
     }.toSeq
 
@@ -210,17 +226,20 @@ class FlussLakeAppendBatch(
     (lakeAndLogPartitions ++ flussOnlyPartitions).toArray
   }
 
-  private def groupLakeSplitsByPartition(
-      lakeSplits: Seq[LakeSplit]): mutable.LinkedHashMap[String, mutable.ArrayBuffer[LakeSplit]] = {
-    val grouped = mutable.LinkedHashMap.empty[String, mutable.ArrayBuffer[LakeSplit]]
+  private def groupLakeSplitsByPartition(lakeSplits: Seq[LakeSplit])
+      : mutable.LinkedHashMap[String, (Seq[String], mutable.ArrayBuffer[LakeSplit])] = {
+    val grouped =
+      mutable.LinkedHashMap.empty[String, (Seq[String], mutable.ArrayBuffer[LakeSplit])]
     lakeSplits.foreach {
       split =>
-        val partitionName = if (split.partition() == null || split.partition().isEmpty) {
-          ""
-        } else {
-          split.partition().asScala.mkString(ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR)
-        }
-        grouped.getOrElseUpdate(partitionName, mutable.ArrayBuffer.empty) += split
+        val partitionValues =
+          if (split.partition() == null) Seq.empty[String] else split.partition().asScala.toSeq
+        val partitionName =
+          if (partitionValues.isEmpty) ""
+          else partitionValues.mkString(ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR)
+        val (_, buf) =
+          grouped.getOrElseUpdate(partitionName, (partitionValues, mutable.ArrayBuffer.empty))
+        buf += split
     }
     grouped
   }
@@ -286,9 +305,11 @@ class FlussLakeAppendBatch(
     }
 
     if (tableInfo.isPartitioned) {
-      partitionInfos.asScala.flatMap {
-        pi => createPartitions(Some(pi.getPartitionId), pi.getPartitionName)
-      }.toArray
+      val matching = SparkPartitionPredicate.filterPartitions(
+        tableInfo,
+        partitionInfos.asScala.toSeq,
+        partitionPredicate)
+      matching.flatMap(pi => createPartitions(Some(pi.getPartitionId), pi.getPartitionName)).toArray
     } else {
       createPartitions(None, null)
     }

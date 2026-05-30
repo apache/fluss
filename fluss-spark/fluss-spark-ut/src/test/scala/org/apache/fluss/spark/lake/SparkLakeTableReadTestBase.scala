@@ -22,12 +22,13 @@ import org.apache.fluss.flink.tiering.LakeTieringJobBuilder
 import org.apache.fluss.flink.tiering.source.TieringSourceOptions
 import org.apache.fluss.metadata.{DataLakeFormat, TableBucket}
 import org.apache.fluss.spark.FlussSparkTestBase
-import org.apache.fluss.spark.read.{FlussLakeUpsertScan, FlussScan, FlussUpsertInputPartition}
+import org.apache.fluss.spark.read.{FlussLakeAppendScan, FlussLakeUpsertScan, FlussScan}
 
 import org.apache.flink.api.common.RuntimeExecutionMode
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.connector.expressions.filter.Predicate
+import org.apache.spark.sql.connector.read.InputPartition
 import org.apache.spark.sql.execution.datasources.v2.{BatchScanExec, DataSourceV2ScanRelation}
 
 import java.time.Duration
@@ -152,7 +153,7 @@ abstract class SparkLakeTableReadTestBase extends FlussSparkTestBase {
       s"Expected any of $expected in pushed predicates, got $pushed")
   }
 
-  protected def lakeUpsertInputPartitions(df: DataFrame): Array[FlussUpsertInputPartition] = {
+  protected def lakeInputPartitions(df: DataFrame): Array[InputPartition] = {
     val scans =
       df.queryExecution.executedPlan.collect {
         case b: BatchScanExec => b.scan
@@ -160,8 +161,11 @@ abstract class SparkLakeTableReadTestBase extends FlussSparkTestBase {
         case DataSourceV2ScanRelation(_, scan, _, _, _) => scan
       }
     scans
-      .collect { case s: FlussLakeUpsertScan => s }
-      .flatMap(_.toBatch.planInputPartitions().collect { case p: FlussUpsertInputPartition => p })
+      .collect {
+        case upsert: FlussLakeUpsertScan => upsert
+        case append: FlussLakeAppendScan => append
+      }
+      .flatMap(_.toBatch.planInputPartitions())
       .toArray
   }
 }
