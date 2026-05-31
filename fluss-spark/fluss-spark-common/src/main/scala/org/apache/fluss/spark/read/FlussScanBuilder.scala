@@ -50,6 +50,8 @@ trait FlussSupportsPushDownPartitionFilters
   def tableInfo: TableInfo
 
   protected var partitionPredicate: Option[FlussPredicate] = None
+  protected var pushedPredicate: Option[FlussPredicate] = None
+  protected var acceptedPredicates: Array[Predicate] = Array.empty[Predicate]
 
   override def pushPredicates(predicates: Array[Predicate]): Array[Predicate] = {
     val (nonPartitionPred, partitionPred) =
@@ -58,14 +60,11 @@ trait FlussSupportsPushDownPartitionFilters
     nonPartitionPred.toArray
   }
 
-  override def pushedPredicates(): Array[Predicate] = Array.empty
+  override def pushedPredicates(): Array[Predicate] = acceptedPredicates
 }
 
 /** Adds ARROW server-side log filtering on top of partition pushdown. */
 trait FlussSupportsPushDownV2Filters extends FlussSupportsPushDownPartitionFilters {
-
-  protected var pushedPredicate: Option[FlussPredicate] = None
-  protected var acceptedPredicates: Array[Predicate] = Array.empty[Predicate]
 
   protected def convertAndStorePredicates(predicates: Array[Predicate]): Unit = {
     val (predicate, accepted) =
@@ -82,8 +81,6 @@ trait FlussSupportsPushDownV2Filters extends FlussSupportsPushDownPartitionFilte
     }
     nonPartitionPredicates
   }
-
-  override def pushedPredicates(): Array[Predicate] = acceptedPredicates
 }
 
 /**
@@ -91,7 +88,7 @@ trait FlussSupportsPushDownV2Filters extends FlussSupportsPushDownPartitionFilte
  * offered to the lake source individually; only the lake-accepted subset is reported back to Spark
  * and combined into the predicate handed to the scan.
  */
-trait FlussLakeSupportsPushDownV2Filters extends FlussSupportsPushDownV2Filters {
+trait FlussLakeSupportsPushDownV2Filters extends FlussSupportsPushDownPartitionFilters {
 
   def tablePath: TablePath
 
@@ -99,10 +96,10 @@ trait FlussLakeSupportsPushDownV2Filters extends FlussSupportsPushDownV2Filters 
 
   override def pushPredicates(predicates: Array[Predicate]): Array[Predicate] = {
     val nonPartitionPredicates = super.pushPredicates(predicates)
+
+    // Pass ALL predicates to Lake Source (including partition predicates) for lake-side filtering
     val pairs =
-      SparkPredicateConverter.convertPerPredicate(
-        tableInfo.getRowType,
-        nonPartitionPredicates.toSeq)
+      SparkPredicateConverter.convertPerPredicate(tableInfo.getRowType, predicates.toSeq)
     val (acceptedSpark, acceptedFluss) = if (pairs.isEmpty) {
       (Seq.empty[Predicate], Seq.empty[FlussPredicate])
     } else {
@@ -169,7 +166,7 @@ class FlussUpsertScanBuilder(
     val tableInfo: TableInfo,
     options: CaseInsensitiveStringMap,
     val flussConfig: FlussConfiguration)
-  extends FlussSupportsPushDownPartitionFilters {
+  extends FlussSupportsPushDownV2Filters {
 
   override def build(): Scan = {
     FlussUpsertScan(tablePath, tableInfo, requiredSchema, partitionPredicate, options, flussConfig)

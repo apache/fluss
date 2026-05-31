@@ -39,23 +39,17 @@ object SparkPartitionPredicate {
     val rowType = PartitionUtils.partitionRowType(tableInfo)
     val onlyPartitionKeys = new PartitionPredicateVisitor(partitionKeys)
 
-    // Separate predicates: those that can be converted and only touch partition keys
-    val (partitionPredicates, nonPartitionPredicates) = predicates.partition {
-      sparkPredicate =>
-        SparkPredicateConverter
-          .convert(rowType, sparkPredicate)
-          .exists(_.visit(onlyPartitionKeys))
+    val flussPredicates = predicates.map {
+      sparkPredicate => (sparkPredicate, SparkPredicateConverter.convert(rowType, sparkPredicate))
     }
 
-    // Convert partition predicates to FlussPredicate
-    val converted = partitionPredicates.flatMap {
-      sparkPredicate =>
-        SparkPredicateConverter
-          .convert(rowType, sparkPredicate)
-          .filter(_.visit(onlyPartitionKeys))
+    val (partitionPairs, nonPartitionPairs) = flussPredicates.partition {
+      case (_, predicateOpt) =>
+        predicateOpt.exists(_.visit(onlyPartitionKeys))
     }
 
-    val partitionPredicate = converted match {
+    val nonPartitionPredicates = nonPartitionPairs.map(_._1)
+    val partitionPredicate = partitionPairs.flatMap(_._2) match {
       case Seq() => None
       case Seq(single) => Some(single)
       case many => Some(PredicateBuilder.and(many.asJava))
@@ -89,6 +83,7 @@ object SparkPartitionPredicate {
       partitionPredicate: Option[FlussPredicate]): Boolean =
     partitionPredicate match {
       case None => true
+      case Some(_) if partitionValues.isEmpty => true
       case Some(predicate) =>
         val rowType = PartitionUtils.partitionRowType(tableInfo)
         predicate.test(PartitionUtils.toPartitionRow(partitionValues.asJava, rowType))
