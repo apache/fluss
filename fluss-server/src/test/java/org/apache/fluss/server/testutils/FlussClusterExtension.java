@@ -68,6 +68,7 @@ import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
 
@@ -237,10 +238,6 @@ public final class FlussClusterExtension
             rpcClient.close();
             rpcClient = null;
         }
-        if (tempDir != null) {
-            tempDir.delete();
-            tempDir = null;
-        }
         for (TabletServer tabletServer : tabletServers.values()) {
             tabletServer.close();
         }
@@ -257,6 +254,10 @@ public final class FlussClusterExtension
         if (zooKeeperServer != null) {
             zooKeeperServer.close();
             zooKeeperServer = null;
+        }
+        if (tempDir != null) {
+            FileUtils.deleteDirectoryQuietly(tempDir);
+            tempDir = null;
         }
     }
 
