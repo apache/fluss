@@ -42,6 +42,7 @@ import org.apache.flink.table.catalog.exceptions.DatabaseNotExistException;
 import org.apache.flink.table.catalog.exceptions.TableNotExistException;
 import org.apache.flink.table.types.AbstractDataType;
 import org.apache.flink.table.types.DataType;
+import org.apache.flink.table.types.logical.LogicalType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -112,7 +113,8 @@ public class HudiLakeCatalog implements LakeCatalog {
                                 "Fail to create table %s in Hudi, because "
                                         + "Database %s still doesn't exist although create database "
                                         + "successfully, please try again.",
-                                tablePath, tablePath.getDatabaseName()));
+                                tablePath, tablePath.getDatabaseName()),
+                        t);
             }
         }
     }
@@ -143,12 +145,14 @@ public class HudiLakeCatalog implements LakeCatalog {
                             e);
                 }
                 // if creating a new fluss table, we should ensure the lake table is empty
-                // TODO: add emptiness check for Hudi table once LakeTieringFactory is implemented
                 if (isCreatingFlussTable) {
-                    LOG.warn(
-                            "Table {} already exists in Hudi catalog with compatible schema. "
-                                    + "Skipping creation as the table may not be empty.",
-                            tablePath);
+                    throw new org.apache.fluss.exception.TableAlreadyExistException(
+                            String.format(
+                                    "The table %s already exists in Hudi catalog with compatible schema, "
+                                            + "but Fluss cannot verify whether the existing Hudi table is empty yet. "
+                                            + "Please first drop the table in Hudi catalog or use a new table name.",
+                                    tablePath),
+                            e);
                 }
             } catch (TableNotExistException tableNotExistException) {
                 // shouldn't happen in normal cases
@@ -158,7 +162,8 @@ public class HudiLakeCatalog implements LakeCatalog {
                                         + "during the initial creation attempt, but subsequently "
                                         + "could not be found when trying to get it. "
                                         + "Please check whether the Hudi table was manually deleted, and try again.",
-                                tablePath));
+                                tablePath),
+                        tableNotExistException);
             }
         }
     }
@@ -181,7 +186,9 @@ public class HudiLakeCatalog implements LakeCatalog {
                     ((ResolvedCatalogBaseTable<?>) table).getResolvedSchema();
             List<ColumnSignature> columns = new ArrayList<>();
             for (Column column : resolvedSchema.getColumns()) {
-                columns.add(new ColumnSignature(column.getName(), column.getDataType()));
+                columns.add(
+                        new ColumnSignature(
+                                column.getName(), column.getDataType().getLogicalType()));
             }
             return columns;
         }
@@ -189,7 +196,8 @@ public class HudiLakeCatalog implements LakeCatalog {
         Schema schema = table.getUnresolvedSchema();
         List<ColumnSignature> columns = new ArrayList<>();
         for (Schema.UnresolvedColumn column : schema.getColumns()) {
-            columns.add(new ColumnSignature(column.getName(), getDataType(column)));
+            AbstractDataType<?> dataType = getDataType(column);
+            columns.add(new ColumnSignature(column.getName(), getLogicalType(dataType)));
         }
         return columns;
     }
@@ -200,14 +208,21 @@ public class HudiLakeCatalog implements LakeCatalog {
         } else if (column instanceof Schema.UnresolvedMetadataColumn) {
             return ((Schema.UnresolvedMetadataColumn) column).getDataType();
         }
-        return null;
+        throw new IllegalStateException("Unexpected column kind: " + column.getClass());
+    }
+
+    private static LogicalType getLogicalType(AbstractDataType<?> dataType) {
+        if (dataType instanceof DataType) {
+            return ((DataType) dataType).getLogicalType();
+        }
+        throw new IllegalArgumentException("Unsupported Hudi column data type: " + dataType);
     }
 
     private static class ColumnSignature {
         private final String name;
-        private final AbstractDataType<?> dataType;
+        private final LogicalType dataType;
 
-        private ColumnSignature(String name, AbstractDataType<?> dataType) {
+        private ColumnSignature(String name, LogicalType dataType) {
             this.name = name;
             this.dataType = dataType;
         }

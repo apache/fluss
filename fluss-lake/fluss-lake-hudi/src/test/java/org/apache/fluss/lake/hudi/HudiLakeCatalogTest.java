@@ -33,6 +33,7 @@ import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.catalog.ObjectPath;
+import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.catalog.exceptions.TableNotExistException;
 import org.apache.flink.table.types.DataType;
@@ -207,6 +208,31 @@ class HudiLakeCatalogTest {
     }
 
     @Test
+    void testIsHudiSchemaCompatibleWithResolvedAndUnresolvedSchema() {
+        CatalogTable unresolvedTable =
+                buildTestCatalogTable(
+                        new String[] {"id", "name"},
+                        new DataType[] {
+                            org.apache.flink.table.api.DataTypes.INT()
+                                    .notNull()
+                                    .bridgedTo(Integer.class),
+                            org.apache.flink.table.api.DataTypes.STRING()
+                        });
+        CatalogTable resolvedTable =
+                buildResolvedTestCatalogTable(
+                        new String[] {"id", "name"},
+                        new DataType[] {
+                            org.apache.flink.table.api.DataTypes.INT().notNull(),
+                            org.apache.flink.table.api.DataTypes.STRING().bridgedTo(String.class)
+                        });
+
+        assertThat(flussHudiLakeCatalog.isHudiSchemaCompatible(unresolvedTable, resolvedTable))
+                .isTrue();
+        assertThat(flussHudiLakeCatalog.isHudiSchemaCompatible(resolvedTable, unresolvedTable))
+                .isTrue();
+    }
+
+    @Test
     void testIsHudiSchemaCompatibleWithDifferentColumnCount() {
         CatalogTable table1 =
                 buildTestCatalogTable(
@@ -263,6 +289,21 @@ class HudiLakeCatalogTest {
         assertThat(flussHudiLakeCatalog.isHudiSchemaCompatible(table1, table2)).isFalse();
     }
 
+    @Test
+    void testIsHudiSchemaCompatibleFailsOnComputedColumn() {
+        org.apache.flink.table.api.Schema schema =
+                org.apache.flink.table.api.Schema.newBuilder()
+                        .column("id", org.apache.flink.table.api.DataTypes.INT())
+                        .columnByExpression("computed_id", "`id` + 1")
+                        .build();
+        CatalogTable table =
+                CatalogTable.of(schema, null, Collections.emptyList(), new HashMap<>());
+
+        assertThatThrownBy(() -> flussHudiLakeCatalog.isHudiSchemaCompatible(table, table))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Unexpected column kind");
+    }
+
     // ------------------------------------------------------------------
     // Duplicate table creation idempotency tests
     // ------------------------------------------------------------------
@@ -297,6 +338,41 @@ class HudiLakeCatalogTest {
                         .getHudiCatalog()
                         .getTable(HudiConversions.toHudiObjectPath(tablePath));
         assertThat(table).isNotNull();
+    }
+
+    @Test
+    void testCreateFlussTableFailsWhenHudiTableAlreadyExists() {
+        String database = "existing_hudi_db";
+        String tableName = "existing_hudi_table";
+
+        Schema flussSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .primaryKey("id")
+                        .build();
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(flussSchema).distributedBy(4, "id").build();
+
+        TablePath tablePath = TablePath.of(database, tableName);
+        flussHudiLakeCatalog.createTable(
+                tablePath, tableDescriptor, new TestingLakeCatalogContext());
+
+        TestingLakeCatalogContext creatingFlussTableContext =
+                new TestingLakeCatalogContext() {
+                    @Override
+                    public boolean isCreatingFlussTable() {
+                        return true;
+                    }
+                };
+
+        assertThatThrownBy(
+                        () ->
+                                flussHudiLakeCatalog.createTable(
+                                        tablePath, tableDescriptor, creatingFlussTableContext))
+                .isInstanceOf(TableAlreadyExistException.class)
+                .hasMessageContaining("cannot verify whether the existing Hudi table is empty");
     }
 
     @Test
@@ -493,15 +569,31 @@ class HudiLakeCatalogTest {
     // ------------------------------------------------------------------
 
     private CatalogTable buildTestCatalogTable(String[] columnNames, DataType[] columnTypes) {
-        List<Column> columns = new ArrayList<>();
-        for (int i = 0; i < columnNames.length; i++) {
-            columns.add(Column.physical(columnNames[i], columnTypes[i]));
-        }
-        ResolvedSchema resolvedSchema = new ResolvedSchema(columns, Collections.emptyList(), null);
+        ResolvedSchema resolvedSchema = buildResolvedSchema(columnNames, columnTypes);
         org.apache.flink.table.api.Schema schema =
                 org.apache.flink.table.api.Schema.newBuilder()
                         .fromResolvedSchema(resolvedSchema)
                         .build();
         return CatalogTable.of(schema, null, Collections.emptyList(), new HashMap<>());
+    }
+
+    private CatalogTable buildResolvedTestCatalogTable(
+            String[] columnNames, DataType[] columnTypes) {
+        ResolvedSchema resolvedSchema = buildResolvedSchema(columnNames, columnTypes);
+        org.apache.flink.table.api.Schema schema =
+                org.apache.flink.table.api.Schema.newBuilder()
+                        .fromResolvedSchema(resolvedSchema)
+                        .build();
+        return new ResolvedCatalogTable(
+                CatalogTable.of(schema, null, Collections.emptyList(), new HashMap<>()),
+                resolvedSchema);
+    }
+
+    private ResolvedSchema buildResolvedSchema(String[] columnNames, DataType[] columnTypes) {
+        List<Column> columns = new ArrayList<>();
+        for (int i = 0; i < columnNames.length; i++) {
+            columns.add(Column.physical(columnNames[i], columnTypes[i]));
+        }
+        return new ResolvedSchema(columns, Collections.emptyList(), null);
     }
 }
