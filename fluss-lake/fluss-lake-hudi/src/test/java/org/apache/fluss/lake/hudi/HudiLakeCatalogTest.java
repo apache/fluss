@@ -182,6 +182,27 @@ class HudiLakeCatalogTest {
         assertThat(table.getUnresolvedSchema()).isEqualTo(expectHudiSchema.toSchema());
     }
 
+    @Test
+    void testCreateLogTableWithoutRecordKeyThrowsException() {
+        Schema flussSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("name", DataTypes.STRING())
+                        .build();
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(flussSchema).distributedBy(3).build();
+
+        TablePath tablePath = TablePath.of("test_db", "log_table_without_record_key");
+        TestingLakeCatalogContext context = new TestingLakeCatalogContext();
+
+        assertThatThrownBy(
+                        () -> flussHudiLakeCatalog.createTable(tablePath, tableDescriptor, context))
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("hudi.hoodie.datasource.write.recordkey.field")
+                .hasMessageContaining(tablePath.toString());
+    }
+
     // ------------------------------------------------------------------
     // isHudiSchemaCompatible() tests
     // ------------------------------------------------------------------
@@ -562,6 +583,31 @@ class HudiLakeCatalogTest {
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining("__timestamp")
                 .hasMessageContaining("system column");
+    }
+
+    @Test
+    void testHudiMetadataColumnPrefixConflictThrowsException() {
+        Schema flussSchema =
+                Schema.newBuilder()
+                        .column("_hoodie_record_key", DataTypes.STRING())
+                        .column("name", DataTypes.STRING())
+                        .primaryKey("_hoodie_record_key")
+                        .build();
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(flussSchema)
+                        .distributedBy(4, "_hoodie_record_key")
+                        .build();
+
+        TablePath tablePath = TablePath.of("test_db", "hudi_metadata_conflict_table");
+        TestingLakeCatalogContext context = new TestingLakeCatalogContext();
+
+        assertThatThrownBy(
+                        () -> flussHudiLakeCatalog.createTable(tablePath, tableDescriptor, context))
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining("_hoodie_record_key")
+                .hasMessageContaining("_hoodie_");
     }
 
     // ------------------------------------------------------------------

@@ -42,8 +42,7 @@ public class HudiCatalogUtils {
 
     private static final Logger LOG = LoggerFactory.getLogger(HudiCatalogUtils.class);
 
-    public static final String MODE_CONFIG = "mode";
-    public static final String CATALOG_NAME_CONFIG = "name";
+    private static final String CATALOG_NAME_KEY = "name";
 
     public static final String HUDI_CATALOG_DEFAULT_NAME = "fluss-hudi-catalog";
     public static final String HIVE_META_STORE_TYPE = "hms";
@@ -55,7 +54,7 @@ public class HudiCatalogUtils {
         Configuration copiedConfig = new Configuration(configuration);
         copiedConfig.setString(CatalogOptions.DEFAULT_DATABASE.key(), "tmp");
         copiedConfig.setString(CatalogOptions.TABLE_EXTERNAL.key(), "true");
-        String catalogName = hudiProps.getOrDefault(CATALOG_NAME_CONFIG, HUDI_CATALOG_DEFAULT_NAME);
+        String catalogName = hudiProps.getOrDefault(CATALOG_NAME_KEY, HUDI_CATALOG_DEFAULT_NAME);
         return buildHudiCatalog(
                 catalogName,
                 hudiProps,

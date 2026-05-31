@@ -61,7 +61,10 @@ public class HudiConversions {
     private static final String HUDI_CONF_PREFIX = "hudi.";
 
     private static final String DELIMITER = ",";
+    private static final String HUDI_METADATA_COLUMN_PREFIX = "_hoodie_";
     private static final String HUDI_TABLE_TYPE_KEY = "hoodie.datasource.write.table.type";
+    private static final String HUDI_RECORD_KEY_FIELD_OPTION =
+            HUDI_CONF_PREFIX + FlinkOptions.RECORD_KEY_FIELD.key();
 
     /** Hudi config options set by Fluss should not be set by users. */
     @VisibleForTesting public static final Set<String> HUDI_UNSETTABLE_OPTIONS = new HashSet<>();
@@ -87,7 +90,10 @@ public class HudiConversions {
     }
 
     public static ResolvedSchema convertToFlinkResolvedSchema(
-            TableDescriptor tableDescriptor, boolean isPkTable, String catalogMode) {
+            TablePath tablePath,
+            TableDescriptor tableDescriptor,
+            boolean isPkTable,
+            String catalogMode) {
         // validate hudi options first
         validateHudiOptions(tableDescriptor.getProperties(), isPkTable);
         validateHudiOptions(tableDescriptor.getCustomProperties(), isPkTable);
@@ -106,9 +112,17 @@ public class HudiConversions {
             String columnName = column.getName();
             if (SYSTEM_COLUMNS.containsKey(columnName)) {
                 throw new InvalidTableException(
-                        "Column "
-                                + columnName
-                                + " conflicts with a system column name of hudi table, please rename the column.");
+                        String.format(
+                                "Column %s in table %s conflicts with a system column name of Hudi table, "
+                                        + "please rename the column.",
+                                columnName, tablePath));
+            }
+            if (columnName.startsWith(HUDI_METADATA_COLUMN_PREFIX)) {
+                throw new InvalidTableException(
+                        String.format(
+                                "Column %s in table %s conflicts with the reserved Hudi metadata column "
+                                        + "prefix '%s', please rename the column.",
+                                columnName, tablePath, HUDI_METADATA_COLUMN_PREFIX));
             }
             columns.add(Column.physical(columnName, column.getDataType().accept(converter)));
         }
@@ -132,12 +146,13 @@ public class HudiConversions {
     /**
      * Builds Hudi table properties from Fluss TableDescriptor.
      *
+     * @param tablePath the path of the Fluss table
      * @param tableDescriptor the Fluss table descriptor
      * @param isPkTable whether this is a primary key table
      * @return map of Hudi table properties
      */
     public static Map<String, String> buildHudiTableProperties(
-            TableDescriptor tableDescriptor, boolean isPkTable) {
+            TablePath tablePath, TableDescriptor tableDescriptor, boolean isPkTable) {
         Map<String, String> hudiProperties = new HashMap<>();
         // Set connector type
         hudiProperties.put(FactoryUtil.CONNECTOR.key(), "hudi");
@@ -153,8 +168,12 @@ public class HudiConversions {
             hudiProperties.put(FlinkOptions.TABLE_TYPE.key(), HoodieTableType.COPY_ON_WRITE.name());
             // set primary key for Fluss Log Table.
             String recordKeyField = getRecordKeyField(tableDescriptor);
-            if (recordKeyField == null || recordKeyField.isEmpty()) {
-                throw new IllegalArgumentException("Record key field should be set.");
+            if (recordKeyField == null || recordKeyField.trim().isEmpty()) {
+                throw new InvalidConfigException(
+                        String.format(
+                                "The Hudi record key field option %s should be set for log table %s. "
+                                        + "Please set it to the column used as the Hudi record key.",
+                                HUDI_RECORD_KEY_FIELD_OPTION, tablePath));
             }
             hudiProperties.put(FlinkOptions.RECORD_KEY_FIELD.key(), recordKeyField);
             hudiProperties.put(
@@ -197,17 +216,22 @@ public class HudiConversions {
     /**
      * Creates a CatalogTable for Hudi from Fluss TableDescriptor.
      *
+     * @param tablePath the path of the Fluss table
      * @param tableDescriptor the Fluss table descriptor
      * @param isPkTable whether this is a primary key table
      * @return the created CatalogTable
      */
     public static CatalogTable createHudiCatalogTable(
-            TableDescriptor tableDescriptor, boolean isPkTable, String catalogMode) {
+            TablePath tablePath,
+            TableDescriptor tableDescriptor,
+            boolean isPkTable,
+            String catalogMode) {
         ResolvedSchema resolvedSchema =
-                convertToFlinkResolvedSchema(tableDescriptor, isPkTable, catalogMode);
+                convertToFlinkResolvedSchema(tablePath, tableDescriptor, isPkTable, catalogMode);
         Schema schema = Schema.newBuilder().fromResolvedSchema(resolvedSchema).build();
         List<String> partitionKeys = tableDescriptor.getPartitionKeys();
-        Map<String, String> options = buildHudiTableProperties(tableDescriptor, isPkTable);
+        Map<String, String> options =
+                buildHudiTableProperties(tablePath, tableDescriptor, isPkTable);
         LOG.info("Hudi table properties: {}", options);
 
         String comment = tableDescriptor.getComment().orElse("Hudi table created from Fluss");
@@ -227,14 +251,21 @@ public class HudiConversions {
     }
 
     private static String getRecordKeyField(TableDescriptor tableDescriptor) {
-        String recordKeyOption = HUDI_CONF_PREFIX + FlinkOptions.RECORD_KEY_FIELD.key();
-        String recordKeyField = tableDescriptor.getCustomProperties().get(recordKeyOption);
+        String recordKeyField =
+                tableDescriptor.getCustomProperties().get(HUDI_RECORD_KEY_FIELD_OPTION);
         if (recordKeyField == null) {
-            recordKeyField = tableDescriptor.getProperties().get(recordKeyOption);
+            recordKeyField = tableDescriptor.getProperties().get(HUDI_RECORD_KEY_FIELD_OPTION);
         }
         return recordKeyField;
     }
 
+    /**
+     * Validates Hudi options that Fluss manages automatically.
+     *
+     * <p>{@link FlinkOptions#RECORD_KEY_FIELD} is allowed for non-primary-key Fluss log tables,
+     * where users must provide the Hudi record key field used by the Hudi bucket index. Primary-key
+     * tables derive this option from the Fluss primary key, so user-provided values are rejected.
+     */
     private static void validateHudiOptions(Map<String, String> properties, boolean isPkTable) {
         properties.forEach(
                 (k, v) -> {

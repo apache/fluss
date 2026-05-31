@@ -43,6 +43,7 @@ import org.apache.flink.table.catalog.exceptions.TableNotExistException;
 import org.apache.flink.table.types.AbstractDataType;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.hudi.table.catalog.CatalogOptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -54,7 +55,6 @@ import java.util.Objects;
 
 import static org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils.HIVE_META_STORE_TYPE;
 import static org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils.HUDI_CATALOG_DEFAULT_NAME;
-import static org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils.MODE_CONFIG;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
@@ -76,7 +76,8 @@ public class HudiLakeCatalog implements LakeCatalog {
     private final String catalogMode;
 
     public HudiLakeCatalog(Configuration configuration) {
-        this.catalogMode = configuration.toMap().getOrDefault(MODE_CONFIG, HIVE_META_STORE_TYPE);
+        this.catalogMode =
+                configuration.toMap().getOrDefault(CatalogOptions.MODE.key(), HIVE_META_STORE_TYPE);
         this.hudiCatalog = HudiCatalogUtils.createHudiCatalog(configuration);
         this.hudiCatalog.open();
     }
@@ -97,7 +98,8 @@ public class HudiLakeCatalog implements LakeCatalog {
 
         // Create Hudi catalog table
         CatalogTable catalogTable =
-                HudiConversions.createHudiCatalogTable(tableDescriptor, isPkTable, catalogMode);
+                HudiConversions.createHudiCatalogTable(
+                        tablePath, tableDescriptor, isPkTable, catalogMode);
 
         // Create table in Hudi catalog
         try {

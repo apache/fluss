@@ -41,15 +41,18 @@ import org.apache.fluss.types.TinyIntType;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.types.DataType;
 
+import javax.annotation.concurrent.ThreadSafe;
+
 import static org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils.FILE_SYSTEM_TYPE;
 import static org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils.HIVE_META_STORE_TYPE;
 
 /** Convert from Fluss's data type to Hudi's internal data type. */
+@ThreadSafe
 public class FlussDataTypeToHudiDataType implements DataTypeVisitor<DataType> {
 
-    private String catalogMode;
+    private final String catalogMode;
 
-    public FlussDataTypeToHudiDataType(String catalogMode) {
+    private FlussDataTypeToHudiDataType(String catalogMode) {
         this.catalogMode = catalogMode;
     }
 
