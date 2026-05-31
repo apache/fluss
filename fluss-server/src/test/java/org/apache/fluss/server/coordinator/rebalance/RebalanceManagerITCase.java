@@ -311,7 +311,7 @@ public class RebalanceManagerITCase {
                     0,
                     baseOffset + i * 10L);
         }
-        FLUSS_CLUSTER_EXTENSION.waitUntilSomeLogSegmentsCopyToRemote(
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllLogSegmentsCopyToRemote(
                 new TableBucket(tb.getTableId(), 0));
     }
 }

@@ -715,6 +715,32 @@ public final class FlussClusterExtension
                 });
     }
 
+    /**
+     * Wait until all log segments (non-active) copy to remote. This method waits until the remote
+     * log end offset reaches the base offset of the active segment.
+     */
+    public void waitUntilAllLogSegmentsCopyToRemote(TableBucket tableBucket) {
+        retry(
+                Duration.ofMinutes(2),
+                () -> {
+                    int leader = waitAndGetLeader(tableBucket);
+                    TabletServer tabletServer = getTabletServerById(leader);
+                    ReplicaManager.HostedReplica hostedReplica =
+                            tabletServer.getReplicaManager().getReplica(tableBucket);
+                    assertThat(hostedReplica).isInstanceOf(ReplicaManager.OnlineReplica.class);
+                    Replica replica = ((ReplicaManager.OnlineReplica) hostedReplica).getReplica();
+                    long activeSegmentBaseOffset =
+                            replica.getLogTablet().activeLogSegment().getBaseOffset();
+                    assertThat(
+                                    tabletServer
+                                            .getReplicaManager()
+                                            .getRemoteLogManager()
+                                            .remoteLogTablet(tableBucket)
+                                            .getRemoteLogEndOffset())
+                            .hasValue(activeSegmentBaseOffset);
+                });
+    }
+
     public void triggerAndWaitSnapshot(TablePath tablePath) throws Exception {
         Optional<TableRegistration> table = zooKeeperClient.getTable(tablePath);
         //noinspection SimplifyOptionalCallChains (Java 8 compatibility)
