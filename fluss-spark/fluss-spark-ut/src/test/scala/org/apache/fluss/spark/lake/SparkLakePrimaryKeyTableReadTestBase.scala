@@ -20,8 +20,8 @@ package org.apache.fluss.spark.lake
 import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.metadata.DataLakeFormat
 import org.apache.fluss.spark.SparkConnectorOptions.{BUCKET_NUMBER, PRIMARY_KEY}
-import org.apache.fluss.spark.read.FlussUpsertInputPartition
 import org.apache.fluss.spark.read.FlussMetrics
+import org.apache.fluss.spark.read.FlussUpsertInputPartition
 
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.execution.datasources.v2.BatchScanExec
