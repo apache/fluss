@@ -67,11 +67,7 @@ public class HudiCatalogUtils {
             org.apache.flink.configuration.Configuration configuration) {
         String catalogMode =
                 hudiProps.getOrDefault(CatalogOptions.MODE.key(), HIVE_META_STORE_TYPE);
-        LOG.info(
-                "create hudi catalog: {}, mode: {}, configuration: {}",
-                catalogName,
-                catalogMode,
-                configuration);
+        LOG.info("create hudi catalog: {}, mode: {}", catalogName, catalogMode);
         switch (catalogMode.toLowerCase(Locale.ENGLISH)) {
             case HIVE_META_STORE_TYPE:
                 return new HoodieHiveCatalog(catalogName, configuration);

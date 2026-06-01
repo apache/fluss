@@ -232,7 +232,7 @@ public class HudiConversions {
         List<String> partitionKeys = tableDescriptor.getPartitionKeys();
         Map<String, String> options =
                 buildHudiTableProperties(tablePath, tableDescriptor, isPkTable);
-        LOG.info("Hudi table properties: {}", options);
+        LOG.debug("Hudi table properties: {}", options);
 
         String comment = tableDescriptor.getComment().orElse("Hudi table created from Fluss");
         return HIVE_META_STORE_TYPE.equals(catalogMode)
