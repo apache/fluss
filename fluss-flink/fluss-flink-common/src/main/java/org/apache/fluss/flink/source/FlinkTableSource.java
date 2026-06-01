@@ -154,6 +154,7 @@ public class FlinkTableSource
 
     // projection push down
     @Nullable private int[] projectedFields;
+    @Nullable private int[][] lakeProjectedFields;
 
     @Nullable private GenericRowData singleRowFilter;
 
@@ -170,6 +171,8 @@ public class FlinkTableSource
     private final Map<String, String> tableOptions;
 
     @Nullable private LakeSource<LakeSplit> lakeSource;
+    private boolean lakeFiltersPushedDown;
+    private List<Predicate> lakePredicates = Collections.emptyList();
     @Nullable private Predicate logRecordBatchFilter;
 
     /** Watermark strategy that is pushed down by the Flink optimizer. */
@@ -529,7 +532,17 @@ public class FlinkTableSource
         source.singleRowFilter = singleRowFilter;
         source.modificationScanType = modificationScanType;
         source.partitionFilters = partitionFilters;
-        source.lakeSource = lakeSource;
+        source.lakeProjectedFields = lakeProjectedFields;
+        source.lakeFiltersPushedDown = lakeFiltersPushedDown;
+        source.lakePredicates = new ArrayList<>(lakePredicates);
+        if (source.lakeSource != null) {
+            if (source.lakeProjectedFields != null) {
+                source.lakeSource.withProject(source.lakeProjectedFields);
+            }
+            if (source.lakeFiltersPushedDown) {
+                source.lakeSource.withFilters(source.lakePredicates);
+            }
+        }
         source.logRecordBatchFilter = logRecordBatchFilter;
         source.watermarkStrategy = watermarkStrategy;
         // Note: availableStatsColumns is already computed in the constructor
@@ -549,6 +562,7 @@ public class FlinkTableSource
     @Override
     public void applyProjection(int[][] projectedFields, DataType producedDataType) {
         this.projectedFields = Arrays.stream(projectedFields).mapToInt(value -> value[0]).toArray();
+        this.lakeProjectedFields = projectedFields;
         this.producedDataType = producedDataType.getLogicalType();
         if (lakeSource != null) {
             lakeSource.withProject(projectedFields);
@@ -710,12 +724,16 @@ public class FlinkTableSource
             }
         }
 
+        LakeSource.FilterPushDownResult filterPushDownResult =
+                checkNotNull(lakeSource).withFilters(lakePredicates);
+        this.lakePredicates =
+                lakePredicates.isEmpty()
+                        ? Collections.emptyList()
+                        : new ArrayList<>(lakePredicates);
+        this.lakeFiltersPushedDown = true;
         if (lakePredicates.isEmpty()) {
             return;
         }
-
-        LakeSource.FilterPushDownResult filterPushDownResult =
-                checkNotNull(lakeSource).withFilters(lakePredicates);
         Set<Predicate> acceptedLakePredicates =
                 Collections.newSetFromMap(new IdentityHashMap<Predicate, Boolean>());
         acceptedLakePredicates.addAll(filterPushDownResult.acceptedPredicates());
