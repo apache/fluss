@@ -256,6 +256,14 @@ public class HudiConversions {
         if (recordKeyField == null) {
             recordKeyField = tableDescriptor.getProperties().get(HUDI_RECORD_KEY_FIELD_OPTION);
         }
+        if (recordKeyField == null) {
+            // also accept the un-prefixed (native Hudi) option key
+            String unprefixedKey = FlinkOptions.RECORD_KEY_FIELD.key();
+            recordKeyField = tableDescriptor.getCustomProperties().get(unprefixedKey);
+            if (recordKeyField == null) {
+                recordKeyField = tableDescriptor.getProperties().get(unprefixedKey);
+            }
+        }
         return recordKeyField;
     }
 
