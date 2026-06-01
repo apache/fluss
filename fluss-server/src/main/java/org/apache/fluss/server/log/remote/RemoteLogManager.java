@@ -275,6 +275,33 @@ public class RemoteLogManager implements Closeable {
         return remoteLogTablet(tableBucket).relevantRemoteLogSegments(offset);
     }
 
+    /**
+     * Updates the ttl of the {@link RemoteLogTablet} for the given bucket and returns its previous
+     * ttl, or {@link Optional#empty()} if no tablet is currently registered (which happens in two
+     * normal scenarios):
+     *
+     * <ul>
+     *   <li>remote logging is globally disabled, so no tablet is ever registered;
+     *   <li>the replica is still being created. The eventually-constructed tablet will read its
+     *       initial ttl from {@code Replica.getLogTTLMs()}; whether that reflects the latest ALTER
+     *       depends on the order in which the metadata update arrives at the owning {@code
+     *       ReplicaManager}.
+     * </ul>
+     *
+     * @return the previous ttl in milliseconds, or {@link Optional#empty()} if absent.
+     */
+    public Optional<Long> updateLogTtlMs(TableBucket tableBucket, long newTtlMs) {
+        RemoteLogTablet remoteLogTablet = remoteLogs.get(tableBucket);
+        if (remoteLogTablet == null) {
+            return Optional.empty();
+        }
+        long oldTtlMs = remoteLogTablet.getTtlMs();
+        if (oldTtlMs != newTtlMs) {
+            remoteLogTablet.updateTtlMs(newTtlMs);
+        }
+        return Optional.of(oldTtlMs);
+    }
+
     private boolean remoteDisabled() {
         return taskInterval <= 0L;
     }

@@ -709,8 +709,8 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         Replica replica = replicaManager.getReplicaOrException(tb);
         RemoteLogTablet remoteLog = remoteLogManager.remoteLogTablet(tb);
 
-        // Verify initial ttl is 7 days
-        long defaultTtlMs = java.time.Duration.ofDays(7).toMillis();
+        // Verify initial ttl matches the configured default table.log.ttl
+        long defaultTtlMs = ConfigOptions.TABLE_LOG_TTL.defaultValue().toMillis();
         assertThat(remoteLog.getTtlMs()).isEqualTo(defaultTtlMs);
 
         // 2. Update ttl via Replica.updateLogTtlMs (simulating metadata propagation)

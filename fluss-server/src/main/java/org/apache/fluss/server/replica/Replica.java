@@ -88,7 +88,6 @@ import org.apache.fluss.server.log.LogReadInfo;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
-import org.apache.fluss.server.log.remote.RemoteLogTablet;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metrics.group.BucketMetricGroup;
@@ -694,26 +693,20 @@ public final class Replica {
      * @param newTtlMs the new ttl in milliseconds; a non-positive value disables expiration
      */
     public void updateLogTtlMs(long newTtlMs) {
-        final RemoteLogTablet remoteLogTablet;
-        try {
-            remoteLogTablet = remoteLogManager.remoteLogTablet(tableBucket);
-        } catch (IllegalStateException e) {
-            // RemoteLogTablet may not be registered yet during the early stage of replica
-            // creation. In that case, the alter is a no-op here because the Replica will read the
-            // up-to-date ttl from the persisted TableInfo when constructing the RemoteLogTablet.
-            LOG.warn(
-                    "RemoteLogTablet for {} is not registered yet, skip applying new logTtlMs={}.",
+        Optional<Long> oldValueOpt = remoteLogManager.updateLogTtlMs(tableBucket, newTtlMs);
+        if (!oldValueOpt.isPresent()) {
+            LOG.debug(
+                    "RemoteLogTablet for {} is unavailable; skip applying new logTtlMs={} "
+                            + "(remote logging may be disabled or the replica is still initializing).",
                     tableBucket,
                     newTtlMs);
             return;
         }
 
-        long oldValue = remoteLogTablet.getTtlMs();
+        long oldValue = oldValueOpt.get();
         if (oldValue == newTtlMs) {
             return;
         }
-
-        remoteLogTablet.updateTtlMs(newTtlMs);
 
         LOG.info("Replica for {} logTtlMs changed from {} to {}", tableBucket, oldValue, newTtlMs);
     }

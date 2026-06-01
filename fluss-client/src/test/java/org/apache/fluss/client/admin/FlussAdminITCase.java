@@ -453,7 +453,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(tableInfo.getTableConfig().getLogTTLMs())
                 .isEqualTo(Duration.ofDays(30).toMillis());
 
-        // reset to remove the property; value should fall back to the default (7 days).
+        // reset to remove the property; value should fall back to the configured default.
         tableChanges =
                 Collections.singletonList(TableChange.reset(ConfigOptions.TABLE_LOG_TTL.key()));
         admin.alterTable(tablePath, tableChanges, false).get();
@@ -462,7 +462,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThat(tableInfo.toTableDescriptor().getProperties())
                 .doesNotContainKey(ConfigOptions.TABLE_LOG_TTL.key());
         assertThat(tableInfo.getTableConfig().getLogTTLMs())
-                .isEqualTo(Duration.ofDays(7).toMillis());
+                .isEqualTo(ConfigOptions.TABLE_LOG_TTL.defaultValue().toMillis());
     }
 
     @Test
