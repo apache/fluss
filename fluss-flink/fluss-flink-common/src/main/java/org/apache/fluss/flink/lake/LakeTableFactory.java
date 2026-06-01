@@ -108,8 +108,7 @@ public class LakeTableFactory {
         try {
             ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
             Class<?> hudiFactoryClass =
-                Class.forName(
-                    "org.apache.hudi.table.HoodieTableFactory", true, classLoader);
+                    Class.forName("org.apache.hudi.table.HoodieTableFactory", true, classLoader);
             return (DynamicTableSourceFactory)
                     hudiFactoryClass.getDeclaredConstructor().newInstance();
         } catch (Exception e) {
