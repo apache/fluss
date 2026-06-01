@@ -63,7 +63,6 @@ trait FlussSupportsPushDownPartitionFilters
   override def pushedPredicates(): Array[Predicate] = acceptedPredicates
 }
 
-/** Adds ARROW server-side log filtering on top of partition pushdown. */
 trait FlussSupportsPushDownV2Filters extends FlussSupportsPushDownPartitionFilters {
 
   protected def convertAndStorePredicates(predicates: Array[Predicate]): Unit = {
@@ -75,8 +74,8 @@ trait FlussSupportsPushDownV2Filters extends FlussSupportsPushDownPartitionFilte
 
   override def pushPredicates(predicates: Array[Predicate]): Array[Predicate] = {
     val nonPartitionPredicates = super.pushPredicates(predicates)
-    // Server-side batch filter only supports ARROW; other log formats reject it.
-    if (tableInfo.getTableConfig.getLogFormat == LogFormat.ARROW) {
+    if (!tableInfo.hasPrimaryKey && tableInfo.getTableConfig.getLogFormat == LogFormat.ARROW) {
+      // Server-side batch filter for log table only supports ARROW; other log formats reject it.
       convertAndStorePredicates(nonPartitionPredicates)
     }
     nonPartitionPredicates
