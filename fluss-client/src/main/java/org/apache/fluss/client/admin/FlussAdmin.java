@@ -99,6 +99,7 @@ import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
+import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import javax.annotation.Nullable;
@@ -112,6 +113,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterDatabaseRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeAlterTableRequest;
@@ -140,20 +143,32 @@ public class FlussAdmin implements Admin {
     private final AdminReadOnlyGateway readOnlyGateway;
     private final MetadataUpdater metadataUpdater;
 
-    private static final int READ_ONLY_GATEWAY_MAX_RETRIES = 3;
+    /**
+     * Single-thread executor that runs the metadata-refresh callback for {@link
+     * RetryableGatewayClientProxy}.
+     */
+    private final ExecutorService refreshExecutor =
+            Executors.newFixedThreadPool(
+                    1, new ExecutorThreadFactory("fluss-admin-metadata-refresh"));
 
     public FlussAdmin(RpcClient client, MetadataUpdater metadataUpdater) {
-        this.gateway =
+        AdminGateway rawGateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getCoordinatorServer, client, AdminGateway.class);
         AdminGateway rawReadOnlyGateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getRandomTabletServer, client, AdminGateway.class);
+        this.gateway =
+                RetryableGatewayClientProxy.createRetryableGatewayProxy(
+                        rawGateway,
+                        metadataUpdater::refreshClusterUntilAvailable,
+                        refreshExecutor,
+                        AdminGateway.class);
         this.readOnlyGateway =
                 RetryableGatewayClientProxy.createRetryableGatewayProxy(
                         rawReadOnlyGateway,
-                        () -> metadataUpdater.updateMetadata(null, null, null),
-                        READ_ONLY_GATEWAY_MAX_RETRIES,
+                        metadataUpdater::refreshClusterUntilAvailable,
+                        refreshExecutor,
                         AdminGateway.class);
         this.metadataUpdater = metadataUpdater;
     }
@@ -748,7 +763,9 @@ public class FlussAdmin implements Admin {
 
     @Override
     public void close() {
-        // nothing to do yet
+        // Stop the metadata-refresh executor; any in-flight refresh will be interrupted, which
+        // refreshClusterUntilAvailable handles by surfacing the InterruptedException upward.
+        refreshExecutor.shutdownNow();
     }
 
     private static Map<Integer, GetTableStatsRequest> prepareTableStatsRequests(

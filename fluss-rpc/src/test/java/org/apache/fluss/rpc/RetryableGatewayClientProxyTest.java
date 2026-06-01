@@ -26,8 +26,14 @@ import org.apache.fluss.rpc.messages.AuthenticateResponse;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -35,6 +41,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Unit tests for {@link RetryableGatewayClientProxy}. */
 class RetryableGatewayClientProxyTest {
+
+    private static final Executor REFRESH_EXECUTOR = ForkJoinPool.commonPool();
 
     @Test
     void testSuccessfulCallWithoutRetry() throws Exception {
@@ -44,7 +52,10 @@ class RetryableGatewayClientProxyTest {
         RpcGateway delegate = createGateway(callCount, 0);
         RpcGateway proxy =
                 RetryableGatewayClientProxy.createRetryableGatewayProxy(
-                        delegate, refreshCount::incrementAndGet, 3, RpcGateway.class);
+                        delegate,
+                        refreshCount::incrementAndGet,
+                        REFRESH_EXECUTOR,
+                        RpcGateway.class);
 
         CompletableFuture<ApiVersionsResponse> result = proxy.apiVersions(new ApiVersionsRequest());
         assertThat(result.get()).isNotNull();
@@ -57,18 +68,21 @@ class RetryableGatewayClientProxyTest {
         AtomicInteger callCount = new AtomicInteger(0);
         AtomicInteger refreshCount = new AtomicInteger(0);
 
-        // Fail with NetworkException for the first 2 calls, then succeed
-        RpcGateway delegate = createGateway(callCount, 2);
+        // Fail with NetworkException for the first call, then succeed on the single retry
+        RpcGateway delegate = createGateway(callCount, 1);
         RpcGateway proxy =
                 RetryableGatewayClientProxy.createRetryableGatewayProxy(
-                        delegate, refreshCount::incrementAndGet, 3, RpcGateway.class);
+                        delegate,
+                        refreshCount::incrementAndGet,
+                        REFRESH_EXECUTOR,
+                        RpcGateway.class);
 
         CompletableFuture<ApiVersionsResponse> result = proxy.apiVersions(new ApiVersionsRequest());
         assertThat(result.get()).isNotNull();
-        // Initial call + 2 retries = 3 total calls
-        assertThat(callCount.get()).isEqualTo(3);
-        // Metadata refresh should be called before each retry
-        assertThat(refreshCount.get()).isEqualTo(2);
+        // Initial call + 1 retry = 2 total calls
+        assertThat(callCount.get()).isEqualTo(2);
+        // Metadata refresh should be called once before the retry
+        assertThat(refreshCount.get()).isEqualTo(1);
     }
 
     @Test
@@ -76,11 +90,14 @@ class RetryableGatewayClientProxyTest {
         AtomicInteger callCount = new AtomicInteger(0);
         AtomicInteger refreshCount = new AtomicInteger(0);
 
-        // Always fail with NetworkException (more failures than max retries)
+        // Always fail with NetworkException (more failures than the single retry can recover)
         RpcGateway delegate = createGateway(callCount, Integer.MAX_VALUE);
         RpcGateway proxy =
                 RetryableGatewayClientProxy.createRetryableGatewayProxy(
-                        delegate, refreshCount::incrementAndGet, 3, RpcGateway.class);
+                        delegate,
+                        refreshCount::incrementAndGet,
+                        REFRESH_EXECUTOR,
+                        RpcGateway.class);
 
         CompletableFuture<ApiVersionsResponse> result = proxy.apiVersions(new ApiVersionsRequest());
         assertThatThrownBy(result::get)
@@ -88,10 +105,10 @@ class RetryableGatewayClientProxyTest {
                 .rootCause()
                 .isInstanceOf(NetworkException.class)
                 .hasMessageContaining("Simulated network error");
-        // Initial call + 3 retries = 4 total calls
-        assertThat(callCount.get()).isEqualTo(4);
-        // Metadata refresh should be called for each retry attempt
-        assertThat(refreshCount.get()).isEqualTo(3);
+        // Initial call + 1 retry = 2 total calls
+        assertThat(callCount.get()).isEqualTo(2);
+        // Metadata refresh should be called once before the single retry
+        assertThat(refreshCount.get()).isEqualTo(1);
     }
 
     @Test
@@ -115,7 +132,10 @@ class RetryableGatewayClientProxyTest {
 
         RpcGateway proxy =
                 RetryableGatewayClientProxy.createRetryableGatewayProxy(
-                        delegate, refreshCount::incrementAndGet, 3, RpcGateway.class);
+                        delegate,
+                        refreshCount::incrementAndGet,
+                        REFRESH_EXECUTOR,
+                        RpcGateway.class);
 
         CompletableFuture<ApiVersionsResponse> result = proxy.apiVersions(new ApiVersionsRequest());
         assertThatThrownBy(result::get)
@@ -145,7 +165,7 @@ class RetryableGatewayClientProxyTest {
 
         RpcGateway proxy =
                 RetryableGatewayClientProxy.createRetryableGatewayProxy(
-                        delegate, failingRefresh, 3, RpcGateway.class);
+                        delegate, failingRefresh, REFRESH_EXECUTOR, RpcGateway.class);
 
         // Should still succeed because the retry goes through even if refresh fails
         CompletableFuture<ApiVersionsResponse> result = proxy.apiVersions(new ApiVersionsRequest());
@@ -154,24 +174,62 @@ class RetryableGatewayClientProxyTest {
         assertThat(refreshCount.get()).isEqualTo(1);
     }
 
+    /**
+     * Verifies that when many failing RPCs run concurrently, only a single metadata refresh is
+     * issued: all retriers piggyback on the same in-flight refresh future. This prevents the
+     * pile-up of N redundant refresh tasks behind the metadata updater's lock.
+     */
     @Test
-    void testRetryWithMaxRetriesZeroDoesNotRetry() {
+    void testConcurrentFailingCallsShareSingleRefresh() throws Exception {
+        int n = 8;
         AtomicInteger callCount = new AtomicInteger(0);
         AtomicInteger refreshCount = new AtomicInteger(0);
+        CountDownLatch refreshGate = new CountDownLatch(1);
 
-        RpcGateway delegate = createGateway(callCount, Integer.MAX_VALUE);
+        // First n calls fail, subsequent calls succeed (so each retrier's retry will succeed).
+        RpcGateway delegate = createGateway(callCount, n);
+
+        // Block the refresh until the test releases it, so all retriers have a chance to arrive
+        // and either start or piggyback on the in-flight refresh.
+        Runnable blockingRefresh =
+                () -> {
+                    refreshCount.incrementAndGet();
+                    try {
+                        refreshGate.await();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                };
+
         RpcGateway proxy =
                 RetryableGatewayClientProxy.createRetryableGatewayProxy(
-                        delegate, refreshCount::incrementAndGet, 0, RpcGateway.class);
+                        delegate, blockingRefresh, REFRESH_EXECUTOR, RpcGateway.class);
 
-        CompletableFuture<ApiVersionsResponse> result = proxy.apiVersions(new ApiVersionsRequest());
-        assertThatThrownBy(result::get)
-                .isInstanceOf(ExecutionException.class)
-                .rootCause()
-                .isInstanceOf(NetworkException.class);
-        // Only the initial call, no retries
-        assertThat(callCount.get()).isEqualTo(1);
-        assertThat(refreshCount.get()).isEqualTo(0);
+        // Fire n calls; each fails on its initial invocation and queues for a refresh.
+        List<CompletableFuture<ApiVersionsResponse>> futures = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            futures.add(proxy.apiVersions(new ApiVersionsRequest()));
+        }
+
+        // Wait until the (single) refresh task has actually started.
+        long deadline = System.currentTimeMillis() + 5000;
+        while (refreshCount.get() == 0 && System.currentTimeMillis() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(refreshCount.get()).as("exactly one refresh should have started").isEqualTo(1);
+
+        // Release the refresh; all retriers should now proceed with their single retry.
+        refreshGate.countDown();
+        for (CompletableFuture<ApiVersionsResponse> f : futures) {
+            assertThat(f.get(5, TimeUnit.SECONDS)).isNotNull();
+        }
+
+        // Initial n failing calls + n successful retries = 2n total invocations.
+        assertThat(callCount.get()).isEqualTo(2 * n);
+        // The critical assertion: n concurrent failures triggered only ONE refresh.
+        assertThat(refreshCount.get())
+                .as("concurrent retriers must share a single refresh")
+                .isEqualTo(1);
     }
 
     /**
