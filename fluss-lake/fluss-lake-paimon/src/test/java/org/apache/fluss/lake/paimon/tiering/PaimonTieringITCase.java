@@ -366,9 +366,9 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
             for (int i = 0; i < 10; i++) {
                 rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
                 flussRows.addAll(rows);
-                // write records
-                writeRows(t2, rows, true);
             }
+            // write records
+            writeRows(t2, flussRows, true);
             // check the status of replica after synced;
             // note: we can't update log start offset for unaware bucket mode log table
             assertReplicaStatus(t2Bucket, 30);

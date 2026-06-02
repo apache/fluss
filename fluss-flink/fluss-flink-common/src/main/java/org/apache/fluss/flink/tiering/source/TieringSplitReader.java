@@ -451,7 +451,7 @@ public class TieringSplitReader<WriteResult>
             }
 
             // has arrived into the end of the split
-            if (lastOffsetAndTimestamp.logOffset >= stoppingOffset - 1) {
+            if (lastOffsetAndTimestamp.lastScannedOffset >= stoppingOffset - 1) {
                 currentTableStoppingOffsets.remove(bucket);
                 if (bucket.getPartitionId() != null) {
                     currentLogScanner.unsubscribe(bucket.getPartitionId(), bucket.getBucket());
@@ -508,7 +508,9 @@ public class TieringSplitReader<WriteResult>
                 }
             }
         }
-        return new LogOffsetAndTimestamp(lastWrittenOffset, lastWrittenTimestamp);
+        ScanRecord lastRecord = records.get(records.size() - 1);
+        return new LogOffsetAndTimestamp(
+                lastWrittenOffset, lastWrittenTimestamp, lastRecord.logOffset());
     }
 
     /** Handles Arrow batch writing for the record batch path. */
@@ -553,7 +555,10 @@ public class TieringSplitReader<WriteResult>
             lastWrittenBatchEndOffset = batchEndOffset;
             lastWrittenTimestamp = batchToWrite.getTimestamp();
         }
-        return new LogOffsetAndTimestamp(lastWrittenBatchEndOffset, lastWrittenTimestamp);
+        ArrowBatchData lastBatch = batches.get(batches.size() - 1);
+        long lastScannedOffset = lastBatch.getBaseLogOffset() + lastBatch.getRecordCount() - 1L;
+        return new LogOffsetAndTimestamp(
+                lastWrittenBatchEndOffset, lastWrittenTimestamp, lastScannedOffset);
     }
 
     /** Closes all Arrow batches in the list to release resources. */
@@ -889,10 +894,13 @@ public class TieringSplitReader<WriteResult>
 
         private final long logOffset;
         private final long timestamp;
+        /** The last offset that was scanned (regardless of whether it was written). */
+        private final long lastScannedOffset;
 
-        public LogOffsetAndTimestamp(long logOffset, long timestamp) {
+        public LogOffsetAndTimestamp(long logOffset, long timestamp, long lastScannedOffset) {
             this.logOffset = logOffset;
             this.timestamp = timestamp;
+            this.lastScannedOffset = lastScannedOffset;
         }
     }
 }

@@ -28,7 +28,10 @@ import org.apache.arrow.vector.Float4Vector;
 import org.apache.arrow.vector.Float8Vector;
 import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.SmallIntVector;
+import org.apache.arrow.vector.TimeMicroVector;
 import org.apache.arrow.vector.TimeMilliVector;
+import org.apache.arrow.vector.TimeNanoVector;
+import org.apache.arrow.vector.TimeSecVector;
 import org.apache.arrow.vector.TimeStampVector;
 import org.apache.arrow.vector.TinyIntVector;
 import org.apache.arrow.vector.VarBinaryVector;
@@ -365,6 +368,8 @@ public interface Arrow2PaimonVectorConverter {
 
         @Override
         public Arrow2PaimonVectorConverter visit(TimeType timeType) {
+            // Paimon stores TIME as milliseconds int. Arrow may use different units
+            // depending on precision, so convert to millis accordingly.
             return vector ->
                     new IntColumnVector() {
 
@@ -375,7 +380,18 @@ public interface Arrow2PaimonVectorConverter {
 
                         @Override
                         public int getInt(int index) {
-                            return ((TimeMilliVector) vector).get(index);
+                            if (vector instanceof TimeMilliVector) {
+                                return ((TimeMilliVector) vector).get(index);
+                            } else if (vector instanceof TimeMicroVector) {
+                                return (int) (((TimeMicroVector) vector).get(index) / 1_000);
+                            } else if (vector instanceof TimeNanoVector) {
+                                return (int) (((TimeNanoVector) vector).get(index) / 1_000_000);
+                            } else if (vector instanceof TimeSecVector) {
+                                return ((TimeSecVector) vector).get(index) * 1_000;
+                            }
+                            throw new UnsupportedOperationException(
+                                    "Unsupported Arrow time vector type: "
+                                            + vector.getClass().getName());
                         }
                     };
         }
