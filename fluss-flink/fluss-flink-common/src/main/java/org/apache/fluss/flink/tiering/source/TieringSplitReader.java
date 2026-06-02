@@ -21,7 +21,9 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.client.table.scanner.log.ArrowScanRecords;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
+import org.apache.fluss.client.table.scanner.log.LogScannerImpl;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.flink.source.reader.BoundedSplitReader;
 import org.apache.fluss.flink.source.reader.RecordAndPos;
@@ -29,12 +31,18 @@ import org.apache.fluss.flink.tiering.source.metrics.TieringMetrics;
 import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSnapshotSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
+import org.apache.fluss.lake.batch.ArrowRecordBatch;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
+import org.apache.fluss.lake.writer.SupportsRecordBatchWrite;
+import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.function.SupplierWithException;
 
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitReader;
@@ -56,6 +64,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
+import java.util.function.Consumer;
+import java.util.function.Function;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -98,6 +108,8 @@ public class TieringSplitReader<WriteResult>
     @Nullable private BoundedSplitReader currentSnapshotSplitReader;
     @Nullable private TieringSnapshotSplit currentSnapshotSplit;
     @Nullable private Integer currentTableNumberOfSplits;
+    // whether the current table uses the Arrow record batch path for tiering
+    @Nullable private Boolean currentTableUseRecordBatchPath;
 
     // map from table bucket to split id
     private final Map<TableBucket, TieringSplit> currentTableSplitsByBucket;
@@ -108,18 +120,21 @@ public class TieringSplitReader<WriteResult>
     private final Set<TieringSplit> currentEmptySplits;
 
     private final TieringMetrics tieringMetrics;
+    private final boolean unshadedArrowAvailable;
 
     public TieringSplitReader(
             Connection connection,
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
+            ClassLoader userClassLoader,
             TieringMetrics tieringMetrics) {
-        this(connection, lakeTieringFactory, DEFAULT_POLL_TIMEOUT, tieringMetrics);
+        this(connection, lakeTieringFactory, userClassLoader, DEFAULT_POLL_TIMEOUT, tieringMetrics);
     }
 
     @VisibleForTesting
     protected TieringSplitReader(
             Connection connection,
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
+            ClassLoader userClassLoader,
             Duration pollTimeout,
             TieringMetrics tieringMetrics) {
         this.lakeTieringFactory = lakeTieringFactory;
@@ -136,6 +151,7 @@ public class TieringSplitReader<WriteResult>
         this.reachTieringMaxDurationTables = new HashSet<>();
         this.pollTimeout = pollTimeout;
         this.tieringMetrics = tieringMetrics;
+        this.unshadedArrowAvailable = checkUnshadedArrowAvailable(userClassLoader);
     }
 
     @Override
@@ -171,8 +187,22 @@ public class TieringSplitReader<WriteResult>
                 if (reachTieringMaxDurationTables.contains(currentTableId)) {
                     return forceCompleteTieringLogRecords();
                 }
-                ScanRecords scanRecords = currentLogScanner.poll(pollTimeout);
-                return forLogRecords(scanRecords);
+                if (useRecordBatchPath()) {
+                    ArrowScanRecords arrowScanRecords =
+                            ((LogScannerImpl) currentLogScanner).pollRecordBatch(pollTimeout);
+                    return processLogRecords(
+                            arrowScanRecords.buckets(),
+                            arrowScanRecords::records,
+                            this::handleArrowBatchRecords,
+                            TieringSplitReader::closeArrowBatches);
+                } else {
+                    ScanRecords scanRecords = currentLogScanner.poll(pollTimeout);
+                    return processLogRecords(
+                            scanRecords.buckets(),
+                            scanRecords::records,
+                            this::handleLogRecords,
+                            ignored -> {});
+                }
             } else {
                 return emptyTableBucketWriteResultWithSplitIds();
             }
@@ -350,43 +380,78 @@ public class TieringSplitReader<WriteResult>
         return new TableBucketWriteResultWithSplitIds(writeResults, finishedSplitIds);
     }
 
-    private RecordsWithSplitIds<TableBucketWriteResult<WriteResult>> forLogRecords(
-            ScanRecords scanRecords) throws IOException {
+    /**
+     * Determines whether the current table should use the Arrow record batch path for tiering. The
+     * batch path is used when the table is an ARROW format append-only (log) table and the lake
+     * writer supports batch writing.
+     */
+    private boolean useRecordBatchPath() {
+        if (currentTableUseRecordBatchPath != null) {
+            return currentTableUseRecordBatchPath;
+        }
+        TableInfo tableInfo = checkNotNull(currentTable).getTableInfo();
+
+        currentTableUseRecordBatchPath =
+                unshadedArrowAvailable
+                        && !tableInfo.hasPrimaryKey()
+                        && tableInfo.getTableConfig().getLogFormat() == LogFormat.ARROW
+                        && tableInfo.getTableConfig().getDataLakeFormat().get()
+                                == DataLakeFormat.PAIMON;
+        return currentTableUseRecordBatchPath;
+    }
+
+    /**
+     * Generic template method for processing tiering log records. Encapsulates the shared workflow
+     * of bucket traversal, stopping offset checks, LakeWriter management, offset/timestamp
+     * tracking, split completion, and table completion.
+     *
+     * @param buckets the set of buckets that have records
+     * @param recordsExtractor function to extract records for a given bucket
+     * @param handler callback for processing records within a single bucket
+     * @param noStoppingOffsetHandler callback for handling records when no stopping offset exists
+     * @param <R> the record type
+     * @return the write results and finished split IDs
+     * @throws IOException if an I/O error occurs during processing
+     */
+    private <R> RecordsWithSplitIds<TableBucketWriteResult<WriteResult>> processLogRecords(
+            Set<TableBucket> buckets,
+            Function<TableBucket, List<R>> recordsExtractor,
+            BucketRecordsHandler<R> handler,
+            Consumer<List<R>> noStoppingOffsetHandler)
+            throws IOException {
         Map<TableBucket, TableBucketWriteResult<WriteResult>> writeResults = new HashMap<>();
         Map<TableBucket, String> finishedSplitIds = new HashMap<>();
 
-        for (TableBucket bucket : scanRecords.buckets()) {
-            List<ScanRecord> bucketScanRecords = scanRecords.records(bucket);
-            if (bucketScanRecords.isEmpty()) {
+        for (TableBucket bucket : buckets) {
+            List<R> records = recordsExtractor.apply(bucket);
+            if (records.isEmpty()) {
                 continue;
             }
+
             // no any stopping offset, just skip handle the records for the bucket
             Long stoppingOffset = currentTableStoppingOffsets.get(bucket);
             if (stoppingOffset == null) {
+                noStoppingOffsetHandler.accept(records);
                 continue;
             }
-            LakeWriter<WriteResult> lakeWriter = null;
-            for (ScanRecord record : bucketScanRecords) {
-                // if record is less than stopping offset
-                if (record.logOffset() < stoppingOffset) {
-                    if (lakeWriter == null) {
-                        lakeWriter =
-                                getOrCreateLakeWriter(
-                                        bucket,
-                                        currentTableSplitsByBucket.get(bucket).getPartitionName());
-                    }
-                    lakeWriter.write(record);
-                    if (record.getSizeInBytes() > 0) {
-                        tieringMetrics.recordBytesRead(record.getSizeInBytes());
-                    }
-                }
+
+            LogOffsetAndTimestamp lastOffsetAndTimestamp =
+                    handler.handleRecords(
+                            records,
+                            () ->
+                                    getOrCreateLakeWriter(
+                                            bucket,
+                                            currentTableSplitsByBucket
+                                                    .get(bucket)
+                                                    .getPartitionName()),
+                            stoppingOffset);
+
+            if (lastOffsetAndTimestamp.logOffset >= 0) {
+                currentTableTieredOffsetAndTimestamp.put(bucket, lastOffsetAndTimestamp);
             }
-            ScanRecord lastRecord = bucketScanRecords.get(bucketScanRecords.size() - 1);
-            currentTableTieredOffsetAndTimestamp.put(
-                    bucket,
-                    new LogOffsetAndTimestamp(lastRecord.logOffset(), lastRecord.timestamp()));
-            // has arrived into the end of the split,
-            if (lastRecord.logOffset() >= stoppingOffset - 1) {
+
+            // has arrived into the end of the split
+            if (lastOffsetAndTimestamp.logOffset >= stoppingOffset - 1) {
                 currentTableStoppingOffsets.remove(bucket);
                 if (bucket.getPartitionId() != null) {
                     currentLogScanner.unsubscribe(bucket.getPartitionId(), bucket.getBucket());
@@ -403,7 +468,7 @@ public class TieringSplitReader<WriteResult>
                                 bucket,
                                 currentTieringSplit.getPartitionName(),
                                 stoppingOffset,
-                                lastRecord.timestamp()));
+                                lastOffsetAndTimestamp.timestamp));
                 // put split of the bucket
                 finishedSplitIds.put(bucket, currentSplitId);
                 LOG.info(
@@ -419,6 +484,83 @@ public class TieringSplitReader<WriteResult>
         }
 
         return new TableBucketWriteResultWithSplitIds(writeResults, finishedSplitIds);
+    }
+
+    /** Handles row-based ScanRecord writing for the log path. */
+    private LogOffsetAndTimestamp handleLogRecords(
+            List<ScanRecord> records,
+            SupplierWithException<LakeWriter<?>, IOException> lakeWriterSupplier,
+            long stoppingOffset)
+            throws IOException {
+        long lastWrittenOffset = -1;
+        long lastWrittenTimestamp = -1;
+        LakeWriter<?> lakeWriter = null;
+        for (ScanRecord record : records) {
+            if (record.logOffset() < stoppingOffset) {
+                if (lakeWriter == null) {
+                    lakeWriter = lakeWriterSupplier.get();
+                }
+                lakeWriter.write(record);
+                lastWrittenOffset = record.logOffset();
+                lastWrittenTimestamp = record.timestamp();
+                if (record.getSizeInBytes() > 0) {
+                    tieringMetrics.recordBytesRead(record.getSizeInBytes());
+                }
+            }
+        }
+        return new LogOffsetAndTimestamp(lastWrittenOffset, lastWrittenTimestamp);
+    }
+
+    /** Handles Arrow batch writing for the record batch path. */
+    private LogOffsetAndTimestamp handleArrowBatchRecords(
+            List<ArrowBatchData> batches,
+            SupplierWithException<LakeWriter<?>, IOException> lakeWriterSupplier,
+            long stoppingOffset)
+            throws IOException {
+        SupportsRecordBatchWrite batchWriter = null;
+        long lastWrittenBatchEndOffset = -1;
+        long lastWrittenTimestamp = -1;
+        for (ArrowBatchData batch : batches) {
+            long batchBaseOffset = batch.getBaseLogOffset();
+            if (batchBaseOffset >= stoppingOffset) {
+                batch.close();
+                continue;
+            }
+
+            long writableRowCount = stoppingOffset - batchBaseOffset;
+            int writableRows = (int) Math.min(batch.getRecordCount(), writableRowCount);
+            if (writableRows <= 0) {
+                batch.close();
+                continue;
+            }
+
+            ArrowBatchData batchToWrite = batch;
+            if (writableRows < batch.getRecordCount()) {
+                batchToWrite = batch.truncateAndTransferOwnership(writableRows);
+            }
+
+            if (batchWriter == null) {
+                batchWriter = (SupportsRecordBatchWrite) lakeWriterSupplier.get();
+            }
+            long batchEndOffset = batchBaseOffset + writableRows - 1L;
+            long batchSizeInBytes = batchToWrite.getSizeInBytes();
+            try (ArrowRecordBatch arrowRecordBatch = new ArrowRecordBatch(batchToWrite)) {
+                batchWriter.write(arrowRecordBatch);
+            }
+            if (batchSizeInBytes > 0) {
+                tieringMetrics.recordBytesRead(batchSizeInBytes);
+            }
+            lastWrittenBatchEndOffset = batchEndOffset;
+            lastWrittenTimestamp = batchToWrite.getTimestamp();
+        }
+        return new LogOffsetAndTimestamp(lastWrittenBatchEndOffset, lastWrittenTimestamp);
+    }
+
+    /** Closes all Arrow batches in the list to release resources. */
+    private static void closeArrowBatches(List<ArrowBatchData> batches) {
+        for (ArrowBatchData batch : batches) {
+            batch.close();
+        }
     }
 
     private LakeWriter<WriteResult> getOrCreateLakeWriter(
@@ -565,6 +707,7 @@ public class TieringSplitReader<WriteResult>
         currentTableId = null;
         currentTablePath = null;
         currentTableNumberOfSplits = null;
+        currentTableUseRecordBatchPath = null;
         currentPendingSnapshotSplits.clear();
         currentTableStoppingOffsets.clear();
         currentTableTieredOffsetAndTimestamp.clear();
@@ -703,6 +846,42 @@ public class TieringSplitReader<WriteResult>
         @Override
         public Set<String> finishedSplits() {
             return new HashSet<>(bucketSplits.values());
+        }
+    }
+
+    /**
+     * Callback interface for processing records within a single bucket. Encapsulates the
+     * differences in write strategy and offset/timestamp calculation between the row-based
+     * (ScanRecord) and Arrow batch (ArrowBatchData) paths.
+     *
+     * @param <R> the record type (ScanRecord or ArrowBatchData)
+     */
+    @FunctionalInterface
+    private interface BucketRecordsHandler<R> {
+
+        /**
+         * Processes the records for a bucket, writes them to the lake, and returns the last offset
+         * and timestamp.
+         *
+         * @param records the records for this bucket
+         * @param lakeWriterSupplier supplier for lazily creating the lake writer
+         * @param stoppingOffset the stopping offset for this bucket
+         * @return the last offset and timestamp after processing
+         * @throws IOException if an I/O error occurs during writing
+         */
+        LogOffsetAndTimestamp handleRecords(
+                List<R> records,
+                SupplierWithException<LakeWriter<?>, IOException> lakeWriterSupplier,
+                long stoppingOffset)
+                throws IOException;
+    }
+
+    private static boolean checkUnshadedArrowAvailable(ClassLoader classLoader) {
+        try {
+            Class.forName("org.apache.arrow.vector.VectorSchemaRoot", false, classLoader);
+            return true;
+        } catch (ClassNotFoundException e) {
+            return false;
         }
     }
 

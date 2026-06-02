@@ -90,11 +90,16 @@ public final class TieringSourceReader<WriteResult>
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
             Duration pollTimeout) {
         TieringMetrics tieringMetrics = new TieringMetrics(context.metricGroup());
+        ClassLoader userClassLoader = context.getUserCodeClassLoader().asClassLoader();
         return new TieringSourceFetcherManager<>(
                 elementsQueue,
                 () ->
                         new TieringSplitReader<>(
-                                connection, lakeTieringFactory, pollTimeout, tieringMetrics),
+                                connection,
+                                lakeTieringFactory,
+                                userClassLoader,
+                                pollTimeout,
+                                tieringMetrics),
                 context.getConfiguration(),
                 (ignore) -> {});
     }

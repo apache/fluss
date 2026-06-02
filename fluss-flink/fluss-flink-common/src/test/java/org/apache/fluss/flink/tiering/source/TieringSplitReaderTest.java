@@ -341,7 +341,10 @@ class TieringSplitReaderTest extends FlinkTestBase {
                         InternalSourceReaderMetricGroup.mock(
                                 new MetricListener().getMetricGroup()));
         return new TieringSplitReader<>(
-                connection, new TestingLakeTieringFactory(), tieringMetrics);
+                connection,
+                new TestingLakeTieringFactory(),
+                Thread.currentThread().getContextClassLoader(),
+                tieringMetrics);
     }
 
     private TieringSplitReader<TestingWriteResult> createTieringReader(
@@ -350,7 +353,11 @@ class TieringSplitReaderTest extends FlinkTestBase {
                 new TieringMetrics(
                         InternalSourceReaderMetricGroup.mock(
                                 new MetricListener().getMetricGroup()));
-        return new TieringSplitReader<>(connection, lakeTieringFactory, tieringMetrics);
+        return new TieringSplitReader<>(
+                connection,
+                lakeTieringFactory,
+                Thread.currentThread().getContextClassLoader(),
+                tieringMetrics);
     }
 
     private void verifyTieringRows(
