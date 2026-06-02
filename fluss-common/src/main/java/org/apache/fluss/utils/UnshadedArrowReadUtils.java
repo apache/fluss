@@ -24,18 +24,19 @@ import org.apache.fluss.record.UnshadedFlussVectorLoader;
 import org.apache.fluss.types.RowType;
 
 import org.apache.arrow.memory.BufferAllocator;
-import org.apache.arrow.vector.BaseFixedWidthVector;
-import org.apache.arrow.vector.BaseVariableWidthVector;
 import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
-import org.apache.arrow.vector.complex.ListVector;
 import org.apache.arrow.vector.ipc.ReadChannel;
 import org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
 import org.apache.arrow.vector.ipc.message.MessageSerializer;
+import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.Schema;
+import org.apache.arrow.vector.util.TransferPair;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
 
 /** Utilities for loading and projecting Arrow scan batches with unshaded Arrow classes. */
 @Internal
@@ -74,6 +75,17 @@ public final class UnshadedArrowReadUtils {
         }
     }
 
+    /**
+     * Projects a VectorSchemaRoot from old schema to target schema using a column projection
+     * mapping.
+     *
+     * @param sourceRoot the source VectorSchemaRoot with old schema data
+     * @param targetRowType the target RowType to project to
+     * @param columnProjection mapping from target column index to source column index; -1 means
+     *     column doesn't exist in source (filled with nulls)
+     * @param allocator the allocator for creating new vectors
+     * @return a new VectorSchemaRoot with the target schema
+     */
     public static VectorSchemaRoot projectVectorSchemaRoot(
             VectorSchemaRoot sourceRoot,
             RowType targetRowType,
@@ -81,51 +93,30 @@ public final class UnshadedArrowReadUtils {
             BufferAllocator allocator) {
         int rowCount = sourceRoot.getRowCount();
         Schema targetSchema = toArrowSchema(targetRowType);
-        VectorSchemaRoot targetRoot = VectorSchemaRoot.create(targetSchema, allocator);
-        for (int i = 0; i < columnProjection.length; i++) {
-            FieldVector targetVector = targetRoot.getVector(i);
-            initFieldVector(targetVector, rowCount);
-            if (columnProjection[i] < 0) {
-                fillNullVector(targetVector, rowCount);
-            } else {
-                FieldVector sourceVector = sourceRoot.getVector(columnProjection[i]);
-                // TODO: Optimize this projection path with Arrow vector transfer/copy utilities
-                // when we only need to reuse or reorder existing columns. The current row-by-row
-                // copy is acceptable for now because this path is not a hot path and is mainly
-                // used by the tiering service, which recreates scanners instead of scanning in a
-                // tight loop.
-                for (int rowId = 0; rowId < rowCount; rowId++) {
-                    targetVector.copyFromSafe(rowId, rowId, sourceVector);
+        List<Field> targetFields = targetSchema.getFields();
+        List<FieldVector> targetVectors = new ArrayList<>(columnProjection.length);
+        try {
+            for (int i = 0; i < columnProjection.length; i++) {
+                if (columnProjection[i] < 0) {
+                    // Column doesn't exist in source, fill with nulls
+                    FieldVector targetVector = targetFields.get(i).createVector(allocator);
+                    targetVector.allocateNew();
+                    for (int rowId = 0; rowId < rowCount; rowId++) {
+                        targetVector.setNull(rowId);
+                    }
+                    targetVector.setValueCount(rowCount);
+                    targetVectors.add(targetVector);
+                } else {
+                    FieldVector sourceVector = sourceRoot.getVector(columnProjection[i]);
+                    TransferPair transfer = sourceVector.getTransferPair(allocator);
+                    transfer.splitAndTransfer(0, rowCount);
+                    targetVectors.add((FieldVector) transfer.getTo());
                 }
-                targetVector.setValueCount(rowCount);
             }
+        } catch (Exception e) {
+            targetVectors.forEach(FieldVector::close);
+            throw e;
         }
-        targetRoot.setRowCount(rowCount);
-        return targetRoot;
-    }
-
-    private static void fillNullVector(FieldVector fieldVector, int rowCount) {
-        for (int i = 0; i < rowCount; i++) {
-            fieldVector.setNull(i);
-        }
-        fieldVector.setValueCount(rowCount);
-    }
-
-    private static void initFieldVector(FieldVector fieldVector, int rowCount) {
-        fieldVector.setInitialCapacity(rowCount);
-        if (fieldVector instanceof BaseFixedWidthVector) {
-            ((BaseFixedWidthVector) fieldVector).allocateNew(rowCount);
-        } else if (fieldVector instanceof BaseVariableWidthVector) {
-            ((BaseVariableWidthVector) fieldVector).allocateNew(rowCount);
-        } else if (fieldVector instanceof ListVector) {
-            ListVector listVector = (ListVector) fieldVector;
-            listVector.allocateNew();
-            FieldVector dataVector = listVector.getDataVector();
-            if (dataVector != null) {
-                initFieldVector(dataVector, rowCount);
-            }
-        } else {
-            fieldVector.allocateNew();
-        }
+        return new VectorSchemaRoot(targetFields, targetVectors, rowCount);
     }
 }

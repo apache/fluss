@@ -409,8 +409,18 @@ public class LogRecordReadContext
             bufferAllocator.close();
         }
 
-        IOUtils.closeQuietly(unshadedBufferAllocator);
-        unshadedBufferAllocator = null;
+        if (unshadedBufferAllocator != null) {
+            try {
+                unshadedBufferAllocator.close();
+            } catch (Exception e) {
+                throw new RuntimeException(
+                        "Failed to close Arrow buffer allocator. "
+                                + "Arrow batches returned by pollRecordBatch() must be closed "
+                                + "before closing the scanner.",
+                        e);
+            }
+            unshadedBufferAllocator = null;
+        }
     }
 
     private AutoCloseable getOrCreateUnshadedBufferAllocator() {
