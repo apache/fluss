@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.utils.AbstractIterator;
+import org.apache.fluss.utils.IOUtils;
 
 import javax.annotation.Nonnull;
 
@@ -30,9 +31,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** A container that holds the scanned Arrow batches per bucket for a particular table. */
+/**
+ * A container that holds the scanned Arrow batches per bucket for a particular table.
+ *
+ * <p>Each {@link ArrowBatchData} holds off-heap Arrow memory. Callers should use try-with-resources
+ * on this container to ensure all batches are released if processing fails mid-iteration.
+ */
 @Internal
-public class ArrowScanRecords implements Iterable<ArrowBatchData> {
+public class ArrowScanRecords implements Iterable<ArrowBatchData>, AutoCloseable {
     public static final ArrowScanRecords EMPTY = new ArrowScanRecords(Collections.emptyMap());
 
     private final Map<TableBucket, List<ArrowBatchData>> records;
@@ -68,6 +74,16 @@ public class ArrowScanRecords implements Iterable<ArrowBatchData> {
 
     public boolean isEmpty() {
         return records.isEmpty();
+    }
+
+    /** Closes all Arrow batches held by this container, releasing off-heap memory. */
+    @Override
+    public void close() {
+        for (List<ArrowBatchData> recs : records.values()) {
+            for (ArrowBatchData rec : recs) {
+                IOUtils.closeQuietly(rec);
+            }
+        }
     }
 
     @Override

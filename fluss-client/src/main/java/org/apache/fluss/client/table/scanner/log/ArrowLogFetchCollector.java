@@ -105,4 +105,20 @@ public class ArrowLogFetchCollector
     protected ArrowScanRecords toResult(Map<TableBucket, List<ArrowBatchData>> fetchedRecords) {
         return new ArrowScanRecords(fetchedRecords);
     }
+
+    @Override
+    protected void closeFetchedRecords(Map<TableBucket, List<ArrowBatchData>> fetched) {
+        for (List<ArrowBatchData> batches : fetched.values()) {
+            for (ArrowBatchData batch : batches) {
+                try {
+                    batch.close();
+                } catch (Exception e) {
+                    LOG.warn(
+                            "Failed to close Arrow batch during cleanup for table {}",
+                            tablePath,
+                            e);
+                }
+            }
+        }
+    }
 }

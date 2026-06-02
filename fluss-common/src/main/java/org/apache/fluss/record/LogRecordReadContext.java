@@ -159,7 +159,6 @@ public class LogRecordReadContext
                 dataRowType,
                 schemaId,
                 allocator,
-                selectedFields,
                 fieldGetters,
                 projectionPushDowned,
                 schemaGetter);
@@ -243,14 +242,7 @@ public class LogRecordReadContext
         FieldGetter[] fieldGetters = buildProjectedFieldGetters(rowType, selectedFields);
         // for INDEXED log format, the projection is NEVER push downed to the server side
         return new LogRecordReadContext(
-                LogFormat.INDEXED,
-                rowType,
-                schemaId,
-                null,
-                selectedFields,
-                fieldGetters,
-                false,
-                schemaGetter);
+                LogFormat.INDEXED, rowType, schemaId, null, fieldGetters, false, schemaGetter);
     }
 
     /**
@@ -281,14 +273,7 @@ public class LogRecordReadContext
         FieldGetter[] fieldGetters = buildProjectedFieldGetters(rowType, selectedFields);
         // for COMPACTED log format, the projection is NEVER push downed to the server side
         return new LogRecordReadContext(
-                LogFormat.COMPACTED,
-                rowType,
-                schemaId,
-                null,
-                selectedFields,
-                fieldGetters,
-                false,
-                schemaGetter);
+                LogFormat.COMPACTED, rowType, schemaId, null, fieldGetters, false, schemaGetter);
     }
 
     private LogRecordReadContext(
@@ -296,7 +281,6 @@ public class LogRecordReadContext
             RowType targetDataRowType,
             int targetSchemaId,
             BufferAllocator bufferAllocator,
-            int[] selectedFields,
             FieldGetter[] selectedFieldGetters,
             boolean projectionPushDowned,
             SchemaGetter schemaGetter) {
@@ -409,17 +393,19 @@ public class LogRecordReadContext
             bufferAllocator.close();
         }
 
-        if (unshadedBufferAllocator != null) {
-            try {
-                unshadedBufferAllocator.close();
-            } catch (Exception e) {
-                throw new RuntimeException(
-                        "Failed to close Arrow buffer allocator. "
-                                + "Arrow batches returned by pollRecordBatch() must be closed "
-                                + "before closing the scanner.",
-                        e);
+        synchronized (unshadedArrowResourceLock) {
+            if (unshadedBufferAllocator != null) {
+                try {
+                    unshadedBufferAllocator.close();
+                } catch (Exception e) {
+                    throw new RuntimeException(
+                            "Failed to close Arrow buffer allocator. "
+                                    + "Arrow batches returned by pollRecordBatch() must be closed "
+                                    + "before closing the scanner.",
+                            e);
+                }
+                unshadedBufferAllocator = null;
             }
-            unshadedBufferAllocator = null;
         }
     }
 

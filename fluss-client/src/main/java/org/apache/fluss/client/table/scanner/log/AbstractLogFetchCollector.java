@@ -132,6 +132,11 @@ abstract class AbstractLogFetchCollector<T, R> {
             if (fetched.isEmpty()) {
                 throw e;
             }
+        } catch (Exception e) {
+            // Release any off-heap resources (e.g. Arrow buffers) held by
+            // already-fetched records before propagating the unexpected error.
+            closeFetchedRecords(fetched);
+            throw e;
         }
 
         return toResult(fetched);
@@ -241,4 +246,11 @@ abstract class AbstractLogFetchCollector<T, R> {
     protected abstract int recordCount(List<T> fetchedRecords);
 
     protected abstract R toResult(Map<TableBucket, List<T>> fetchedRecords);
+
+    /**
+     * Release resources held by fetched records on failure. The default implementation is a no-op,
+     * suitable for record types that are plain Java objects. Subclasses whose record types hold
+     * off-heap resources (e.g. Arrow buffers) should override this to close them.
+     */
+    protected void closeFetchedRecords(Map<TableBucket, List<T>> fetched) {}
 }

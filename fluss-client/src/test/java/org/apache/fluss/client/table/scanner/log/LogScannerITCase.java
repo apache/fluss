@@ -540,27 +540,28 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             assertThat(System.nanoTime())
                     .as("Timed out waiting for %s records, got %s", expectedRecords, count)
                     .isLessThan(deadline);
-            ArrowScanRecords records = scanner.pollRecordBatch(Duration.ofSeconds(1));
-            for (ArrowBatchData batch : records) {
-                try (ArrowBatchData b = batch) {
-                    IntVector intVector = (IntVector) b.getVectorSchemaRoot().getVector(0);
-                    VarCharVector stringVector =
-                            (VarCharVector) b.getVectorSchemaRoot().getVector(1);
-                    VarCharVector extraVector =
-                            (VarCharVector) b.getVectorSchemaRoot().getVector(2);
-                    for (int rowId = 0; rowId < b.getRecordCount(); rowId++) {
-                        int expectedValue = (int) (b.getBaseLogOffset() + rowId);
-                        assertThat(expectedValue).isGreaterThanOrEqualTo(minExpectedOffset);
-                        assertThat(intVector.get(rowId)).isEqualTo(expectedValue);
-                        assertThat(stringVector.getObject(rowId).toString())
-                                .isEqualTo("value-" + expectedValue);
-                        if (expectedValue < 3) {
-                            assertThat(extraVector.isNull(rowId)).isTrue();
-                        } else {
-                            assertThat(extraVector.getObject(rowId).toString())
-                                    .isEqualTo("extra-" + expectedValue);
+            try (ArrowScanRecords records = scanner.pollRecordBatch(Duration.ofSeconds(1))) {
+                for (ArrowBatchData batch : records) {
+                    try (ArrowBatchData b = batch) {
+                        IntVector intVector = (IntVector) b.getVectorSchemaRoot().getVector(0);
+                        VarCharVector stringVector =
+                                (VarCharVector) b.getVectorSchemaRoot().getVector(1);
+                        VarCharVector extraVector =
+                                (VarCharVector) b.getVectorSchemaRoot().getVector(2);
+                        for (int rowId = 0; rowId < b.getRecordCount(); rowId++) {
+                            int expectedValue = (int) (b.getBaseLogOffset() + rowId);
+                            assertThat(expectedValue).isGreaterThanOrEqualTo(minExpectedOffset);
+                            assertThat(intVector.get(rowId)).isEqualTo(expectedValue);
+                            assertThat(stringVector.getObject(rowId).toString())
+                                    .isEqualTo("value-" + expectedValue);
+                            if (expectedValue < 3) {
+                                assertThat(extraVector.isNull(rowId)).isTrue();
+                            } else {
+                                assertThat(extraVector.getObject(rowId).toString())
+                                        .isEqualTo("extra-" + expectedValue);
+                            }
+                            count++;
                         }
-                        count++;
                     }
                 }
             }

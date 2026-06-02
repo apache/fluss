@@ -267,11 +267,20 @@ public abstract class CompletedFetch {
      * The {@link LogRecordBatch batches} are loaded as {@link ArrowBatchData Arrow batches} and
      * returned.
      *
-     * @param maxRecords The maximum number of records to return; the actual number returned may be
-     *     less
+     * @param maxRecords A soft upper bound on the number of records to return. Because batches are
+     *     returned whole (never split), the actual number of records may exceed this value. At
+     *     least one batch is always returned if available, even if it alone exceeds the limit.
      * @return {@link ArrowBatchData Arrow batches}
      */
     public List<ArrowBatchData> fetchArrowBatches(int maxRecords) {
+        if (cachedRecordException != null) {
+            throw new FetchException(
+                    "Received exception when fetching the next Arrow batch from "
+                            + tableBucket
+                            + ". If needed, please back past the batch to continue scanning.",
+                    cachedRecordException);
+        }
+
         if (isConsumed) {
             return Collections.emptyList();
         }
@@ -309,25 +318,23 @@ public abstract class CompletedFetch {
                 nextFetchOffset = batch.nextLogOffset();
             }
         } catch (Exception e) {
-            closeArrowBatches(arrowBatches);
-            throw new FetchException(
-                    "Received exception when fetching the next Arrow batch from "
-                            + tableBucket
-                            + ". If needed, please back past the batch to continue scanning.",
-                    e);
+            // Deliver partial results when possible, mirroring fetchRecords() semantics.
+            // The batch iterator is single-pass (batches.next()), so already-consumed
+            // batches cannot be re-read. Rolling back nextFetchOffset would leave it
+            // pointing at batches the iterator has already passed, causing a different
+            // kind of inconsistency. Delivering partial results keeps offsets, recordsRead,
+            // and the iterator position all in sync.
+            cachedRecordException = e;
+            if (arrowBatches.isEmpty()) {
+                throw new FetchException(
+                        "Received exception when fetching the next Arrow batch from "
+                                + tableBucket
+                                + ". If needed, please back past the batch to continue scanning.",
+                        e);
+            }
         }
 
         return arrowBatches;
-    }
-
-    private void closeArrowBatches(List<ArrowBatchData> arrowBatches) {
-        for (ArrowBatchData arrowBatch : arrowBatches) {
-            try {
-                arrowBatch.close();
-            } catch (Exception e) {
-                LOG.warn("Failed to close Arrow batch for bucket {}", tableBucket, e);
-            }
-        }
     }
 
     private LogRecord nextFetchedRecord() throws Exception {
