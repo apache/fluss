@@ -313,6 +313,7 @@ final class ReplicaTest extends ReplicaTestBase {
                                 new Object[] {3, "b1"}));
         assertThatLogRecords(fetchRecords(kvReplica))
                 .withSchema(DATA1_ROW_TYPE)
+                .withSchemaGetter(kvReplica.getSchemaGetter())
                 .isEqualTo(expected);
         int currentOffset = 4;
 

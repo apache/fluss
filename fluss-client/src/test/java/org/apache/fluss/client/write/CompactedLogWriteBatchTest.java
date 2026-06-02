@@ -45,6 +45,7 @@ import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
+import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -222,7 +223,9 @@ public class CompactedLogWriteBatchTest {
         assertThat(recordBatch.schemaId()).isEqualTo((short) DATA1_TABLE_INFO.getSchemaId());
         try (LogRecordReadContext readContext =
                         LogRecordReadContext.createCompactedRowReadContext(
-                                DATA1_ROW_TYPE, DATA1_TABLE_INFO.getSchemaId());
+                                DATA1_ROW_TYPE,
+                                DATA1_TABLE_INFO.getSchemaId(),
+                                TEST_SCHEMA_GETTER);
                 CloseableIterator<LogRecord> iterator = recordBatch.records(readContext)) {
             assertThat(iterator.hasNext()).isTrue();
             LogRecord record = iterator.next();

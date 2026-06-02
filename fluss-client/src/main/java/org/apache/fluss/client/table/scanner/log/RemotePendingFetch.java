@@ -18,6 +18,7 @@
 package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.FileLogRecords;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.remote.RemoteLogSegment;
@@ -30,6 +31,7 @@ class RemotePendingFetch implements PendingFetch {
 
     final RemoteLogSegment remoteLogSegment;
     private final RemoteLogDownloadFuture downloadFuture;
+    private final TablePath tablePath;
 
     private final int posInLogSegment;
     private final long fetchOffset;
@@ -41,6 +43,7 @@ class RemotePendingFetch implements PendingFetch {
     RemotePendingFetch(
             RemoteLogSegment remoteLogSegment,
             RemoteLogDownloadFuture downloadFuture,
+            TablePath tablePath,
             int posInLogSegment,
             long fetchOffset,
             long highWatermark,
@@ -49,6 +52,7 @@ class RemotePendingFetch implements PendingFetch {
             boolean isCheckCrc) {
         this.remoteLogSegment = remoteLogSegment;
         this.downloadFuture = downloadFuture;
+        this.tablePath = tablePath;
         this.posInLogSegment = posInLogSegment;
         this.fetchOffset = fetchOffset;
         this.highWatermark = highWatermark;
@@ -72,6 +76,7 @@ class RemotePendingFetch implements PendingFetch {
         FileLogRecords fileLogRecords = downloadFuture.getFileLogRecords(posInLogSegment);
         return new RemoteCompletedFetch(
                 remoteLogSegment.tableBucket(),
+                tablePath,
                 fileLogRecords,
                 highWatermark,
                 readContext,
