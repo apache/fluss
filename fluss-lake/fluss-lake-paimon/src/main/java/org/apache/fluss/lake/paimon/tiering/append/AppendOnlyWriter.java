@@ -19,9 +19,11 @@ package org.apache.fluss.lake.paimon.tiering.append;
 
 import org.apache.fluss.lake.paimon.tiering.RecordWriter;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.types.RowType;
 
+import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.table.BucketMode;
 import org.apache.paimon.table.FileStoreTable;
@@ -37,6 +39,13 @@ import static org.apache.fluss.lake.paimon.tiering.PaimonLakeTieringFactory.FLUS
 public class AppendOnlyWriter extends RecordWriter<InternalRow> {
 
     private final FileStoreTable fileStoreTable;
+
+    /**
+     * Lazily-initialized helper for Arrow batch writing. Stored as {@link AutoCloseable} to avoid
+     * loading Arrow classes when Arrow is not on the classpath. The actual type is {@link
+     * AppendOnlyArrowBatchHelper} which is only loaded when {@link #writeArrowBatch} is called.
+     */
+    @Nullable private AutoCloseable arrowBatchHelper;
 
     public AppendOnlyWriter(
             FileStoreTable fileStoreTable,
@@ -70,5 +79,35 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
             writtenBucket = 0;
         }
         tableWrite.getWrite().write(partition, writtenBucket, flussRecordAsPaimonRow);
+    }
+
+    /**
+     * Writes an Arrow batch directly to Paimon Parquet files. Delegates to {@link
+     * AppendOnlyArrowBatchHelper} which is lazily loaded to avoid class loading issues when Arrow
+     * is not on the classpath.
+     */
+    public void writeArrowBatch(ArrowBatchData arrowBatchData) throws Exception {
+        AppendOnlyArrowBatchHelper helper;
+        if (arrowBatchHelper == null) {
+            helper =
+                    new AppendOnlyArrowBatchHelper(
+                            fileStoreTable, tableWrite, tableRowType, bucket);
+            arrowBatchHelper = helper;
+        } else {
+            helper = (AppendOnlyArrowBatchHelper) arrowBatchHelper;
+        }
+        BinaryRow derivedPartition = helper.writeArrowBatch(arrowBatchData, partition);
+        if (partition == null) {
+            partition = derivedPartition;
+        }
+    }
+
+    @Override
+    public void close() throws Exception {
+        if (arrowBatchHelper != null) {
+            arrowBatchHelper.close();
+            arrowBatchHelper = null;
+        }
+        super.close();
     }
 }

@@ -378,6 +378,18 @@ public abstract class CompletedFetch {
         drain();
     }
 
+    /**
+     * Advances {@code nextFetchOffset} to the given offset, ensuring it never decreases. A
+     * decreasing offset can happen when an earlier batch in the response is fully skipped (its
+     * entire range is before {@code nextFetchOffset}), and its {@code nextLogOffset()} is less than
+     * the current {@code nextFetchOffset}. Without this guard, subsequent batches whose base offset
+     * falls between the regressed value and the original {@code nextFetchOffset} would bypass the
+     * slice logic and be returned un-trimmed.
+     */
+    private void advanceNextFetchOffset(long offset) {
+        nextFetchOffset = Math.max(nextFetchOffset, offset);
+    }
+
     private void maybeEnsureValid(LogRecordBatch batch) {
         if (isCheckCrcs) {
             if (readContext.isProjectionPushDowned()) {
