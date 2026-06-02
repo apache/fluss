@@ -51,7 +51,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -199,10 +198,11 @@ class CoordinatorServiceOrphanRpcsITCase {
             TableBucket tb, CompletedSnapshotStore.SnapshotInUseChecker inUseChecker) {
         return new CompletedSnapshotStore(
                 MAX_SNAPSHOTS_TO_RETAIN,
-                new SharedKvFileRegistry(Executors.newSingleThreadExecutor()),
+                new SharedKvFileRegistry(),
                 Collections.emptyList(),
                 new NoOpSnapshotHandleStore(),
-                Executors.newSingleThreadExecutor(),
+                org.apache.fluss.shaded.guava32.com.google.common.util.concurrent.MoreExecutors
+                        .directExecutor(),
                 inUseChecker);
     }
 

@@ -20,14 +20,12 @@ package org.apache.fluss.flink.action.orphan.build;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.metadata.ActiveKvSnapshots;
+import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
 import org.apache.fluss.flink.action.orphan.RpcErrorClassifier;
 import org.apache.fluss.flink.action.orphan.rule.BucketActiveRefs;
 import org.apache.fluss.fs.FSDataInputStream;
 import org.apache.fluss.fs.FsPath;
-import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
-import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
-import org.apache.fluss.rpc.messages.PbKvSnapshot;
-import org.apache.fluss.rpc.messages.PbRemoteLogManifestEntry;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonProcessingException;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
@@ -131,13 +129,13 @@ public final class ActiveRefsFetcher {
     private static AdminFacade wrap(Admin admin) {
         return new AdminFacade() {
             @Override
-            public CompletableFuture<ListRemoteLogManifestsResponse> listRemoteLogManifests(
+            public CompletableFuture<List<RemoteLogManifestInfo>> listRemoteLogManifests(
                     long tableId, @Nullable Long partitionId) {
                 return admin.listRemoteLogManifests(tableId, partitionId);
             }
 
             @Override
-            public CompletableFuture<ListKvSnapshotsResponse> listKvSnapshots(
+            public CompletableFuture<ActiveKvSnapshots> listKvSnapshots(
                     long tableId, @Nullable Long partitionId) {
                 return admin.listKvSnapshots(tableId, partitionId);
             }
@@ -154,9 +152,9 @@ public final class ActiveRefsFetcher {
      */
     public LogActiveRefsFetchResult fetchLogActiveRefsByBucket(
             long tableId, @Nullable Long partitionId) {
-        ListRemoteLogManifestsResponse rpc;
+        List<RemoteLogManifestInfo> manifests;
         try {
-            rpc =
+            manifests =
                     RetryUtils.executeWithRetry(
                             () -> admin.listRemoteLogManifests(tableId, partitionId).get(),
                             "listRemoteLogManifests",
@@ -171,15 +169,15 @@ public final class ActiveRefsFetcher {
                     formatRpcFailureReason(tableId, partitionId, e.getCause()));
         }
 
-        Map<Integer, List<PbRemoteLogManifestEntry>> entriesByBucket = new HashMap<>();
-        for (PbRemoteLogManifestEntry entry : rpc.getManifestsList()) {
-            int bucketId = entry.getTableBucket().getBucketId();
+        Map<Integer, List<RemoteLogManifestInfo>> entriesByBucket = new HashMap<>();
+        for (RemoteLogManifestInfo entry : manifests) {
+            int bucketId = entry.getTableBucket().getBucket();
             entriesByBucket.computeIfAbsent(bucketId, id -> new ArrayList<>()).add(entry);
         }
 
         Map<Integer, BucketActiveRefs> resolved = new HashMap<>();
         Map<Integer, String> readFailures = new HashMap<>();
-        for (Map.Entry<Integer, List<PbRemoteLogManifestEntry>> bucketEntries :
+        for (Map.Entry<Integer, List<RemoteLogManifestInfo>> bucketEntries :
                 entriesByBucket.entrySet()) {
             int bucketId = bucketEntries.getKey();
             try {
@@ -223,9 +221,9 @@ public final class ActiveRefsFetcher {
      * with the log path.
      */
     public KvActiveRefsFetchResult fetchKvActiveSnapDirs(long tableId, @Nullable Long partitionId) {
-        ListKvSnapshotsResponse rpc;
+        ActiveKvSnapshots activeKvSnapshots;
         try {
-            rpc =
+            activeKvSnapshots =
                     RetryUtils.executeWithRetry(
                             () -> admin.listKvSnapshots(tableId, partitionId).get(),
                             "listKvSnapshots",
@@ -240,10 +238,14 @@ public final class ActiveRefsFetcher {
                     formatRpcFailureReason(tableId, partitionId, e.getCause()));
         }
         Map<Integer, Set<String>> dirsByBucket = new HashMap<>();
-        for (PbKvSnapshot snapshot : rpc.getActiveSnapshotsList()) {
-            int bucketId = snapshot.getBucketId();
-            String dirName = FlussPaths.REMOTE_KV_SNAPSHOT_DIR_PREFIX + snapshot.getSnapshotId();
-            dirsByBucket.computeIfAbsent(bucketId, b -> new HashSet<>()).add(dirName);
+        for (Map.Entry<Integer, Set<Long>> entry :
+                activeKvSnapshots.getSnapshotIdsByBucket().entrySet()) {
+            int bucketId = entry.getKey();
+            Set<String> dirNames = new HashSet<>();
+            for (Long snapshotId : entry.getValue()) {
+                dirNames.add(FlussPaths.REMOTE_KV_SNAPSHOT_DIR_PREFIX + snapshotId);
+            }
+            dirsByBucket.put(bucketId, dirNames);
         }
         return KvActiveRefsFetchResult.ok(dirsByBucket);
     }
@@ -274,11 +276,11 @@ public final class ActiveRefsFetcher {
         return reason;
     }
 
-    private BucketActiveRefs buildBucketActiveRefs(List<PbRemoteLogManifestEntry> entries)
+    private BucketActiveRefs buildBucketActiveRefs(List<RemoteLogManifestInfo> entries)
             throws IOException {
         Set<String> manifestPaths = new HashSet<>();
         Set<String> segmentRelpaths = new HashSet<>();
-        for (PbRemoteLogManifestEntry entry : entries) {
+        for (RemoteLogManifestInfo entry : entries) {
             String path = entry.getRemoteLogManifestPath();
             manifestPaths.add(path);
             byte[] manifestBytes = metadataReader.read(new FsPath(path));
@@ -337,10 +339,10 @@ public final class ActiveRefsFetcher {
      */
     @VisibleForTesting
     interface AdminFacade {
-        CompletableFuture<ListRemoteLogManifestsResponse> listRemoteLogManifests(
+        CompletableFuture<List<RemoteLogManifestInfo>> listRemoteLogManifests(
                 long tableId, @Nullable Long partitionId);
 
-        CompletableFuture<ListKvSnapshotsResponse> listKvSnapshots(
+        CompletableFuture<ActiveKvSnapshots> listKvSnapshots(
                 long tableId, @Nullable Long partitionId);
     }
 

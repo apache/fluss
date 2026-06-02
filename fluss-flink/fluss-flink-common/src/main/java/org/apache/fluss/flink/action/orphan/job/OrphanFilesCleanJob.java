@@ -67,6 +67,7 @@ public final class OrphanFilesCleanJob {
                 trigger.process(new ScopeEnumeratorFunction(config))
                         .returns(TypeInformation.of(new TypeHint<CleanTask>() {}))
                         .setParallelism(1)
+                        .setMaxParallelism(1)
                         .name("ScopeEnumerator");
 
         // Stage 2: ScanAndClean (parallelism=N)
@@ -86,8 +87,9 @@ public final class OrphanFilesCleanJob {
                 stats.transform(
                                 "StatsAggregate",
                                 TypeInformation.of(new TypeHint<CleanStats>() {}),
-                                new StatsAggregateOperator(config.dryRun()))
-                        .setParallelism(1);
+                                new StatsAggregateOperator(config.dryRun(), config.extraConfigs()))
+                        .setParallelism(1)
+                        .setMaxParallelism(1);
 
         // Execute and collect the single result
         List<CleanStats> collected = collectResults(result);

@@ -17,11 +17,12 @@
 
 package org.apache.fluss.client.admin;
 
-import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.client.metadata.ActiveKvSnapshots;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
+import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
@@ -68,8 +69,6 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metadata.TableStats;
-import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
-import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
 
@@ -807,8 +806,8 @@ public interface Admin extends AutoCloseable {
      * @param partitionId optional partition id (null for non-partitioned tables)
      * @return per-bucket manifest paths and end offsets
      */
-    @Internal
-    default CompletableFuture<ListRemoteLogManifestsResponse> listRemoteLogManifests(
+    @PublicEvolving
+    default CompletableFuture<List<RemoteLogManifestInfo>> listRemoteLogManifests(
             long tableId, @Nullable Long partitionId) {
         throw new UnsupportedOperationException(
                 "listRemoteLogManifests is not supported by this Admin implementation");
@@ -819,10 +818,10 @@ public interface Admin extends AutoCloseable {
      *
      * @param tableId the table to query
      * @param partitionId optional partition id (null for non-partitioned tables)
-     * @return per-bucket active snapshot entries
+     * @return per-bucket active snapshot ids grouped by bucket
      */
-    @Internal
-    default CompletableFuture<ListKvSnapshotsResponse> listKvSnapshots(
+    @PublicEvolving
+    default CompletableFuture<ActiveKvSnapshots> listKvSnapshots(
             long tableId, @Nullable Long partitionId) {
         throw new UnsupportedOperationException(
                 "listKvSnapshots is not supported by this Admin implementation");

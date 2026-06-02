@@ -26,6 +26,9 @@ import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.shaded.guava32.com.google.common.util.concurrent.RateLimiter;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -46,6 +49,8 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
  */
 @Internal
 public final class SafeDeleter {
+
+    private static final Logger LOG = LoggerFactory.getLogger(SafeDeleter.class);
 
     private final FileSystem fs;
     private final boolean dryRun;
@@ -71,7 +76,7 @@ public final class SafeDeleter {
      *     (deletion silently failed — e.g. permissions, transient remote-store error). Callers
      *     should track {@code false} returns as delete failures in their run summary.
      */
-    public boolean deleteFile(FsPath file, Decision decision, RuleId ruleId) throws IOException {
+    public boolean deleteFile(FsPath file, Decision decision, RuleId ruleId) {
         checkArgument(
                 decision == Decision.DELETE,
                 "deleteFile must only be called for Decision.DELETE, got %s",
@@ -81,9 +86,15 @@ public final class SafeDeleter {
             return true;
         }
         rateLimiter.acquire();
-        boolean ok = fs.delete(file, false);
-        audit.logDeleted(file, ruleId, ok);
-        return ok;
+        try {
+            boolean ok = fs.delete(file, false);
+            audit.logDeleted(file, ruleId, ok);
+            return ok;
+        } catch (IOException e) {
+            LOG.warn("Failed to delete file: {}", file, e);
+            audit.logDeleted(file, ruleId, false);
+            return false;
+        }
     }
 
     /**
@@ -94,7 +105,7 @@ public final class SafeDeleter {
      *     {@link FileSystem#delete} returned {@code false}. Callers should not increment a "deleted
      *     directory" counter when this returns {@code false}.
      */
-    public boolean deleteEmptyDir(FsPath dir) throws IOException {
+    public boolean deleteEmptyDir(FsPath dir) {
         FileStatus[] children = listChildrenSilently(dir);
         if (children == null || children.length > 0) {
             return false;
@@ -104,11 +115,16 @@ public final class SafeDeleter {
             return true;
         }
         rateLimiter.acquire();
-        boolean ok = fs.delete(dir, false);
-        if (ok) {
-            audit.logDirDeleted(dir);
+        try {
+            boolean ok = fs.delete(dir, false);
+            if (ok) {
+                audit.logDirDeleted(dir);
+            }
+            return ok;
+        } catch (IOException e) {
+            LOG.warn("Failed to delete empty directory: {}", dir, e);
+            return false;
         }
-        return ok;
     }
 
     private FileStatus[] listChildrenSilently(FsPath dir) {

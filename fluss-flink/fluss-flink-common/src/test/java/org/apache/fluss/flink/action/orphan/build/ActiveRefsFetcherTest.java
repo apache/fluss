@@ -17,11 +17,10 @@
 
 package org.apache.fluss.flink.action.orphan.build;
 
+import org.apache.fluss.client.metadata.ActiveKvSnapshots;
+import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
 import org.apache.fluss.fs.FsPath;
-import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
-import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
-import org.apache.fluss.rpc.messages.PbKvSnapshot;
-import org.apache.fluss.rpc.messages.PbRemoteLogManifestEntry;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.utils.FlussPaths;
 
 import org.junit.jupiter.api.Test;
@@ -32,7 +31,9 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -200,7 +201,10 @@ class ActiveRefsFetcherTest {
     @Test
     void fetchKvActiveSnapDirsAggregatesPerBucket() {
         StubAdmin admin = new StubAdmin(new AtomicInteger());
-        admin.queueKvResponse(Arrays.asList(kvSnapshot(0, 9), kvSnapshot(0, 10), kvSnapshot(1, 5)));
+        Map<Integer, Set<Long>> snapshotIds = new HashMap<>();
+        snapshotIds.put(0, new HashSet<>(Arrays.asList(9L, 10L)));
+        snapshotIds.put(1, new HashSet<>(Arrays.asList(5L)));
+        admin.queueKvResponseMultiBucket(snapshotIds);
 
         ActiveRefsFetcher builder =
                 new ActiveRefsFetcher(admin, /* metadataReader */ null, /* maxRetries= */ 3);
@@ -277,7 +281,7 @@ class ActiveRefsFetcherTest {
     void fetchKvActiveSnapDirsWithPartitionIdRoutesCorrectly() {
         AtomicInteger rpcCalls = new AtomicInteger(0);
         StubAdmin admin = new StubAdmin(rpcCalls);
-        admin.queueKvResponse(Arrays.asList(kvSnapshot(0, 5)));
+        admin.queueKvResponse(0, 5L);
 
         ActiveRefsFetcher builder =
                 new ActiveRefsFetcher(admin, /* metadataReader */ null, /* maxRetries= */ 3);
@@ -296,10 +300,6 @@ class ActiveRefsFetcherTest {
                 .isEqualTo(1);
     }
 
-    private static PbKvSnapshot kvSnapshot(int bucketId, long snapshotId) {
-        return new PbKvSnapshot().setBucketId(bucketId).setSnapshotId(snapshotId);
-    }
-
     // -------------------------------------------------------------------------
     // Test fixtures
     // -------------------------------------------------------------------------
@@ -307,10 +307,9 @@ class ActiveRefsFetcherTest {
     /** Queues per-call responses for ListRemoteLogManifests / ListKvSnapshots and tracks calls. */
     private static final class StubAdmin implements ActiveRefsFetcher.AdminFacade {
 
-        private final Deque<ListRemoteLogManifestsResponse> responses = new ArrayDeque<>();
-        private final Deque<ListKvSnapshotsResponse> kvResponses = new ArrayDeque<>();
+        private final Deque<List<RemoteLogManifestInfo>> responses = new ArrayDeque<>();
+        private final Deque<ActiveKvSnapshots> kvResponses = new ArrayDeque<>();
         private final AtomicInteger callCounter;
-        // Sentinel Long.MIN_VALUE differentiates "never invoked" from "invoked with null".
         private final AtomicReference<Long> lastLogPartitionId =
                 new AtomicReference<>(Long.MIN_VALUE);
         private final AtomicReference<Long> lastKvPartitionId =
@@ -325,48 +324,50 @@ class ActiveRefsFetcherTest {
         }
 
         void queueResponse(FsPath manifestPath, int bucketId) {
-            ListRemoteLogManifestsResponse response = new ListRemoteLogManifestsResponse();
-            PbRemoteLogManifestEntry entry = response.addManifest();
-            entry.setTableBucket().setTableId(7L).setBucketId(bucketId);
-            entry.setRemoteLogManifestPath(manifestPath.toString());
-            entry.setRemoteLogEndOffset(0L);
-            responses.add(response);
+            List<RemoteLogManifestInfo> list = new ArrayList<>();
+            list.add(
+                    new RemoteLogManifestInfo(
+                            new TableBucket(7L, bucketId), manifestPath.toString(), 0L));
+            responses.add(list);
         }
 
         void queueMultiBucketResponse(FsPath manifestPath0, FsPath manifestPath1) {
-            ListRemoteLogManifestsResponse response = new ListRemoteLogManifestsResponse();
-            PbRemoteLogManifestEntry entry0 = response.addManifest();
-            entry0.setTableBucket().setTableId(7L).setBucketId(0);
-            entry0.setRemoteLogManifestPath(manifestPath0.toString());
-            entry0.setRemoteLogEndOffset(0L);
-            PbRemoteLogManifestEntry entry1 = response.addManifest();
-            entry1.setTableBucket().setTableId(7L).setBucketId(1);
-            entry1.setRemoteLogManifestPath(manifestPath1.toString());
-            entry1.setRemoteLogEndOffset(0L);
-            responses.add(response);
+            List<RemoteLogManifestInfo> list = new ArrayList<>();
+            list.add(
+                    new RemoteLogManifestInfo(
+                            new TableBucket(7L, 0), manifestPath0.toString(), 0L));
+            list.add(
+                    new RemoteLogManifestInfo(
+                            new TableBucket(7L, 1), manifestPath1.toString(), 0L));
+            responses.add(list);
         }
 
         void queueEmptyResponse() {
-            responses.add(new ListRemoteLogManifestsResponse());
+            responses.add(Collections.emptyList());
         }
 
-        void queueKvResponse(List<PbKvSnapshot> snapshots) {
-            ListKvSnapshotsResponse response = new ListKvSnapshotsResponse().setTableId(7L);
-            for (PbKvSnapshot snapshot : snapshots) {
-                response.addActiveSnapshot().copyFrom(snapshot);
+        void queueKvResponse(int bucketId, long... snapshotIds) {
+            Map<Integer, Set<Long>> snapshotIdsByBucket = new HashMap<>();
+            Set<Long> ids = new HashSet<>();
+            for (long id : snapshotIds) {
+                ids.add(id);
             }
-            kvResponses.add(response);
+            snapshotIdsByBucket.put(bucketId, ids);
+            kvResponses.add(new ActiveKvSnapshots(7L, null, snapshotIdsByBucket));
+        }
+
+        void queueKvResponseMultiBucket(Map<Integer, Set<Long>> snapshotIdsByBucket) {
+            kvResponses.add(new ActiveKvSnapshots(7L, null, snapshotIdsByBucket));
         }
 
         @Override
-        public CompletableFuture<ListRemoteLogManifestsResponse> listRemoteLogManifests(
+        public CompletableFuture<List<RemoteLogManifestInfo>> listRemoteLogManifests(
                 long tableId, @Nullable Long partitionId) {
             callCounter.incrementAndGet();
             lastLogPartitionId.set(partitionId);
-            ListRemoteLogManifestsResponse next = responses.poll();
+            List<RemoteLogManifestInfo> next = responses.poll();
             if (next == null) {
-                CompletableFuture<ListRemoteLogManifestsResponse> failed =
-                        new CompletableFuture<>();
+                CompletableFuture<List<RemoteLogManifestInfo>> failed = new CompletableFuture<>();
                 failed.completeExceptionally(
                         new IllegalStateException("StubAdmin: no more queued responses"));
                 return failed;
@@ -375,13 +376,13 @@ class ActiveRefsFetcherTest {
         }
 
         @Override
-        public CompletableFuture<ListKvSnapshotsResponse> listKvSnapshots(
+        public CompletableFuture<ActiveKvSnapshots> listKvSnapshots(
                 long tableId, @Nullable Long partitionId) {
             callCounter.incrementAndGet();
             lastKvPartitionId.set(partitionId);
-            ListKvSnapshotsResponse next = kvResponses.poll();
+            ActiveKvSnapshots next = kvResponses.poll();
             if (next == null) {
-                CompletableFuture<ListKvSnapshotsResponse> failed = new CompletableFuture<>();
+                CompletableFuture<ActiveKvSnapshots> failed = new CompletableFuture<>();
                 failed.completeExceptionally(
                         new IllegalStateException("StubAdmin: no more queued kv responses"));
                 return failed;

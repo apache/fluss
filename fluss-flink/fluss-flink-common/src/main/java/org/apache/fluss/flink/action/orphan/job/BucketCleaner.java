@@ -28,6 +28,10 @@ import org.apache.fluss.flink.action.orphan.rule.RuleDispatcher;
 import org.apache.fluss.fs.FileStatus;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.utils.FlussPaths;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.ArrayDeque;
@@ -42,6 +46,8 @@ import java.util.Deque;
  */
 @Internal
 public final class BucketCleaner {
+
+    private static final Logger LOG = LoggerFactory.getLogger(BucketCleaner.class);
 
     private final RuleDispatcher dispatcher;
     private final SafeDeleter safeDeleter;
@@ -84,7 +90,8 @@ public final class BucketCleaner {
             FileStatus[] children;
             try {
                 children = fs.listStatus(dir);
-            } catch (IOException ignored) {
+            } catch (IOException e) {
+                LOG.warn("Failed to list directory: {}", dir, e);
                 continue;
             }
             if (children == null) {
@@ -93,6 +100,9 @@ public final class BucketCleaner {
             for (FileStatus child : children) {
                 FsPath childPath = child.getPath();
                 if (child.isDir()) {
+                    if (FlussPaths.REMOTE_KV_SNAPSHOT_SHARED_DIR.equals(childPath.getName())) {
+                        continue;
+                    }
                     stack.push(childPath);
                     continue;
                 }

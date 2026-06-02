@@ -39,6 +39,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+
 /** Shared utility methods for the orphan files cleanup action. */
 @Internal
 public final class OrphanCleanUtils {
@@ -78,9 +80,10 @@ public final class OrphanCleanUtils {
 
     /**
      * Resolves the effective remote data directory for a table/partition target using the
-     * three-level fallback: partition-level → table-level → cluster-level.
+     * three-level fallback: partition-level → table-level → cluster-level. At least one level is
+     * always set because the coordinator assigns a {@code remoteDataDir} to every table at creation
+     * time via {@code RemoteDirSelector.nextDataDir()}.
      */
-    @Nullable
     public static String resolveRemoteDataDir(
             TableInfo tableInfo,
             @Nullable PartitionInfo partitionInfo,
@@ -91,12 +94,17 @@ public final class OrphanCleanUtils {
         if (tableInfo.getRemoteDataDir() != null) {
             return tableInfo.getRemoteDataDir();
         }
-        return clusterRemoteDataDir;
+        return checkNotNull(
+                clusterRemoteDataDir,
+                "No remote data directory resolvable: partition, table, "
+                        + "and cluster levels are all null. This should not happen because the "
+                        + "coordinator requires remote.data.dir or remote.data.dirs at startup.");
     }
 
     /**
      * Resolves the cluster-level {@code remote.data.dir} by querying the coordinator's runtime
-     * configuration.
+     * configuration. Returns {@code null} when the cluster uses {@code remote.data.dirs}
+     * (multi-directory mode) without the legacy single {@code remote.data.dir}.
      */
     @Nullable
     public static String resolveClusterRemoteDataDir(Admin admin) throws Exception {

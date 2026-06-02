@@ -206,7 +206,7 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
             List<PartitionInfo> partitions = admin.listPartitionInfos(tablePath).get();
             TableInfo confirm = admin.getTableInfo(tablePath).get();
             if (confirm.getTableId() != tableInfo.getTableId()) {
-                audit.logSkipTable(dbState.dbName, tableName, "ABA");
+                audit.logSkipTable(dbState.dbName, tableName, "table-recreated-during-enumeration");
                 liveTable.partitionInfosComplete = false;
                 return;
             }
@@ -274,13 +274,6 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
 
         String remoteDataDir =
                 resolveRemoteDataDir(liveTable.tableInfo, partitionInfo, clusterRemoteDataDir);
-        if (remoteDataDir == null) {
-            LOG.warn(
-                    "Table {} partition {} has no resolvable remote.data.dir; skipping",
-                    liveTable.tablePath,
-                    partitionId);
-            return;
-        }
 
         FsPath remoteLogDir = remoteSubDir(remoteDataDir, FlussPaths.REMOTE_LOG_DIR_NAME);
         FsPath remoteKvDir = remoteSubDir(remoteDataDir, FlussPaths.REMOTE_KV_DIR_NAME);
@@ -482,16 +475,10 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
     private List<String> rootsForLiveTable(
             LiveTableScope liveTable, @Nullable String clusterRemoteDataDir) {
         LinkedHashSet<String> roots = new LinkedHashSet<String>(rootsToScan(clusterRemoteDataDir));
-        String tableRoot = resolveRemoteDataDir(liveTable.tableInfo, null, clusterRemoteDataDir);
-        if (tableRoot != null) {
-            roots.add(tableRoot);
-        }
+        roots.add(resolveRemoteDataDir(liveTable.tableInfo, null, clusterRemoteDataDir));
         for (PartitionInfo partitionInfo : liveTable.partitions) {
-            String partitionRoot =
-                    resolveRemoteDataDir(liveTable.tableInfo, partitionInfo, clusterRemoteDataDir);
-            if (partitionRoot != null) {
-                roots.add(partitionRoot);
-            }
+            roots.add(
+                    resolveRemoteDataDir(liveTable.tableInfo, partitionInfo, clusterRemoteDataDir));
         }
         return new ArrayList<String>(roots);
     }

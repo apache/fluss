@@ -34,8 +34,10 @@ import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
+import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.TableAlreadyExistException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.exception.UnknownServerException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
@@ -245,7 +247,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final CoordinatorMetadataCache metadataCache;
 
     private final Supplier<CompletedSnapshotStoreManager> snapshotStoreManagerSupplier;
-    private final Supplier<CoordinatorContext> coordinatorContextSupplier;
     private final LakeTableTieringManager lakeTableTieringManager;
     private final LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
     private final ExecutorService ioExecutor;
@@ -288,8 +289,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEpoch();
         this.snapshotStoreManagerSupplier =
                 () -> coordinatorEventProcessorSupplier.get().completedSnapshotStoreManager();
-        this.coordinatorContextSupplier =
-                () -> coordinatorEventProcessorSupplier.get().getCoordinatorContext();
         this.lakeTableTieringManager = lakeTableTieringManager;
         this.metadataCache = metadataCache;
         this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
@@ -809,6 +808,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                         authorizeTableWithSession(session, OperationType.DESCRIBE, tableId);
                     }
                     Long partitionId = request.hasPartitionId() ? request.getPartitionId() : null;
+                    validatePartitionOwnership(partitionId, tableId);
                     ListRemoteLogManifestsResponse response = new ListRemoteLogManifestsResponse();
                     try {
                         List<ZooKeeperClient.TableBucketAndManifest> entries =
@@ -844,90 +844,145 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             ListKvSnapshotsRequest request) {
         long tableId = request.getTableId();
         Session session = authorizer != null ? currentSession() : null;
-        return CompletableFuture.supplyAsync(
-                () -> {
-                    if (authorizer != null) {
-                        authorizeTableWithSession(session, OperationType.DESCRIBE, tableId);
-                    }
-                    Long partitionId = request.hasPartitionId() ? request.getPartitionId() : null;
 
-                    // Resolve table metadata: prefer in-memory context, fallback to ZK assignment
-                    // (single getData) to handle the race between createTable and context sync.
-                    CoordinatorContext context = coordinatorContextSupplier.get();
-                    TablePath tablePath = context.getTablePathById(tableId);
-                    int numBuckets;
-                    if (tablePath != null) {
-                        TableInfo tableInfo = context.getTableInfoById(tableId);
-                        if (tableInfo == null) {
-                            throw new ApiException(
-                                    "Table metadata not yet available for table " + tableId);
-                        }
-                        numBuckets = tableInfo.getNumBuckets();
-                    } else {
-                        try {
-                            if (partitionId != null) {
-                                Optional<PartitionAssignment> pAssignment =
-                                        zkClient.getPartitionAssignment(partitionId);
-                                if (!pAssignment.isPresent()) {
-                                    throw new ApiException(
-                                            "Partition " + partitionId + " does not exist");
-                                }
-                                numBuckets = pAssignment.get().getBuckets().size();
-                            } else {
-                                Optional<TableAssignment> assignment =
-                                        zkClient.getTableAssignment(tableId);
-                                if (!assignment.isPresent()) {
-                                    throw new ApiException("Table " + tableId + " does not exist");
-                                }
-                                numBuckets = assignment.get().getBuckets().size();
-                            }
-                        } catch (ApiException e) {
-                            throw e;
-                        } catch (Exception e) {
-                            throw new ApiException(
-                                    "Failed to resolve table " + tableId + ": " + e.getMessage());
-                        }
-                    }
+        // Resolve numBuckets via event thread (CoordinatorContext is @NotThreadSafe)
+        CompletableFuture<Integer> numBucketsFuture = resolveNumBuckets(tableId, request);
 
-                    CompletedSnapshotStoreManager storeManager = snapshotStoreManagerSupplier.get();
-                    Map<Integer, Set<Long>> activeByBucket =
-                            storeManager.getActiveSnapshotIdsByBucket(
-                                    tableId, partitionId, numBuckets);
-                    Map<Integer, Set<Long>> stillInUse =
-                            kvSnapshotLeaseManager.getStillInUseSnapshotIds(tableId, partitionId);
+        return numBucketsFuture.thenCompose(
+                numBuckets ->
+                        CompletableFuture.supplyAsync(
+                                () -> {
+                                    if (authorizer != null) {
+                                        authorizeTableWithSession(
+                                                session, OperationType.DESCRIBE, tableId);
+                                    }
+                                    Long partitionId =
+                                            request.hasPartitionId()
+                                                    ? request.getPartitionId()
+                                                    : null;
+                                    validatePartitionOwnership(partitionId, tableId);
 
-                    ListKvSnapshotsResponse response =
-                            new ListKvSnapshotsResponse().setTableId(tableId);
-                    if (partitionId != null) {
-                        response.setPartitionId(partitionId);
-                    }
+                                    CompletedSnapshotStoreManager storeManager =
+                                            snapshotStoreManagerSupplier.get();
+                                    Map<Integer, Set<Long>> activeByBucket =
+                                            storeManager.getActiveSnapshotIdsByBucket(
+                                                    tableId, partitionId, numBuckets);
+                                    Map<Integer, Set<Long>> stillInUse =
+                                            kvSnapshotLeaseManager.getStillInUseSnapshotIds(
+                                                    tableId, partitionId);
 
-                    Set<Integer> allBucketIds = new HashSet<>(activeByBucket.keySet());
-                    allBucketIds.addAll(stillInUse.keySet());
+                                    ListKvSnapshotsResponse response =
+                                            new ListKvSnapshotsResponse().setTableId(tableId);
+                                    if (partitionId != null) {
+                                        response.setPartitionId(partitionId);
+                                    }
 
-                    for (int bucketId : allBucketIds) {
-                        Set<Long> activeIds =
-                                activeByBucket.getOrDefault(bucketId, Collections.emptySet());
-                        for (Long snapId : activeIds) {
-                            appendActiveSnapshot(response, bucketId, snapId);
-                        }
-                        Set<Long> stillInUseIds =
-                                stillInUse.getOrDefault(bucketId, Collections.emptySet());
-                        for (Long snapId : stillInUseIds) {
-                            if (activeIds.contains(snapId)) {
-                                continue;
-                            }
-                            appendActiveSnapshot(response, bucketId, snapId);
-                        }
-                    }
-                    return response;
-                },
-                ioExecutor);
+                                    Set<Integer> allBucketIds =
+                                            new HashSet<>(activeByBucket.keySet());
+                                    allBucketIds.addAll(stillInUse.keySet());
+
+                                    for (int bucketId : allBucketIds) {
+                                        Set<Long> activeIds =
+                                                activeByBucket.getOrDefault(
+                                                        bucketId, Collections.emptySet());
+                                        for (Long snapId : activeIds) {
+                                            appendActiveSnapshot(response, bucketId, snapId);
+                                        }
+                                        Set<Long> stillInUseIds =
+                                                stillInUse.getOrDefault(
+                                                        bucketId, Collections.emptySet());
+                                        for (Long snapId : stillInUseIds) {
+                                            if (activeIds.contains(snapId)) {
+                                                continue;
+                                            }
+                                            appendActiveSnapshot(response, bucketId, snapId);
+                                        }
+                                    }
+                                    return response;
+                                },
+                                ioExecutor));
     }
 
     private static void appendActiveSnapshot(
             ListKvSnapshotsResponse response, int bucketId, long snapshotId) {
         response.addActiveSnapshot().setBucketId(bucketId).setSnapshotId(snapshotId);
+    }
+
+    private CompletableFuture<Integer> resolveNumBuckets(
+            long tableId, ListKvSnapshotsRequest request) {
+        AccessContextEvent<Integer> event =
+                new AccessContextEvent<>(
+                        ctx -> {
+                            TablePath tablePath = ctx.getTablePathById(tableId);
+                            if (tablePath != null) {
+                                TableInfo tableInfo = ctx.getTableInfoById(tableId);
+                                if (tableInfo != null) {
+                                    return tableInfo.getNumBuckets();
+                                }
+                            }
+                            return null;
+                        });
+        eventManagerSupplier.get().put(event);
+        return event.getResultFuture()
+                .thenCompose(
+                        numBuckets -> {
+                            if (numBuckets != null) {
+                                return CompletableFuture.completedFuture(numBuckets);
+                            }
+                            return CompletableFuture.supplyAsync(
+                                    () -> resolveNumBucketsFromZk(tableId, request), ioExecutor);
+                        });
+    }
+
+    private int resolveNumBucketsFromZk(long tableId, ListKvSnapshotsRequest request) {
+        Long partitionId = request.hasPartitionId() ? request.getPartitionId() : null;
+        try {
+            if (partitionId != null) {
+                Optional<PartitionAssignment> pAssignment =
+                        zkClient.getPartitionAssignment(partitionId);
+                if (!pAssignment.isPresent()) {
+                    throw new PartitionNotExistException(
+                            "Partition " + partitionId + " does not exist");
+                }
+                return pAssignment.get().getBuckets().size();
+            } else {
+                Optional<TableAssignment> assignment = zkClient.getTableAssignment(tableId);
+                if (!assignment.isPresent()) {
+                    throw new TableNotExistException("Table " + tableId + " does not exist");
+                }
+                return assignment.get().getBuckets().size();
+            }
+        } catch (ApiException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ApiException("Failed to resolve table " + tableId + ": " + e.getMessage(), e);
+        }
+    }
+
+    private void validatePartitionOwnership(@Nullable Long partitionId, long tableId) {
+        if (partitionId == null) {
+            return;
+        }
+        try {
+            Optional<PartitionAssignment> pa = zkClient.getPartitionAssignment(partitionId);
+            if (!pa.isPresent()) {
+                throw new PartitionNotExistException(
+                        "Partition " + partitionId + " does not exist");
+            }
+            if (pa.get().getTableId() != tableId) {
+                throw new PartitionNotExistException(
+                        "Partition " + partitionId + " does not belong to table " + tableId);
+            }
+        } catch (ApiException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new UnknownServerException(
+                    "Failed to validate partition ownership for partition "
+                            + partitionId
+                            + " and table "
+                            + tableId,
+                    e);
+        }
     }
 
     @Override

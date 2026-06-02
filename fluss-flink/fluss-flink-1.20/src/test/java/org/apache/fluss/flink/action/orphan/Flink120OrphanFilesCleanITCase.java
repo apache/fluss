@@ -19,4 +19,4 @@
 package org.apache.fluss.flink.action.orphan;
 
 /** The IT case for orphan files cleanup in Flink 1.20. */
-class Flink20OrphanFilesCleanITCase extends OrphanFilesCleanITCase {}
+class Flink120OrphanFilesCleanITCase extends OrphanFilesCleanITCase {}

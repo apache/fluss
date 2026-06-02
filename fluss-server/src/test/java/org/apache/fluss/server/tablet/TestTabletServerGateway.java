@@ -56,14 +56,10 @@ import org.apache.fluss.rpc.messages.ListAclsRequest;
 import org.apache.fluss.rpc.messages.ListAclsResponse;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
-import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
-import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
-import org.apache.fluss.rpc.messages.ListRemoteLogManifestsRequest;
-import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
@@ -163,18 +159,6 @@ public class TestTabletServerGateway implements TabletServerGateway {
     @Override
     public CompletableFuture<ListPartitionInfosResponse> listPartitionInfos(
             ListPartitionInfosRequest request) {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public CompletableFuture<ListRemoteLogManifestsResponse> listRemoteLogManifests(
-            ListRemoteLogManifestsRequest request) {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public CompletableFuture<ListKvSnapshotsResponse> listKvSnapshots(
-            ListKvSnapshotsRequest request) {
         throw new UnsupportedOperationException();
     }
 

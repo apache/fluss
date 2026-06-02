@@ -47,12 +47,8 @@ import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.LimitScanRequest;
 import org.apache.fluss.rpc.messages.LimitScanResponse;
-import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
-import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
-import org.apache.fluss.rpc.messages.ListRemoteLogManifestsRequest;
-import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
@@ -383,30 +379,6 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                         metadataCache,
                         metadataFunctionProvider);
         return CompletableFuture.completedFuture(metadataResponse);
-    }
-
-    @Override
-    public CompletableFuture<ListRemoteLogManifestsResponse> listRemoteLogManifests(
-            ListRemoteLogManifestsRequest request) {
-        // listRemoteLogManifests is served by CoordinatorService; TabletService rejects the call.
-        CompletableFuture<ListRemoteLogManifestsResponse> failed = new CompletableFuture<>();
-        failed.completeExceptionally(
-                new UnsupportedOperationException(
-                        "listRemoteLogManifests is not supported on the tablet server; "
-                                + "send this request to the coordinator."));
-        return failed;
-    }
-
-    @Override
-    public CompletableFuture<ListKvSnapshotsResponse> listKvSnapshots(
-            ListKvSnapshotsRequest request) {
-        // listKvSnapshots is served by CoordinatorService; TabletService rejects the call.
-        CompletableFuture<ListKvSnapshotsResponse> failed = new CompletableFuture<>();
-        failed.completeExceptionally(
-                new UnsupportedOperationException(
-                        "listKvSnapshots is not supported on the tablet server; "
-                                + "send this request to the coordinator."));
-        return failed;
     }
 
     @Override

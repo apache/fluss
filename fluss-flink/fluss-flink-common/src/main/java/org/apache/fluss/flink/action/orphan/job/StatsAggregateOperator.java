@@ -18,7 +18,9 @@
 package org.apache.fluss.flink.action.orphan.job;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.action.orphan.audit.AuditLogger;
+import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
@@ -31,6 +33,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Stage 3 of the orphan files cleanup job. Runs at parallelism=1 to aggregate {@link CleanStats}
@@ -48,11 +51,21 @@ public final class StatsAggregateOperator extends AbstractStreamOperator<CleanSt
     private static final Logger LOG = LoggerFactory.getLogger(StatsAggregateOperator.class);
 
     private final boolean dryRun;
+    private final Map<String, String> extraConfigs;
 
     private transient CleanStats accumulated;
 
-    public StatsAggregateOperator(boolean dryRun) {
+    public StatsAggregateOperator(boolean dryRun, Map<String, String> extraConfigs) {
         this.dryRun = dryRun;
+        this.extraConfigs = extraConfigs;
+    }
+
+    @Override
+    public void open() throws Exception {
+        super.open();
+        if (!extraConfigs.isEmpty()) {
+            FileSystem.initialize(Configuration.fromMap(extraConfigs), null);
+        }
     }
 
     @Override

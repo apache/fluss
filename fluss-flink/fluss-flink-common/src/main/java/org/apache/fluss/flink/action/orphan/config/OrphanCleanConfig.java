@@ -159,9 +159,9 @@ public final class OrphanCleanConfig implements Serializable {
     /**
      * Parses a CLI cutoff value into an absolute epoch-ms timestamp. Empty input falls back to
      * {@code now - defaultGap}. Explicit input must parse as {@code yyyy-MM-dd HH:mm:ss} in the
-     * server's local time zone and must be at least {@link #HARD_LOWER_BOUND} earlier than {@code
-     * now} — closer-to-now cutoffs would race with active writes (see {@code HARD_LOWER_BOUND}
-     * javadoc).
+     * Flink action JVM's local time zone and must be at least {@link #HARD_LOWER_BOUND} earlier
+     * than {@code now} — closer-to-now cutoffs would race with active writes (see {@code
+     * HARD_LOWER_BOUND} javadoc).
      */
     private static long parseCutoff(
             String flag, @Nullable String value, long now, Duration defaultGap) {

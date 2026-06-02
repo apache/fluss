@@ -18,10 +18,12 @@
 package org.apache.fluss.client.admin;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.client.metadata.ActiveKvSnapshots;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
 import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
@@ -82,13 +84,11 @@ import org.apache.fluss.rpc.messages.ListAclsRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
 import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
-import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
 import org.apache.fluss.rpc.messages.ListRemoteLogManifestsRequest;
-import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
@@ -403,29 +403,27 @@ public class FlussAdmin implements Admin {
      * relying on FS LIST + mtime selection.
      */
     @Override
-    public CompletableFuture<ListRemoteLogManifestsResponse> listRemoteLogManifests(
+    public CompletableFuture<List<RemoteLogManifestInfo>> listRemoteLogManifests(
             long tableId, @Nullable Long partitionId) {
         ListRemoteLogManifestsRequest request = new ListRemoteLogManifestsRequest();
         request.setTableId(tableId);
         if (partitionId != null) {
             request.setPartitionId(partitionId);
         }
-        return gateway.listRemoteLogManifests(request);
+        return gateway.listRemoteLogManifests(request)
+                .thenApply(ClientRpcMessageUtils::toRemoteLogManifestInfos);
     }
 
-    /**
-     * Returns per-bucket active KV snapshot dirs (retained_N + still-in-use) for the given table or
-     * partition. Used by the orphan cleanup action to construct the complete KV active set.
-     */
     @Override
-    public CompletableFuture<ListKvSnapshotsResponse> listKvSnapshots(
+    public CompletableFuture<ActiveKvSnapshots> listKvSnapshots(
             long tableId, @Nullable Long partitionId) {
         ListKvSnapshotsRequest request = new ListKvSnapshotsRequest();
         request.setTableId(tableId);
         if (partitionId != null) {
             request.setPartitionId(partitionId);
         }
-        return gateway.listKvSnapshots(request);
+        return gateway.listKvSnapshots(request)
+                .thenApply(ClientRpcMessageUtils::toActiveKvSnapshots);
     }
 
     @Override

@@ -51,8 +51,12 @@ import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.DropTableResponse;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsResponse;
+import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
+import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
+import org.apache.fluss.rpc.messages.ListRemoteLogManifestsRequest;
+import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RegisterProducerOffsetsRequest;
@@ -216,4 +220,28 @@ public interface AdminGateway extends AdminReadOnlyGateway {
 
     // todo: rename table & alter table
 
+    // ==================================================================================
+    // Orphan Cleanup RPCs (coordinator-only, internal)
+    // ==================================================================================
+
+    /**
+     * List remote log manifest entries for all buckets of a table or single partition.
+     *
+     * @param request request with table_id and optional partition_id
+     * @return per-bucket manifest path and end offset
+     */
+    @RPC(api = ApiKeys.LIST_REMOTE_LOG_MANIFESTS)
+    CompletableFuture<ListRemoteLogManifestsResponse> listRemoteLogManifests(
+            ListRemoteLogManifestsRequest request);
+
+    /**
+     * List active KV snapshot ids for a unit. The response is the union of (a) the top-N retained
+     * snapshots for each bucket (controlled by {@code kv.snapshot.num-retained}) and (b) any
+     * lease-pinned snapshots still in use beyond that retention window. The server merges both
+     * sources and emits one entry per active {@code (bucket_id, snapshot_id)} pair with no source
+     * discriminator — callers should treat the entire response as the active set and never under-
+     * count (a missed entry risks misdeleting an active snapshot).
+     */
+    @RPC(api = ApiKeys.LIST_KV_SNAPSHOTS)
+    CompletableFuture<ListKvSnapshotsResponse> listKvSnapshots(ListKvSnapshotsRequest request);
 }

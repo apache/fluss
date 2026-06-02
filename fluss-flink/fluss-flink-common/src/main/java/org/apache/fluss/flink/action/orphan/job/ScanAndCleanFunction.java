@@ -161,7 +161,8 @@ public final class ScanAndCleanFunction extends ProcessFunction<CleanTask, Clean
             FileStatus[] children;
             try {
                 children = fs.listStatus(dir);
-            } catch (IOException ignored) {
+            } catch (IOException e) {
+                LOG.warn("Failed to list directory: {}", dir, e);
                 continue;
             }
             if (children == null) {
