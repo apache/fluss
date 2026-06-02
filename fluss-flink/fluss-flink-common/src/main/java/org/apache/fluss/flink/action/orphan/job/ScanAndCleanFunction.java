@@ -77,7 +77,9 @@ public final class ScanAndCleanFunction extends ProcessFunction<CleanTask, Clean
     }
 
     @Override
-    public void open(org.apache.flink.configuration.Configuration parameters) {
+    public void open(org.apache.flink.api.common.functions.OpenContext openContext)
+            throws Exception {
+        super.open(openContext);
         if (!extraConfigs.isEmpty()) {
             FileSystem.initialize(Configuration.fromMap(extraConfigs), null);
         }

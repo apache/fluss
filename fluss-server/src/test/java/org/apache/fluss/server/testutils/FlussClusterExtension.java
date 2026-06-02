@@ -772,33 +772,33 @@ public final class FlussClusterExtension
     }
 
     private Long triggerSnapshot(TableBucket tableBucket) {
-        Long snapshotId = null;
-        Long nextSnapshotId = null;
         for (TabletServer ts : tabletServers.values()) {
             ReplicaManager.HostedReplica replica = ts.getReplicaManager().getReplica(tableBucket);
             if (replica instanceof ReplicaManager.OnlineReplica) {
                 Replica r = ((ReplicaManager.OnlineReplica) replica).getReplica();
                 PeriodicSnapshotManager kvSnapshotManager = r.getKvSnapshotManager();
                 if (r.isLeader() && kvSnapshotManager != null) {
-                    snapshotId = kvSnapshotManager.currentSnapshotId();
+                    long snapshotId = kvSnapshotManager.currentSnapshotId();
                     kvSnapshotManager.triggerSnapshot();
-                    nextSnapshotId = kvSnapshotManager.currentSnapshotId();
-                    break;
+                    // triggerSnapshot() submits to guardedExecutor asynchronously.
+                    // Wait for the counter to advance; if it does not, initSnapshot()
+                    // determined there is no new data (logOffset <= lastSnapshotOffset)
+                    // and the trigger was a legitimate no-op — return null.
+                    try {
+                        waitUntil(
+                                () -> kvSnapshotManager.currentSnapshotId() > snapshotId,
+                                Duration.ofSeconds(3),
+                                Duration.ofMillis(50),
+                                "");
+                    } catch (AssertionError e) {
+                        return null;
+                    }
+                    return snapshotId;
                 }
             }
         }
-
-        if (snapshotId != null) {
-            if (nextSnapshotId > snapshotId) {
-                // only there is a new snapshot triggered, we return the snapshot id
-                return snapshotId;
-            } else {
-                return null;
-            }
-        } else {
-            fail("No KV snapshot manager found for table bucket " + tableBucket);
-            return null;
-        }
+        fail("No KV snapshot manager found for table bucket " + tableBucket);
+        return null;
     }
 
     public CompletedSnapshot waitUntilSnapshotFinished(TableBucket tableBucket, long snapshotId) {
