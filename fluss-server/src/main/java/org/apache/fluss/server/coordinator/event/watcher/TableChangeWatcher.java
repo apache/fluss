@@ -201,6 +201,9 @@ public class TableChangeWatcher {
                             TableRegistration table = TableZNode.decode(oldData.getData());
                             TableConfig tableConfig =
                                     new TableConfig(Configuration.fromMap(table.properties));
+                            // Evict the cached bucket count so the map does not grow
+                            // unbounded as tables are dropped over the coordinator's lifetime.
+                            tableBucketCount.remove(table.tableId);
                             replicaCleanupManager.submitTableDrop(
                                     table.tableId,
                                     tableConfig.getAutoPartitionStrategy().isAutoPartitionEnabled(),
@@ -296,8 +299,8 @@ public class TableChangeWatcher {
      * Returns the bucket count owned by a single partition of the given table. Looks up the local
      * cache first and falls back to a synchronous {@link ZooKeeperClient#getTable} read on miss. If
      * the table znode is already gone (e.g. cascading drop where the table node was deleted before
-     * this partition NODE_DELETED is delivered), returns {@code 0}; the drop is still admitted
-     * thanks to the manager's starvation guard.
+     * this partition NODE_DELETED is delivered), returns {@code 0}; the cleanup manager will
+     * normalize this to a minimum cost so the drop is still throttled/admitted.
      */
     private int resolveTableBucketCount(long tableId, TablePath tablePath) {
         Integer cached = tableBucketCount.get(tableId);
@@ -315,7 +318,7 @@ public class TableChangeWatcher {
             LOG.warn(
                     "Failed to read TableRegistration for {} (tableId={}) while resolving "
                             + "bucket count for partition drop. Falling back to bucketCount=0; "
-                            + "the drop will still be admitted via the starvation guard.",
+                            + "the cleanup manager will normalize this to a minimum cost.",
                     tablePath,
                     tableId,
                     e);

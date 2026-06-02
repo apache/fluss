@@ -236,6 +236,14 @@ public class ReplicaCleanupManager implements AutoCloseable {
             String partitionName,
             int bucketCount,
             @Nullable Runnable resumeAction) {
+        if (closed.get()) {
+            LOG.debug(
+                    "Ignoring partition drop submission (tableId={}, partitionId={}) because "
+                            + "ReplicaCleanupManager is closed.",
+                    tableId,
+                    partitionId);
+            return;
+        }
         int normalized = Math.max(1, bucketCount);
         List<PendingDrop> batch;
         lock.lock();
@@ -297,6 +305,12 @@ public class ReplicaCleanupManager implements AutoCloseable {
             boolean isDataLakeEnabled,
             int bucketCount,
             @Nullable Runnable resumeAction) {
+        if (closed.get()) {
+            LOG.debug(
+                    "Ignoring table drop submission (tableId={}) because ReplicaCleanupManager is closed.",
+                    tableId);
+            return;
+        }
         int normalized = Math.max(1, bucketCount);
         List<PendingDrop> batch;
         lock.lock();
