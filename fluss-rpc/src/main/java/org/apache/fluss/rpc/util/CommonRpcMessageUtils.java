@@ -17,6 +17,7 @@
 
 package org.apache.fluss.rpc.util;
 
+import org.apache.fluss.lake.source.LakeLogFetchInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
@@ -30,6 +31,7 @@ import org.apache.fluss.rpc.messages.PbAclFilter;
 import org.apache.fluss.rpc.messages.PbAclInfo;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbKeyValue;
+import org.apache.fluss.rpc.messages.PbLakeLogFetchInfo;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbRemoteLogFetchInfo;
 import org.apache.fluss.rpc.messages.PbRemoteLogSegment;
@@ -196,6 +198,19 @@ public class CommonRpcMessageUtils {
                 fetchLogResultForBucket =
                         new FetchLogResultForBucket(
                                 tb, rlFetchInfo, respForBucket.getHighWatermark());
+            } else if (respForBucket.hasLakeLogFetchInfo()) {
+                PbLakeLogFetchInfo pbLakeLogFetchInfo = respForBucket.getLakeLogFetchInfo();
+                LakeLogFetchInfo lakeLogFetchInfo =
+                        new LakeLogFetchInfo(
+                                pbLakeLogFetchInfo.getSnapshotId(),
+                                pbLakeLogFetchInfo.hasPartitionName()
+                                        ? pbLakeLogFetchInfo.getPartitionName()
+                                        : null,
+                                pbLakeLogFetchInfo.getStartOffset(),
+                                pbLakeLogFetchInfo.getEndOffset());
+                fetchLogResultForBucket =
+                        new FetchLogResultForBucket(
+                                tb, lakeLogFetchInfo, respForBucket.getHighWatermark());
             } else {
                 ByteBuffer recordsBuffer = toByteBuffer(respForBucket.getRecordsSlice());
                 LogRecords records =

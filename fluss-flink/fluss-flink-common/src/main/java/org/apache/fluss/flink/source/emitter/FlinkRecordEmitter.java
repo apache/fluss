@@ -23,6 +23,7 @@ import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
 import org.apache.fluss.flink.source.reader.FlinkSourceReader;
 import org.apache.fluss.flink.source.reader.RecordAndPos;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplitState;
+import org.apache.fluss.flink.source.split.LogSplitState;
 import org.apache.fluss.flink.source.split.SourceSplitState;
 
 import org.apache.flink.api.connector.source.SourceOutput;
@@ -73,6 +74,7 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
             }
             processAndEmitRecord(scanRecord, sourceOutput);
         } else if (splitState.isLogSplitState()) {
+            LogSplitState logSplitState = splitState.asLogSplitState();
             // Attempt to process and emit the record.
             // For $binlog, this returns true only when a complete row (or the final part of
             // a split) is emitted.
@@ -83,9 +85,7 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
                 // This ensures that if a crash occurs mid-update (between BEFORE and AFTER),
                 // the source will re-read the same log offset upon recovery,
                 // allowing the BinlogDeserializationSchema to correctly reconstruct the state.
-                splitState
-                        .asLogSplitState()
-                        .setNextOffset(recordAndPosition.record().logOffset() + 1);
+                logSplitState.setNextOffset(recordAndPosition.record().logOffset() + 1);
             }
         } else if (splitState.isLakeSplit()) {
             if (lakeRecordRecordEmitter == null) {

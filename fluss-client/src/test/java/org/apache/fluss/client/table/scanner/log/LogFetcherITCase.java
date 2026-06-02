@@ -109,6 +109,7 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                         metadataUpdater,
                         TestingScannerMetricGroup.newInstance(),
                         new RemoteFileDownloader(1),
+                        null,
                         clientSchemaGetter);
     }
 
@@ -184,6 +185,7 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                         metadataUpdater,
                         TestingScannerMetricGroup.newInstance(),
                         new RemoteFileDownloader(1),
+                        null,
                         clientSchemaGetter);
         newSchemaLogFetcher.sendFetches();
         // The fetcher is async to fetch data, so we need to wait the result write to the
@@ -283,6 +285,7 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                         metadataUpdater,
                         TestingScannerMetricGroup.newInstance(),
                         new RemoteFileDownloader(1),
+                        null,
                         clientSchemaGetter);
 
         // send fetches to fetch data, should have no available fetch.
@@ -324,6 +327,7 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                         metadataUpdater1,
                         TestingScannerMetricGroup.newInstance(),
                         new RemoteFileDownloader(1),
+                        null,
                         clientSchemaGetter);
 
         ExecutorService executor = Executors.newSingleThreadExecutor();

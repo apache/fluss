@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.TypedLogScanner;
+import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.predicate.Predicate;
 
@@ -71,6 +72,8 @@ public interface Scan {
      * @param predicate the predicate to apply for record batch level filtering
      */
     Scan filter(@Nullable Predicate predicate);
+
+    Scan lakeSource(@Nullable LakeSource lakeSource);
 
     /**
      * Creates a {@link LogScanner} to continuously read log data for this scan.

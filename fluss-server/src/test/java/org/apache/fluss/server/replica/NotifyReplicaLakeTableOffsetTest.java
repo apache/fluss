@@ -23,6 +23,7 @@ import org.apache.fluss.server.entity.LakeBucketOffset;
 import org.apache.fluss.server.entity.NotifyLakeTableOffsetData;
 
 import org.assertj.core.api.AssertionsForClassTypes;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -46,6 +47,27 @@ class NotifyReplicaLakeTableOffsetTest extends ReplicaTestBase {
         notifyAndVerify(tb, replica, 1, 0L, 20L, System.currentTimeMillis());
         // notify again
         notifyAndVerify(tb, replica, 2, 20L, 30L, System.currentTimeMillis());
+    }
+
+    @Test
+    void testNotifyWithoutLakeLogStartOffset() throws Exception {
+        TableBucket tb = makeTableBucket(false);
+        makeLogTableAsLeader(tb, false);
+        Replica replica = replicaManager.getReplicaOrException(tb);
+
+        NotifyLakeTableOffsetData notifyLakeTableOffsetData =
+                new NotifyLakeTableOffsetData(
+                        1,
+                        Collections.singletonMap(
+                                tb,
+                                new LakeBucketOffset(1, null, 20L, System.currentTimeMillis())));
+        CompletableFuture<NotifyLakeTableOffsetResponse> future = new CompletableFuture<>();
+        replicaManager.notifyLakeTableOffset(notifyLakeTableOffsetData, future::complete);
+        future.get();
+
+        AssertionsForClassTypes.assertThat(replica.getLogTablet().getLakeLogStartOffset())
+                .isEqualTo(0L);
+        AssertionsForClassTypes.assertThat(replica.getLogTablet().canFetchFromLakeLog(0L)).isTrue();
     }
 
     private void notifyAndVerify(

@@ -117,6 +117,7 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
                         metadataUpdater,
                         scannerMetricGroup,
                         new RemoteFileDownloader(1),
+                        null,
                         TEST_SCHEMA_GETTER);
     }
 
@@ -439,6 +440,7 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
                 metadataUpdater,
                 scannerMetricGroup,
                 new RemoteFileDownloader(1),
+                null,
                 TEST_SCHEMA_GETTER);
     }
 

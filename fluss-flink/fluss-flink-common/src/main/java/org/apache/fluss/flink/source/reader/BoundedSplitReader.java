@@ -200,7 +200,10 @@ public class BoundedSplitReader implements AutoCloseable {
 
         @Override
         public RecordAndPos next() {
-            recordAndPosition.setRecord(records.next(), ++currentReadRecordsCount);
+            recordAndPosition.setRecord(
+                    records.next(),
+                    ++currentReadRecordsCount,
+                    recordAndPosition.getCurrentSplitIndex());
             return recordAndPosition;
         }
 
