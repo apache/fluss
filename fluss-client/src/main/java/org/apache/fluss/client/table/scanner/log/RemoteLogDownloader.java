@@ -26,7 +26,6 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.FlussPaths;
@@ -88,17 +87,17 @@ public class RemoteLogDownloader implements Closeable {
     private volatile boolean closed = false;
 
     public RemoteLogDownloader(
-            TablePath tablePath,
+            String scannerName,
             Configuration conf,
             RemoteFileDownloader remoteFileDownloader,
             ScannerMetricGroup scannerMetricGroup) {
         // default we give a 5s long interval to avoid frequent loop
-        this(tablePath, conf, remoteFileDownloader, scannerMetricGroup, POLL_TIMEOUT);
+        this(scannerName, conf, remoteFileDownloader, scannerMetricGroup, POLL_TIMEOUT);
     }
 
     @VisibleForTesting
     RemoteLogDownloader(
-            TablePath tablePath,
+            String scannerName,
             Configuration conf,
             RemoteFileDownloader remoteFileDownloader,
             ScannerMetricGroup scannerMetricGroup,
@@ -116,7 +115,7 @@ public class RemoteLogDownloader implements Closeable {
                 Paths.get(
                         conf.get(ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR),
                         "remote-logs-" + UUID.randomUUID());
-        this.downloadThread = new DownloadRemoteLogThread(tablePath);
+        this.downloadThread = new DownloadRemoteLogThread(scannerName);
     }
 
     public void start() {
@@ -315,8 +314,8 @@ public class RemoteLogDownloader implements Closeable {
      * until it is interrupted.
      */
     private class DownloadRemoteLogThread extends ShutdownableThread {
-        public DownloadRemoteLogThread(TablePath tablePath) {
-            super(String.format("DownloadRemoteLog-[%s]", tablePath.toString()), true);
+        public DownloadRemoteLogThread(String scannerName) {
+            super(String.format("DownloadRemoteLog-[%s]", scannerName), true);
         }
 
         @Override

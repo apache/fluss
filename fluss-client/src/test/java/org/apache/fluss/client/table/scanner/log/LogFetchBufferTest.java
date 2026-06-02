@@ -41,6 +41,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
@@ -260,6 +261,7 @@ public class LogFetchBufferTest {
     private DefaultCompletedFetch makeCompletedFetch(TableBucket tableBucket) throws Exception {
         return new DefaultCompletedFetch(
                 tableBucket,
+                DATA1_TABLE_PATH,
                 new FetchLogResultForBucket(tableBucket, genMemoryLogRecordsByObject(DATA1), 10L),
                 readContext,
                 logScannerStatus,

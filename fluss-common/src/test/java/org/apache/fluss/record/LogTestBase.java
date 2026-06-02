@@ -33,6 +33,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
+import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** base test class for Log. */
@@ -65,6 +66,7 @@ public abstract class LogTestBase {
             List<MemoryLogRecords> expected, LogRecords actual, RowType rowType) {
         LogRecordsAssert.assertThatLogRecords(actual)
                 .withSchema(rowType)
+                .withSchemaGetter(TEST_SCHEMA_GETTER)
                 .isEqualTo(new ListLogRecords(expected));
     }
 

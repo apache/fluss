@@ -72,8 +72,7 @@ public class LogFetchCollectorTest {
         logScannerStatus.assignScanBuckets(scanBuckets);
         logFetchBuffer = new LogFetchBuffer();
         logFetchCollector =
-                new LogFetchCollector(
-                        DATA1_TABLE_PATH, logScannerStatus, new Configuration(), metadataUpdater);
+                new LogFetchCollector(logScannerStatus, new Configuration(), metadataUpdater);
         readContext =
                 LogRecordReadContext.createArrowReadContext(
                         DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, TEST_SCHEMA_GETTER);
@@ -220,7 +219,7 @@ public class LogFetchCollectorTest {
                 new TestingMetadataUpdater(
                         Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO));
         LogFetchCollector collector =
-                new LogFetchCollector(DATA1_TABLE_PATH, logScannerStatus, conf, metadataUpdater);
+                new LogFetchCollector(logScannerStatus, conf, metadataUpdater);
 
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
         FetchLogResultForBucket result =
@@ -247,7 +246,7 @@ public class LogFetchCollectorTest {
                 new TestingMetadataUpdater(
                         Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO));
         LogFetchCollector collector =
-                new LogFetchCollector(DATA1_TABLE_PATH, logScannerStatus, conf, metadataUpdater);
+                new LogFetchCollector(logScannerStatus, conf, metadataUpdater);
 
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
         FetchLogResultForBucket filteredEmpty = new FetchLogResultForBucket(tb, 10L, 20L);
@@ -266,7 +265,14 @@ public class LogFetchCollectorTest {
     private DefaultCompletedFetch makeCompletedFetch(
             TableBucket tableBucket, FetchLogResultForBucket resultForBucket, long offset) {
         return new DefaultCompletedFetch(
-                tableBucket, resultForBucket, readContext, logScannerStatus, true, offset, null);
+                tableBucket,
+                DATA1_TABLE_PATH,
+                resultForBucket,
+                readContext,
+                logScannerStatus,
+                true,
+                offset,
+                null);
     }
 
     @Test
@@ -317,7 +323,7 @@ public class LogFetchCollectorTest {
                 new TestingMetadataUpdater(
                         Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO));
         LogFetchCollector collector =
-                new LogFetchCollector(DATA1_TABLE_PATH, logScannerStatus, conf, metadataUpdater);
+                new LogFetchCollector(logScannerStatus, conf, metadataUpdater);
 
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
         FetchLogResultForBucket result = new FetchLogResultForBucket(tb, records, 4L);

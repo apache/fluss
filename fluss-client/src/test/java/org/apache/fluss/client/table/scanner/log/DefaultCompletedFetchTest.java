@@ -336,10 +336,12 @@ public class DefaultCompletedFetchTest {
         DefaultCompletedFetch defaultCompletedFetch =
                 new DefaultCompletedFetch(
                         tb,
+                        DATA2_TABLE_PATH,
                         resultForBucket,
                         LogRecordReadContext.createReadContext(
                                 tableInfo,
                                 false,
+                                LogRecordReadContext.SchemaResolution.DYNAMIC,
                                 null,
                                 new TestingSchemaGetter(
                                         tableInfo.getSchemaId(), tableInfo.getSchema())),
@@ -391,10 +393,12 @@ public class DefaultCompletedFetchTest {
             Projection projection) {
         return new DefaultCompletedFetch(
                 tableBucket,
+                DATA2_TABLE_PATH,
                 resultForBucket,
                 LogRecordReadContext.createReadContext(
                         tableInfo,
                         false,
+                        LogRecordReadContext.SchemaResolution.DYNAMIC,
                         projection,
                         new TestingSchemaGetter(tableInfo.getSchemaId(), tableInfo.getSchema())),
                 logScannerStatus,

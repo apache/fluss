@@ -298,9 +298,15 @@ class RemoteCompletedFetchTest {
             Runnable recycle) {
         return new RemoteCompletedFetch(
                 tableBucket,
+                DATA2_TABLE_PATH,
                 fileLogRecords,
                 10L,
-                LogRecordReadContext.createReadContext(tableInfo, true, projection, schemaGetter),
+                LogRecordReadContext.createReadContext(
+                        tableInfo,
+                        true,
+                        LogRecordReadContext.SchemaResolution.DYNAMIC,
+                        projection,
+                        schemaGetter),
                 logScannerStatus,
                 true,
                 fetchOffset,

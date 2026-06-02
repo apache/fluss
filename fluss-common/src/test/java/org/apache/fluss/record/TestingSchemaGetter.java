@@ -36,7 +36,6 @@ public class TestingSchemaGetter implements SchemaGetter {
         this.schemaCaches = new HashMap<>();
     }
 
-    // todo: remove it(简化测试代码）
     public TestingSchemaGetter(SchemaInfo schemaInfo) {
         this.schemaInfo = schemaInfo;
         this.schemaCaches = new HashMap<>();
