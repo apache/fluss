@@ -58,17 +58,14 @@ import java.util.Map;
 public class LogFetchCollector {
     private static final Logger LOG = LoggerFactory.getLogger(LogFetchCollector.class);
 
-    private final TablePath tablePath;
     private final LogScannerStatus logScannerStatus;
     private final int maxPollRecords;
     private final MetadataUpdater metadataUpdater;
 
     public LogFetchCollector(
-            TablePath tablePath,
             LogScannerStatus logScannerStatus,
             Configuration conf,
             MetadataUpdater metadataUpdater) {
-        this.tablePath = tablePath;
         this.logScannerStatus = logScannerStatus;
         this.maxPollRecords = conf.getInt(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS);
         this.metadataUpdater = metadataUpdater;
@@ -253,6 +250,7 @@ public class LogFetchCollector {
     private void handleInitializeErrors(
             CompletedFetch completedFetch, Errors error, String errorMessage) {
         TableBucket tb = completedFetch.tableBucket;
+        TablePath tablePath = completedFetch.tablePath;
         long fetchOffset = completedFetch.fetchOffset();
         if (error == Errors.NOT_LEADER_OR_FOLLOWER
                 || error == Errors.LOG_STORAGE_EXCEPTION

@@ -28,6 +28,7 @@ import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
@@ -41,6 +42,7 @@ import org.junit.jupiter.api.Test;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -77,20 +79,21 @@ public class LogFetcherTest {
         LogScannerStatus logScannerStatus = initializeLogScannerStatus();
         logFetcher =
                 new LogFetcher(
-                        DATA1_TABLE_INFO,
-                        null,
-                        null,
+                        "default-fetcher",
                         logScannerStatus,
                         new Configuration(),
                         metadataUpdater,
                         TestingScannerMetricGroup.newInstance(),
                         new RemoteFileDownloader(1),
-                        clientSchemaGetter);
+                        LogRecordReadContext.SchemaResolution.TARGET);
+        logFetcher.registerTable(
+                new TableScanSpec(DATA1_TABLE_INFO, null, null), clientSchemaGetter);
     }
 
     @Test
     void sendFetchRequestWithNotLeaderOrFollowerException() {
-        Map<Integer, FetchLogRequest> requestMap = logFetcher.prepareFetchLogRequests();
+        List<TableBucket> fetchable = Collections.singletonList(tb1);
+        Map<Integer, FetchLogRequest> requestMap = logFetcher.prepareFetchLogRequests(fetchable);
         Set<Integer> serverSet = requestMap.keySet();
         assertThat(serverSet).containsExactlyInAnyOrder(1);
 

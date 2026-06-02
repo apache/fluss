@@ -48,30 +48,57 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 @ThreadSafe
 public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoCloseable {
 
-    // the log format of the table
+    /**
+     * Schema resolution strategy for reading records.
+     *
+     * <p>Replaces an earlier {@code boolean readAsTargetSchema} flag that was adjacent to {@code
+     * boolean readFromRemote} in the factory signature and prone to accidental swaps at call sites.
+     */
+    public enum SchemaResolution {
+        /**
+         * Records are projected to the table's current target schema. Columns added via later
+         * schema evolutions are hidden; columns removed from the target are dropped.
+         */
+        TARGET,
+        /**
+         * Records are returned with their original write-time schema. Callers observe schema
+         * evolution: fields added in a newer schema version become visible once written with that
+         * schema.
+         */
+        DYNAMIC
+    }
+
+    private final long tableId;
     private final LogFormat logFormat;
-    // the schema of the date read form server or remote. (which is projected in the server side)
-    private final RowType dataRowType;
-    // the static schemaId of the table, should support dynamic schema evolution in the future
-    private final int targetSchemaId;
-    // the Arrow memory buffer allocator for the table, should be null if not ARROW log format
+    /**
+     * When present, provides fixed schema identity, data row type, and pre-built field getters.
+     * When {@code null}, the reader dynamically adapts to each batch's schema so that columns added
+     * via schema evolution are visible.
+     */
+    @Nullable private final ReadTarget target;
+
     @Nullable private final BufferAllocator bufferAllocator;
-    // the final selected fields of the read data
-    private final FieldGetter[] selectedFieldGetters;
-    // whether the projection is push downed to the server side and the returned data is pruned.
     private final boolean projectionPushDowned;
     private final SchemaGetter schemaGetter;
     private final ConcurrentHashMap<Integer, VectorSchemaRoot> vectorSchemaRootMap =
             new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, FieldGetter[]> fieldGetterCache =
+            new ConcurrentHashMap<>();
+
+    // -------------------------------------------------------------------------
+    //  Main factory methods
+    // -------------------------------------------------------------------------
 
     public static LogRecordReadContext createReadContext(
             TableInfo tableInfo,
             boolean readFromRemote,
+            SchemaResolution schemaResolution,
             @Nullable Projection projection,
             SchemaGetter schemaGetter) {
         return createReadContext(
                 tableInfo,
                 readFromRemote,
+                schemaResolution,
                 projection,
                 schemaGetter,
                 new ChunkedAllocationManager.ChunkedFactory());
@@ -80,8 +107,13 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
     /**
      * Creates a {@link LogRecordReadContext} with a custom {@link AllocationManager.Factory}.
      *
+     * <p>When {@code schemaResolution} is {@link SchemaResolution#DYNAMIC} and {@code projection}
+     * is {@code null}, no fixed {@link ReadTarget} is created. In that mode the reader dynamically
+     * builds field getters per batch schema, so columns added via schema evolution become visible.
+     *
      * @param tableInfo the table info of the table to read
      * @param readFromRemote whether the data is read from remote storage
+     * @param schemaResolution how to resolve the output schema: see {@link SchemaResolution}
      * @param projection the projection to apply, or null for all fields
      * @param schemaGetter the schema getter to resolve schema by id
      * @param allocationManagerFactory the factory for creating Arrow memory allocations
@@ -89,75 +121,88 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
     public static LogRecordReadContext createReadContext(
             TableInfo tableInfo,
             boolean readFromRemote,
+            SchemaResolution schemaResolution,
             @Nullable Projection projection,
             SchemaGetter schemaGetter,
             AllocationManager.Factory allocationManagerFactory) {
+        checkNotNull(schemaResolution, "schemaResolution");
+        boolean readAsTargetSchema = schemaResolution == SchemaResolution.TARGET;
         RowType rowType = tableInfo.getRowType();
         LogFormat logFormat = tableInfo.getTableConfig().getLogFormat();
         // only for arrow log format, the projection can be push downed to the server side
-        boolean projectionPushDowned = projection != null && logFormat == LogFormat.ARROW;
-        int schemaId = tableInfo.getSchemaId();
-        if (projection == null) {
-            // set a default dummy projection to simplify code
-            projection = Projection.of(IntStream.range(0, rowType.getFieldCount()).toArray());
+        boolean projectionPushDowned =
+                logFormat == LogFormat.ARROW && !readFromRemote && projection != null;
+
+        // Compute ReadTarget when there is a fixed output configuration.
+        // When schemaResolution is DYNAMIC and no projection is set, target is null and
+        // the reader dynamically adapts to each batch's schema.
+        ReadTarget target = null;
+        if (readAsTargetSchema || projection != null) {
+            int schemaId = tableInfo.getSchemaId();
+            if (projection == null) {
+                // set a default dummy projection to simplify code
+                projection = Projection.of(IntStream.range(0, rowType.getFieldCount()).toArray());
+            }
+            RowType dataRowType;
+            int[] selectedFields;
+            if (projectionPushDowned) {
+                dataRowType = projection.projectInOrder(rowType);
+                selectedFields = projection.getReorderingIndexes();
+            } else {
+                dataRowType = rowType;
+                selectedFields = projection.getProjection();
+            }
+            target = new ReadTarget(schemaId, dataRowType, selectedFields, readAsTargetSchema);
         }
 
         if (logFormat == LogFormat.ARROW) {
-            if (readFromRemote) {
-                // currently, for remote read, arrow log doesn't support projection pushdown,
-                // so set the rowType as is.
-                int[] selectedFields = projection.getProjection();
-                return createArrowReadContext(
-                        rowType,
-                        schemaId,
-                        selectedFields,
-                        false,
-                        schemaGetter,
-                        allocationManagerFactory);
-            } else {
-                // arrow data that returned from server has been projected (in order)
-                RowType projectedRowType = projection.projectInOrder(rowType);
-                // need to reorder the fields for final output
-                int[] selectedFields = projection.getReorderingIndexes();
-                return createArrowReadContext(
-                        projectedRowType,
-                        schemaId,
-                        selectedFields,
-                        projectionPushDowned,
-                        schemaGetter,
-                        allocationManagerFactory);
-            }
+            return createArrowReadContext(
+                    tableInfo.getTableId(),
+                    target,
+                    projectionPushDowned,
+                    schemaGetter,
+                    allocationManagerFactory);
         } else if (logFormat == LogFormat.INDEXED) {
-            int[] selectedFields = projection.getProjection();
-            return createIndexedReadContext(rowType, schemaId, selectedFields, schemaGetter);
+            return createIndexedReadContext(tableInfo.getTableId(), target, schemaGetter);
         } else if (logFormat == LogFormat.COMPACTED) {
-            int[] selectedFields = projection.getProjection();
-            return createCompactedRowReadContext(rowType, schemaId, selectedFields);
+            return createCompactedRowReadContext(tableInfo.getTableId(), target, schemaGetter);
         } else {
             throw new IllegalArgumentException("Unsupported log format: " + logFormat);
         }
     }
 
+    // -------------------------------------------------------------------------
+    //  Internal factory methods
+    // -------------------------------------------------------------------------
+
     private static LogRecordReadContext createArrowReadContext(
-            RowType dataRowType,
-            int schemaId,
-            int[] selectedFields,
+            long tableId,
+            @Nullable ReadTarget target,
             boolean projectionPushDowned,
             SchemaGetter schemaGetter,
             AllocationManager.Factory allocationManagerFactory) {
         // TODO: use a more reasonable memory limit
         BufferAllocator allocator =
                 BufferAllocatorUtil.createBufferAllocator(allocationManagerFactory);
-        FieldGetter[] fieldGetters = buildProjectedFieldGetters(dataRowType, selectedFields);
         return new LogRecordReadContext(
-                LogFormat.ARROW,
-                dataRowType,
-                schemaId,
-                allocator,
-                fieldGetters,
-                projectionPushDowned,
-                schemaGetter);
+                tableId, LogFormat.ARROW, target, allocator, projectionPushDowned, schemaGetter);
     }
+
+    private static LogRecordReadContext createIndexedReadContext(
+            long tableId, @Nullable ReadTarget target, SchemaGetter schemaGetter) {
+        return new LogRecordReadContext(
+                tableId, LogFormat.INDEXED, target, null, false, schemaGetter);
+    }
+
+    private static LogRecordReadContext createCompactedRowReadContext(
+            long tableId, @Nullable ReadTarget target, @Nullable SchemaGetter schemaGetter) {
+        return new LogRecordReadContext(
+                tableId, LogFormat.COMPACTED, target, null, false, schemaGetter);
+    }
+
+    // -------------------------------------------------------------------------
+    //  @VisibleForTesting and convenience factory methods
+    // -------------------------------------------------------------------------
 
     /**
      * Creates a LogRecordReadContext for ARROW log format, that underlying Arrow resources are not
@@ -171,13 +216,9 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
     public static LogRecordReadContext createArrowReadContext(
             RowType rowType, int schemaId, SchemaGetter schemaGetter) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
+        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields, true);
         return createArrowReadContext(
-                rowType,
-                schemaId,
-                selectedFields,
-                false,
-                schemaGetter,
-                new ChunkedAllocationManager.ChunkedFactory());
+                -1L, target, false, schemaGetter, new ChunkedAllocationManager.ChunkedFactory());
     }
 
     @VisibleForTesting
@@ -187,10 +228,10 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
             SchemaGetter schemaGetter,
             boolean projectionPushDowned) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
+        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields, true);
         return createArrowReadContext(
-                rowType,
-                schemaId,
-                selectedFields,
+                -1L,
+                target,
                 projectionPushDowned,
                 schemaGetter,
                 new ChunkedAllocationManager.ChunkedFactory());
@@ -207,86 +248,48 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
     public static LogRecordReadContext createIndexedReadContext(
             RowType rowType, int schemaId, SchemaGetter schemaGetter) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
-        return createIndexedReadContext(rowType, schemaId, selectedFields, schemaGetter);
+        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields, true);
+        return createIndexedReadContext(-1L, target, schemaGetter);
     }
 
     /** Creates a LogRecordReadContext for COMPACTED log format. */
     public static LogRecordReadContext createCompactedRowReadContext(
             RowType rowType, int schemaId) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
-        return createCompactedRowReadContext(rowType, schemaId, selectedFields, null);
+        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields, false);
+        return createCompactedRowReadContext(-1L, target, null);
     }
 
     /** Creates a LogRecordReadContext for COMPACTED log format with schema evolution support. */
     public static LogRecordReadContext createCompactedRowReadContext(
-            RowType rowType, int schemaId, SchemaGetter schemaGetter) {
+            long tableId, RowType rowType, int schemaId, SchemaGetter schemaGetter) {
         int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
-        return createCompactedRowReadContext(rowType, schemaId, selectedFields, schemaGetter);
+        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields, true);
+        return createCompactedRowReadContext(tableId, target, schemaGetter);
     }
 
-    /**
-     * Creates a LogRecordReadContext for INDEXED log format.
-     *
-     * @param rowType the schema of the read data
-     * @param schemaId the schemaId of the table
-     * @param selectedFields the final selected fields of the read data
-     * @param schemaGetter the schema getter of to get schema by schemaId
-     */
-    public static LogRecordReadContext createIndexedReadContext(
-            RowType rowType, int schemaId, int[] selectedFields, SchemaGetter schemaGetter) {
-        FieldGetter[] fieldGetters = buildProjectedFieldGetters(rowType, selectedFields);
-        // for INDEXED log format, the projection is NEVER push downed to the server side
-        return new LogRecordReadContext(
-                LogFormat.INDEXED, rowType, schemaId, null, fieldGetters, false, schemaGetter);
-    }
-
-    /**
-     * Creates a LogRecordReadContext for COMPACTED log format.
-     *
-     * @param rowType the schema of the read data
-     * @param schemaId the schemaId of the table
-     * @param selectedFields the final selected fields of the read data
-     */
-    public static LogRecordReadContext createCompactedRowReadContext(
-            RowType rowType, int schemaId, int[] selectedFields) {
-        return createCompactedRowReadContext(rowType, schemaId, selectedFields, null);
-    }
-
-    /**
-     * Creates a LogRecordReadContext for COMPACTED log format.
-     *
-     * @param rowType the schema of the read data
-     * @param schemaId the schemaId of the table
-     * @param selectedFields the final selected fields of the read data
-     * @param schemaGetter the schema getter to resolve evolved batch schemas
-     */
-    public static LogRecordReadContext createCompactedRowReadContext(
-            RowType rowType,
-            int schemaId,
-            int[] selectedFields,
-            @Nullable SchemaGetter schemaGetter) {
-        FieldGetter[] fieldGetters = buildProjectedFieldGetters(rowType, selectedFields);
-        // for COMPACTED log format, the projection is NEVER push downed to the server side
-        return new LogRecordReadContext(
-                LogFormat.COMPACTED, rowType, schemaId, null, fieldGetters, false, schemaGetter);
-    }
+    // -------------------------------------------------------------------------
+    //  Constructor
+    // -------------------------------------------------------------------------
 
     private LogRecordReadContext(
+            long tableId,
             LogFormat logFormat,
-            RowType targetDataRowType,
-            int targetSchemaId,
-            BufferAllocator bufferAllocator,
-            FieldGetter[] selectedFieldGetters,
+            @Nullable ReadTarget target,
+            @Nullable BufferAllocator bufferAllocator,
             boolean projectionPushDowned,
             SchemaGetter schemaGetter) {
+        this.tableId = tableId;
         this.logFormat = logFormat;
-        this.dataRowType = targetDataRowType;
-        this.targetSchemaId = targetSchemaId;
+        this.target = target;
         this.bufferAllocator = bufferAllocator;
-        this.selectedFieldGetters = selectedFieldGetters;
         this.projectionPushDowned = projectionPushDowned;
         this.schemaGetter = schemaGetter;
     }
+
+    // -------------------------------------------------------------------------
+    //  ReadContext interface methods
+    // -------------------------------------------------------------------------
 
     @Override
     public LogFormat getLogFormat() {
@@ -295,17 +298,30 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
 
     @Override
     public RowType getRowType(int schemaId) {
-        if (isSameRowType(schemaId)) {
-            return dataRowType;
+        if (isProjectionPushDowned()) {
+            assert target != null;
+            return target.dataRowType;
         }
-
-        Schema schema = schemaGetter.getSchema(schemaId);
-        return schema.getRowType();
+        return schemaGetter.getSchema(schemaId).getRowType();
     }
 
-    /** Get the selected field getters for the read data. */
-    public FieldGetter[] getSelectedFieldGetters() {
-        return selectedFieldGetters;
+    /**
+     * Get the selected field getters for the read data. When no fixed {@link ReadTarget} is
+     * configured, getters are built dynamically from the batch's actual schema so that columns
+     * added via schema evolution are visible.
+     */
+    public FieldGetter[] getSelectedFieldGetters(int schemaId) {
+        if (target != null) {
+            return target.fieldGetters;
+        }
+        // Dynamic: build all-field getters from the batch's actual schema.
+        return fieldGetterCache.computeIfAbsent(
+                schemaId,
+                id -> {
+                    RowType batchRowType = schemaGetter.getSchema(id).getRowType();
+                    int[] allFields = IntStream.range(0, batchRowType.getFieldCount()).toArray();
+                    return buildProjectedFieldGetters(batchRowType, allFields);
+                });
     }
 
     /** Whether the projection is push downed to the server side and the returned data is pruned. */
@@ -316,6 +332,11 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
     /** Get the schema getter. */
     public SchemaGetter getSchemaGetter() {
         return schemaGetter;
+    }
+
+    @Override
+    public long getTableId() {
+        return tableId;
     }
 
     @Override
@@ -345,15 +366,12 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
     @Nullable
     @Override
     public ProjectedRow getOutputProjectedRow(int schemaId) {
-        if (isSameRowType(schemaId)) {
-            return null;
-        }
-        if (schemaGetter == null) {
+        if (target == null || schemaId == target.schemaId) {
             return null;
         }
         // TODO: should we cache the projection?
         Schema originSchema = schemaGetter.getSchema(schemaId);
-        Schema expectedSchema = schemaGetter.getSchema(targetSchemaId);
+        Schema expectedSchema = schemaGetter.getSchema(target.schemaId);
         return ProjectedRow.from(originSchema, expectedSchema);
     }
 
@@ -364,11 +382,10 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         }
     }
 
-    private boolean isSameRowType(int schemaId) {
-        return targetSchemaId == schemaId || isProjectionPushDowned();
-    }
-
-    private static FieldGetter[] buildProjectedFieldGetters(RowType rowType, int[] selectedFields) {
+    // -------------------------------------------------------------------------
+    //  Private helpers
+    // -------------------------------------------------------------------------
+    static FieldGetter[] buildProjectedFieldGetters(RowType rowType, int[] selectedFields) {
         List<DataType> dataTypeList = rowType.getChildren();
         FieldGetter[] fieldGetters = new FieldGetter[selectedFields.length];
         for (int i = 0; i < fieldGetters.length; i++) {
@@ -378,5 +395,46 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
                             dataTypeList.get(selectedFields[i]), selectedFields[i]);
         }
         return fieldGetters;
+    }
+
+    // -------------------------------------------------------------------------
+    //  ReadTarget
+    // -------------------------------------------------------------------------
+
+    /**
+     * Encapsulates the target output configuration for reading log records. Contains the target
+     * schema identity, data row type, selected field indices, and pre-built field getters.
+     *
+     * <p>When a {@code ReadTarget} is provided, field getters are fixed and schema evolution may be
+     * enabled. When absent ({@code null}), the reader dynamically adapts to each batch's schema so
+     * that columns added via schema evolution are visible.
+     */
+    static class ReadTarget {
+        /** The schema id this configuration was built for. */
+        final int schemaId;
+
+        /** The row type of the data (may be server-projected for ARROW format). */
+        final RowType dataRowType;
+
+        /** The field indices to select from the data row type. */
+        final int[] selectedFields;
+
+        /** Pre-built field getters corresponding to {@link #selectedFields}. */
+        final FieldGetter[] fieldGetters;
+
+        /** Whether to project records from other schemas to this target schema. */
+        final boolean readAsTargetSchema;
+
+        ReadTarget(
+                int schemaId,
+                RowType dataRowType,
+                int[] selectedFields,
+                boolean readAsTargetSchema) {
+            this.schemaId = schemaId;
+            this.dataRowType = dataRowType;
+            this.selectedFields = selectedFields;
+            this.fieldGetters = buildProjectedFieldGetters(dataRowType, selectedFields);
+            this.readAsTargetSchema = readAsTargetSchema;
+        }
     }
 }

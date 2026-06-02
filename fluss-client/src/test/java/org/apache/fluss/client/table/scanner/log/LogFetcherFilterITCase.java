@@ -27,6 +27,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.record.LogRecordBatchStatisticsTestUtils;
+import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
@@ -109,15 +110,15 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
         TestingScannerMetricGroup scannerMetricGroup = TestingScannerMetricGroup.newInstance();
         logFetcher =
                 new LogFetcher(
-                        DATA1_TABLE_INFO,
-                        null, // projection
-                        recordBatchFilter, // recordBatchFilter
+                        "default-scanner",
                         logScannerStatus,
                         clientConf,
                         metadataUpdater,
                         scannerMetricGroup,
                         new RemoteFileDownloader(1),
-                        TEST_SCHEMA_GETTER);
+                        LogRecordReadContext.SchemaResolution.TARGET);
+        logFetcher.registerTable(
+                new TableScanSpec(DATA1_TABLE_INFO, null, recordBatchFilter), TEST_SCHEMA_GETTER);
     }
 
     @AfterEach
@@ -430,16 +431,18 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
         Predicate recordBatchFilter = builder.greaterThan(0, 5); // a > 5
 
         TestingScannerMetricGroup scannerMetricGroup = TestingScannerMetricGroup.newInstance();
-        return new LogFetcher(
-                DATA1_TABLE_INFO,
-                null,
-                recordBatchFilter,
-                scannerStatus,
-                clientConf,
-                metadataUpdater,
-                scannerMetricGroup,
-                new RemoteFileDownloader(1),
-                TEST_SCHEMA_GETTER);
+        LogFetcher logFetcher =
+                new LogFetcher(
+                        "default fetcher",
+                        scannerStatus,
+                        clientConf,
+                        metadataUpdater,
+                        scannerMetricGroup,
+                        new RemoteFileDownloader(1),
+                        LogRecordReadContext.SchemaResolution.TARGET);
+        logFetcher.registerTable(
+                new TableScanSpec(DATA1_TABLE_INFO, null, recordBatchFilter), TEST_SCHEMA_GETTER);
+        return logFetcher;
     }
 
     private void addRecordsToBucket(TableBucket tableBucket, MemoryLogRecords logRecords)
