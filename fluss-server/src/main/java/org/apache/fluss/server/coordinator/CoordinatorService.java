@@ -295,62 +295,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     }
 
     @Override
-    public CompletableFuture<GetClusterHealthResponse> getClusterHealth(
-            GetClusterHealthRequest request) {
-        AccessContextEvent<GetClusterHealthResponse> event =
-                new AccessContextEvent<>(CoordinatorService::computeClusterHealth);
-        eventManagerSupplier.get().put(event);
-        return event.getResultFuture();
-    }
-
-    @VisibleForTesting
-    static GetClusterHealthResponse computeClusterHealth(CoordinatorContext ctx) {
-        GetClusterHealthResponse response = new GetClusterHealthResponse();
-
-        int numReplicas = 0;
-        int inSyncReplicas = 0;
-        int numLeaderReplicas = 0;
-        int activeLeaderReplicas = 0;
-        Set<TableBucket> inactiveLeaders = ctx.getInactiveLeaderBuckets();
-
-        for (TableBucket tb : ctx.getAllBuckets()) {
-            List<Integer> assignment = ctx.getAssignment(tb);
-            numReplicas += assignment.size();
-            numLeaderReplicas++;
-
-            Optional<LeaderAndIsr> laiOpt = ctx.getBucketLeaderAndIsr(tb);
-            if (laiOpt.isPresent()) {
-                LeaderAndIsr lai = laiOpt.get();
-                inSyncReplicas += lai.isr().size();
-                if (lai.leader() != LeaderAndIsr.NO_LEADER
-                        && ctx.getLiveTabletServers().containsKey(lai.leader())
-                        && !inactiveLeaders.contains(tb)) {
-                    activeLeaderReplicas++;
-                }
-            }
-        }
-
-        // PbClusterHealthStatus: GREEN=0, YELLOW=1, RED=2, UNKNOWN=3
-        int status;
-        if (numLeaderReplicas == 0) {
-            status = 0; // GREEN
-        } else if (activeLeaderReplicas < numLeaderReplicas) {
-            status = 2; // RED
-        } else if (inSyncReplicas < numReplicas) {
-            status = 1; // YELLOW
-        } else {
-            status = 0; // GREEN
-        }
-
-        response.setNumReplicas(numReplicas);
-        response.setInSyncReplicas(inSyncReplicas);
-        response.setNumLeaderReplicas(numLeaderReplicas);
-        response.setActiveLeaderReplicas(activeLeaderReplicas);
-        response.setStatus(status);
-        return response;
-    }
-
-    @Override
     public String name() {
         return "coordinator";
     }
@@ -1290,6 +1234,60 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                         new CancelRebalanceEvent(
                                 request.hasRebalanceId() ? request.getRebalanceId() : null,
                                 response));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<GetClusterHealthResponse> getClusterHealth(
+            GetClusterHealthRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.DESCRIBE, Resource.cluster());
+        }
+
+        AccessContextEvent<GetClusterHealthResponse> event =
+                new AccessContextEvent<>(CoordinatorService::computeClusterHealth);
+        eventManagerSupplier.get().put(event);
+        return event.getResultFuture();
+    }
+
+    @VisibleForTesting
+    static GetClusterHealthResponse computeClusterHealth(CoordinatorContext ctx) {
+        GetClusterHealthResponse response = new GetClusterHealthResponse();
+
+        int numReplicas = 0;
+        int inSyncReplicas = 0;
+        int numLeaderReplicas = 0;
+        int activeLeaderReplicas = 0;
+
+        for (TableBucket tb : ctx.getAllBuckets()) {
+            List<Integer> assignment = ctx.getAssignment(tb);
+            numReplicas += assignment.size();
+            numLeaderReplicas++;
+
+            Optional<LeaderAndIsr> laiOpt = ctx.getBucketLeaderAndIsr(tb);
+            if (laiOpt.isPresent()) {
+                inSyncReplicas += laiOpt.get().isr().size();
+            }
+            if (ctx.isLeaderActive(tb)) {
+                activeLeaderReplicas++;
+            }
+        }
+
+        // PbClusterHealthStatus: GREEN=0, YELLOW=1, RED=2, UNKNOWN=3
+        int status;
+        if (activeLeaderReplicas < numLeaderReplicas) {
+            status = 2; // RED
+        } else if (inSyncReplicas < numReplicas) {
+            status = 1; // YELLOW
+        } else {
+            status = 0; // GREEN
+        }
+
+        response.setNumReplicas(numReplicas);
+        response.setInSyncReplicas(inSyncReplicas);
+        response.setNumLeaderReplicas(numLeaderReplicas);
+        response.setActiveLeaderReplicas(activeLeaderReplicas);
+        response.setStatus(status);
         return response;
     }
 

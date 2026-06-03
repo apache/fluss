@@ -366,12 +366,6 @@ public class TestTabletServerGateway implements TabletServerGateway {
         throw new UnsupportedOperationException();
     }
 
-    @Override
-    public CompletableFuture<org.apache.fluss.rpc.messages.GetClusterHealthResponse>
-            getClusterHealth(org.apache.fluss.rpc.messages.GetClusterHealthRequest request) {
-        throw new UnsupportedOperationException();
-    }
-
     public int pendingRequestSize() {
         return requests.size();
     }

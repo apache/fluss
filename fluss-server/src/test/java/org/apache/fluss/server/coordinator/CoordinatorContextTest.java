@@ -17,19 +17,24 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.cluster.Endpoint;
+import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.zk.ZkEpoch;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -73,76 +78,122 @@ class CoordinatorContextTest {
         assertThat(context.getLakeTableCount()).isEqualTo(2);
     }
 
-    // ---- Inactive Leader Tracking Tests ----
+    // ---- Pending Leader Activation Tracking Tests ----
 
     @Test
-    void testMarkLeaderInactive() {
+    void testAddPendingLeaderActivation() {
         CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
         TableBucket tb1 = new TableBucket(1L, 0);
         TableBucket tb2 = new TableBucket(1L, 1);
 
-        assertThat(context.isLeaderActive(tb1)).isTrue();
-        assertThat(context.getInactiveLeaderBuckets()).isEmpty();
+        assertThat(context.getPendingLeaderActivationBuckets()).isEmpty();
 
-        context.markLeaderInactive(tb1);
-        context.markLeaderInactive(tb2);
+        context.addPendingLeaderActivation(tb1);
+        context.addPendingLeaderActivation(tb2);
 
-        assertThat(context.isLeaderActive(tb1)).isFalse();
-        assertThat(context.isLeaderActive(tb2)).isFalse();
-        assertThat(context.getInactiveLeaderBuckets()).containsExactlyInAnyOrder(tb1, tb2);
+        assertThat(context.getPendingLeaderActivationBuckets()).containsExactlyInAnyOrder(tb1, tb2);
     }
 
     @Test
-    void testMarkLeaderActive() {
+    void testClearPendingLeaderActivation() {
         CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
         TableBucket tb1 = new TableBucket(1L, 0);
         TableBucket tb2 = new TableBucket(1L, 1);
 
-        context.markLeadersInactive(Arrays.asList(tb1, tb2));
+        context.addPendingLeaderActivations(Arrays.asList(tb1, tb2));
 
-        context.markLeaderActive(tb1);
-        assertThat(context.isLeaderActive(tb1)).isTrue();
-        assertThat(context.isLeaderActive(tb2)).isFalse();
+        context.clearPendingLeaderActivation(tb1);
+        assertThat(context.getPendingLeaderActivationBuckets()).containsExactly(tb2);
 
-        context.markLeaderActive(tb2);
-        assertThat(context.getInactiveLeaderBuckets()).isEmpty();
+        context.clearPendingLeaderActivation(tb2);
+        assertThat(context.getPendingLeaderActivationBuckets()).isEmpty();
     }
 
     @Test
-    void testMarkLeaderActiveForNonExistentBucket() {
+    void testClearPendingLeaderActivationForNonExistentBucket() {
         CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
         TableBucket tb1 = new TableBucket(1L, 0);
 
         // Should not throw
-        context.markLeaderActive(tb1);
-        assertThat(context.isLeaderActive(tb1)).isTrue();
+        context.clearPendingLeaderActivation(tb1);
+        assertThat(context.getPendingLeaderActivationBuckets()).isEmpty();
     }
 
     @Test
-    void testRemoveFromInactiveLeaders() {
+    void testRemoveFromPendingLeaderActivations() {
         CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
         TableBucket tb1 = new TableBucket(1L, 0);
         TableBucket tb2 = new TableBucket(1L, 1);
         TableBucket tb3 = new TableBucket(2L, 0);
 
-        context.markLeadersInactive(Arrays.asList(tb1, tb2, tb3));
+        context.addPendingLeaderActivations(Arrays.asList(tb1, tb2, tb3));
 
         Set<TableBucket> toRemove = new HashSet<>(Arrays.asList(tb1, tb3));
-        context.removeFromInactiveLeaders(toRemove);
+        context.removeFromPendingLeaderActivations(toRemove);
 
-        assertThat(context.isLeaderActive(tb1)).isTrue();
-        assertThat(context.isLeaderActive(tb2)).isFalse();
-        assertThat(context.isLeaderActive(tb3)).isTrue();
+        assertThat(context.getPendingLeaderActivationBuckets()).containsExactly(tb2);
     }
 
     @Test
-    void testGetInactiveLeaderBucketsReturnsUnmodifiableSet() {
+    void testGetPendingLeaderActivationBucketsReturnsUnmodifiableSet() {
         CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
         TableBucket tb1 = new TableBucket(1L, 0);
-        context.markLeaderInactive(tb1);
+        context.addPendingLeaderActivation(tb1);
 
-        Set<TableBucket> inactive = context.getInactiveLeaderBuckets();
-        assertThat(inactive).isUnmodifiable();
+        Set<TableBucket> pending = context.getPendingLeaderActivationBuckets();
+        assertThat(pending).isUnmodifiable();
+    }
+
+    @Test
+    void testIsLeaderActiveSingleSourceOfTruth() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+        TableBucket tb = new TableBucket(1L, 0);
+
+        // No LeaderAndIsr → not active
+        assertThat(context.isLeaderActive(tb)).isFalse();
+
+        // Set up live server and LeaderAndIsr
+        context.setLiveTabletServers(
+                Collections.singletonList(
+                        new ServerInfo(
+                                0,
+                                "RACK0",
+                                Endpoint.fromListenersString("CLIENT://host0:9124"),
+                                ServerType.TABLET_SERVER)));
+        context.putBucketLeaderAndIsr(
+                tb,
+                new LeaderAndIsr(
+                        0, 1, Collections.singletonList(0), Collections.emptyList(), 0, 1));
+
+        // Active leader on live server, not pending → active
+        assertThat(context.isLeaderActive(tb)).isTrue();
+
+        // Add to pending → not active
+        context.addPendingLeaderActivation(tb);
+        assertThat(context.isLeaderActive(tb)).isFalse();
+
+        // Clear pending → active again
+        context.clearPendingLeaderActivation(tb);
+        assertThat(context.isLeaderActive(tb)).isTrue();
+
+        // Leader is NO_LEADER → not active
+        context.putBucketLeaderAndIsr(
+                tb,
+                new LeaderAndIsr(
+                        LeaderAndIsr.NO_LEADER,
+                        1,
+                        Collections.singletonList(0),
+                        Collections.emptyList(),
+                        0,
+                        1));
+        assertThat(context.isLeaderActive(tb)).isFalse();
+
+        // Leader on dead server → not active
+        context.putBucketLeaderAndIsr(
+                tb,
+                new LeaderAndIsr(
+                        99, 1, Collections.singletonList(99), Collections.emptyList(), 0, 1));
+        assertThat(context.isLeaderActive(tb)).isFalse();
     }
 
     private TableInfo createTableInfo(long tableId, TablePath tablePath, boolean isLake) {

@@ -1021,10 +1021,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
         for (TableBucket tb : succeededBuckets) {
             Optional<LeaderAndIsr> laiOpt = coordinatorContext.getBucketLeaderAndIsr(tb);
             if (laiOpt.isPresent() && laiOpt.get().leader() == serverId) {
-                coordinatorContext.markLeaderActive(tb);
+                coordinatorContext.clearPendingLeaderActivation(tb);
             }
         }
         if (!offlineReplicas.isEmpty()) {
+            // trigger replicas to offline
             onReplicaBecomeOffline(offlineReplicas);
         }
 

@@ -45,8 +45,6 @@ import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DescribeClusterConfigsResponse;
-import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
-import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
@@ -574,18 +572,6 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         List<ConfigEntry> configs = dynamicConfigManager.describeConfigs();
         return CompletableFuture.completedFuture(
                 new DescribeClusterConfigsResponse().addAllConfigs(toPbConfigEntries(configs)));
-    }
-
-    @Override
-    public CompletableFuture<GetClusterHealthResponse> getClusterHealth(
-            GetClusterHealthRequest request) {
-        GetClusterHealthResponse resp = new GetClusterHealthResponse();
-        resp.setNumReplicas(0)
-                .setInSyncReplicas(0)
-                .setNumLeaderReplicas(0)
-                .setActiveLeaderReplicas(0)
-                .setStatus(3); // UNKNOWN
-        return CompletableFuture.completedFuture(resp);
     }
 
     protected MetadataResponse processMetadataRequest(

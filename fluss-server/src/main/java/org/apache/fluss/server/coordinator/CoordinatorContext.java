@@ -107,11 +107,11 @@ public class CoordinatorContext {
     private final Map<Integer, Set<TableBucket>> replicasOnOffline = new HashMap<>();
 
     /**
-     * Tracks leader buckets that are currently inactive — a leader is inactive from the moment we
-     * send NotifyLeaderAndIsr until the target server responds successfully confirming it is the
-     * leader. Also inactive when leader == NO_LEADER.
+     * Tracks buckets where a leader change has been dispatched (via NotifyLeaderAndIsr) but not yet
+     * confirmed by the target server. A bucket enters this set when we send the notification and
+     * leaves it when the target server successfully responds confirming it is the leader.
      */
-    private final Set<TableBucket> inactiveLeaderBuckets = new HashSet<>();
+    private final Set<TableBucket> pendingLeaderActivationBuckets = new HashSet<>();
 
     /** A mapping from tabletServers to server tag. */
     private final Map<Integer, ServerTag> serverTags = new HashMap<>();
@@ -225,30 +225,46 @@ public class CoordinatorContext {
         replicasOnOffline.remove(serverId);
     }
 
-    // ---- Inactive leader tracking (for Cluster Health API) ----
+    // ---- Pending leader activation tracking (for Cluster Health API) ----
 
-    public void markLeaderInactive(TableBucket bucket) {
-        inactiveLeaderBuckets.add(bucket);
+    public void addPendingLeaderActivation(TableBucket bucket) {
+        pendingLeaderActivationBuckets.add(bucket);
     }
 
-    public void markLeadersInactive(Collection<TableBucket> buckets) {
-        inactiveLeaderBuckets.addAll(buckets);
+    public void addPendingLeaderActivations(Collection<TableBucket> buckets) {
+        pendingLeaderActivationBuckets.addAll(buckets);
     }
 
-    public void markLeaderActive(TableBucket bucket) {
-        inactiveLeaderBuckets.remove(bucket);
+    public void clearPendingLeaderActivation(TableBucket bucket) {
+        pendingLeaderActivationBuckets.remove(bucket);
     }
 
+    /**
+     * Returns whether the given bucket has an active leader. A leader is considered active when:
+     *
+     * <ul>
+     *   <li>A LeaderAndIsr record exists for the bucket
+     *   <li>The leader is not {@link LeaderAndIsr#NO_LEADER}
+     *   <li>The leader's tablet server is alive
+     *   <li>The bucket is not pending leader activation confirmation
+     * </ul>
+     */
     public boolean isLeaderActive(TableBucket bucket) {
-        return !inactiveLeaderBuckets.contains(bucket);
+        return getBucketLeaderAndIsr(bucket)
+                .map(
+                        lai ->
+                                lai.leader() != LeaderAndIsr.NO_LEADER
+                                        && liveTabletServers.containsKey(lai.leader())
+                                        && !pendingLeaderActivationBuckets.contains(bucket))
+                .orElse(false);
     }
 
-    public Set<TableBucket> getInactiveLeaderBuckets() {
-        return Collections.unmodifiableSet(inactiveLeaderBuckets);
+    public Set<TableBucket> getPendingLeaderActivationBuckets() {
+        return Collections.unmodifiableSet(pendingLeaderActivationBuckets);
     }
 
-    public void removeFromInactiveLeaders(Set<TableBucket> buckets) {
-        inactiveLeaderBuckets.removeAll(buckets);
+    public void removeFromPendingLeaderActivations(Set<TableBucket> buckets) {
+        pendingLeaderActivationBuckets.removeAll(buckets);
     }
 
     public Map<Long, TablePath> allTables() {
@@ -698,7 +714,7 @@ public class CoordinatorContext {
                                 bucketLeaderAndIsr.remove(tb);
                                 removedBuckets.add(tb);
                             });
-            removeFromInactiveLeaders(removedBuckets);
+            removeFromPendingLeaderActivations(removedBuckets);
         }
 
         TablePath tablePath = tablePathById.remove(tableId);
@@ -725,7 +741,7 @@ public class CoordinatorContext {
                                 bucketLeaderAndIsr.remove(tb);
                                 removedBuckets.add(tb);
                             });
-            removeFromInactiveLeaders(removedBuckets);
+            removeFromPendingLeaderActivations(removedBuckets);
         }
 
         PhysicalTablePath physicalTablePath =
@@ -760,7 +776,7 @@ public class CoordinatorContext {
         partitionAssignments.clear();
         bucketLeaderAndIsr.clear();
         replicasOnOffline.clear();
-        inactiveLeaderBuckets.clear();
+        pendingLeaderActivationBuckets.clear();
         bucketStates.clear();
         replicaStates.clear();
         tablePathById.clear();

@@ -168,12 +168,6 @@ public class TestingTabletGatewayService extends TestingGatewayService
     }
 
     @Override
-    public CompletableFuture<org.apache.fluss.rpc.messages.GetClusterHealthResponse>
-            getClusterHealth(org.apache.fluss.rpc.messages.GetClusterHealthRequest request) {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
     public CompletableFuture<NotifyLakeTableOffsetResponse> notifyLakeTableOffset(
             NotifyLakeTableOffsetRequest request) {
         return null;

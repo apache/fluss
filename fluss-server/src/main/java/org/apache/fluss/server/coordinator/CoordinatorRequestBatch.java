@@ -35,13 +35,11 @@ import org.apache.fluss.rpc.messages.PbStopReplicaRespForBucket;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
-import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
 import org.apache.fluss.server.entity.DeleteReplicaResultForBucket;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
-import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.TableMetadata;
@@ -420,7 +418,7 @@ public class CoordinatorRequestBatch {
                     notifyRequestEntry.getValue().entrySet()) {
                 int leader = entry.getValue().getLeader();
                 if (leader == serverId || leader == LeaderAndIsr.NO_LEADER) {
-                    coordinatorContext.markLeaderInactive(entry.getKey());
+                    coordinatorContext.addPendingLeaderActivation(entry.getKey());
                 }
             }
 
@@ -433,20 +431,19 @@ public class CoordinatorRequestBatch {
                                     "Failed to send notify leader and isr request to tablet server {}.",
                                     serverId,
                                     throwable);
-                            // Treat all buckets as failed — clears pending state and triggers
-                            // re-election via onReplicaBecomeOffline.
-                            List<NotifyLeaderAndIsrResultForBucket> failedResults =
-                                    new ArrayList<>();
-                            ApiError sendError =
-                                    new ApiError(
-                                            Errors.UNKNOWN_SERVER_ERROR, throwable.getMessage());
+                            // todo: in FLUSS-55886145, we will introduce a sender thread to send
+                            // the request, and retry if encounter any error; It may happens that
+                            // the tablet server is offline and will always got error. But,
+                            // coordinator will remove the sender for the tablet server and mark all
+                            // replica in the tablet server as offline. so, in here, if encounter
+                            // any error, we just ignore it.
+
+                            // Clear pending state so the health API does not report stale
+                            // RED. The coordinator will detect actual server death via
+                            // heartbeat timeout and trigger re-election separately.
                             for (TableBucket tb : buckets) {
-                                failedResults.add(
-                                        new NotifyLeaderAndIsrResultForBucket(tb, sendError));
+                                coordinatorContext.clearPendingLeaderActivation(tb);
                             }
-                            eventManager.put(
-                                    new NotifyLeaderAndIsrResponseReceivedEvent(
-                                            failedResults, serverId));
                             return;
                         }
                         // put the response receive event into the event manager

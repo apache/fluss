@@ -95,7 +95,7 @@ class ClusterHealthTest {
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1, 2));
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1, 2), Collections.emptyList(), 0, 1));
-        ctx.markLeaderInactive(tb);
+        ctx.addPendingLeaderActivation(tb);
 
         GetClusterHealthResponse resp = CoordinatorService.computeClusterHealth(ctx);
 
@@ -159,11 +159,11 @@ class ClusterHealthTest {
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1));
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1), Collections.emptyList(), 0, 1));
-        ctx.markLeaderInactive(tb);
+        ctx.addPendingLeaderActivation(tb);
 
         assertThat(CoordinatorService.computeClusterHealth(ctx).getStatus()).isEqualTo(2 /* RED */);
 
-        ctx.markLeaderActive(tb);
+        ctx.clearPendingLeaderActivation(tb);
 
         assertThat(CoordinatorService.computeClusterHealth(ctx).getStatus())
                 .isEqualTo(0 /* GREEN */);
@@ -221,13 +221,13 @@ class ClusterHealthTest {
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1));
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1), Collections.emptyList(), 0, 1));
-        ctx.markLeaderInactive(tb);
+        ctx.addPendingLeaderActivation(tb);
 
-        assertThat(ctx.getInactiveLeaderBuckets()).contains(tb);
+        assertThat(ctx.getPendingLeaderActivationBuckets()).contains(tb);
 
         ctx.removeTable(1L);
 
-        assertThat(ctx.getInactiveLeaderBuckets()).doesNotContain(tb);
+        assertThat(ctx.getPendingLeaderActivationBuckets()).doesNotContain(tb);
     }
 
     @Test
@@ -245,7 +245,7 @@ class ClusterHealthTest {
         ctx.putBucketLeaderAndIsr(
                 tb2, new LeaderAndIsr(1, 1, Arrays.asList(0, 1), Collections.emptyList(), 0, 1));
 
-        ctx.markLeaderInactive(tb2);
+        ctx.addPendingLeaderActivation(tb2);
 
         GetClusterHealthResponse resp = CoordinatorService.computeClusterHealth(ctx);
 
@@ -261,13 +261,13 @@ class ClusterHealthTest {
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1));
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1), Collections.emptyList(), 0, 1));
-        ctx.markLeaderInactive(tb);
+        ctx.addPendingLeaderActivation(tb);
 
-        assertThat(ctx.getInactiveLeaderBuckets()).contains(tb);
+        assertThat(ctx.getPendingLeaderActivationBuckets()).contains(tb);
 
         ctx.removePartition(new TablePartition(1L, 100L));
 
-        assertThat(ctx.getInactiveLeaderBuckets()).doesNotContain(tb);
+        assertThat(ctx.getPendingLeaderActivationBuckets()).doesNotContain(tb);
     }
 
     @Test
@@ -281,13 +281,13 @@ class ClusterHealthTest {
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1), Collections.emptyList(), 0, 1));
 
         // Sending to server 1 (follower): leader=0, serverId=1
-        // Follower does not match leader, so markLeaderInactive is NOT called.
+        // Follower does not match leader, so addPendingLeaderActivation is NOT called.
         assertThat(ctx.isLeaderActive(tb)).isTrue();
         assertThat(CoordinatorService.computeClusterHealth(ctx).getStatus())
                 .isEqualTo(0 /* GREEN */);
 
-        // Sending to server 0 (leader): leader=0, serverId=0 — matches, so mark inactive.
-        ctx.markLeaderInactive(tb);
+        // Sending to server 0 (leader): leader=0, serverId=0 — matches, so mark pending.
+        ctx.addPendingLeaderActivation(tb);
         assertThat(ctx.isLeaderActive(tb)).isFalse();
         assertThat(CoordinatorService.computeClusterHealth(ctx).getStatus()).isEqualTo(2 /* RED */);
     }
@@ -301,7 +301,7 @@ class ClusterHealthTest {
         ctx.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1, 2));
         ctx.putBucketLeaderAndIsr(
                 tb, new LeaderAndIsr(0, 1, Arrays.asList(0, 1, 2), Collections.emptyList(), 0, 1));
-        ctx.markLeaderInactive(tb);
+        ctx.addPendingLeaderActivation(tb);
 
         // Simulate: leader changed from server 0 to server 1 before server 0 responds
         ctx.putBucketLeaderAndIsr(
@@ -313,7 +313,7 @@ class ClusterHealthTest {
                 .ifPresent(
                         lai -> {
                             if (lai.leader() == respondingServerId) {
-                                ctx.markLeaderActive(tb);
+                                ctx.clearPendingLeaderActivation(tb);
                             }
                         });
 
@@ -327,7 +327,7 @@ class ClusterHealthTest {
                 .ifPresent(
                         lai -> {
                             if (lai.leader() == actualLeaderServerId) {
-                                ctx.markLeaderActive(tb);
+                                ctx.clearPendingLeaderActivation(tb);
                             }
                         });
 
