@@ -17,8 +17,6 @@
 
 package org.apache.fluss.server.coordinator;
 
-import org.apache.fluss.config.ConfigOptions;
-import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.DropPartitionEvent;
@@ -60,117 +58,89 @@ class ReplicaCleanupManagerTest {
     }
 
     @Test
-    void testSubmitPartitionDropAdmitsImmediatelyWithinBudget() {
-        ReplicaCleanupManager manager = newManager(configWithBucketBudget(1000));
+    void testSubmitPartitionDropAdmitsImmediately() {
+        ReplicaCleanupManager manager = newManager();
 
-        manager.submitPartitionDrop(1L, 100L, "p20240101", 4);
+        manager.submitPartitionDrop(1L, 100L, "p20240101");
 
         assertThat(eventManager.summaries()).containsExactly("partition:1:100:p20240101");
         assertThat(manager.getInflightCount()).isOne();
-        assertThat(manager.getInflightBuckets()).isEqualTo(4);
         assertThat(manager.getPendingDropCount()).isZero();
     }
 
     @Test
-    void testSubmitTableDropAdmitsImmediatelyWithinBudget() {
-        ReplicaCleanupManager manager = newManager(configWithBucketBudget(1000));
+    void testSubmitTableDropAdmitsImmediately() {
+        ReplicaCleanupManager manager = newManager();
 
-        manager.submitTableDrop(7L, true, false, 8);
+        manager.submitTableDrop(7L, false, false, false);
 
-        assertThat(eventManager.summaries()).containsExactly("table:7:auto=true:lake=false");
+        assertThat(eventManager.summaries()).containsExactly("table:7:auto=false:lake=false");
         assertThat(manager.getInflightCount()).isOne();
-        assertThat(manager.getInflightBuckets()).isEqualTo(8);
     }
 
     @Test
-    void testBucketBudgetHoldsBackExtraDrops() {
-        // budget = 1000; admit greedily while running sum stays within budget.
-        ReplicaCleanupManager manager = newManager(configWithBucketBudget(1000));
+    void testOneAtATimeThrottling() {
+        ReplicaCleanupManager manager = newManager();
 
-        // 3 partitions @ 300 buckets each = 900 (still <= 1000), 4th @ 300 would push to 1200.
-        manager.submitPartitionDrop(1L, 100L, "p1", 300);
-        manager.submitPartitionDrop(1L, 101L, "p2", 300);
-        manager.submitPartitionDrop(1L, 102L, "p3", 300);
-        manager.submitPartitionDrop(1L, 103L, "p4", 300);
+        // First drop is admitted immediately; subsequent drops pend.
+        manager.submitPartitionDrop(1L, 100L, "p1");
+        manager.submitPartitionDrop(1L, 101L, "p2");
+        manager.submitPartitionDrop(1L, 102L, "p3");
 
-        assertThat(eventManager.summaries())
-                .containsExactly("partition:1:100:p1", "partition:1:101:p2", "partition:1:102:p3");
-        assertThat(manager.getInflightBuckets()).isEqualTo(900);
-        assertThat(manager.getInflightCount()).isEqualTo(3);
-        assertThat(manager.getPendingDropCount()).isOne();
-    }
-
-    @Test
-    void testOversizedHeadOfQueueDropAdmittedAlone() {
-        // Single table whose bucket count already exceeds the budget on its own.
-        ReplicaCleanupManager manager = newManager(configWithBucketBudget(1000));
-
-        manager.submitTableDrop(1L, false, false, 5000);
-        manager.submitPartitionDrop(2L, 200L, "p2", 100);
-        manager.submitPartitionDrop(2L, 201L, "p3", 100);
-
-        // The oversized head is admitted on its own (starvation guard); subsequent drops wait
-        // until it completes, even though their cumulative bucket count would otherwise fit.
-        assertThat(eventManager.summaries()).containsExactly("table:1:auto=false:lake=false");
-        assertThat(manager.getInflightBuckets()).isEqualTo(5000);
+        assertThat(eventManager.summaries()).containsExactly("partition:1:100:p1");
         assertThat(manager.getInflightCount()).isOne();
         assertThat(manager.getPendingDropCount()).isEqualTo(2);
+    }
+
+    @Test
+    void testCompletionAdmitsNextPending() {
+        ReplicaCleanupManager manager = newManager();
+
+        manager.submitPartitionDrop(1L, 100L, "p1");
+        manager.submitPartitionDrop(1L, 101L, "p2");
+        manager.submitPartitionDrop(1L, 102L, "p3");
+
+        assertThat(eventManager.summaries()).containsExactly("partition:1:100:p1");
+
+        // Complete the first; second is admitted.
+        manager.onPartitionDropCompleted(new TablePartition(1L, 100L));
+        assertThat(eventManager.summaries())
+                .containsExactly("partition:1:100:p1", "partition:1:101:p2");
+        assertThat(manager.getInflightCount()).isOne();
+        assertThat(manager.getPendingDropCount()).isOne();
+
+        // Complete the second; third is admitted.
+        manager.onPartitionDropCompleted(new TablePartition(1L, 101L));
+        assertThat(eventManager.summaries())
+                .containsExactly("partition:1:100:p1", "partition:1:101:p2", "partition:1:102:p3");
+        assertThat(manager.getInflightCount()).isOne();
+        assertThat(manager.getPendingDropCount()).isZero();
+    }
+
+    @Test
+    void testTableDropCompletionAdmitsNext() {
+        ReplicaCleanupManager manager = newManager();
+
+        manager.submitTableDrop(1L, false, false, false);
+        manager.submitPartitionDrop(2L, 200L, "p2");
+
+        assertThat(eventManager.summaries()).containsExactly("table:1:auto=false:lake=false");
+        assertThat(manager.getPendingDropCount()).isOne();
 
         manager.onTableDropCompleted(1L);
 
-        // After completion the next two partitions fit within budget and are admitted together.
         assertThat(eventManager.summaries())
-                .containsExactly(
-                        "table:1:auto=false:lake=false",
-                        "partition:2:200:p2",
-                        "partition:2:201:p3");
-        assertThat(manager.getInflightBuckets()).isEqualTo(200);
-    }
-
-    @Test
-    void testCallbackReleasesBudgetAndPullsNextPending() {
-        ReplicaCleanupManager manager = newManager(configWithBucketBudget(1000));
-
-        manager.submitPartitionDrop(1L, 100L, "p1", 600);
-        manager.submitPartitionDrop(1L, 101L, "p2", 600); // pends: 600+600 > 1000
-        manager.submitPartitionDrop(1L, 102L, "p3", 300);
-
-        assertThat(eventManager.summaries()).containsExactly("partition:1:100:p1");
-        assertThat(manager.getPendingDropCount()).isEqualTo(2);
-        assertThat(manager.getInflightBuckets()).isEqualTo(600);
-
-        manager.onPartitionDropCompleted(new TablePartition(1L, 100L));
-
-        assertThat(eventManager.summaries())
-                .containsExactly("partition:1:100:p1", "partition:1:101:p2", "partition:1:102:p3");
-        assertThat(manager.getInflightBuckets()).isEqualTo(900);
+                .containsExactly("table:1:auto=false:lake=false", "partition:2:200:p2");
         assertThat(manager.getPendingDropCount()).isZero();
     }
 
     @Test
-    void testNonPositiveBatchCapDisablesLimit() {
-        ReplicaCleanupManager manager = newManager(configWithBucketBudget(0));
+    void testFifoOrder() {
+        ReplicaCleanupManager manager = newManager();
 
-        manager.submitTableDrop(1L, false, false, 100_000);
-        manager.submitTableDrop(2L, true, true, 50_000);
-        manager.submitPartitionDrop(3L, 30L, "px", 10_000);
-
-        assertThat(eventManager.summaries())
-                .containsExactly(
-                        "table:1:auto=false:lake=false",
-                        "table:2:auto=true:lake=true",
-                        "partition:3:30:px");
-        assertThat(manager.getPendingDropCount()).isZero();
-    }
-
-    @Test
-    void testFifoOrderForPendingDrops() {
-        // Each drop on its own equals the budget, so they admit one at a time in order.
-        ReplicaCleanupManager manager = newManager(configWithBucketBudget(100));
-
-        manager.submitPartitionDrop(1L, 10L, "p10", 100);
-        manager.submitPartitionDrop(1L, 11L, "p11", 100);
-        manager.submitPartitionDrop(1L, 12L, "p12", 100);
+        manager.submitPartitionDrop(1L, 10L, "p10");
+        manager.submitPartitionDrop(1L, 11L, "p11");
+        manager.submitPartitionDrop(1L, 12L, "p12");
 
         assertThat(eventManager.summaries()).containsExactly("partition:1:10:p10");
 
@@ -182,93 +152,75 @@ class ReplicaCleanupManagerTest {
     }
 
     @Test
-    void testZeroBucketCountNormalizedToMinimumCost() {
-        // bucketCount=0 means caller couldn't determine the size (e.g. cascade drop where the
-        // table znode was already gone). The manager normalizes it to a minimum cost of 1 so
-        // that every drop still contributes to the budget and cannot bypass throttling.
-        ReplicaCleanupManager manager = newManager(configWithBucketBudget(2));
-
-        manager.submitPartitionDrop(1L, 100L, "p1", 0);
-        manager.submitPartitionDrop(1L, 101L, "p2", 0);
-        manager.submitPartitionDrop(1L, 102L, "p3", 0);
-
-        // Each drop costs 1 bucket; budget=2 admits only the first two.
-        assertThat(eventManager.summaries())
-                .containsExactly("partition:1:100:p1", "partition:1:101:p2");
-        assertThat(manager.getInflightBuckets()).isEqualTo(2);
-        assertThat(manager.getPendingDropCount()).isOne();
-
-        // Completing one frees room for the third.
-        manager.onPartitionDropCompleted(new TablePartition(1L, 100L));
-        assertThat(eventManager.summaries())
-                .containsExactly("partition:1:100:p1", "partition:1:101:p2", "partition:1:102:p3");
-    }
-
-    @Test
     void testCompletionForUnknownDropIsNoOp() {
-        ReplicaCleanupManager manager = newManager(configWithBucketBudget(1000));
+        ReplicaCleanupManager manager = newManager();
 
         manager.onPartitionDropCompleted(new TablePartition(99L, 999L));
         manager.onTableDropCompleted(123L);
 
         assertThat(eventManager.summaries()).isEmpty();
         assertThat(manager.getInflightCount()).isZero();
-        assertThat(manager.getInflightBuckets()).isZero();
     }
 
     @Test
-    void testTimeoutAbandonsExpiredInflightDrops() {
-        Configuration conf = configWithBucketBudget(100);
-        conf.set(
-                ConfigOptions.COORDINATOR_REPLICA_CLEANUP_INFLIGHT_TIMEOUT, Duration.ofMillis(100));
-        ReplicaCleanupManager manager = newManager(conf);
+    void testCompletionForMismatchedDropIsNoOp() {
+        ReplicaCleanupManager manager = newManager();
 
-        manager.submitTableDrop(1L, false, false, 100);
-        manager.submitPartitionDrop(2L, 200L, "px", 100);
+        manager.submitPartitionDrop(1L, 100L, "p1");
 
-        // budget = 100 buckets; second drop pends behind the first.
+        // Complete with wrong partition id — should be no-op.
+        manager.onPartitionDropCompleted(new TablePartition(1L, 999L));
         assertThat(manager.getInflightCount()).isOne();
-        assertThat(manager.getInflightBuckets()).isEqualTo(100);
+
+        // Complete with table callback — should be no-op (inflight is a partition drop).
+        manager.onTableDropCompleted(1L);
+        assertThat(manager.getInflightCount()).isOne();
+    }
+
+    @Test
+    void testTimeoutAbandonsInflightDrop() {
+        ReplicaCleanupManager manager = newManager();
+
+        manager.submitTableDrop(1L, false, false, false);
+        manager.submitPartitionDrop(2L, 200L, "px");
+
+        assertThat(manager.getInflightCount()).isOne();
         assertThat(manager.getPendingDropCount()).isOne();
 
-        // not yet expired
-        clock.advanceTime(Duration.ofMillis(50));
+        // Not yet expired.
+        clock.advanceTime(Duration.ofMillis(100_000));
         manager.checkTimeouts();
         assertThat(manager.getInflightCount()).isOne();
 
-        // crosses the timeout boundary, in-flight gets abandoned and pending pulled in
-        clock.advanceTime(Duration.ofMillis(60));
+        // Crosses the 3-minute timeout boundary.
+        clock.advanceTime(Duration.ofMillis(90_000));
         manager.checkTimeouts();
 
         assertThat(eventManager.summaries())
                 .containsExactly("table:1:auto=false:lake=false", "partition:2:200:px");
         assertThat(manager.getPendingDropCount()).isZero();
         assertThat(manager.getInflightCount()).isOne();
-        assertThat(manager.getInflightBuckets()).isEqualTo(100);
     }
 
     @Test
-    void testDuplicateCompletionCallbackIsNoOp() {
-        ReplicaCleanupManager manager = newManager(configWithBucketBudget(1000));
+    void testDuplicateCompletionIsNoOp() {
+        ReplicaCleanupManager manager = newManager();
         TablePartition tp = new TablePartition(1L, 100L);
 
-        manager.submitPartitionDrop(tp.getTableId(), tp.getPartitionId(), "px", 4);
+        manager.submitPartitionDrop(tp.getTableId(), tp.getPartitionId(), "px");
         assertThat(manager.getInflightCount()).isOne();
-        assertThat(manager.getInflightBuckets()).isEqualTo(4);
 
         manager.onPartitionDropCompleted(tp);
         assertThat(manager.getInflightCount()).isZero();
-        assertThat(manager.getInflightBuckets()).isZero();
 
-        // second completion is a no-op (inflight entry already removed)
+        // Second completion is a no-op.
         manager.onPartitionDropCompleted(tp);
         assertThat(manager.getInflightCount()).isZero();
-        assertThat(manager.getInflightBuckets()).isZero();
     }
 
     @Test
     void testStartIsIdempotentAndCloseDisablesStart() {
-        ReplicaCleanupManager manager = newManager(configWithBucketBudget(1000));
+        ReplicaCleanupManager manager = newManager();
 
         manager.start();
         manager.start(); // second start is a no-op
@@ -280,7 +232,7 @@ class ReplicaCleanupManagerTest {
 
     @Test
     void testCloseIsIdempotent() {
-        ReplicaCleanupManager manager = newManager(configWithBucketBudget(1000));
+        ReplicaCleanupManager manager = newManager();
 
         manager.close();
         manager.close(); // must not throw
@@ -288,41 +240,36 @@ class ReplicaCleanupManagerTest {
 
     @Test
     void testSubmitTableDropForResumeRunsRunnableInsteadOfEvent() {
-        // Resume path used during coordinator startup: stale TableInfo is gone, so the manager
-        // must drive the deletion via the supplied Runnable rather than enqueue DropTableEvent.
-        ReplicaCleanupManager manager = newManager(configWithBucketBudget(1000));
+        ReplicaCleanupManager manager = newManager();
         AtomicInteger invoked = new AtomicInteger();
 
-        manager.submitTableDropForResume(7L, 8, invoked::incrementAndGet);
+        manager.submitTableDropForResume(7L, invoked::incrementAndGet);
 
         assertThat(invoked).hasValue(1);
         assertThat(eventManager.summaries()).isEmpty();
         assertThat(manager.getInflightCount()).isOne();
-        assertThat(manager.getInflightBuckets()).isEqualTo(8);
     }
 
     @Test
     void testSubmitPartitionDropForResumeRunsRunnableInsteadOfEvent() {
-        ReplicaCleanupManager manager = newManager(configWithBucketBudget(1000));
+        ReplicaCleanupManager manager = newManager();
         AtomicInteger invoked = new AtomicInteger();
 
-        manager.submitPartitionDropForResume(1L, 100L, "p20240101", 4, invoked::incrementAndGet);
+        manager.submitPartitionDropForResume(1L, 100L, "p20240101", invoked::incrementAndGet);
 
         assertThat(invoked).hasValue(1);
         assertThat(eventManager.summaries()).isEmpty();
         assertThat(manager.getInflightCount()).isOne();
-        assertThat(manager.getInflightBuckets()).isEqualTo(4);
     }
 
     @Test
-    void testForResumeDropRespectsBucketBudget() {
-        // The resume path shares the same bucket-budget queue: oversized drops still wait.
-        ReplicaCleanupManager manager = newManager(configWithBucketBudget(100));
+    void testForResumeDropRespectsOneAtATime() {
+        ReplicaCleanupManager manager = newManager();
         AtomicInteger first = new AtomicInteger();
         AtomicInteger second = new AtomicInteger();
 
-        manager.submitTableDropForResume(1L, 100, first::incrementAndGet);
-        manager.submitPartitionDropForResume(2L, 200L, "px", 100, second::incrementAndGet);
+        manager.submitTableDropForResume(1L, first::incrementAndGet);
+        manager.submitPartitionDropForResume(2L, 200L, "px", second::incrementAndGet);
 
         // First admitted, second pends.
         assertThat(first).hasValue(1);
@@ -330,24 +277,87 @@ class ReplicaCleanupManagerTest {
         assertThat(manager.getInflightCount()).isOne();
         assertThat(manager.getPendingDropCount()).isOne();
 
-        // Completion of the first releases the budget and pulls the second resume runnable.
+        // Completion of the first admits the second.
         manager.onTableDropCompleted(1L);
         assertThat(second).hasValue(1);
         assertThat(eventManager.summaries()).isEmpty();
+    }
+
+    @Test
+    void testPartitionedTableDropIsFireAndForget() {
+        ReplicaCleanupManager manager = newManager();
+
+        // Submit a partition drop first (will be admitted as inflight).
+        manager.submitPartitionDrop(1L, 100L, "p1");
+        // Then submit a partitioned table drop (pending).
+        manager.submitTableDrop(1L, true, true, false);
+        // Then submit another partition drop (pending).
+        manager.submitPartitionDrop(2L, 200L, "p2");
+
+        assertThat(eventManager.summaries()).containsExactly("partition:1:100:p1");
+        assertThat(manager.getInflightCount()).isOne();
+        assertThat(manager.getPendingDropCount()).isEqualTo(2);
+
+        // Complete partition1. The auto-partition table drop is admitted next.
+        // Since it's fire-and-forget, it immediately releases and admits the next drop.
+        manager.onPartitionDropCompleted(new TablePartition(1L, 100L));
+
+        // Both the table drop AND the following partition drop should have been admitted.
+        assertThat(eventManager.summaries())
+                .containsExactly(
+                        "partition:1:100:p1", "table:1:auto=true:lake=false", "partition:2:200:p2");
+        // The last partition drop is now inflight (waiting for completion).
+        assertThat(manager.getInflightCount()).isOne();
+        assertThat(manager.getPendingDropCount()).isZero();
+    }
+
+    @Test
+    void testPartitionedTableDropAdmittedFirstIsAlsoFireAndForget() {
+        ReplicaCleanupManager manager = newManager();
+
+        // Submit a partitioned table drop as the first drop.
+        manager.submitTableDrop(5L, true, true, false);
+
+        // It should be executed immediately AND released (not tracked as inflight).
+        assertThat(eventManager.summaries()).containsExactly("table:5:auto=true:lake=false");
+        assertThat(manager.getInflightCount()).isZero();
+        assertThat(manager.getPendingDropCount()).isZero();
+    }
+
+    @Test
+    void testPartitionedTableWithoutAutoPartitionIsAlsoFireAndForget() {
+        ReplicaCleanupManager manager = newManager();
+
+        // A partitioned table without auto-partition still has no table-level replicas.
+        manager.submitTableDrop(5L, true, false, false);
+
+        // It should also be fire-and-forget.
+        assertThat(eventManager.summaries()).containsExactly("table:5:auto=false:lake=false");
+        assertThat(manager.getInflightCount()).isZero();
+        assertThat(manager.getPendingDropCount()).isZero();
+    }
+
+    @Test
+    void testNonPartitionedTableDropIsNotFireAndForget() {
+        ReplicaCleanupManager manager = newManager();
+
+        // Non-partitioned table drop should be tracked normally.
+        manager.submitTableDrop(5L, false, false, false);
+
+        assertThat(eventManager.summaries()).containsExactly("table:5:auto=false:lake=false");
+        assertThat(manager.getInflightCount()).isOne();
+        assertThat(manager.getPendingDropCount()).isZero();
     }
 
     // ------------------------------------------------------------------------------------------
     // Helpers
     // ------------------------------------------------------------------------------------------
 
-    private ReplicaCleanupManager newManager(Configuration conf) {
-        return new ReplicaCleanupManager(eventManager, conf, clock, timeoutExecutor);
-    }
-
-    private static Configuration configWithBucketBudget(int budget) {
-        Configuration conf = new Configuration();
-        conf.set(ConfigOptions.COORDINATOR_REPLICA_CLEANUP_MAX_BUCKETS_PER_BATCH, budget);
-        return conf;
+    private ReplicaCleanupManager newManager() {
+        ReplicaCleanupManager manager =
+                new ReplicaCleanupManager(eventManager, clock, timeoutExecutor);
+        manager.start(); // Activate throttling for unit tests.
+        return manager;
     }
 
     /** Records the order of drop events admitted into the coordinator event queue. */

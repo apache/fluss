@@ -200,46 +200,6 @@ public class ConfigOptions {
                             "The interval of auto partition check. "
                                     + "The default value is 10 minutes.");
 
-    public static final ConfigOption<Integer> COORDINATOR_REPLICA_CLEANUP_MAX_BUCKETS_PER_BATCH =
-            key("coordinator.replica-cleanup.max-buckets-per-batch")
-                    .intType()
-                    .defaultValue(1000)
-                    .withDescription(
-                            "Per-batch drop budget for the coordinator's ReplicaCleanupManager, measured in number "
-                                    + "of buckets across the drops admitted in one batch. Drop sources "
-                                    + "(ZooKeeper watcher, etc.) submit lightweight pending drops carrying their bucket "
-                                    + "count to the manager, which admits drops in FIFO order while the running sum of "
-                                    + "in-flight bucket counts stays within the budget. If the head-of-queue drop alone "
-                                    + "already exceeds the budget, it is admitted on its own to avoid starvation. "
-                                    + "The next batch is admitted only after in-flight drops complete (or time out). "
-                                    + "This caps how much of the coordinator event queue can be occupied by drop work, "
-                                    + "protecting unrelated coordinator work (leader election, heartbeats, metadata "
-                                    + "changes) from drop bursts triggered by cascading DROP TABLE or auto-partition "
-                                    + "expiration. Set to a non-positive value to disable the cap.");
-
-    public static final ConfigOption<Duration> COORDINATOR_REPLICA_CLEANUP_INFLIGHT_TIMEOUT =
-            key("coordinator.replica-cleanup.inflight-timeout")
-                    .durationType()
-                    .defaultValue(Duration.ofMinutes(3))
-                    .withDescription(
-                            "The timeout for an in-flight drop event in the coordinator's ReplicaCleanupManager. If a "
-                                    + "drop event has been admitted into the coordinator event queue but the "
-                                    + "corresponding completion callback (i.e. all replicas reaching DeletionSuccessful) "
-                                    + "has not arrived within this timeout, the manager abandons tracking of that drop, "
-                                    + "releases its event budget and continues admitting the next pending drop. The "
-                                    + "ZooKeeper metadata for the partition/table has already been removed synchronously "
-                                    + "prior to admission, so the abandoned state only refers to in-memory tracking; "
-                                    + "any residual replica state will be reconciled on the next coordinator startup.");
-
-    public static final ConfigOption<Duration> COORDINATOR_REPLICA_CLEANUP_TIMEOUT_CHECK_INTERVAL =
-            key("coordinator.replica-cleanup.timeout-check-interval")
-                    .durationType()
-                    .defaultValue(Duration.ofMinutes(1))
-                    .withDescription(
-                            "The periodic interval at which the coordinator's ReplicaCleanupManager scans in-flight "
-                                    + "drops for timeouts. See 'coordinator.replica-cleanup.inflight-timeout' "
-                                    + "for details. Default is 1 minute.");
-
     public static final ConfigOption<Boolean> LOG_TABLE_ALLOW_CREATION =
             key("allow.create.log.tables")
                     .booleanType()

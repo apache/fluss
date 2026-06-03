@@ -234,8 +234,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         tableBucketStateMachine,
                         new RemoteStorageCleaner(conf, ioExecutor),
                         ioExecutor);
-        this.replicaCleanupManager =
-                new ReplicaCleanupManager(coordinatorEventManager, conf, clock);
+        this.replicaCleanupManager = new ReplicaCleanupManager(coordinatorEventManager, clock);
         this.tableManager.setReplicaCleanupManager(replicaCleanupManager);
         this.coordinatorChangeWatcher =
                 new CoordinatorChangeWatcher(zooKeeperClient, coordinatorEventManager);
@@ -311,11 +310,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 coordinatorContext.getServerTags());
         updateTabletServerMetadataCacheWhenStartup(tabletServerInfoList);
 
+        replicaCleanupManager.start();
+
         // start table manager
         tableManager.startup();
-
-        // start replica cleanup manager timeout checker after table manager is up
-        replicaCleanupManager.start();
 
         // start the event manager which will then process the event
         coordinatorEventManager.start();
@@ -944,11 +942,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // remove table metrics.
         coordinatorMetricGroup.removeTableMetricGroup(dropTableInfo.getTablePath(), tableId);
-
-        // For partitioned tables the table-level assignment is empty, so no
-        // DeleteReplicaResponse will ever arrive to trigger resumeDeletions().
-        // Call it now so the vacuously-complete table is finalized immediately.
-        tableManager.resumeDeletions();
     }
 
     private void processDropPartition(DropPartitionEvent dropPartitionEvent) {

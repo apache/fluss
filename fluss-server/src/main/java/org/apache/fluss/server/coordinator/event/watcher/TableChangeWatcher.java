@@ -46,8 +46,6 @@ import org.apache.fluss.utils.types.Tuple2;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.HashMap;
-import java.util.Map;
 import java.util.Optional;
 
 /** A watcher to watch the table changes(create/delete) in zookeeper. */
@@ -61,9 +59,6 @@ public class TableChangeWatcher {
     private final EventManager eventManager;
     private final ReplicaCleanupManager replicaCleanupManager;
     private final ZooKeeperClient zooKeeperClient;
-
-    /** Cache of {@code tableId -> bucketCount} for partitions. */
-    private final Map<Long, Integer> tableBucketCount = new HashMap<>();
 
     public TableChangeWatcher(
             ZooKeeperClient zooKeeperClient,
@@ -182,15 +177,10 @@ public class TableChangeWatcher {
                             // starve unrelated coordinator work.
                             PartitionRegistration partition =
                                     PartitionZNode.decode(oldData.getData());
-                            int buckets =
-                                    resolveTableBucketCount(
-                                            partition.getTableId(),
-                                            physicalTablePath.getTablePath());
                             replicaCleanupManager.submitPartitionDrop(
                                     partition.getTableId(),
                                     partition.getPartitionId(),
-                                    physicalTablePath.getPartitionName(),
-                                    buckets);
+                                    physicalTablePath.getPartitionName());
                         } else {
                             // maybe table node is deleted
                             // try to parse the path as a table node
@@ -201,14 +191,11 @@ public class TableChangeWatcher {
                             TableRegistration table = TableZNode.decode(oldData.getData());
                             TableConfig tableConfig =
                                     new TableConfig(Configuration.fromMap(table.properties));
-                            // Evict the cached bucket count so the map does not grow
-                            // unbounded as tables are dropped over the coordinator's lifetime.
-                            tableBucketCount.remove(table.tableId);
                             replicaCleanupManager.submitTableDrop(
                                     table.tableId,
+                                    table.isPartitioned(),
                                     tableConfig.getAutoPartitionStrategy().isAutoPartitionEnabled(),
-                                    tableConfig.isDataLakeEnabled(),
-                                    table.bucketCount);
+                                    tableConfig.isDataLakeEnabled());
                         }
                         break;
                     }
@@ -293,37 +280,6 @@ public class TableChangeWatcher {
             TableRegistration newTable = TableZNode.decode(newData.getData());
             eventManager.put(new TableRegistrationChangeEvent(tablePath, newTable));
         }
-    }
-
-    /**
-     * Returns the bucket count owned by a single partition of the given table. Looks up the local
-     * cache first and falls back to a synchronous {@link ZooKeeperClient#getTable} read on miss. If
-     * the table znode is already gone (e.g. cascading drop where the table node was deleted before
-     * this partition NODE_DELETED is delivered), returns {@code 0}; the cleanup manager will
-     * normalize this to a minimum cost so the drop is still throttled/admitted.
-     */
-    private int resolveTableBucketCount(long tableId, TablePath tablePath) {
-        Integer cached = tableBucketCount.get(tableId);
-        if (cached != null) {
-            return cached;
-        }
-        try {
-            Optional<TableRegistration> registration = zooKeeperClient.getTable(tablePath);
-            if (registration.isPresent()) {
-                int buckets = registration.get().bucketCount;
-                tableBucketCount.put(tableId, buckets);
-                return buckets;
-            }
-        } catch (Exception e) {
-            LOG.warn(
-                    "Failed to read TableRegistration for {} (tableId={}) while resolving "
-                            + "bucket count for partition drop. Falling back to bucketCount=0; "
-                            + "the cleanup manager will normalize this to a minimum cost.",
-                    tablePath,
-                    tableId,
-                    e);
-        }
-        return 0;
     }
 
     private void processSchemaChange(TablePath tablePath, int schemaId) {

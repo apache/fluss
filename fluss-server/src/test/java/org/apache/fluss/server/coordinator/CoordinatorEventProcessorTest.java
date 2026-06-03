@@ -808,7 +808,6 @@ class CoordinatorEventProcessorTest {
 
         // After completion, the cleanup manager should have released tracking.
         assertThat(cleanupManager.getInflightCount()).isZero();
-        assertThat(cleanupManager.getInflightBuckets()).isZero();
         assertThat(cleanupManager.getPendingDropCount()).isZero();
 
         // Partition2 should remain online.
@@ -888,7 +887,6 @@ class CoordinatorEventProcessorTest {
                 Duration.ofMinutes(1),
                 () -> {
                     assertThat(cleanupManager.getInflightCount()).isZero();
-                    assertThat(cleanupManager.getInflightBuckets()).isZero();
                     assertThat(cleanupManager.getPendingDropCount()).isZero();
                 });
     }
