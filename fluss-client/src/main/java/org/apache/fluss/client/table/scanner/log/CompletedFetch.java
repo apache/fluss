@@ -22,6 +22,7 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.exception.CorruptRecordException;
 import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.CompactedLogRecord;
 import org.apache.fluss.record.IndexedLogRecord;
@@ -55,6 +56,7 @@ abstract class CompletedFetch {
     static final long NO_FILTERED_END_OFFSET = -1L;
 
     final TableBucket tableBucket;
+    final TablePath tablePath;
     final ApiError error;
     final int sizeInBytes;
     final long highWatermark;
@@ -65,9 +67,9 @@ abstract class CompletedFetch {
     private final Iterator<LogRecordBatch> batches;
     private final LogScannerStatus logScannerStatus;
     protected final LogRecordReadContext readContext;
-    protected final InternalRow.FieldGetter[] selectedFieldGetters;
 
     private LogRecordBatch currentBatch;
+    private int currentBatchSchemaId = -1;
     private LogRecord lastRecord;
     private CloseableIterator<LogRecord> records;
     private int recordsRead = 0;
@@ -79,6 +81,7 @@ abstract class CompletedFetch {
 
     public CompletedFetch(
             TableBucket tableBucket,
+            TablePath tablePath,
             ApiError error,
             int sizeInBytes,
             long highWatermark,
@@ -89,6 +92,7 @@ abstract class CompletedFetch {
             long fetchOffset,
             long filteredEndOffset) {
         this.tableBucket = tableBucket;
+        this.tablePath = tablePath;
         this.error = error;
         this.sizeInBytes = sizeInBytes;
         this.highWatermark = highWatermark;
@@ -96,7 +100,6 @@ abstract class CompletedFetch {
         this.readContext = readContext;
         this.isCheckCrcs = isCheckCrcs;
         this.logScannerStatus = logScannerStatus;
-        this.selectedFieldGetters = readContext.getSelectedFieldGetters();
         this.fetchOffset = fetchOffset;
         checkArgument(
                 filteredEndOffset == NO_FILTERED_END_OFFSET || filteredEndOffset >= fetchOffset,
@@ -113,12 +116,20 @@ abstract class CompletedFetch {
     //  refactor #fetchRecords to return an iterator which lazily deserialize
     //  from underlying record stream and arrow buffer.
     ScanRecord toScanRecord(LogRecord record) {
+        long tableId = tableBucket.getTableId();
+        int schemaId = currentBatchSchemaId;
+        InternalRow.FieldGetter[] selectedFieldGetters =
+                readContext.getSelectedFieldGetters(schemaId);
+
         GenericRow newRow = new GenericRow(selectedFieldGetters.length);
         InternalRow internalRow = record.getRow();
         for (int i = 0; i < selectedFieldGetters.length; i++) {
             newRow.setField(i, selectedFieldGetters[i].getFieldOrNull(internalRow));
         }
+
         return new ScanRecord(
+                tableId,
+                schemaId,
                 record.logOffset(),
                 record.timestamp(),
                 record.getChangeType(),
@@ -285,6 +296,7 @@ abstract class CompletedFetch {
                 }
 
                 currentBatch = batches.next();
+                currentBatchSchemaId = currentBatch.schemaId();
                 // TODO get last epoch.
                 maybeEnsureValid(currentBatch);
 

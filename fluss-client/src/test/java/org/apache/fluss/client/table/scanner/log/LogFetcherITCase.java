@@ -30,6 +30,7 @@ import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.rpc.RpcClient;
@@ -101,15 +102,15 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                 new ClientSchemaGetter(DATA1_TABLE_PATH, new SchemaInfo(DATA1_SCHEMA, 1), admin);
         logFetcher =
                 new LogFetcher(
-                        DATA1_TABLE_INFO,
-                        null,
-                        null,
+                        "default-scanner",
                         logScannerStatus,
                         clientConf,
                         metadataUpdater,
                         TestingScannerMetricGroup.newInstance(),
                         new RemoteFileDownloader(1),
-                        clientSchemaGetter);
+                        LogRecordReadContext.SchemaResolution.TARGET);
+        logFetcher.registerTable(
+                new TableScanSpec(DATA1_TABLE_INFO, null, null), clientSchemaGetter);
     }
 
     @Test
@@ -163,6 +164,15 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
         logScannerStatus.assignScanBuckets(Collections.singletonMap(tb0, 0L));
         LogFetcher newSchemaLogFetcher =
                 new LogFetcher(
+                        "default-scanner",
+                        logScannerStatus,
+                        clientConf,
+                        metadataUpdater,
+                        TestingScannerMetricGroup.newInstance(),
+                        new RemoteFileDownloader(1),
+                        LogRecordReadContext.SchemaResolution.TARGET);
+        newSchemaLogFetcher.registerTable(
+                new TableScanSpec(
                         new TableInfo(
                                 DATA1_TABLE_INFO.getTablePath(),
                                 tableId,
@@ -178,13 +188,8 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                                 DATA1_TABLE_INFO.getCreatedTime(),
                                 DATA1_TABLE_INFO.getModifiedTime()),
                         null,
-                        null,
-                        logScannerStatus,
-                        clientConf,
-                        metadataUpdater,
-                        TestingScannerMetricGroup.newInstance(),
-                        new RemoteFileDownloader(1),
-                        clientSchemaGetter);
+                        null),
+                clientSchemaGetter);
         newSchemaLogFetcher.sendFetches();
         // The fetcher is async to fetch data, so we need to wait the result write to the
         // logFetchBuffer.
@@ -275,16 +280,16 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
 
         LogFetcher logFetcher =
                 new LogFetcher(
-                        DATA1_TABLE_INFO,
-                        null,
-                        null,
+                        DATA1_TABLE_PATH.toString(),
                         logScannerStatus,
                         clientConf,
                         metadataUpdater,
                         TestingScannerMetricGroup.newInstance(),
                         new RemoteFileDownloader(1),
-                        clientSchemaGetter);
+                        LogRecordReadContext.SchemaResolution.TARGET);
 
+        logFetcher.registerTable(
+                new TableScanSpec(DATA1_TABLE_INFO, null, null), clientSchemaGetter);
         // send fetches to fetch data, should have no available fetch.
         logFetcher.sendFetches();
         assertThat(logFetcher.hasAvailableFetches()).isFalse();
@@ -316,15 +321,15 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                         new FlussAdmin(FLUSS_CLUSTER_EXTENSION.getRpcClient(), metadataUpdater1));
         logFetcher =
                 new LogFetcher(
-                        DATA1_TABLE_INFO,
-                        null,
-                        null,
+                        DATA1_TABLE_PATH.toString(),
                         logScannerStatus,
                         clientConf,
                         metadataUpdater1,
                         TestingScannerMetricGroup.newInstance(),
                         new RemoteFileDownloader(1),
-                        clientSchemaGetter);
+                        LogRecordReadContext.SchemaResolution.TARGET);
+        logFetcher.registerTable(
+                new TableScanSpec(DATA1_TABLE_INFO, null, null), clientSchemaGetter);
 
         ExecutorService executor = Executors.newSingleThreadExecutor();
         Future<?> future =

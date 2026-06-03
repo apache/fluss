@@ -353,6 +353,7 @@ public final class TestData {
                     new Object[] {10L, "z", 100.0});
     // ------------------- Statistics test data and schemas end ------------------------
 
+    // todo: 这里需要好好修改一下
     public static final TestingSchemaGetter TEST_SCHEMA_GETTER =
-            new TestingSchemaGetter(DEFAULT_SCHEMA_ID, DATA2_SCHEMA);
+            new TestingSchemaGetter(DEFAULT_SCHEMA_ID, DATA1_SCHEMA);
 }

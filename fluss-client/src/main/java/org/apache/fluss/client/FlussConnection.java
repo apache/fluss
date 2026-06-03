@@ -22,6 +22,8 @@ import org.apache.fluss.client.admin.FlussAdmin;
 import org.apache.fluss.client.lookup.LookupClient;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.FlussTable;
+import org.apache.fluss.client.table.MultiTable;
+import org.apache.fluss.client.table.MultiTableImpl;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.client.token.DefaultSecurityTokenManager;
@@ -104,6 +106,11 @@ public final class FlussConnection implements Connection {
         metadataUpdater.updateTableOrPartitionMetadata(tablePath, null);
         Admin admin = getOrCreateAdmin();
         return new FlussTable(this, tablePath, admin.getTableInfo(tablePath).join());
+    }
+
+    @Override
+    public MultiTable getMultiTable() {
+        return new MultiTableImpl(this);
     }
 
     public MetadataUpdater getMetadataUpdater() {
