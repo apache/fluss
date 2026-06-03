@@ -272,7 +272,7 @@ public abstract class CompletedFetch {
      *     least one batch is always returned if available, even if it alone exceeds the limit.
      * @return {@link ArrowBatchData Arrow batches}
      */
-    public List<ArrowBatchData> fetchArrowBatches(int maxRecords) {
+    List<ArrowBatchData> fetchArrowBatches(int maxRecords) {
         if (cachedRecordException != null) {
             throw new FetchException(
                     "Received exception when fetching the next Arrow batch from "

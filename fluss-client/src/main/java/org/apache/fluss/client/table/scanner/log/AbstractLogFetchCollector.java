@@ -34,6 +34,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -241,7 +242,54 @@ abstract class AbstractLogFetchCollector<T, R> {
         }
     }
 
-    protected abstract List<T> fetchRecords(CompletedFetch nextInLineFetch, int maxRecords);
+    protected List<T> fetchRecords(CompletedFetch nextInLineFetch, int maxRecords) {
+        TableBucket tb = nextInLineFetch.tableBucket;
+        Long offset = logScannerStatus.getBucketOffset(tb);
+        if (offset == null) {
+            log.debug(
+                    "Ignoring fetched records for {} at offset {} since the current offset is null which means the bucket has been unsubscribed.",
+                    tb,
+                    nextInLineFetch.fetchOffset());
+        } else {
+            if (nextInLineFetch.nextFetchOffset() == offset) {
+                List<T> records = doFetchRecords(nextInLineFetch, maxRecords);
+                log.trace(
+                        "Returning {} fetched records at offset {} for assigned bucket {}.",
+                        records.size(),
+                        offset,
+                        tb);
+
+                if (nextInLineFetch.nextFetchOffset() > offset) {
+                    log.trace(
+                            "Updating fetch offset from {} to {} for bucket {} and returning {} records from poll()",
+                            offset,
+                            nextInLineFetch.nextFetchOffset(),
+                            tb,
+                            records.size());
+                    logScannerStatus.updateOffset(tb, nextInLineFetch.nextFetchOffset());
+                }
+                return records;
+            } else {
+                // these records aren't next in line based on the last consumed offset, ignore them
+                // they must be from an obsolete request
+                log.warn(
+                        "Ignoring fetched records for {} at offset {} since the current offset is {}",
+                        nextInLineFetch.tableBucket,
+                        nextInLineFetch.nextFetchOffset(),
+                        offset);
+            }
+        }
+
+        log.trace("Draining fetched records for bucket {}", nextInLineFetch.tableBucket);
+        nextInLineFetch.drain();
+        return Collections.emptyList();
+    }
+
+    /**
+     * Fetch records from the given {@link CompletedFetch}. Subclasses implement this to call the
+     * appropriate method on {@link CompletedFetch} for their record type.
+     */
+    protected abstract List<T> doFetchRecords(CompletedFetch nextInLineFetch, int maxRecords);
 
     protected abstract int recordCount(List<T> fetchedRecords);
 

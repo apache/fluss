@@ -31,7 +31,6 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.concurrent.ThreadSafe;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -58,48 +57,8 @@ public class LogFetchCollector extends AbstractLogFetchCollector<ScanRecord, Sca
     }
 
     @Override
-    protected List<ScanRecord> fetchRecords(CompletedFetch nextInLineFetch, int maxRecords) {
-        TableBucket tb = nextInLineFetch.tableBucket;
-        Long offset = logScannerStatus.getBucketOffset(tb);
-        if (offset == null) {
-            LOG.debug(
-                    "Ignoring fetched records for {} at offset {} since the current offset is null which means the bucket has been unsubscribed.",
-                    tb,
-                    nextInLineFetch.fetchOffset());
-        } else {
-            if (nextInLineFetch.nextFetchOffset() == offset) {
-                List<ScanRecord> records = nextInLineFetch.fetchRecords(maxRecords);
-                LOG.trace(
-                        "Returning {} fetched records at offset {} for assigned bucket {}.",
-                        records.size(),
-                        offset,
-                        tb);
-
-                if (nextInLineFetch.nextFetchOffset() > offset) {
-                    LOG.trace(
-                            "Updating fetch offset from {} to {} for bucket {} and returning {} records from poll()",
-                            offset,
-                            nextInLineFetch.nextFetchOffset(),
-                            tb,
-                            records.size());
-                    logScannerStatus.updateOffset(tb, nextInLineFetch.nextFetchOffset());
-                }
-                return records;
-            } else {
-                // these records aren't next in line based on the last consumed offset, ignore them
-                // they must be from an obsolete request
-                LOG.warn(
-                        "Ignoring fetched records for {} at offset {} since the current offset is {}",
-                        nextInLineFetch.tableBucket,
-                        nextInLineFetch.nextFetchOffset(),
-                        offset);
-            }
-        }
-
-        LOG.trace("Draining fetched records for bucket {}", nextInLineFetch.tableBucket);
-        nextInLineFetch.drain();
-
-        return Collections.emptyList();
+    protected List<ScanRecord> doFetchRecords(CompletedFetch nextInLineFetch, int maxRecords) {
+        return nextInLineFetch.fetchRecords(maxRecords);
     }
 
     @Override
