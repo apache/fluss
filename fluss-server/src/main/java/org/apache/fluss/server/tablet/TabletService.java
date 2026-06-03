@@ -26,6 +26,7 @@ import org.apache.fluss.exception.UnknownScannerIdException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.KvRecordBatch;
@@ -33,6 +34,8 @@ import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.entity.PrefixLookupResultForBucket;
+import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
+import org.apache.fluss.rpc.entity.PutKvResultForBucket;
 import org.apache.fluss.rpc.entity.ResultForBucket;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
@@ -89,6 +92,7 @@ import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.FetchParamsBuilder;
 import org.apache.fluss.server.log.FilterInfo;
 import org.apache.fluss.server.log.ListOffsetsParam;
+import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
 import org.apache.fluss.server.replica.Replica;
@@ -98,6 +102,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -107,6 +112,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.security.acl.OperationType.READ;
@@ -186,9 +192,25 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<ProduceLogResponse> produceLog(ProduceLogRequest request) {
-        authorizeTable(WRITE, request.getTableId());
-        CompletableFuture<ProduceLogResponse> response = new CompletableFuture<>();
         Map<TableBucket, MemoryLogRecords> produceLogData = getProduceLogData(request);
+        Optional<TableInfo> tableInfoOpt = getTableInfo(request.getTableId());
+        if (!tableInfoOpt.isPresent()) {
+            return CompletableFuture.completedFuture(
+                    makeProduceLogUnknownTableResponse(produceLogData.keySet()));
+        }
+        authorizeTable(WRITE, request.getTableId());
+        TableInfo tableInfo = tableInfoOpt.get();
+        if (tableInfo.hasPrimaryKey()) {
+            return CompletableFuture.completedFuture(
+                    makeProduceLogErrorResponse(
+                            produceLogData.keySet(),
+                            new ApiError(
+                                    Errors.INVALID_TABLE_EXCEPTION,
+                                    String.format(
+                                            "PRODUCE_LOG is only supported on log table, but %s is a primary key table.",
+                                            tableInfo.getTablePath()))));
+        }
+        CompletableFuture<ProduceLogResponse> response = new CompletableFuture<>();
         replicaManager.appendRecordsToLog(
                 request.getTimeoutMs(),
                 request.getAcks(),
@@ -250,9 +272,24 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<PutKvResponse> putKv(PutKvRequest request) {
-        authorizeTable(WRITE, request.getTableId());
-
         Map<TableBucket, KvRecordBatch> putKvData = getPutKvData(request);
+        Optional<TableInfo> tableInfoOpt = getTableInfo(request.getTableId());
+        if (!tableInfoOpt.isPresent()) {
+            return CompletableFuture.completedFuture(
+                    makePutKvUnknownTableResponse(putKvData.keySet()));
+        }
+        authorizeTable(WRITE, request.getTableId());
+        TableInfo tableInfo = tableInfoOpt.get();
+        if (!tableInfo.hasPrimaryKey()) {
+            ApiError apiError =
+                    new ApiError(
+                            Errors.NON_PRIMARY_KEY_TABLE_EXCEPTION,
+                            String.format(
+                                    "PUT_KV is only supported on primary key table, but %s is a log table.",
+                                    tableInfo.getTablePath()));
+            return CompletableFuture.completedFuture(
+                    makePutKvErrorResponse(putKvData.keySet(), tableBucket -> apiError));
+        }
         // Get mergeMode from request, default to DEFAULT if not set
         MergeMode mergeMode =
                 request.hasAggMode()
@@ -754,5 +791,56 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                                             Resource.table(tablePathOpt.get()));
                         })
                 .collect(Collectors.toSet());
+    }
+
+    private Optional<TableInfo> getTableInfo(long tableId) {
+        Optional<TablePath> tablePathOpt = metadataCache.getTablePath(tableId);
+        if (!tablePathOpt.isPresent()) {
+            return Optional.empty();
+        }
+        Optional<TableMetadata> tableMetadataOpt =
+                metadataCache.getTableMetadata(tablePathOpt.get());
+        return tableMetadataOpt.map(TableMetadata::getTableInfo);
+    }
+
+    private ProduceLogResponse makeProduceLogErrorResponse(
+            Collection<TableBucket> tableBuckets, ApiError apiError) {
+        List<ProduceLogResultForBucket> results = new ArrayList<>(tableBuckets.size());
+        for (TableBucket tableBucket : tableBuckets) {
+            results.add(new ProduceLogResultForBucket(tableBucket, apiError));
+        }
+        return makeProduceLogResponse(results);
+    }
+
+    private ProduceLogResponse makeProduceLogUnknownTableResponse(
+            Collection<TableBucket> tableBuckets) {
+        List<ProduceLogResultForBucket> results = new ArrayList<>(tableBuckets.size());
+        for (TableBucket tableBucket : tableBuckets) {
+            results.add(
+                    new ProduceLogResultForBucket(
+                            tableBucket,
+                            new ApiError(
+                                    Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION,
+                                    "Unknown table or bucket: " + tableBucket)));
+        }
+        return makeProduceLogResponse(results);
+    }
+
+    private PutKvResponse makePutKvErrorResponse(
+            Collection<TableBucket> tableBuckets, Function<TableBucket, ApiError> errorProvider) {
+        List<PutKvResultForBucket> results = new ArrayList<>(tableBuckets.size());
+        for (TableBucket tableBucket : tableBuckets) {
+            results.add(new PutKvResultForBucket(tableBucket, errorProvider.apply(tableBucket)));
+        }
+        return makePutKvResponse(results);
+    }
+
+    private PutKvResponse makePutKvUnknownTableResponse(Collection<TableBucket> tableBuckets) {
+        return makePutKvErrorResponse(
+                tableBuckets,
+                tableBucket ->
+                        new ApiError(
+                                Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION,
+                                "Unknown table or bucket: " + tableBucket));
     }
 }
