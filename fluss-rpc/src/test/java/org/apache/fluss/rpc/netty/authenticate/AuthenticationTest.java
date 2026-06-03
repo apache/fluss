@@ -79,6 +79,25 @@ public class AuthenticationTest {
     }
 
     @Test
+    void testJaasConfigRejectsNonPlainLoginModule() throws Exception {
+        Configuration clientConfig = new Configuration();
+        clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "sasl");
+        clientConfig.set(ConfigOptions.CLIENT_SASL_MECHANISM, "plain");
+        clientConfig.setString(
+                "client.security.sasl.jaas.config",
+                "com.sun.security.auth.module.JndiLoginModule required username=\"root\" password=\"password\";");
+        try (NettyClient nettyClient =
+                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
+            assertThatThrownBy(
+                            () -> verifyGetTableNamesList(nettyClient, usernamePasswordServerNode))
+                    .isInstanceOf(AuthenticationException.class)
+                    .hasMessageContaining(
+                            "Only 'org.apache.fluss.security.auth.sasl.plain.PlainLoginModule' is supported")
+                    .hasMessageContaining("Got: 'com.sun.security.auth.module.JndiLoginModule'");
+        }
+    }
+
+    @Test
     void testMutualAuthenticate() throws Exception {
         Configuration clientConfig = new Configuration();
         clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "mutual");

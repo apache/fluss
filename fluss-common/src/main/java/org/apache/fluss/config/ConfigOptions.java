@@ -1413,7 +1413,10 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "JAAS configuration string for the client. If not provided, uses the JVM option -Djava.security.auth.login.config. \n"
+                            "JAAS configuration string for the client. This option is retained for backward "
+                                    + "compatibility only. Since only SASL/PLAIN is currently supported, only "
+                                    + "PlainLoginModule is accepted. Prefer using 'client.security.sasl.username' "
+                                    + "and 'client.security.sasl.password' directly.\n"
                                     + "Example: org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required username=\"admin\" password=\"admin-secret\";");
 
     public static final ConfigOption<String> CLIENT_SASL_JAAS_USERNAME =
