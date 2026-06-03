@@ -85,6 +85,7 @@ import org.apache.fluss.server.coordinator.event.NotifyKvSnapshotOffsetEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLakeTableOffsetEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
+import org.apache.fluss.server.coordinator.event.RebalanceTaskTimeoutEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
 import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
 import org.apache.fluss.server.coordinator.event.TableRegistrationChangeEvent;
@@ -122,6 +123,7 @@ import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.AutoPartitionStrategy;
+import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -249,7 +251,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.lakeTableTieringManager = lakeTableTieringManager;
         this.coordinatorMetricGroup = coordinatorMetricGroup;
         this.internalListenerName = conf.getString(ConfigOptions.INTERNAL_LISTENER_NAME);
-        this.rebalanceManager = new RebalanceManager(this, zooKeeperClient);
+        this.rebalanceManager =
+                new RebalanceManager(
+                        this, zooKeeperClient, coordinatorEventManager, SystemClock.getInstance());
         this.ioExecutor = ioExecutor;
         this.lakeTableHelper =
                 new LakeTableHelper(zooKeeperClient, conf.getString(ConfigOptions.REMOTE_DATA_DIR));
@@ -302,6 +306,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // start rebalance manager.
         rebalanceManager.startup();
+        rebalanceManager.start();
     }
 
     public void shutdown() {
@@ -645,6 +650,13 @@ public class CoordinatorEventProcessor implements EventProcessor {
             completeFromCallable(
                     cancelRebalanceEvent.getRespCallback(),
                     () -> processCancelRebalance(cancelRebalanceEvent));
+        } else if (event instanceof RebalanceTaskTimeoutEvent) {
+            RebalanceTaskTimeoutEvent timeoutEvent = (RebalanceTaskTimeoutEvent) event;
+            LOG.warn(
+                    "Rebalance task for {} timed out. Treating as completed.",
+                    timeoutEvent.getTableBucket());
+            rebalanceManager.finishRebalanceTask(
+                    timeoutEvent.getTableBucket(), RebalanceStatus.COMPLETED);
         } else if (event instanceof ListRebalanceProgressEvent) {
             ListRebalanceProgressEvent listRebalanceProgressEvent =
                     (ListRebalanceProgressEvent) event;
