@@ -117,6 +117,7 @@ import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
+import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
@@ -1042,6 +1043,32 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
             assertThat(partitionIdByNames.get(partitionInfo.getPartitionName()))
                     .isEqualTo(partitionInfo.getPartitionId());
         }
+    }
+
+    @Test
+    void testListPartitionInfosAfterTabletServerRestart() throws Exception {
+        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+        TablePath partitionedTablePath = TablePath.of(dbName, "test_retry_partitioned_table");
+        admin.createTable(partitionedTablePath, DATA1_PARTITIONED_TABLE_DESCRIPTOR, true).get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(partitionedTablePath);
+
+        // First query should succeed.
+        List<PartitionInfo> partitionInfosBefore =
+                admin.listPartitionInfos(partitionedTablePath).get();
+        assertThat(partitionInfosBefore).isNotEmpty();
+
+        // Restart all tablet servers (they bind to new ports, making cached addresses stale).
+        for (int i = 0; i < FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().size(); i++) {
+            FLUSS_CLUSTER_EXTENSION.stopTabletServer(i);
+            FLUSS_CLUSTER_EXTENSION.startTabletServer(i);
+        }
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+
+        // Second query using the same admin client should succeed after retry with metadata
+        // refresh (verifies RetryableGatewayClientProxy convergence on stale addresses).
+        List<PartitionInfo> partitionInfosAfter =
+                admin.listPartitionInfos(partitionedTablePath).get();
+        assertThat(partitionInfosAfter).hasSize(partitionInfosBefore.size());
     }
 
     @Test

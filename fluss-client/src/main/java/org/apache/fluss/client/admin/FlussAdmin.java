@@ -152,18 +152,18 @@ public class FlussAdmin implements Admin {
                     1, new ExecutorThreadFactory("fluss-admin-metadata-refresh"));
 
     public FlussAdmin(RpcClient client, MetadataUpdater metadataUpdater) {
-        AdminGateway rawGateway =
+        // TODO: AdminGateway includes non-idempotent write operations (createTable, dropTable,
+        //  createDatabase, etc.). Wrapping it with RetryableGatewayClientProxy is unsafe because
+        //  a request may succeed on the server while the response is lost (surfacing as a
+        //  RetriableException), causing a duplicate mutation on retry. A future phase should
+        //  introduce idempotent retry semantics (e.g., request-id deduplication) before enabling
+        //  retry on the write gateway.
+        this.gateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getCoordinatorServer, client, AdminGateway.class);
         AdminGateway rawReadOnlyGateway =
                 GatewayClientProxy.createGatewayProxy(
                         metadataUpdater::getRandomTabletServer, client, AdminGateway.class);
-        this.gateway =
-                RetryableGatewayClientProxy.createRetryableGatewayProxy(
-                        rawGateway,
-                        metadataUpdater::refreshClusterUntilAvailable,
-                        refreshExecutor,
-                        AdminGateway.class);
         this.readOnlyGateway =
                 RetryableGatewayClientProxy.createRetryableGatewayProxy(
                         rawReadOnlyGateway,
