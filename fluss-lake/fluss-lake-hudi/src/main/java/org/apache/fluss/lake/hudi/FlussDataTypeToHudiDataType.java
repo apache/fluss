@@ -46,7 +46,13 @@ import javax.annotation.concurrent.ThreadSafe;
 import static org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils.FILE_SYSTEM_TYPE;
 import static org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils.HIVE_META_STORE_TYPE;
 
-/** Convert from Fluss's data type to Hudi's internal data type. */
+/**
+ * Converter from Fluss's data type to Flink's internal data type used by Hudi.
+ *
+ * <p>Hudi's Flink catalog accepts Flink {@link DataType} through Flink catalog APIs and then
+ * handles the conversion to Hudi's internal schema itself. Therefore, Fluss only needs to bridge
+ * its type system to Flink's type system here.
+ */
 @ThreadSafe
 public class FlussDataTypeToHudiDataType implements DataTypeVisitor<DataType> {
 
@@ -174,10 +180,10 @@ public class FlussDataTypeToHudiDataType implements DataTypeVisitor<DataType> {
         return withNullability(DataTypes.ROW(fields), rowType.isNullable());
     }
 
-    private DataType withNullability(DataType hudi, boolean nullable) {
-        if (hudi.getLogicalType().isNullable() != nullable) {
-            return nullable ? hudi.nullable() : hudi.notNull();
+    private DataType withNullability(DataType flinkDataType, boolean nullable) {
+        if (flinkDataType.getLogicalType().isNullable() != nullable) {
+            return nullable ? flinkDataType.nullable() : flinkDataType.notNull();
         }
-        return hudi;
+        return flinkDataType;
     }
 }

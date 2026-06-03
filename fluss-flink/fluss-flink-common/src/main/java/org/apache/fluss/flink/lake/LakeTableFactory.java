@@ -44,7 +44,7 @@ public class LakeTableFactory {
                         originIdentifier.getDatabaseName(),
                         tableName);
 
-        // For Iceberg, Hudi and Paimon, pass the table name as-is to their factory.
+        // For Iceberg and Paimon, pass the table name as-is to their factory.
         // Metadata tables will be handled internally by their respective factories.
         DynamicTableFactory.Context newContext =
                 new FactoryUtil.DefaultDynamicTableContext(
@@ -66,13 +66,11 @@ public class LakeTableFactory {
                 return getPaimonFactory();
             case ICEBERG:
                 return getIcebergFactory();
-            case HUDI:
-                return getHudiFactory();
             default:
                 throw new UnsupportedOperationException(
                         "Unsupported lake connector: "
                                 + lakeFlinkCatalog.getLakeFormat()
-                                + ". Only 'paimon', 'iceberg' and 'hudi' are supported.");
+                                + ". Only 'paimon' and 'iceberg' are supported.");
         }
     }
 
@@ -100,22 +98,6 @@ public class LakeTableFactory {
         } catch (Exception e) {
             throw new RuntimeException(
                     "Failed to create Iceberg table factory. Please ensure iceberg-flink-runtime is on the classpath.",
-                    e);
-        }
-    }
-
-    private DynamicTableSourceFactory getHudiFactory() {
-        try {
-            ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
-            Class<?> hudiFactoryClass =
-                    Class.forName("org.apache.hudi.table.HoodieTableFactory", true, classLoader);
-            return (DynamicTableSourceFactory)
-                    hudiFactoryClass.getDeclaredConstructor().newInstance();
-        } catch (Exception e) {
-            throw new RuntimeException(
-                    "Failed to create Hudi table factory. Please ensure hudi-flink-bundle "
-                            + "(matching the current Flink version) is on the classpath, "
-                            + "typically under plugins/hudi/.",
                     e);
         }
     }

@@ -28,7 +28,6 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataTypes;
 
-import org.apache.flink.table.api.TableSchema;
 import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.Column;
@@ -40,6 +39,9 @@ import org.apache.flink.table.types.DataType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -47,6 +49,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -124,19 +127,11 @@ class HudiLakeCatalogTest {
 
         assertThat(table).isNotNull();
 
-        List<String> primaryKeys = new ArrayList<>();
-        primaryKeys.add("id");
-        TableSchema expectHudiSchema =
-                TableSchema.builder()
-                        .field("id", org.apache.flink.table.api.DataTypes.INT().notNull())
-                        .field("name", org.apache.flink.table.api.DataTypes.STRING())
-                        .field("__bucket", org.apache.flink.table.api.DataTypes.INT())
-                        .field("__offset", org.apache.flink.table.api.DataTypes.BIGINT())
-                        .field("__timestamp", org.apache.flink.table.api.DataTypes.TIMESTAMP(6))
-                        .primaryKey("primaryKey", primaryKeys.toArray(new String[0]))
-                        .build();
+        org.apache.flink.table.api.Schema expectedHudiSchema =
+                buildExpectedHudiSchema(
+                        org.apache.flink.table.api.DataTypes.INT().notNull(), "primaryKey");
 
-        assertThat(table.getUnresolvedSchema()).isEqualTo(expectHudiSchema.toSchema());
+        assertThat(table.getUnresolvedSchema()).isEqualTo(expectedHudiSchema);
     }
 
     @Test
@@ -167,19 +162,11 @@ class HudiLakeCatalogTest {
         ObjectPath objectPath = HudiConversions.toHudiObjectPath(tablePath);
         CatalogBaseTable table = flussHudiLakeCatalog.getHudiCatalog().getTable(objectPath);
 
-        List<String> primaryKeys = new ArrayList<>();
-        primaryKeys.add("id");
-        TableSchema expectHudiSchema =
-                TableSchema.builder()
-                        .field("id", org.apache.flink.table.api.DataTypes.BIGINT().notNull())
-                        .field("name", org.apache.flink.table.api.DataTypes.STRING())
-                        .field("__bucket", org.apache.flink.table.api.DataTypes.INT())
-                        .field("__offset", org.apache.flink.table.api.DataTypes.BIGINT())
-                        .field("__timestamp", org.apache.flink.table.api.DataTypes.TIMESTAMP(6))
-                        .primaryKey("PK_id", primaryKeys.toArray(new String[0]))
-                        .build();
+        org.apache.flink.table.api.Schema expectedHudiSchema =
+                buildExpectedHudiSchema(
+                        org.apache.flink.table.api.DataTypes.BIGINT().notNull(), "PK_id");
 
-        assertThat(table.getUnresolvedSchema()).isEqualTo(expectHudiSchema.toSchema());
+        assertThat(table.getUnresolvedSchema()).isEqualTo(expectedHudiSchema);
     }
 
     @Test
@@ -253,8 +240,10 @@ class HudiLakeCatalogTest {
                 .isTrue();
     }
 
-    @Test
-    void testIsHudiSchemaCompatibleWithDifferentColumnCount() {
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("incompatibleSchemaArgs")
+    void testIsHudiSchemaCompatibleWithIncompatibleSchemas(
+            String ignoredCaseName, String[] columnNames, DataType[] columnTypes) {
         CatalogTable table1 =
                 buildTestCatalogTable(
                         new String[] {"id", "name"},
@@ -262,50 +251,7 @@ class HudiLakeCatalogTest {
                             org.apache.flink.table.api.DataTypes.INT().notNull(),
                             org.apache.flink.table.api.DataTypes.STRING()
                         });
-        CatalogTable table2 =
-                buildTestCatalogTable(
-                        new String[] {"id"},
-                        new DataType[] {org.apache.flink.table.api.DataTypes.INT().notNull()});
-
-        assertThat(flussHudiLakeCatalog.isHudiSchemaCompatible(table1, table2)).isFalse();
-    }
-
-    @Test
-    void testIsHudiSchemaCompatibleWithDifferentColumnName() {
-        CatalogTable table1 =
-                buildTestCatalogTable(
-                        new String[] {"id", "name"},
-                        new DataType[] {
-                            org.apache.flink.table.api.DataTypes.INT().notNull(),
-                            org.apache.flink.table.api.DataTypes.STRING()
-                        });
-        CatalogTable table2 =
-                buildTestCatalogTable(
-                        new String[] {"id", "value"},
-                        new DataType[] {
-                            org.apache.flink.table.api.DataTypes.INT().notNull(),
-                            org.apache.flink.table.api.DataTypes.STRING()
-                        });
-
-        assertThat(flussHudiLakeCatalog.isHudiSchemaCompatible(table1, table2)).isFalse();
-    }
-
-    @Test
-    void testIsHudiSchemaCompatibleWithDifferentColumnType() {
-        CatalogTable table1 =
-                buildTestCatalogTable(
-                        new String[] {"id", "name"},
-                        new DataType[] {
-                            org.apache.flink.table.api.DataTypes.INT().notNull(),
-                            org.apache.flink.table.api.DataTypes.STRING()
-                        });
-        CatalogTable table2 =
-                buildTestCatalogTable(
-                        new String[] {"id", "name"},
-                        new DataType[] {
-                            org.apache.flink.table.api.DataTypes.INT().notNull(),
-                            org.apache.flink.table.api.DataTypes.BIGINT()
-                        });
+        CatalogTable table2 = buildTestCatalogTable(columnNames, columnTypes);
 
         assertThat(flussHudiLakeCatalog.isHudiSchemaCompatible(table1, table2)).isFalse();
     }
@@ -613,6 +559,40 @@ class HudiLakeCatalogTest {
     // ------------------------------------------------------------------
     // Helper methods
     // ------------------------------------------------------------------
+
+    private org.apache.flink.table.api.Schema buildExpectedHudiSchema(
+            DataType idType, String primaryKeyName) {
+        return org.apache.flink.table.api.Schema.newBuilder()
+                .column("id", idType)
+                .column("name", org.apache.flink.table.api.DataTypes.STRING())
+                .column("__bucket", org.apache.flink.table.api.DataTypes.INT())
+                .column("__offset", org.apache.flink.table.api.DataTypes.BIGINT())
+                .column("__timestamp", org.apache.flink.table.api.DataTypes.TIMESTAMP(6))
+                .primaryKeyNamed(primaryKeyName, "id")
+                .build();
+    }
+
+    private static Stream<Arguments> incompatibleSchemaArgs() {
+        return Stream.of(
+                Arguments.of(
+                        "different column count",
+                        new String[] {"id"},
+                        new DataType[] {org.apache.flink.table.api.DataTypes.INT().notNull()}),
+                Arguments.of(
+                        "different column name",
+                        new String[] {"id", "value"},
+                        new DataType[] {
+                            org.apache.flink.table.api.DataTypes.INT().notNull(),
+                            org.apache.flink.table.api.DataTypes.STRING()
+                        }),
+                Arguments.of(
+                        "different column type",
+                        new String[] {"id", "name"},
+                        new DataType[] {
+                            org.apache.flink.table.api.DataTypes.INT().notNull(),
+                            org.apache.flink.table.api.DataTypes.BIGINT()
+                        }));
+    }
 
     private CatalogTable buildTestCatalogTable(String[] columnNames, DataType[] columnTypes) {
         ResolvedSchema resolvedSchema = buildResolvedSchema(columnNames, columnTypes);

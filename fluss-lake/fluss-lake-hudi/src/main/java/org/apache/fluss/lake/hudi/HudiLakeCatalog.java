@@ -96,7 +96,8 @@ public class HudiLakeCatalog implements LakeCatalog {
 
         boolean isPkTable = tableDescriptor.getSchema().getPrimaryKeyIndexes().length > 0;
 
-        // Create Hudi catalog table
+        // Hudi's Flink catalog creates tables from Flink CatalogTable objects, so bridge the
+        // Fluss descriptor into Flink/Hudi schema and options before delegating to Hudi.
         CatalogTable catalogTable =
                 HudiConversions.createHudiCatalogTable(
                         tablePath, tableDescriptor, isPkTable, catalogMode);
