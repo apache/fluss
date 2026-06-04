@@ -23,6 +23,7 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.client.tiering.TieringWriterInitContext;
 import org.apache.fluss.flink.source.reader.BoundedSplitReader;
 import org.apache.fluss.flink.source.reader.RecordAndPos;
 import org.apache.fluss.flink.tiering.source.metrics.TieringMetrics;
@@ -63,7 +64,8 @@ import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** The {@link SplitReader} implementation which will read Fluss and write to lake. */
 public class TieringSplitReader<WriteResult>
-        implements SplitReader<TableBucketWriteResult<WriteResult>, TieringSplit> {
+        implements SplitReader<
+                org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>, TieringSplit> {
 
     private static final Logger LOG = LoggerFactory.getLogger(TieringSplitReader.class);
 
@@ -139,7 +141,8 @@ public class TieringSplitReader<WriteResult>
     }
 
     @Override
-    public RecordsWithSplitIds<TableBucketWriteResult<WriteResult>> fetch() throws IOException {
+    public RecordsWithSplitIds<org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>>
+            fetch() throws IOException {
         // check empty splits
         if (!currentEmptySplits.isEmpty()) {
             LOG.info("Empty split(s) {} finished.", currentEmptySplits);
@@ -294,9 +297,10 @@ public class TieringSplitReader<WriteResult>
         }
     }
 
-    private RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>
+    private RecordsWithSplitIds<org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>>
             forceCompleteTieringLogRecords() throws IOException {
-        Map<TableBucket, TableBucketWriteResult<WriteResult>> writeResults = new HashMap<>();
+        Map<TableBucket, org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>>
+                writeResults = new HashMap<>();
         Map<TableBucket, String> finishedSplitIds = new HashMap<>();
 
         // force finish all splits
@@ -319,9 +323,10 @@ public class TieringSplitReader<WriteResult>
                         logOffsetAndTimestamp == null
                                 ? UNKNOWN_BUCKET_TIMESTAMP
                                 : logOffsetAndTimestamp.timestamp;
-                TableBucketWriteResult<WriteResult> bucketWriteResult =
-                        completeLakeWriter(
-                                bucket, split.getPartitionName(), logEndOffset, timestamp);
+                org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>
+                        bucketWriteResult =
+                                completeLakeWriter(
+                                        bucket, split.getPartitionName(), logEndOffset, timestamp);
 
                 if (logEndOffset == UNKNOWN_BUCKET_OFFSET) {
                     // when the log end offset is unknown, the write result must be
@@ -350,9 +355,10 @@ public class TieringSplitReader<WriteResult>
         return new TableBucketWriteResultWithSplitIds(writeResults, finishedSplitIds);
     }
 
-    private RecordsWithSplitIds<TableBucketWriteResult<WriteResult>> forLogRecords(
-            ScanRecords scanRecords) throws IOException {
-        Map<TableBucket, TableBucketWriteResult<WriteResult>> writeResults = new HashMap<>();
+    private RecordsWithSplitIds<org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>>
+            forLogRecords(ScanRecords scanRecords) throws IOException {
+        Map<TableBucket, org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>>
+                writeResults = new HashMap<>();
         Map<TableBucket, String> finishedSplitIds = new HashMap<>();
 
         for (TableBucket bucket : scanRecords.buckets()) {
@@ -437,7 +443,7 @@ public class TieringSplitReader<WriteResult>
         return lakeWriter;
     }
 
-    private TableBucketWriteResult<WriteResult> completeLakeWriter(
+    private org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult> completeLakeWriter(
             TableBucket bucket,
             @Nullable String partitionName,
             long logEndOffset,
@@ -460,7 +466,8 @@ public class TieringSplitReader<WriteResult>
     }
 
     private TableBucketWriteResultWithSplitIds forEmptySplits(Set<TieringSplit> emptySplits) {
-        Map<TableBucket, TableBucketWriteResult<WriteResult>> writeResults = new HashMap<>();
+        Map<TableBucket, org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>>
+                writeResults = new HashMap<>();
         Map<TableBucket, String> finishedSplitIds = new HashMap<>();
         for (TieringSplit tieringSplit : emptySplits) {
             TableBucket tableBucket = tieringSplit.getTableBucket();
@@ -490,7 +497,7 @@ public class TieringSplitReader<WriteResult>
         TableBucket tableBucket = currentSnapshotSplit.getTableBucket();
         long logEndOffset = currentSnapshotSplit.getLogOffsetOfSnapshot();
         String splitId = currentTableSplitsByBucket.remove(tableBucket).splitId();
-        TableBucketWriteResult<WriteResult> writeResult =
+        org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult> writeResult =
                 completeLakeWriter(
                         tableBucket,
                         currentSnapshotSplit.getPartitionName(),
@@ -635,15 +642,16 @@ public class TieringSplitReader<WriteResult>
                 stoppingOffset);
     }
 
-    private TableBucketWriteResult<WriteResult> toTableBucketWriteResult(
-            TablePath tablePath,
-            TableBucket tableBucket,
-            @Nullable String partitionName,
-            @Nullable WriteResult writeResult,
-            long endLogOffset,
-            long maxTimestamp,
-            int numberOfSplits) {
-        return new TableBucketWriteResult<>(
+    private org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>
+            toTableBucketWriteResult(
+                    TablePath tablePath,
+                    TableBucket tableBucket,
+                    @Nullable String partitionName,
+                    @Nullable WriteResult writeResult,
+                    long endLogOffset,
+                    long maxTimestamp,
+                    int numberOfSplits) {
+        return new org.apache.fluss.client.tiering.TableBucketWriteResult<>(
                 tablePath,
                 tableBucket,
                 partitionName,
@@ -654,21 +662,30 @@ public class TieringSplitReader<WriteResult>
     }
 
     private class TableBucketWriteResultWithSplitIds
-            implements RecordsWithSplitIds<TableBucketWriteResult<WriteResult>> {
+            implements RecordsWithSplitIds<
+                    org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>> {
 
         private final Iterator<TableBucket> bucketIterator;
 
-        private final Map<TableBucket, TableBucketWriteResult<WriteResult>> bucketWriteResults;
+        private final Map<
+                        TableBucket,
+                        org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>>
+                bucketWriteResults;
         private final Map<TableBucket, String> bucketSplits;
 
-        @Nullable private TableBucketWriteResult<WriteResult> writeResultForCurrentSplit;
+        @Nullable
+        private org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>
+                writeResultForCurrentSplit;
 
         public TableBucketWriteResultWithSplitIds() {
             this(Collections.emptyMap(), Collections.emptyMap());
         }
 
         public TableBucketWriteResultWithSplitIds(
-                Map<TableBucket, TableBucketWriteResult<WriteResult>> bucketWriteResults,
+                Map<
+                                TableBucket,
+                                org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>>
+                        bucketWriteResults,
                 Map<TableBucket, String> bucketSplits) {
             this.bucketIterator = bucketWriteResults.keySet().iterator();
             this.bucketWriteResults = bucketWriteResults;
@@ -690,9 +707,11 @@ public class TieringSplitReader<WriteResult>
 
         @Nullable
         @Override
-        public TableBucketWriteResult<WriteResult> nextRecordFromSplit() {
+        public org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>
+                nextRecordFromSplit() {
             if (writeResultForCurrentSplit != null) {
-                TableBucketWriteResult<WriteResult> bucketWriteResult = writeResultForCurrentSplit;
+                org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>
+                        bucketWriteResult = writeResultForCurrentSplit;
                 writeResultForCurrentSplit = null;
                 return bucketWriteResult;
             } else {

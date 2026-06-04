@@ -42,13 +42,20 @@ class TableBucketWriteResultSerializerTest {
         TableBucket tableBucket =
                 isPartitioned ? new TableBucket(1, 1000L, 2) : new TableBucket(1, 2);
         String partitionName = isPartitioned ? "partition1" : null;
-        TableBucketWriteResult<TestingWriteResult> tableBucketWriteResult =
-                new TableBucketWriteResult<>(
-                        tablePath, tableBucket, partitionName, testingWriteResult, 10, 30L, 20);
+        org.apache.fluss.client.tiering.TableBucketWriteResult<TestingWriteResult>
+                tableBucketWriteResult =
+                        new org.apache.fluss.client.tiering.TableBucketWriteResult<>(
+                                tablePath,
+                                tableBucket,
+                                partitionName,
+                                testingWriteResult,
+                                10,
+                                30L,
+                                20);
 
         // test serialize and deserialize
         byte[] serialized = tableBucketWriteResultSerializer.serialize(tableBucketWriteResult);
-        TableBucketWriteResult<TestingWriteResult> deserialized =
+        org.apache.fluss.client.tiering.TableBucketWriteResult<TestingWriteResult> deserialized =
                 tableBucketWriteResultSerializer.deserialize(
                         tableBucketWriteResultSerializer.getVersion(), serialized);
 
@@ -63,7 +70,7 @@ class TableBucketWriteResultSerializerTest {
 
         // verify when writeResult is null
         tableBucketWriteResult =
-                new TableBucketWriteResult<>(
+                new org.apache.fluss.client.tiering.TableBucketWriteResult<>(
                         tablePath, tableBucket, partitionName, null, 20, 30L, 30);
         serialized = tableBucketWriteResultSerializer.serialize(tableBucketWriteResult);
         deserialized =

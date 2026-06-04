@@ -684,5 +684,17 @@ public class TieringSourceEnumerator
             this.isForceFinished = isForceFinished;
             this.stats = stats != null ? stats : TieringStats.UNKNOWN;
         }
+
+        @Override
+        public String toString() {
+            return "TieringFinishInfo{"
+                    + "tieringEpoch="
+                    + tieringEpoch
+                    + ", isForceFinished="
+                    + isForceFinished
+                    + ", stats="
+                    + stats
+                    + '}';
+        }
     }
 }

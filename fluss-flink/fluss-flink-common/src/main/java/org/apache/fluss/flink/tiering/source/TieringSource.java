@@ -55,7 +55,9 @@ import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.getClientS
  */
 public class TieringSource<WriteResult>
         implements Source<
-                TableBucketWriteResult<WriteResult>, TieringSplit, TieringSourceEnumeratorState> {
+                org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>,
+                TieringSplit,
+                TieringSourceEnumeratorState> {
 
     public static final String TIERING_SOURCE_TRANSFORMATION_UID =
             "$$fluss_tiering_source_operator$$";
@@ -108,9 +110,14 @@ public class TieringSource<WriteResult>
     }
 
     @Override
-    public SourceReader<TableBucketWriteResult<WriteResult>, TieringSplit> createReader(
-            SourceReaderContext sourceReaderContext) {
-        FutureCompletingBlockingQueue<RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>>
+    public SourceReader<
+                    org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>,
+                    TieringSplit>
+            createReader(SourceReaderContext sourceReaderContext) {
+        FutureCompletingBlockingQueue<
+                        RecordsWithSplitIds<
+                                org.apache.fluss.client.tiering.TableBucketWriteResult<
+                                        WriteResult>>>
                 elementsQueue = new FutureCompletingBlockingQueue<>();
         flussConf.set(
                 CLIENT_SCANNER_IO_TMP_DIR,

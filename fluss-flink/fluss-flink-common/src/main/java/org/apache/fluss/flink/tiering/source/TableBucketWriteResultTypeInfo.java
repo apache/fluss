@@ -25,9 +25,12 @@ import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.core.io.SimpleVersionedSerializerTypeSerializerProxy;
 import org.apache.flink.util.function.SerializableSupplier;
 
-/** A {@link TypeInformation} for {@link TableBucketWriteResult} . */
+/**
+ * A {@link TypeInformation} for {@link org.apache.fluss.client.tiering.TableBucketWriteResult} .
+ */
 public class TableBucketWriteResultTypeInfo<WriteResult>
-        extends TypeInformationAdapter<TableBucketWriteResult<WriteResult>> {
+        extends TypeInformationAdapter<
+                org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>> {
 
     private final SerializableSupplier<SimpleVersionedSerializer<WriteResult>>
             writeResultSerializerFactory;
@@ -38,9 +41,10 @@ public class TableBucketWriteResultTypeInfo<WriteResult>
         this.writeResultSerializerFactory = writeResultSerializerFactory;
     }
 
-    public static <WriteResult> TypeInformation<TableBucketWriteResult<WriteResult>> of(
-            SerializableSupplier<SimpleVersionedSerializer<WriteResult>>
-                    writeResultSerializerFactory) {
+    public static <WriteResult>
+            TypeInformation<org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>> of(
+                    SerializableSupplier<SimpleVersionedSerializer<WriteResult>>
+                            writeResultSerializerFactory) {
         return new TableBucketWriteResultTypeInfo<>(writeResultSerializerFactory);
     }
 
@@ -66,8 +70,9 @@ public class TableBucketWriteResultTypeInfo<WriteResult>
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     @Override
-    public Class<TableBucketWriteResult<WriteResult>> getTypeClass() {
-        return (Class) TableBucketWriteResult.class;
+    public Class<org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>>
+            getTypeClass() {
+        return (Class) org.apache.fluss.client.tiering.TableBucketWriteResult.class;
     }
 
     @Override
@@ -76,23 +81,23 @@ public class TableBucketWriteResultTypeInfo<WriteResult>
     }
 
     @Override
-    protected TypeSerializer<TableBucketWriteResult<WriteResult>> createSerializer(
-            TypeSerializerCreator typeSerializerCreator) {
+    protected TypeSerializer<org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>>
+            createSerializer(TypeSerializerCreator typeSerializerCreator) {
         // no copy, so that data from lake writer is directly going into lake committer while
         // chaining
         return new SimpleVersionedSerializerTypeSerializerProxy<
-                TableBucketWriteResult<WriteResult>>(
+                org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>>(
                 () -> new TableBucketWriteResultSerializer<>(writeResultSerializerFactory.get())) {
             @Override
-            public TableBucketWriteResult<WriteResult> copy(
-                    TableBucketWriteResult<WriteResult> from) {
+            public org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult> copy(
+                    org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult> from) {
                 return from;
             }
 
             @Override
-            public TableBucketWriteResult<WriteResult> copy(
-                    TableBucketWriteResult<WriteResult> from,
-                    TableBucketWriteResult<WriteResult> reuse) {
+            public org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult> copy(
+                    org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult> from,
+                    org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult> reuse) {
                 return from;
             }
         };

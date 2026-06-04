@@ -46,8 +46,8 @@ import static org.apache.fluss.flink.tiering.source.TieringSplitReader.DEFAULT_P
 @Internal
 public final class TieringSourceReader<WriteResult>
         extends SingleThreadMultiplexSourceReaderBaseAdapter<
-                TableBucketWriteResult<WriteResult>,
-                TableBucketWriteResult<WriteResult>,
+                org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>,
+                org.apache.fluss.client.tiering.TableBucketWriteResult<WriteResult>,
                 TieringSplit,
                 TieringSplitState> {
 
@@ -56,7 +56,10 @@ public final class TieringSourceReader<WriteResult>
     private final Connection connection;
 
     public TieringSourceReader(
-            FutureCompletingBlockingQueue<RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>>
+            FutureCompletingBlockingQueue<
+                            RecordsWithSplitIds<
+                                    org.apache.fluss.client.tiering.TableBucketWriteResult<
+                                            WriteResult>>>
                     elementsQueue,
             SourceReaderContext context,
             Connection connection,
@@ -66,7 +69,10 @@ public final class TieringSourceReader<WriteResult>
 
     @VisibleForTesting
     TieringSourceReader(
-            FutureCompletingBlockingQueue<RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>>
+            FutureCompletingBlockingQueue<
+                            RecordsWithSplitIds<
+                                    org.apache.fluss.client.tiering.TableBucketWriteResult<
+                                            WriteResult>>>
                     elementsQueue,
             SourceReaderContext context,
             Connection connection,
@@ -83,7 +89,10 @@ public final class TieringSourceReader<WriteResult>
     }
 
     private static <WriteResult> TieringSourceFetcherManager<WriteResult> createFetcherManager(
-            FutureCompletingBlockingQueue<RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>>
+            FutureCompletingBlockingQueue<
+                            RecordsWithSplitIds<
+                                    org.apache.fluss.client.tiering.TableBucketWriteResult<
+                                            WriteResult>>>
                     elementsQueue,
             SourceReaderContext context,
             Connection connection,
