@@ -998,6 +998,14 @@ public final class FlussClusterExtension
             // reduce testing resources
             clusterConf.set(ConfigOptions.NETTY_SERVER_NUM_NETWORK_THREADS, 1);
             clusterConf.set(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS, 3);
+            // Use short cleanup timeouts so that a slow in-flight drop does not block
+            // subsequent drops beyond the test's retry window.
+            clusterConf.set(
+                    ConfigOptions.COORDINATOR_REPLICA_CLEANUP_INFLIGHT_TIMEOUT,
+                    Duration.ofSeconds(2));
+            clusterConf.set(
+                    ConfigOptions.COORDINATOR_REPLICA_CLEANUP_TIMEOUT_CHECK_INTERVAL,
+                    Duration.ofSeconds(1));
         }
 
         /** Sets the number of tablet servers. */

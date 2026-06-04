@@ -234,7 +234,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         tableBucketStateMachine,
                         new RemoteStorageCleaner(conf, ioExecutor),
                         ioExecutor);
-        this.replicaCleanupManager = new ReplicaCleanupManager(coordinatorEventManager, clock);
+        this.replicaCleanupManager =
+                new ReplicaCleanupManager(coordinatorEventManager, clock, conf);
         this.tableManager.setReplicaCleanupManager(replicaCleanupManager);
         this.coordinatorChangeWatcher =
                 new CoordinatorChangeWatcher(zooKeeperClient, coordinatorEventManager);

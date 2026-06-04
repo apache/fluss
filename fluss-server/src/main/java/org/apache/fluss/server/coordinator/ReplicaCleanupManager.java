@@ -18,6 +18,8 @@
 package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.server.coordinator.event.DropPartitionEvent;
 import org.apache.fluss.server.coordinator.event.DropTableEvent;
@@ -75,11 +77,8 @@ public class ReplicaCleanupManager implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(ReplicaCleanupManager.class);
 
-    /** Hardcoded timeout for in-flight drops: 3 minutes. */
-    private static final long INFLIGHT_TIMEOUT_MS = 3 * 60 * 1000L;
-
-    /** Hardcoded interval for the periodic timeout check: 1 minute. */
-    private static final long TIMEOUT_CHECK_INTERVAL_MS = 60 * 1000L;
+    private final long inflightTimeoutMs;
+    private final long timeoutCheckIntervalMs;
 
     private final EventManager eventManager;
     private final Clock clock;
@@ -99,20 +98,29 @@ public class ReplicaCleanupManager implements AutoCloseable {
     @Nullable
     private InflightDrop currentInflight;
 
-    public ReplicaCleanupManager(EventManager eventManager, Clock clock) {
+    public ReplicaCleanupManager(EventManager eventManager, Clock clock, Configuration conf) {
         this(
                 eventManager,
                 clock,
                 Executors.newScheduledThreadPool(
-                        1, new ExecutorThreadFactory("replica-cleanup-timeout")));
+                        1, new ExecutorThreadFactory("replica-cleanup-timeout")),
+                conf.get(ConfigOptions.COORDINATOR_REPLICA_CLEANUP_INFLIGHT_TIMEOUT).toMillis(),
+                conf.get(ConfigOptions.COORDINATOR_REPLICA_CLEANUP_TIMEOUT_CHECK_INTERVAL)
+                        .toMillis());
     }
 
     @VisibleForTesting
     ReplicaCleanupManager(
-            EventManager eventManager, Clock clock, ScheduledExecutorService timeoutChecker) {
+            EventManager eventManager,
+            Clock clock,
+            ScheduledExecutorService timeoutChecker,
+            long inflightTimeoutMs,
+            long timeoutCheckIntervalMs) {
         this.eventManager = eventManager;
         this.clock = clock == null ? SystemClock.getInstance() : clock;
         this.timeoutChecker = timeoutChecker;
+        this.inflightTimeoutMs = inflightTimeoutMs;
+        this.timeoutCheckIntervalMs = timeoutCheckIntervalMs;
     }
 
     /** Starts the periodic timeout checker and activates one-at-a-time throttling. Idempotent. */
@@ -123,14 +131,14 @@ public class ReplicaCleanupManager implements AutoCloseable {
         if (started.compareAndSet(false, true)) {
             timeoutChecker.scheduleWithFixedDelay(
                     this::checkTimeoutsSafely,
-                    TIMEOUT_CHECK_INTERVAL_MS,
-                    TIMEOUT_CHECK_INTERVAL_MS,
+                    timeoutCheckIntervalMs,
+                    timeoutCheckIntervalMs,
                     TimeUnit.MILLISECONDS);
             LOG.info(
                     "ReplicaCleanupManager started: one-at-a-time throttling, "
                             + "inflightTimeoutMs={}, timeoutCheckIntervalMs={}",
-                    INFLIGHT_TIMEOUT_MS,
-                    TIMEOUT_CHECK_INTERVAL_MS);
+                    inflightTimeoutMs,
+                    timeoutCheckIntervalMs);
         }
     }
 
@@ -370,7 +378,7 @@ public class ReplicaCleanupManager implements AutoCloseable {
                 return;
             }
             long elapsed = clock.milliseconds() - currentInflight.submittedAtMs;
-            if (elapsed <= INFLIGHT_TIMEOUT_MS) {
+            if (elapsed <= inflightTimeoutMs) {
                 return;
             }
             LOG.warn(

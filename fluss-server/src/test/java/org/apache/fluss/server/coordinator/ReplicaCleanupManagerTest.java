@@ -355,7 +355,8 @@ class ReplicaCleanupManagerTest {
 
     private ReplicaCleanupManager newManager() {
         ReplicaCleanupManager manager =
-                new ReplicaCleanupManager(eventManager, clock, timeoutExecutor);
+                new ReplicaCleanupManager(
+                        eventManager, clock, timeoutExecutor, 3 * 60 * 1000L, 60 * 1000L);
         manager.start(); // Activate throttling for unit tests.
         return manager;
     }

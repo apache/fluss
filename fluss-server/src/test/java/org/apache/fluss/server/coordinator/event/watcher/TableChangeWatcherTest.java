@@ -116,7 +116,9 @@ class TableChangeWatcherTest {
         // test verify exactly that).
         replicaCleanupManager =
                 new ReplicaCleanupManager(
-                        eventManager, org.apache.fluss.utils.clock.SystemClock.getInstance());
+                        eventManager,
+                        org.apache.fluss.utils.clock.SystemClock.getInstance(),
+                        new org.apache.fluss.config.Configuration());
         tableChangeWatcher =
                 new TableChangeWatcher(zookeeperClient, eventManager, replicaCleanupManager);
         tableChangeWatcher.start();
@@ -475,7 +477,9 @@ class TableChangeWatcherTest {
         TestingEventManager newEventManager = new TestingEventManager();
         ReplicaCleanupManager newCleanupManager =
                 new ReplicaCleanupManager(
-                        newEventManager, org.apache.fluss.utils.clock.SystemClock.getInstance());
+                        newEventManager,
+                        org.apache.fluss.utils.clock.SystemClock.getInstance(),
+                        new org.apache.fluss.config.Configuration());
         TableChangeWatcher newWatcher =
                 new TableChangeWatcher(zookeeperClient, newEventManager, newCleanupManager);
         newWatcher.start();
