@@ -23,6 +23,7 @@ import org.apache.fluss.client.FlussConnection;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.FlussAdmin;
 import org.apache.fluss.client.admin.KvSnapshotLease;
+import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.writer.AppendWriter;
@@ -416,6 +417,7 @@ public class FlussAuthorizationITCase {
         // 4. getLatestKvSnapshots
         // 5. listPartitionInfos
         // 6. getLatestLakeSnapshot
+        // 7. listOffsets
 
         // first check call these methods without authorization.
         assertThat(guestAdmin.listTables(DATA1_TABLE_PATH_PK.getDatabaseName()).get())
@@ -426,6 +428,15 @@ public class FlussAuthorizationITCase {
         assertNoTableDescribeAuth(() -> guestAdmin.listPartitionInfos(DATA1_TABLE_PATH_PK).get());
         assertNoTableDescribeAuth(
                 () -> guestAdmin.getLatestLakeSnapshot(DATA1_TABLE_PATH_PK).get());
+        assertNoTableDescribeAuth(
+                () ->
+                        guestAdmin
+                                .listOffsets(
+                                        DATA1_TABLE_PATH_PK,
+                                        Arrays.asList(0),
+                                        new OffsetSpec.LatestSpec())
+                                .all()
+                                .get());
 
         // add acl to allow guest describe table resource
         List<AclBinding> aclBindings =
@@ -459,6 +470,15 @@ public class FlussAuthorizationITCase {
                 .rootCause()
                 .isInstanceOf(LakeTableSnapshotNotExistException.class)
                 .hasMessageContaining("Lake table snapshot doesn't exist for table");
+        assertThat(
+                        guestAdmin
+                                .listOffsets(
+                                        DATA1_TABLE_PATH_PK,
+                                        Arrays.asList(0),
+                                        new OffsetSpec.LatestSpec())
+                                .all()
+                                .get())
+                .isNotEmpty();
     }
 
     @ParameterizedTest
