@@ -653,10 +653,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
         } else if (event instanceof RebalanceTaskTimeoutEvent) {
             RebalanceTaskTimeoutEvent timeoutEvent = (RebalanceTaskTimeoutEvent) event;
             LOG.warn(
-                    "Rebalance task for {} timed out. Treating as completed.",
+                    "Rebalance task for {} timed out. Treating as timeout.",
                     timeoutEvent.getTableBucket());
             rebalanceManager.finishRebalanceTask(
-                    timeoutEvent.getTableBucket(), RebalanceStatus.COMPLETED);
+                    timeoutEvent.getTableBucket(), RebalanceStatus.TIMEOUT);
         } else if (event instanceof ListRebalanceProgressEvent) {
             ListRebalanceProgressEvent listRebalanceProgressEvent =
                     (ListRebalanceProgressEvent) event;

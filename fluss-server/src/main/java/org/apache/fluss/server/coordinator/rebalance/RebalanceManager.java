@@ -486,7 +486,7 @@ public class RebalanceManager {
         if (elapsed > REBALANCE_TASK_TIMEOUT_MS) {
             LOG.warn(
                     "In-flight rebalance task for {} timed out after {}ms. "
-                            + "Treating it as completed and advancing to the next task.",
+                            + "Treating it as timed out and advancing to the next task.",
                     bucket,
                     elapsed);
             // Clear inflight state to prevent duplicate timeout events from being

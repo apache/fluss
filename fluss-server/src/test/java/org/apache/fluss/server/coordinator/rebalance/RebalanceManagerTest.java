@@ -64,6 +64,7 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.TIMEOUT;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link RebalanceManager}. */
@@ -287,13 +288,13 @@ public class RebalanceManagerTest {
         assertThat(eventManager.events).hasSize(1);
         RebalanceTaskTimeoutEvent timeoutEvent =
                 (RebalanceTaskTimeoutEvent) eventManager.events.get(0);
-        manager.finishRebalanceTask(timeoutEvent.getTableBucket(), COMPLETED);
+        manager.finishRebalanceTask(timeoutEvent.getTableBucket(), TIMEOUT);
 
-        // The timed-out task should be in finishedRebalanceTasks as COMPLETED.
+        // The timed-out task should be in finishedRebalanceTasks as TIMEOUT.
         assertThat(manager.hasInProgressRebalance()).isTrue();
         RebalanceResultForBucket result =
                 manager.listRebalanceProgress(null).progressForBucketMap().get(tb1);
-        assertThat(result.status()).isEqualTo(COMPLETED);
+        assertThat(result.status()).isEqualTo(TIMEOUT);
 
         manager.close();
     }
