@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.source;
 
 import org.apache.fluss.client.initializer.OffsetsInitializer;
+import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.StatisticsColumnsConfig;
@@ -38,12 +39,14 @@ import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.CompoundPredicate;
 import org.apache.fluss.predicate.PartitionPredicateVisitor;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.predicate.PredicateVisitor;
+import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.RowType;
 
@@ -102,6 +105,7 @@ import java.util.Set;
 import static org.apache.fluss.flink.utils.LakeSourceUtils.createLakeSource;
 import static org.apache.fluss.flink.utils.PredicateConverter.convertToFlussPredicate;
 import static org.apache.fluss.flink.utils.PushdownUtils.ValueConversion.FLINK_INTERNAL_VALUE;
+import static org.apache.fluss.flink.utils.PushdownUtils.ValueConversion.FLUSS_INTERNAL_VALUE;
 import static org.apache.fluss.flink.utils.PushdownUtils.extractFieldEquals;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -594,7 +598,8 @@ public class FlinkTableSource
 
             // if not all primary key fields are in condition, fall through to
             // try partition filter pushdown for partitioned PK tables
-            if (visitedPkFields.equals(primaryKeyTypes.keySet())) {
+            if (visitedPkFields.equals(primaryKeyTypes.keySet())
+                    && lookupCoversAllData(filters, primaryKeyTypes)) {
                 singleRowFilter = lookupRow;
                 // FLINK-38635: return all filters as remaining for scan vs lookup safety net
                 return Result.of(acceptedFilters, filters);
@@ -887,6 +892,36 @@ public class FlinkTableSource
             projection[primaryKeyIndexes[i]] = i;
         }
         return projection;
+    }
+
+    private boolean lookupCoversAllData(
+            List<ResolvedExpression> filters, Map<Integer, LogicalType> primaryKeyTypes) {
+        if (!isDataLakeEnabled || !isPartitioned()) {
+            return true;
+        }
+        return PushdownUtils.partitionExists(
+                tablePath, flussConfig, resolveLookupPartition(filters, primaryKeyTypes));
+    }
+
+    private PartitionSpec resolveLookupPartition(
+            List<ResolvedExpression> filters, Map<Integer, LogicalType> primaryKeyTypes) {
+        List<FieldEqual> keyEquals =
+                extractFieldEquals(
+                        filters,
+                        primaryKeyTypes,
+                        new ArrayList<>(),
+                        new ArrayList<>(),
+                        FLUSS_INTERNAL_VALUE);
+        int[] keyRowProjection = getKeyRowProjection();
+        GenericRow keyRow = new GenericRow(primaryKeyIndexes.length);
+        for (FieldEqual keyEqual : keyEquals) {
+            keyRow.setField(keyRowProjection[keyEqual.fieldIndex], keyEqual.equalValue);
+        }
+        RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
+        List<String> partitionKeys = flussRowType.project(partitionKeyIndexes).getFieldNames();
+        return new PartitionGetter(flussRowType.project(primaryKeyIndexes), partitionKeys)
+                .getResolvedPartitionSpec(keyRow)
+                .toPartitionSpec();
     }
 
     @VisibleForTesting
