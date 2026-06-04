@@ -62,7 +62,11 @@ public class ArrowLogFetchCollector
     }
 
     @Override
-    protected ArrowScanRecords toResult(Map<TableBucket, List<ArrowBatchData>> fetchedRecords) {
+    protected ArrowScanRecords toResult(
+            Map<TableBucket, List<ArrowBatchData>> fetchedRecords,
+            Map<TableBucket, Long> consumedUpToOffsets) {
+        // Arrow scan paths don't need consumedUpToOffsets (issue #2371 is specific to
+        // row-based tiering), so it's discarded here rather than carried in ArrowScanRecords.
         return new ArrowScanRecords(fetchedRecords);
     }
 

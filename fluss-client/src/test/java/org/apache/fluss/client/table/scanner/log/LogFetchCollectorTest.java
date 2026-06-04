@@ -258,6 +258,9 @@ public class LogFetchCollectorTest {
         assertThat(scanRecords.records(tb)).isEmpty();
         assertThat(logScannerStatus.getBucketOffset(tb)).isEqualTo(20L);
         assertThat(completedFetch.isConsumed()).isTrue();
+        // Empty record list, but bucket exposed via buckets() with an advanced consumedUpToOffset.
+        assertThat(scanRecords.buckets()).contains(tb);
+        assertThat(scanRecords.consumedUpToOffset(tb)).isEqualTo(20L);
     }
 
     private DefaultCompletedFetch makeCompletedFetch(

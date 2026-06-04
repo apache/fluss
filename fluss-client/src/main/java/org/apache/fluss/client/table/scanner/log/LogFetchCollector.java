@@ -67,7 +67,9 @@ public class LogFetchCollector extends AbstractLogFetchCollector<ScanRecord, Sca
     }
 
     @Override
-    protected ScanRecords toResult(Map<TableBucket, List<ScanRecord>> fetchedRecords) {
-        return new ScanRecords(fetchedRecords);
+    protected ScanRecords toResult(
+            Map<TableBucket, List<ScanRecord>> fetchedRecords,
+            Map<TableBucket, Long> consumedUpToOffsets) {
+        return new ScanRecords(fetchedRecords, consumedUpToOffsets);
     }
 }

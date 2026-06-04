@@ -355,63 +355,89 @@ public class TieringSplitReader<WriteResult>
         Map<TableBucket, TableBucketWriteResult<WriteResult>> writeResults = new HashMap<>();
         Map<TableBucket, String> finishedSplitIds = new HashMap<>();
 
+        // Iterate every polled bucket, including those that only advanced their offset.
         for (TableBucket bucket : scanRecords.buckets()) {
-            List<ScanRecord> bucketScanRecords = scanRecords.records(bucket);
-            if (bucketScanRecords.isEmpty()) {
-                continue;
-            }
-            // no any stopping offset, just skip handle the records for the bucket
             Long stoppingOffset = currentTableStoppingOffsets.get(bucket);
             if (stoppingOffset == null) {
                 continue;
             }
+
+            List<ScanRecord> records = scanRecords.records(bucket);
             LakeWriter<WriteResult> lakeWriter = null;
-            for (ScanRecord record : bucketScanRecords) {
-                // if record is less than stopping offset
-                if (record.logOffset() < stoppingOffset) {
-                    if (lakeWriter == null) {
-                        lakeWriter =
-                                getOrCreateLakeWriter(
-                                        bucket,
-                                        currentTableSplitsByBucket.get(bucket).getPartitionName());
-                    }
-                    lakeWriter.write(record);
-                    if (record.getSizeInBytes() > 0) {
-                        tieringMetrics.recordBytesRead(record.getSizeInBytes());
-                    }
+            ScanRecord lastRecord = null;
+
+            for (ScanRecord record : records) {
+                lastRecord = record;
+
+                // The scanner may return records beyond this split's exclusive stopping offset.
+                // Those records belong to the next split and must not be tiered here.
+                if (record.logOffset() >= stoppingOffset) {
+                    continue;
+                }
+
+                if (lakeWriter == null) {
+                    lakeWriter =
+                            getOrCreateLakeWriter(
+                                    bucket,
+                                    currentTableSplitsByBucket.get(bucket).getPartitionName());
+                }
+                lakeWriter.write(record);
+                if (record.getSizeInBytes() > 0) {
+                    tieringMetrics.recordBytesRead(record.getSizeInBytes());
                 }
             }
-            ScanRecord lastRecord = bucketScanRecords.get(bucketScanRecords.size() - 1);
+
+            // consumedUpToOffset is an exclusive upper bound: all offsets before it have been
+            // consumed by the scanner in this poll round. It may advance even when records is
+            // empty, for example when FIRST_ROW filters duplicate upserts into empty WAL batches.
+            Long consumedUpToOffset = scanRecords.consumedUpToOffset(bucket);
+            checkState(
+                    consumedUpToOffset != null,
+                    "Missing consumed-up-to offset for polled bucket %s.",
+                    bucket);
+
+            // The split owns offsets before stoppingOffset only. If the scanner consumed past
+            // the split boundary, cap the tiered progress at stoppingOffset so the next split
+            // still owns later data.
+            long tieredLogEndOffset = Math.min(consumedUpToOffset, stoppingOffset);
+            long tieredTimestamp;
+            if (lastRecord != null) {
+                tieredTimestamp = lastRecord.timestamp();
+            } else {
+                LogOffsetAndTimestamp latest = currentTableTieredOffsetAndTimestamp.get(bucket);
+                tieredTimestamp = latest != null ? latest.timestamp : UNKNOWN_BUCKET_TIMESTAMP;
+            }
             currentTableTieredOffsetAndTimestamp.put(
-                    bucket,
-                    new LogOffsetAndTimestamp(lastRecord.logOffset(), lastRecord.timestamp()));
-            // has arrived into the end of the split,
-            if (lastRecord.logOffset() >= stoppingOffset - 1) {
-                currentTableStoppingOffsets.remove(bucket);
-                if (bucket.getPartitionId() != null) {
-                    currentLogScanner.unsubscribe(bucket.getPartitionId(), bucket.getBucket());
-                } else {
-                    // todo: should unsubscribe the log split if unsubscribe bucket for
-                    // un-partitioned table is supported
-                }
-                TieringSplit currentTieringSplit = currentTableSplitsByBucket.remove(bucket);
-                String currentSplitId = currentTieringSplit.splitId();
-                // put write result of the bucket
-                writeResults.put(
-                        bucket,
-                        completeLakeWriter(
-                                bucket,
-                                currentTieringSplit.getPartitionName(),
-                                stoppingOffset,
-                                lastRecord.timestamp()));
-                // put split of the bucket
-                finishedSplitIds.put(bucket, currentSplitId);
-                LOG.info(
-                        "Finish tier bucket {} for table {}, split: {}.",
-                        bucket,
-                        currentTablePath,
-                        currentSplitId);
+                    bucket, new LogOffsetAndTimestamp(tieredLogEndOffset - 1, tieredTimestamp));
+
+            // The split owns offsets below stoppingOffset. If the scanner has not consumed up to
+            // that exclusive bound yet, keep the split active.
+            if (consumedUpToOffset < stoppingOffset) {
+                continue;
             }
+
+            currentTableStoppingOffsets.remove(bucket);
+            if (bucket.getPartitionId() != null) {
+                currentLogScanner.unsubscribe(bucket.getPartitionId(), bucket.getBucket());
+            } else {
+                // todo: should unsubscribe the log split if unsubscribe bucket for
+                // un-partitioned table is supported
+            }
+            TieringSplit currentTieringSplit = currentTableSplitsByBucket.remove(bucket);
+            String currentSplitId = currentTieringSplit.splitId();
+            writeResults.put(
+                    bucket,
+                    completeLakeWriter(
+                            bucket,
+                            currentTieringSplit.getPartitionName(),
+                            stoppingOffset,
+                            tieredTimestamp));
+            finishedSplitIds.put(bucket, currentSplitId);
+            LOG.info(
+                    "Finish tier bucket {} for table {}, split: {}.",
+                    bucket,
+                    currentTablePath,
+                    currentSplitId);
         }
 
         if (!finishedSplitIds.isEmpty()) {
