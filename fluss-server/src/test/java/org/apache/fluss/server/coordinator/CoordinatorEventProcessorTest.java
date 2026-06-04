@@ -52,6 +52,7 @@ import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
+import org.apache.fluss.server.coordinator.event.TableRegistrationChangeEvent;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.coordinator.statemachine.BucketState;
@@ -78,6 +79,7 @@ import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
@@ -129,6 +131,7 @@ import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignm
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link CoordinatorEventProcessor}. */
@@ -1009,6 +1012,44 @@ class CoordinatorEventProcessorTest {
                     assertThat(tableInfoInCtx.getCustomProperties().toMap())
                             .containsEntry("custom.key", "custom.value");
                 });
+    }
+
+    @Test
+    void testTableRegistrationChangeWithUnknownTable() {
+        TablePath tablePath = TablePath.of(defaultDatabase, "test_unknown_table");
+        TableRegistration tableRegistration =
+                TableRegistration.newTable(10L, remoteDataDir, TEST_TABLE);
+
+        assertThatCode(
+                        () ->
+                                eventProcessor.process(
+                                        new TableRegistrationChangeEvent(
+                                                tablePath, tableRegistration)))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void testTableRegistrationChangeWithMissingTableInfo() throws Exception {
+        TablePath tablePath = TablePath.of(defaultDatabase, "test_missing_table_info");
+        long tableId = 10L;
+        TableRegistration tableRegistration =
+                TableRegistration.newTable(tableId, remoteDataDir, TEST_TABLE);
+
+        fromCtx(
+                ctx -> {
+                    ctx.putTablePath(tableId, tablePath);
+                    return null;
+                });
+
+        assertThatCode(
+                        () ->
+                                eventProcessor.process(
+                                        new TableRegistrationChangeEvent(
+                                                tablePath, tableRegistration)))
+                .doesNotThrowAnyException();
+
+        TableInfo tableInfo = fromCtx(ctx -> ctx.getTableInfoById(tableId));
+        assertThat(tableInfo).isNull();
     }
 
     @Test
