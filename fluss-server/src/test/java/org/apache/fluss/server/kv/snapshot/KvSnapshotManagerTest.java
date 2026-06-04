@@ -33,8 +33,8 @@ import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.function.FunctionWithException;
 
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -74,6 +74,7 @@ class KvSnapshotManagerTest {
 
     private static final long periodicMaterializeDelay = 10_000L;
     private static ZooKeeperClient zkClient;
+    private static ExecutorService dataTransferThreadPool;
     private final TableBucket tableBucket = new TableBucket(1, 1);
     private ManuallyTriggeredScheduledExecutorService scheduledExecutorService;
     private ManuallyTriggeredScheduledExecutorService asyncSnapshotExecutorService;
@@ -90,6 +91,7 @@ class KvSnapshotManagerTest {
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+        dataTransferThreadPool = Executors.newFixedThreadPool(1);
     }
 
     @BeforeEach
@@ -98,7 +100,6 @@ class KvSnapshotManagerTest {
         conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofMillis(periodicMaterializeDelay));
         scheduledExecutorService = new ManuallyTriggeredScheduledExecutorService();
         asyncSnapshotExecutorService = new ManuallyTriggeredScheduledExecutorService();
-        ExecutorService dataTransferThreadPool = Executors.newFixedThreadPool(1);
         kvSnapshotResource =
                 new KvSnapshotResource(
                         scheduledExecutorService,
@@ -112,6 +113,13 @@ class KvSnapshotManagerTest {
                         kvSnapshotResource,
                         conf);
         manualClock = new ManualClock(System.currentTimeMillis());
+    }
+
+    @AfterAll
+    static void baseAfterAll() {
+        if (dataTransferThreadPool != null) {
+            dataTransferThreadPool.shutdownNow();
+        }
     }
 
     @AfterEach
@@ -140,7 +148,7 @@ class KvSnapshotManagerTest {
         kvSnapshotManager = createSnapshotManager(snapshotContext);
         startPeriodicUploadSnapshot(NopUploadSnapshotTarget.INSTANCE);
         // periodic snapshot is disabled when periodicMaterializeDelay is not positive
-        Assertions.assertEquals(0, scheduledExecutorService.getAllScheduledTasks().size());
+        assertThat(scheduledExecutorService.getAllScheduledTasks()).isEmpty();
     }
 
     @Test

@@ -86,14 +86,15 @@ public class KvSnapshotManager implements Closeable {
     /** Number of consecutive snapshot failures. */
     private final AtomicInteger numberOfConsecutiveFailures;
 
-    /** Whether upload snapshot is started. */
-    private volatile boolean isLeader = false;
+    /** The current role of the replica. */
+    private volatile ReplicaRole role = ReplicaRole.FOLLOWER;
 
-    /** Whether the replica is a standby replica. */
-    private volatile boolean isStandby = false;
-
-    /** Whether the standby replica is initializing. */
-    private volatile boolean standbyInitializing = false;
+    /**
+     * Whether the replica is initializing (downloading latest snapshot). This transient flag
+     * prevents concurrent notification-driven downloads via {@link #downloadSnapshot(long)} while
+     * {@link #downloadLatestSnapshot()} is in progress.
+     */
+    private volatile boolean initializing = false;
 
     /**
      * A supplier to get the current snapshot delay. This allows dynamic reconfiguration of the
@@ -170,8 +171,7 @@ public class KvSnapshotManager implements Closeable {
 
     public void becomeLeader() {
         downloadEpoch.incrementAndGet();
-        isLeader = true;
-        isStandby = false;
+        role = ReplicaRole.LEADER;
         // Clear standby download cache when leaving standby role
         clearStandbyDownloadCache();
         ensureDbDirectoryExists();
@@ -179,16 +179,14 @@ public class KvSnapshotManager implements Closeable {
 
     public void becomeFollower() {
         downloadEpoch.incrementAndGet();
-        isLeader = false;
-        isStandby = false;
+        role = ReplicaRole.FOLLOWER;
         // Clear standby download cache when leaving standby role
         clearStandbyDownloadCache();
     }
 
     public void becomeStandby() {
         downloadEpoch.incrementAndGet();
-        isLeader = false;
-        isStandby = true;
+        role = ReplicaRole.STANDBY;
         // Clear standby download cache when new added to standby role
         clearStandbyDownloadCache();
         ensureDbDirectoryExists();
@@ -265,14 +263,14 @@ public class KvSnapshotManager implements Closeable {
     }
 
     public void downloadSnapshot(long snapshotId) throws Exception {
-        if (standbyInitializing || !isStandby) {
+        if (initializing || role != ReplicaRole.STANDBY) {
             LOG.info(
                     "Skip downloading snapshot {} for bucket {} because replica is no "
-                            + "longer standby or is initializing. is standby: {}, is initializing: {}",
+                            + "longer standby or is initializing. role: {}, is initializing: {}",
                     snapshotId,
                     tableBucket,
-                    isStandby,
-                    standbyInitializing);
+                    role,
+                    initializing);
             return;
         }
         // Idempotent guard: skip duplicate notifications for the same (or older) snapshot id.
@@ -316,14 +314,14 @@ public class KvSnapshotManager implements Closeable {
      * @return the latest snapshot
      */
     public Optional<CompletedSnapshot> downloadLatestSnapshot() throws Exception {
-        // standbyInitializing is used to prevent concurrent download via
+        // initializing is used to prevent concurrent download via
         // downloadSnapshot(snapshotId).
-        standbyInitializing = true;
+        initializing = true;
         try {
-            // Note: no isStandby check here. This method is called from both:
-            // 1. initKvTablet() during leader initialization - isStandby is already false
-            // 2. becomeStandbyAsync() during standby initialization - isStandby is true
-            // The isStandby guard is only needed in downloadSnapshot(snapshotId) which is
+            // Note: no role check here. This method is called from both:
+            // 1. initKvTablet() during leader initialization - role is already LEADER
+            // 2. becomeStandbyAsync() during standby initialization - role is STANDBY
+            // The role guard is only needed in downloadSnapshot(snapshotId) which is
             // called from the notification path exclusively for standby replicas.
             int epochAtStart = downloadEpoch.get();
             Optional<CompletedSnapshot> latestSnapshot = getLatestSnapshot();
@@ -349,7 +347,7 @@ public class KvSnapshotManager implements Closeable {
 
             return latestSnapshot;
         } finally {
-            standbyInitializing = false;
+            initializing = false;
         }
     }
 
@@ -429,7 +427,7 @@ public class KvSnapshotManager implements Closeable {
     // schedule thread and asyncOperationsThreadPool can access this method
     private synchronized void scheduleNextSnapshot(long delay, Executor guardedExecutor) {
         ScheduledExecutorService snapshotScheduler = snapshotContext.getSnapshotScheduler();
-        if (isLeader && !snapshotScheduler.isShutdown()) {
+        if (role == ReplicaRole.LEADER && !snapshotScheduler.isShutdown()) {
             LOG.debug(
                     "TableBucket {} schedules the next snapshot in {} seconds",
                     tableBucket,
@@ -453,7 +451,7 @@ public class KvSnapshotManager implements Closeable {
         // of using guardedExecutor
         guardedExecutor.execute(
                 () -> {
-                    if (isLeader) {
+                    if (role == ReplicaRole.LEADER) {
                         LOG.debug("TableBucket {} triggers snapshot.", tableBucket);
                         long triggerTime = System.currentTimeMillis();
 
@@ -840,7 +838,7 @@ public class KvSnapshotManager implements Closeable {
             checkDownloadNotCancelled(expectedEpoch);
 
             // Step 6: Atomically move downloaded files from temp to final directory
-            moveSnapshotFilesToFinalDirectory(tempDownloadDir, kvDbPath);
+            moveSnapshotFilesToFinalDirectory(tempDownloadDir, kvDbPath, expectedEpoch);
 
             long totalTime = clock.milliseconds() - start;
             LOG.info(
@@ -928,7 +926,8 @@ public class KvSnapshotManager implements Closeable {
      * @param finalDir the final RocksDB db directory
      * @throws IOException if file move operations fail
      */
-    private void moveSnapshotFilesToFinalDirectory(Path tempDir, Path finalDir) throws IOException {
+    private void moveSnapshotFilesToFinalDirectory(Path tempDir, Path finalDir, int expectedEpoch)
+            throws IOException {
         File[] files = tempDir.toFile().listFiles();
         if (files == null || files.length == 0) {
             LOG.debug(
@@ -941,6 +940,7 @@ public class KvSnapshotManager implements Closeable {
 
         int movedCount = 0;
         for (File file : files) {
+            checkDownloadNotCancelled(expectedEpoch);
             Path sourcePath = file.toPath();
             Path targetPath = finalDir.resolve(file.getName());
 
@@ -1026,8 +1026,7 @@ public class KvSnapshotManager implements Closeable {
     public void close() {
         synchronized (this) {
             // do-nothing, please make the periodicExecutor will be closed by external
-            isLeader = false;
-            isStandby = false;
+            role = ReplicaRole.FOLLOWER;
             // cancel the scheduled task if not completed yet
             if (scheduledTask != null && !scheduledTask.isDone()) {
                 scheduledTask.cancel(true);

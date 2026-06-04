@@ -311,7 +311,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         return Optional.ofNullable(currentKvs.get(tableBucket));
     }
 
-    public void closeOrDropKv(TableBucket tableBucket, boolean needDrop) {
+    public void closeKv(TableBucket tableBucket, boolean needDrop) {
         KvTablet removeTablet =
                 inLock(tabletCreationOrDeletionLock, () -> currentKvs.remove(tableBucket));
 
