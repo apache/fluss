@@ -32,6 +32,7 @@ import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.ControlledShutdownRequest;
 import org.apache.fluss.rpc.messages.ControlledShutdownResponse;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
+import org.apache.fluss.rpc.netty.server.NettyServer;
 import org.apache.fluss.rpc.netty.server.RequestsMetrics;
 import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.ServerBase;
@@ -328,6 +329,8 @@ public class TabletServer extends ServerBase {
                             tabletService,
                             tabletServerMetricGroup,
                             requestsMetrics);
+            // Register FlussProtocolPlugin for dynamic SASL config updates
+            dynamicConfigManager.register(((NettyServer) rpcServer).getFlussProtocolPlugin());
             rpcServer.start();
 
             registerTabletServer();

@@ -272,6 +272,16 @@ public final class NettyServer implements RpcServer {
                         protocolName, protocols.keySet()));
     }
 
+    /** Returns the FlussProtocolPlugin instance used by this server. */
+    public FlussProtocolPlugin getFlussProtocolPlugin() {
+        for (NetworkProtocolPlugin protocol : protocols) {
+            if (protocol instanceof FlussProtocolPlugin) {
+                return (FlussProtocolPlugin) protocol;
+            }
+        }
+        throw new IllegalStateException("FlussProtocolPlugin not found in loaded protocols.");
+    }
+
     @Override
     public ScheduledExecutorService getScheduledExecutor() {
         checkState(isRunning, "Netty server has not been started yet.");
