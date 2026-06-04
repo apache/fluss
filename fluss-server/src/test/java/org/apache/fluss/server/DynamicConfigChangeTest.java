@@ -47,6 +47,7 @@ import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -696,5 +697,110 @@ public class DynamicConfigChangeTest {
             // Verify the ratio was NOT changed
             assertThat(localDiskManager.getDiskWriteLimitRatio()).isEqualTo(0.85);
         }
+    }
+
+    @Test
+    void testAppendAndSubtractOnListConfig() throws Exception {
+        Configuration configuration = new Configuration();
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+
+        AtomicReference<List<String>> reconfiguredUsers = new AtomicReference<>();
+        dynamicConfigManager.register(
+                new ServerReconfigurable() {
+                    @Override
+                    public void validate(Configuration newConfig) throws ConfigException {}
+
+                    @Override
+                    public void reconfigure(Configuration newConfig) {
+                        reconfiguredUsers.set(newConfig.get(ConfigOptions.SERVER_SASL_USERS));
+                    }
+                });
+        dynamicConfigManager.startup();
+
+        // APPEND first user
+        dynamicConfigManager.alterConfigs(
+                Collections.singletonList(
+                        new AlterConfig(
+                                ConfigOptions.SERVER_SASL_USERS.key(),
+                                "admin:admin-secret",
+                                AlterConfigOpType.APPEND)));
+
+        Map<String, String> zkConfig = zookeeperClient.fetchEntityConfig();
+        assertThat(zkConfig.get(ConfigOptions.SERVER_SASL_USERS.key()))
+                .isEqualTo("admin:admin-secret");
+        assertThat(reconfiguredUsers.get()).containsExactly("admin:admin-secret");
+
+        // APPEND second user
+        dynamicConfigManager.alterConfigs(
+                Collections.singletonList(
+                        new AlterConfig(
+                                ConfigOptions.SERVER_SASL_USERS.key(),
+                                "bob:bob-secret",
+                                AlterConfigOpType.APPEND)));
+
+        zkConfig = zookeeperClient.fetchEntityConfig();
+        assertThat(zkConfig.get(ConfigOptions.SERVER_SASL_USERS.key()))
+                .isEqualTo("admin:admin-secret,bob:bob-secret");
+        assertThat(reconfiguredUsers.get()).containsExactly("admin:admin-secret", "bob:bob-secret");
+
+        // SUBTRACT first user
+        dynamicConfigManager.alterConfigs(
+                Collections.singletonList(
+                        new AlterConfig(
+                                ConfigOptions.SERVER_SASL_USERS.key(),
+                                "admin:admin-secret",
+                                AlterConfigOpType.SUBTRACT)));
+
+        zkConfig = zookeeperClient.fetchEntityConfig();
+        assertThat(zkConfig.get(ConfigOptions.SERVER_SASL_USERS.key())).isEqualTo("bob:bob-secret");
+        assertThat(reconfiguredUsers.get()).containsExactly("bob:bob-secret");
+
+        // SUBTRACT last user - should remove key entirely
+        dynamicConfigManager.alterConfigs(
+                Collections.singletonList(
+                        new AlterConfig(
+                                ConfigOptions.SERVER_SASL_USERS.key(),
+                                "bob:bob-secret",
+                                AlterConfigOpType.SUBTRACT)));
+
+        zkConfig = zookeeperClient.fetchEntityConfig();
+        assertThat(zkConfig.containsKey(ConfigOptions.SERVER_SASL_USERS.key())).isFalse();
+        assertThat(reconfiguredUsers.get()).isNull();
+    }
+
+    @Test
+    void testAppendOnNonListConfigIsRejected() throws Exception {
+        Configuration configuration = new Configuration();
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+        dynamicConfigManager.startup();
+
+        // APPEND on a non-list config (kv.snapshot.interval is Duration type)
+        // should be rejected immediately by the list-type check.
+        assertThatThrownBy(
+                        () ->
+                                dynamicConfigManager.alterConfigs(
+                                        Collections.singletonList(
+                                                new AlterConfig(
+                                                        ConfigOptions.KV_SNAPSHOT_INTERVAL.key(),
+                                                        "5min",
+                                                        AlterConfigOpType.APPEND))))
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining(
+                        "APPEND/SUBTRACT operations are only supported for list-typed config keys");
+
+        // SUBTRACT on a non-list config should also be rejected.
+        assertThatThrownBy(
+                        () ->
+                                dynamicConfigManager.alterConfigs(
+                                        Collections.singletonList(
+                                                new AlterConfig(
+                                                        ConfigOptions.KV_SNAPSHOT_INTERVAL.key(),
+                                                        "5min",
+                                                        AlterConfigOpType.SUBTRACT))))
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining(
+                        "APPEND/SUBTRACT operations are only supported for list-typed config keys");
     }
 }

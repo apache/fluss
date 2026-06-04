@@ -30,6 +30,7 @@ import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.rpc.netty.client.NettyClient;
+import org.apache.fluss.rpc.netty.server.FlussProtocolPlugin;
 import org.apache.fluss.rpc.netty.server.NettyServer;
 import org.apache.fluss.rpc.netty.server.RequestsMetrics;
 import org.apache.fluss.rpc.protocol.ApiKeys;
@@ -178,6 +179,100 @@ public class SaslAuthenticationITCase {
                 .hasMessage("Authentication failed: Invalid username or password");
         clientConfig.setString("client.security.sasl.password", "alice-secret");
         testAuthentication(clientConfig);
+    }
+
+    @Test
+    void testAddAndDeleteUser() throws Exception {
+        // Start a server with username/password list config (admin and alice)
+        Configuration serverConfig = new Configuration();
+        serverConfig.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+        serverConfig.setString("security.sasl.enabled.mechanisms", "plain");
+        serverConfig.setString("security.sasl.users", "admin:admin-secret,alice:alice-secret");
+        serverConfig.setString(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS.key(), "3");
+
+        MetricGroup metricGroup = NOPMetricsGroup.newInstance();
+        TestingAuthenticateGatewayService service = new TestingAuthenticateGatewayService();
+        try (NetUtils.Port port = getAvailablePort();
+                NettyServer nettyServer =
+                        new NettyServer(
+                                serverConfig,
+                                Collections.singletonList(
+                                        new Endpoint("localhost", port.getPort(), "CLIENT")),
+                                service,
+                                metricGroup,
+                                RequestsMetrics.createCoordinatorServerRequestMetrics(
+                                        metricGroup))) {
+            nettyServer.start();
+            ServerNode serverNode =
+                    new ServerNode(1, "localhost", port.getPort(), ServerType.TABLET_SERVER);
+            FlussProtocolPlugin plugin = nettyServer.getFlussProtocolPlugin();
+
+            // Verify "admin" can authenticate
+            try (NettyClient client = createSaslClient("admin", "admin-secret")) {
+                verifyListTables(client, serverNode);
+            }
+
+            // Verify "bob" cannot authenticate initially
+            try (NettyClient client = createSaslClient("bob", "bob-secret")) {
+                assertThatThrownBy(() -> verifyListTables(client, serverNode))
+                        .cause()
+                        .isExactlyInstanceOf(AuthenticationException.class)
+                        .hasMessageContaining("Invalid username or password");
+            }
+
+            // Add user "bob" via reconfigure
+            Configuration addBobConfig = new Configuration();
+            addBobConfig.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+            addBobConfig.setString("security.sasl.enabled.mechanisms", "plain");
+            addBobConfig.setString(
+                    "security.sasl.users", "admin:admin-secret,alice:alice-secret,bob:bob-secret");
+            plugin.validate(addBobConfig);
+            plugin.reconfigure(addBobConfig);
+
+            // Verify "bob" can now authenticate
+            try (NettyClient client = createSaslClient("bob", "bob-secret")) {
+                verifyListTables(client, serverNode);
+            }
+
+            // Delete user "admin" via reconfigure
+            Configuration removeAdminConfig = new Configuration();
+            removeAdminConfig.setString(
+                    ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
+            removeAdminConfig.setString("security.sasl.enabled.mechanisms", "plain");
+            removeAdminConfig.setString("security.sasl.users", "alice:alice-secret,bob:bob-secret");
+            plugin.validate(removeAdminConfig);
+            plugin.reconfigure(removeAdminConfig);
+
+            // Verify "admin" can no longer authenticate
+            try (NettyClient client = createSaslClient("admin", "admin-secret")) {
+                assertThatThrownBy(() -> verifyListTables(client, serverNode))
+                        .cause()
+                        .isExactlyInstanceOf(AuthenticationException.class)
+                        .hasMessageContaining("Invalid username or password");
+            }
+
+            // Verify "bob" still works
+            try (NettyClient client = createSaslClient("bob", "bob-secret")) {
+                verifyListTables(client, serverNode);
+            }
+        }
+    }
+
+    private NettyClient createSaslClient(String username, String password) {
+        Configuration clientConfig = new Configuration();
+        clientConfig.setString("client.security.protocol", "sasl");
+        clientConfig.setString("client.security.sasl.mechanism", "plain");
+        clientConfig.setString("client.security.sasl.username", username);
+        clientConfig.setString("client.security.sasl.password", password);
+        return new NettyClient(clientConfig, TestingClientMetricGroup.newInstance());
+    }
+
+    private void verifyListTables(NettyClient client, ServerNode serverNode) throws Exception {
+        ListTablesRequest request = new ListTablesRequest().setDatabaseName("test-database");
+        ListTablesResponse response =
+                (ListTablesResponse)
+                        client.sendRequest(serverNode, ApiKeys.LIST_TABLES, request).get();
+        assertThat(response.getTableNamesList()).isEqualTo(Collections.singletonList("test-table"));
     }
 
     private void testAuthentication(Configuration clientConfig) throws Exception {

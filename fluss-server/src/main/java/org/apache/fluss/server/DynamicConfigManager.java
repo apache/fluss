@@ -18,6 +18,8 @@
 package org.apache.fluss.server;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.config.ConfigOption;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
@@ -34,6 +36,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
@@ -145,6 +148,30 @@ public class DynamicConfigManager {
                         case DELETE:
                             configsProps.remove(configPropName);
                             break;
+                        case APPEND:
+                            validateListType(configPropName);
+                            String existingAppend = configsProps.getOrDefault(configPropName, "");
+                            if (existingAppend.isEmpty()) {
+                                configsProps.put(configPropName, configPropValue);
+                            } else {
+                                configsProps.put(
+                                        configPropName, existingAppend + "," + configPropValue);
+                            }
+                            break;
+                        case SUBTRACT:
+                            validateListType(configPropName);
+                            String existingSubtract = configsProps.get(configPropName);
+                            if (existingSubtract != null) {
+                                List<String> items =
+                                        new ArrayList<>(Arrays.asList(existingSubtract.split(",")));
+                                items.remove(configPropValue);
+                                if (items.isEmpty()) {
+                                    configsProps.remove(configPropName);
+                                } else {
+                                    configsProps.put(configPropName, String.join(",", items));
+                                }
+                            }
+                            break;
                         default:
                             throw new ConfigException(
                                     "Unsupported config operation type " + alterConfigOp.opType());
@@ -158,6 +185,17 @@ public class DynamicConfigManager {
 
         // Apply to zookeeper only after verification.
         zooKeeperClient.upsertServerEntityConfig(configsProps);
+    }
+
+    private static void validateListType(String configKey) {
+        ConfigOption<?> configOption = ConfigOptions.getConfigOption(configKey);
+        if (configOption == null || !configOption.isList()) {
+            throw new ConfigException(
+                    String.format(
+                            "APPEND/SUBTRACT operations are only supported for list-typed config keys, "
+                                    + "but '%s' is not a list type.",
+                            configKey));
+        }
     }
 
     private class ConfigChangedNotificationHandler

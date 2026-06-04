@@ -90,7 +90,8 @@ public class AuthenticationFactory {
      *     authenticators.
      */
     public static Map<String, Supplier<ServerAuthenticator>> loadServerAuthenticatorSuppliers(
-            Configuration configuration) {
+            Supplier<Configuration> configurationSupplier) {
+        Configuration configuration = configurationSupplier.get();
         PluginManager pluginManager = PluginUtils.createPluginManagerFromRootFolder(configuration);
         Map<String, Supplier<ServerAuthenticator>> serverAuthenticators = new HashMap<>();
         Map<String, String> protocolMap =
@@ -105,7 +106,9 @@ public class AuthenticationFactory {
 
             serverAuthenticators.put(
                     protocolEntry.getKey(),
-                    () -> serverAuthenticatorPlugin.createServerAuthenticator(configuration));
+                    () ->
+                            serverAuthenticatorPlugin.createServerAuthenticator(
+                                    configurationSupplier.get()));
         }
         return serverAuthenticators;
     }

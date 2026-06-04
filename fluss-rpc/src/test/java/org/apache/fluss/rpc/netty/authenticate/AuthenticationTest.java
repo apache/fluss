@@ -242,11 +242,7 @@ public class AuthenticationTest {
         configuration.setString(
                 ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT1:mutual,CLIENT2:sasl");
         configuration.setString("security.sasl.enabled.mechanisms", "plain");
-        configuration.setString(
-                "security.sasl.plain.jaas.config",
-                "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required "
-                        + "    user_root=\"password\" "
-                        + "    user_guest=\"password2\";");
+        configuration.setString("security.sasl.users", "root:password,guest:password2");
         configuration.set(ConfigOptions.SUPER_USERS, "User:root");
         configuration.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         // 3 worker threads is enough for this test
