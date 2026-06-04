@@ -756,7 +756,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // Skip if the table is not yet registered in coordinator context.
         // Should not happen in normal cases.
-        if (tableId == null || tableId == TableInfo.UNKNOWN_TABLE_ID) {
+        if (tableId == TableInfo.UNKNOWN_TABLE_ID) {
             LOG.warn(
                     "Table {} is not registered in coordinator context, "
                             + "skip processing table registration change.",
@@ -765,14 +765,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
         }
 
         TableInfo oldTableInfo = coordinatorContext.getTableInfoById(tableId);
-        if (oldTableInfo == null) {
-            LOG.warn(
-                    "Table {} with id {} is not loaded in coordinator context, "
-                            + "skip processing table registration change.",
-                    tablePath,
-                    tableId);
-            return;
-        }
 
         TableInfo newTableInfo =
                 event.getNewTableRegistration()

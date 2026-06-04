@@ -1029,30 +1029,6 @@ class CoordinatorEventProcessorTest {
     }
 
     @Test
-    void testTableRegistrationChangeWithMissingTableInfo() throws Exception {
-        TablePath tablePath = TablePath.of(defaultDatabase, "test_missing_table_info");
-        long tableId = 10L;
-        TableRegistration tableRegistration =
-                TableRegistration.newTable(tableId, remoteDataDir, TEST_TABLE);
-
-        fromCtx(
-                ctx -> {
-                    ctx.putTablePath(tableId, tablePath);
-                    return null;
-                });
-
-        assertThatCode(
-                        () ->
-                                eventProcessor.process(
-                                        new TableRegistrationChangeEvent(
-                                                tablePath, tableRegistration)))
-                .doesNotThrowAnyException();
-
-        TableInfo tableInfo = fromCtx(ctx -> ctx.getTableInfoById(tableId));
-        assertThat(tableInfo).isNull();
-    }
-
-    @Test
     void testAlterStandbyReplicaEnabled() throws Exception {
         // make sure all request to gateway should be successful
         initCoordinatorChannel();
