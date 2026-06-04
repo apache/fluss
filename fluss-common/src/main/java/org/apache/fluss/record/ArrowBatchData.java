@@ -19,6 +19,8 @@ package org.apache.fluss.record;
 
 import org.apache.fluss.annotation.Internal;
 
+import org.apache.arrow.memory.ArrowBuf;
+import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -38,6 +40,7 @@ public class ArrowBatchData implements AutoCloseable {
     private final long baseLogOffset;
     private final long timestamp;
     private final int schemaId;
+    private boolean closed;
 
     public ArrowBatchData(
             VectorSchemaRoot vectorSchemaRoot, long baseLogOffset, long timestamp, int schemaId) {
@@ -72,6 +75,17 @@ public class ArrowBatchData implements AutoCloseable {
         return vectorSchemaRoot.getRowCount();
     }
 
+    /** Returns the total size in bytes of the underlying Arrow buffers. */
+    public long getSizeInBytes() {
+        long size = 0;
+        for (FieldVector vector : vectorSchemaRoot.getFieldVectors()) {
+            for (ArrowBuf buf : vector.getBuffers(false)) {
+                size += buf.readableBytes();
+            }
+        }
+        return size;
+    }
+
     /**
      * Creates a new {@link ArrowBatchData} containing a contiguous slice of this batch's rows and
      * releases the original vector data.
@@ -92,12 +106,37 @@ public class ArrowBatchData implements AutoCloseable {
         int remainingRows = getRecordCount() - skipRows;
         VectorSchemaRoot slicedRoot = vectorSchemaRoot.slice(skipRows, remainingRows);
         // release original vector buffers; sliced vectors hold independent copies
-        vectorSchemaRoot.close();
+        close();
         return new ArrowBatchData(slicedRoot, baseLogOffset + skipRows, timestamp, schemaId);
+    }
+
+    /**
+     * Creates a new {@link ArrowBatchData} containing only the first {@code rowCount} rows and
+     * releases the original vector data.
+     *
+     * <p>After this method returns, the original {@link ArrowBatchData} instance MUST NOT be used
+     * or closed. The caller is responsible for closing the returned instance.
+     *
+     * @param rowCount the number of leading rows to keep
+     * @return a new {@link ArrowBatchData} containing the first {@code rowCount} rows
+     */
+    public ArrowBatchData truncateAndTransferOwnership(int rowCount) {
+        checkArgument(rowCount > 0, "rowCount must be > 0, but is %s", rowCount);
+        checkArgument(
+                rowCount <= getRecordCount(),
+                "rowCount(%s) must be <= recordCount(%s)",
+                rowCount,
+                getRecordCount());
+        VectorSchemaRoot slicedRoot = vectorSchemaRoot.slice(0, rowCount);
+        close();
+        return new ArrowBatchData(slicedRoot, baseLogOffset, timestamp, schemaId);
     }
 
     @Override
     public void close() {
-        vectorSchemaRoot.close();
+        if (!closed) {
+            closed = true;
+            vectorSchemaRoot.close();
+        }
     }
 }

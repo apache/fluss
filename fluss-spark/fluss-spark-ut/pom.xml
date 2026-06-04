@@ -96,6 +96,13 @@
         </dependency>
 
         <dependency>
+            <groupId>org.apache.paimon</groupId>
+            <artifactId>paimon-arrow</artifactId>
+            <version>${paimon.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-lake-iceberg</artifactId>
             <version>${project.version}</version>

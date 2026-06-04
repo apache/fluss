@@ -454,6 +454,7 @@
                                         <exclude>org.apache.fluss.lake.batch.ArrowRecordBatch</exclude>
                                         <exclude>org.apache.fluss.lake.committer.CommittedLakeSnapshot</exclude>
                                         <exclude>org.apache.fluss.lake.paimon.utils.FlussDataTypeToPaimonDataType</exclude>
+                                        <exclude>org.apache.paimon.arrow.converter.Arrow2PaimonVectorConverter*</exclude>
                                         <!-- start exclude for lake lance -->
                                         <exclude>org.apache.fluss.lake.lance.*</exclude>
                                         <!-- temporarily exclude iceberg -->

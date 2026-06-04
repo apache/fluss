@@ -21,7 +21,9 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.client.table.scanner.log.ArrowScanRecords;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
+import org.apache.fluss.client.table.scanner.log.LogScannerImpl;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.flink.source.reader.BoundedSplitReader;
 import org.apache.fluss.flink.source.reader.RecordAndPos;
@@ -29,12 +31,18 @@ import org.apache.fluss.flink.tiering.source.metrics.TieringMetrics;
 import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSnapshotSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
+import org.apache.fluss.lake.batch.ArrowRecordBatch;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
+import org.apache.fluss.lake.writer.SupportsRecordBatchWrite;
+import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.function.SupplierWithException;
 
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitReader;
@@ -56,6 +64,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
+import java.util.function.Function;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -98,6 +107,8 @@ public class TieringSplitReader<WriteResult>
     @Nullable private BoundedSplitReader currentSnapshotSplitReader;
     @Nullable private TieringSnapshotSplit currentSnapshotSplit;
     @Nullable private Integer currentTableNumberOfSplits;
+    // whether the current table uses the Arrow record batch path for tiering
+    @Nullable private Boolean currentTableUseRecordBatchPath;
 
     // map from table bucket to split id
     private final Map<TableBucket, TieringSplit> currentTableSplitsByBucket;
@@ -108,18 +119,21 @@ public class TieringSplitReader<WriteResult>
     private final Set<TieringSplit> currentEmptySplits;
 
     private final TieringMetrics tieringMetrics;
+    private final boolean unshadedArrowAvailable;
 
     public TieringSplitReader(
             Connection connection,
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
+            ClassLoader userClassLoader,
             TieringMetrics tieringMetrics) {
-        this(connection, lakeTieringFactory, DEFAULT_POLL_TIMEOUT, tieringMetrics);
+        this(connection, lakeTieringFactory, userClassLoader, DEFAULT_POLL_TIMEOUT, tieringMetrics);
     }
 
     @VisibleForTesting
     protected TieringSplitReader(
             Connection connection,
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
+            ClassLoader userClassLoader,
             Duration pollTimeout,
             TieringMetrics tieringMetrics) {
         this.lakeTieringFactory = lakeTieringFactory;
@@ -136,6 +150,7 @@ public class TieringSplitReader<WriteResult>
         this.reachTieringMaxDurationTables = new HashSet<>();
         this.pollTimeout = pollTimeout;
         this.tieringMetrics = tieringMetrics;
+        this.unshadedArrowAvailable = checkUnshadedArrowAvailable(userClassLoader);
     }
 
     @Override
@@ -171,8 +186,23 @@ public class TieringSplitReader<WriteResult>
                 if (reachTieringMaxDurationTables.contains(currentTableId)) {
                     return forceCompleteTieringLogRecords();
                 }
-                ScanRecords scanRecords = currentLogScanner.poll(pollTimeout);
-                return forLogRecords(scanRecords);
+                if (useRecordBatchPath()) {
+                    try (ArrowScanRecords arrowScanRecords =
+                            ((LogScannerImpl) currentLogScanner).pollRecordBatch(pollTimeout)) {
+                        return processLogRecords(
+                                arrowScanRecords.buckets(),
+                                arrowScanRecords::records,
+                                this::handleArrowBatchRecords,
+                                null);
+                    }
+                } else {
+                    ScanRecords scanRecords = currentLogScanner.poll(pollTimeout);
+                    return processLogRecords(
+                            scanRecords.buckets(),
+                            scanRecords::records,
+                            this::handleLogRecords,
+                            scanRecords::consumedUpToOffset);
+                }
             } else {
                 return emptyTableBucketWriteResultWithSplitIds();
             }
@@ -350,72 +380,130 @@ public class TieringSplitReader<WriteResult>
         return new TableBucketWriteResultWithSplitIds(writeResults, finishedSplitIds);
     }
 
-    private RecordsWithSplitIds<TableBucketWriteResult<WriteResult>> forLogRecords(
-            ScanRecords scanRecords) throws IOException {
+    /**
+     * Determines whether the current table should use the Arrow record batch path for tiering. The
+     * batch path is used when the table is an ARROW format append-only (log) table and the lake
+     * writer supports batch writing.
+     */
+    private boolean useRecordBatchPath() {
+        if (currentTableUseRecordBatchPath != null) {
+            return currentTableUseRecordBatchPath;
+        }
+        TableInfo tableInfo = checkNotNull(currentTable).getTableInfo();
+
+        currentTableUseRecordBatchPath =
+                unshadedArrowAvailable
+                        && !tableInfo.hasPrimaryKey()
+                        && tableInfo.getTableConfig().getLogFormat() == LogFormat.ARROW
+                        && tableInfo.getTableConfig().getDataLakeFormat().orElse(null)
+                                == DataLakeFormat.PAIMON;
+        return currentTableUseRecordBatchPath;
+    }
+
+    /**
+     * Generic template method for processing tiering log records. Encapsulates the shared workflow
+     * of bucket traversal, stopping offset checks, LakeWriter management, offset/timestamp
+     * tracking, split completion, and table completion.
+     *
+     * @param buckets the set of buckets that have records
+     * @param recordsExtractor function to extract records for a given bucket
+     * @param handler callback for processing records within a single bucket
+     * @param consumedUpToOffsetExtractor optional function to extract the consumed-up-to offset
+     *     for a given bucket. When provided (row-based path), the offset is used for progress
+     *     tracking and split completion even when records are empty.
+     * @param <R> the record type
+     * @return the write results and finished split IDs
+     * @throws IOException if an I/O error occurs during processing
+     */
+    private <R> RecordsWithSplitIds<TableBucketWriteResult<WriteResult>> processLogRecords(
+            Set<TableBucket> buckets,
+            Function<TableBucket, List<R>> recordsExtractor,
+            BucketRecordsHandler<R> handler,
+            @Nullable Function<TableBucket, Long> consumedUpToOffsetExtractor)
+            throws IOException {
         Map<TableBucket, TableBucketWriteResult<WriteResult>> writeResults = new HashMap<>();
         Map<TableBucket, String> finishedSplitIds = new HashMap<>();
 
-        // Iterate every polled bucket, including those that only advanced their offset.
-        for (TableBucket bucket : scanRecords.buckets()) {
+        // Iterate every polled bucket, including those that only advanced their offset
+        // (when consumedUpToOffsetExtractor is available).
+        for (TableBucket bucket : buckets) {
             Long stoppingOffset = currentTableStoppingOffsets.get(bucket);
             if (stoppingOffset == null) {
                 continue;
             }
 
-            List<ScanRecord> records = scanRecords.records(bucket);
-            LakeWriter<WriteResult> lakeWriter = null;
-            ScanRecord lastRecord = null;
+            List<R> records = recordsExtractor.apply(bucket);
 
-            for (ScanRecord record : records) {
-                lastRecord = record;
-
-                // The scanner may return records beyond this split's exclusive stopping offset.
-                // Those records belong to the next split and must not be tiered here.
-                if (record.logOffset() >= stoppingOffset) {
-                    continue;
-                }
-
-                if (lakeWriter == null) {
-                    lakeWriter =
-                            getOrCreateLakeWriter(
-                                    bucket,
-                                    currentTableSplitsByBucket.get(bucket).getPartitionName());
-                }
-                lakeWriter.write(record);
-                if (record.getSizeInBytes() > 0) {
-                    tieringMetrics.recordBytesRead(record.getSizeInBytes());
-                }
-            }
-
-            // consumedUpToOffset is an exclusive upper bound: all offsets before it have been
-            // consumed by the scanner in this poll round. It may advance even when records is
-            // empty, for example when FIRST_ROW filters duplicate upserts into empty WAL batches.
-            Long consumedUpToOffset = scanRecords.consumedUpToOffset(bucket);
-            checkState(
-                    consumedUpToOffset != null,
-                    "Missing consumed-up-to offset for polled bucket %s.",
-                    bucket);
-
-            // The split owns offsets before stoppingOffset only. If the scanner consumed past
-            // the split boundary, cap the tiered progress at stoppingOffset so the next split
-            // still owns later data.
-            long tieredLogEndOffset = Math.min(consumedUpToOffset, stoppingOffset);
-            long tieredTimestamp;
-            if (lastRecord != null) {
-                tieredTimestamp = lastRecord.timestamp();
-            } else {
-                LogOffsetAndTimestamp latest = currentTableTieredOffsetAndTimestamp.get(bucket);
-                tieredTimestamp = latest != null ? latest.timestamp : UNKNOWN_BUCKET_TIMESTAMP;
-            }
-            currentTableTieredOffsetAndTimestamp.put(
-                    bucket, new LogOffsetAndTimestamp(tieredLogEndOffset - 1, tieredTimestamp));
-
-            // The split owns offsets below stoppingOffset. If the scanner has not consumed up to
-            // that exclusive bound yet, keep the split active.
-            if (consumedUpToOffset < stoppingOffset) {
+            // When consumedUpToOffset is not available (e.g., Arrow batch path),
+            // skip buckets with no records since offset progress cannot be tracked.
+            if (consumedUpToOffsetExtractor == null && records.isEmpty()) {
                 continue;
             }
 
+            // Process records through the handler
+            LogOffsetAndTimestamp lastOffsetAndTimestamp =
+                    records.isEmpty()
+                            ? new LogOffsetAndTimestamp(-1, -1, -1)
+                            : handler.handleRecords(
+                                    records,
+                                    () ->
+                                            getOrCreateLakeWriter(
+                                                    bucket,
+                                                    currentTableSplitsByBucket
+                                                            .get(bucket)
+                                                            .getPartitionName()),
+                                    stoppingOffset);
+
+            boolean splitFinished;
+            long completionTimestamp;
+
+            if (consumedUpToOffsetExtractor != null) {
+                // Row-based path: use consumedUpToOffset for progress tracking.
+                // consumedUpToOffset is an exclusive upper bound: all offsets before it have been
+                // consumed by the scanner in this poll round. It may advance even when records is
+                // empty, e.g. when FIRST_ROW filters duplicate upserts into empty WAL batches.
+                Long consumedUpToOffset = consumedUpToOffsetExtractor.apply(bucket);
+                checkState(
+                        consumedUpToOffset != null,
+                        "Missing consumed-up-to offset for polled bucket %s.",
+                        bucket);
+
+                // The split owns offsets before stoppingOffset only. If the scanner consumed past
+                // the split boundary, cap the tiered progress at stoppingOffset so the next split
+                // still owns later data.
+                long tieredLogEndOffset = Math.min(consumedUpToOffset, stoppingOffset);
+                long tieredTimestamp;
+                if (lastOffsetAndTimestamp.logOffset >= 0) {
+                    tieredTimestamp = lastOffsetAndTimestamp.timestamp;
+                } else {
+                    LogOffsetAndTimestamp latest =
+                            currentTableTieredOffsetAndTimestamp.get(bucket);
+                    tieredTimestamp =
+                            latest != null ? latest.timestamp : UNKNOWN_BUCKET_TIMESTAMP;
+                }
+                currentTableTieredOffsetAndTimestamp.put(
+                        bucket,
+                        new LogOffsetAndTimestamp(tieredLogEndOffset - 1, tieredTimestamp));
+
+                // The split owns offsets below stoppingOffset. If the scanner has not consumed up
+                // to that exclusive bound yet, keep the split active.
+                splitFinished = consumedUpToOffset >= stoppingOffset;
+                completionTimestamp = tieredTimestamp;
+            } else {
+                // Arrow batch path: use handler result for progress tracking.
+                if (lastOffsetAndTimestamp.logOffset >= 0) {
+                    currentTableTieredOffsetAndTimestamp.put(bucket, lastOffsetAndTimestamp);
+                }
+
+                splitFinished = lastOffsetAndTimestamp.lastScannedOffset >= stoppingOffset - 1;
+                completionTimestamp = lastOffsetAndTimestamp.timestamp;
+            }
+
+            if (!splitFinished) {
+                continue;
+            }
+
+            // Split completion: unsubscribe, remove split, complete lake writer.
             currentTableStoppingOffsets.remove(bucket);
             if (bucket.getPartitionId() != null) {
                 currentLogScanner.unsubscribe(bucket.getPartitionId(), bucket.getBucket());
@@ -431,7 +519,7 @@ public class TieringSplitReader<WriteResult>
                             bucket,
                             currentTieringSplit.getPartitionName(),
                             stoppingOffset,
-                            tieredTimestamp));
+                            completionTimestamp));
             finishedSplitIds.put(bucket, currentSplitId);
             LOG.info(
                     "Finish tier bucket {} for table {}, split: {}.",
@@ -445,6 +533,101 @@ public class TieringSplitReader<WriteResult>
         }
 
         return new TableBucketWriteResultWithSplitIds(writeResults, finishedSplitIds);
+    }
+
+    /** Handles row-based ScanRecord writing for the log path. */
+    private LogOffsetAndTimestamp handleLogRecords(
+            List<ScanRecord> records,
+            SupplierWithException<LakeWriter<?>, IOException> lakeWriterSupplier,
+            long stoppingOffset)
+            throws IOException {
+        long lastWrittenOffset = -1;
+        long lastWrittenTimestamp = -1;
+        LakeWriter<?> lakeWriter = null;
+        for (ScanRecord record : records) {
+            if (record.logOffset() < stoppingOffset) {
+                if (lakeWriter == null) {
+                    lakeWriter = lakeWriterSupplier.get();
+                }
+                lakeWriter.write(record);
+                lastWrittenOffset = record.logOffset();
+                lastWrittenTimestamp = record.timestamp();
+                if (record.getSizeInBytes() > 0) {
+                    tieringMetrics.recordBytesRead(record.getSizeInBytes());
+                }
+            }
+        }
+        ScanRecord lastRecord = records.get(records.size() - 1);
+        return new LogOffsetAndTimestamp(
+                lastWrittenOffset, lastWrittenTimestamp, lastRecord.logOffset());
+    }
+
+    /** Handles Arrow batch writing for the record batch path. */
+    private LogOffsetAndTimestamp handleArrowBatchRecords(
+            List<ArrowBatchData> batches,
+            SupplierWithException<LakeWriter<?>, IOException> lakeWriterSupplier,
+            long stoppingOffset)
+            throws IOException {
+        SupportsRecordBatchWrite batchWriter = null;
+        long lastWrittenBatchEndOffset = -1;
+        long lastWrittenTimestamp = -1;
+        long lastScannedOffset = -1;
+        try {
+            for (ArrowBatchData batch : batches) {
+                long batchBaseOffset = batch.getBaseLogOffset();
+                long batchRecordCount = batch.getRecordCount();
+                long batchTimestamp = batch.getTimestamp();
+                lastScannedOffset = batchBaseOffset + batchRecordCount - 1L;
+                if (batchBaseOffset >= stoppingOffset) {
+                    batch.close();
+                    continue;
+                }
+
+                long writableRowCount = stoppingOffset - batchBaseOffset;
+                int writableRows = (int) Math.min(batchRecordCount, writableRowCount);
+                if (writableRows <= 0) {
+                    batch.close();
+                    continue;
+                }
+
+                if (batchWriter == null) {
+                    LakeWriter<?> lakeWriter = lakeWriterSupplier.get();
+                    if (!(lakeWriter instanceof SupportsRecordBatchWrite)) {
+                        throw new IOException(
+                                "LakeWriter does not support RecordBatch writes: "
+                                        + lakeWriter.getClass().getName());
+                    }
+                    batchWriter = (SupportsRecordBatchWrite) lakeWriter;
+                }
+
+                ArrowBatchData batchToWrite = batch;
+                if (writableRows < batchRecordCount) {
+                    batchToWrite = batch.truncateAndTransferOwnership(writableRows);
+                }
+                long batchEndOffset = batchBaseOffset + writableRows - 1L;
+                long batchSizeInBytes = batchToWrite.getSizeInBytes();
+                try (ArrowRecordBatch arrowRecordBatch = new ArrowRecordBatch(batchToWrite)) {
+                    batchWriter.write(arrowRecordBatch);
+                }
+                if (batchSizeInBytes > 0) {
+                    tieringMetrics.recordBytesRead(batchSizeInBytes);
+                }
+                lastWrittenBatchEndOffset = batchEndOffset;
+                lastWrittenTimestamp = batchTimestamp;
+            }
+        } catch (Exception e) {
+            closeArrowBatches(batches);
+            throw e;
+        }
+        return new LogOffsetAndTimestamp(
+                lastWrittenBatchEndOffset, lastWrittenTimestamp, lastScannedOffset);
+    }
+
+    /** Closes all Arrow batches in the list to release resources. */
+    private static void closeArrowBatches(List<ArrowBatchData> batches) {
+        for (ArrowBatchData batch : batches) {
+            batch.close();
+        }
     }
 
     private LakeWriter<WriteResult> getOrCreateLakeWriter(
@@ -591,6 +774,7 @@ public class TieringSplitReader<WriteResult>
         currentTableId = null;
         currentTablePath = null;
         currentTableNumberOfSplits = null;
+        currentTableUseRecordBatchPath = null;
         currentPendingSnapshotSplits.clear();
         currentTableStoppingOffsets.clear();
         currentTableTieredOffsetAndTimestamp.clear();
@@ -732,14 +916,57 @@ public class TieringSplitReader<WriteResult>
         }
     }
 
+    /**
+     * Callback interface for processing records within a single bucket. Encapsulates the
+     * differences in write strategy and offset/timestamp calculation between the row-based
+     * (ScanRecord) and Arrow batch (ArrowBatchData) paths.
+     *
+     * @param <R> the record type (ScanRecord or ArrowBatchData)
+     */
+    @FunctionalInterface
+    private interface BucketRecordsHandler<R> {
+
+        /**
+         * Processes the records for a bucket, writes them to the lake, and returns the last offset
+         * and timestamp.
+         *
+         * @param records the records for this bucket
+         * @param lakeWriterSupplier supplier for lazily creating the lake writer
+         * @param stoppingOffset the stopping offset for this bucket
+         * @return the last offset and timestamp after processing
+         * @throws IOException if an I/O error occurs during writing
+         */
+        LogOffsetAndTimestamp handleRecords(
+                List<R> records,
+                SupplierWithException<LakeWriter<?>, IOException> lakeWriterSupplier,
+                long stoppingOffset)
+                throws IOException;
+    }
+
+    private static boolean checkUnshadedArrowAvailable(ClassLoader classLoader) {
+        try {
+            Class.forName("org.apache.arrow.vector.VectorSchemaRoot", false, classLoader);
+            return true;
+        } catch (ClassNotFoundException e) {
+            return false;
+        }
+    }
+
     private static final class LogOffsetAndTimestamp {
 
         private final long logOffset;
         private final long timestamp;
+        /** The last offset that was scanned (regardless of whether it was written). */
+        private final long lastScannedOffset;
 
         public LogOffsetAndTimestamp(long logOffset, long timestamp) {
+            this(logOffset, timestamp, -1);
+        }
+
+        public LogOffsetAndTimestamp(long logOffset, long timestamp, long lastScannedOffset) {
             this.logOffset = logOffset;
             this.timestamp = timestamp;
+            this.lastScannedOffset = lastScannedOffset;
         }
     }
 }
