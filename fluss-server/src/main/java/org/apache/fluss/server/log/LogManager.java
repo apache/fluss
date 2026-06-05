@@ -20,6 +20,7 @@ package org.apache.fluss.server.log;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.FlussException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LogStorageException;
@@ -262,6 +263,7 @@ public final class LogManager extends TabletManagerBase {
      * @param tableBucket the table bucket
      * @param logFormat the log format
      * @param tieredLogLocalSegments the number of segments to retain in local for tiered log
+     * @param logTtlMs the log TTL in milliseconds from table configuration
      * @param isChangelog whether the log is a changelog of primary key table
      */
     public LogTablet getOrCreateLog(
@@ -270,6 +272,7 @@ public final class LogManager extends TabletManagerBase {
             TableBucket tableBucket,
             LogFormat logFormat,
             int tieredLogLocalSegments,
+            long logTtlMs,
             boolean isChangelog)
             throws Exception {
         return inLock(
@@ -292,6 +295,7 @@ public final class LogManager extends TabletManagerBase {
                                     scheduler,
                                     logFormat,
                                     tieredLogLocalSegments,
+                                    logTtlMs,
                                     isChangelog,
                                     clock,
                                     true);
@@ -304,6 +308,26 @@ public final class LogManager extends TabletManagerBase {
 
                     return logTablet;
                 });
+    }
+
+    @VisibleForTesting
+    public LogTablet getOrCreateLog(
+            File dataDir,
+            PhysicalTablePath tablePath,
+            TableBucket tableBucket,
+            LogFormat logFormat,
+            int tieredLogLocalSegments,
+            boolean isChangelog)
+            throws Exception {
+        long logTtlMs = new TableConfig(new Configuration()).getLogTTLMs();
+        return getOrCreateLog(
+                dataDir,
+                tablePath,
+                tableBucket,
+                logFormat,
+                tieredLogLocalSegments,
+                logTtlMs,
+                isChangelog);
     }
 
     public Optional<LogTablet> getLog(TableBucket tableBucket) {
@@ -397,6 +421,7 @@ public final class LogManager extends TabletManagerBase {
                         scheduler,
                         tableInfo.getTableConfig().getLogFormat(),
                         tableInfo.getTableConfig().getTieredLogLocalSegments(),
+                        tableInfo.getTableConfig().getLogTTLMs(),
                         tableInfo.hasPrimaryKey(),
                         clock,
                         isCleanShutdown);
