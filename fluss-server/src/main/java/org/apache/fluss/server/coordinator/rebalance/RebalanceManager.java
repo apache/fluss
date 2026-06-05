@@ -107,10 +107,18 @@ public class RebalanceManager {
     private volatile @Nullable String currentRebalanceId;
     private volatile boolean isClosed = false;
 
-    /** Timestamp when the current in-flight task was started, or -1 if idle. */
+    /**
+     * Timestamp when the current in-flight task was started, or -1 if idle.
+     *
+     * <p>Write ordering contract (volatile publication idiom): always write {@code
+     * inflightTaskStartMs} BEFORE {@code inflightTaskBucket} when setting, and clear {@code
+     * inflightTaskBucket} BEFORE {@code inflightTaskStartMs} when resetting. The timeout checker
+     * reads in reverse order (bucket first, then startMs), ensuring it never observes a stale
+     * startMs paired with a new bucket.
+     */
     private volatile long inflightTaskStartMs = -1;
 
-    /** The bucket of the current in-flight task, or null if idle. */
+    /** The bucket of the current in-flight task, or null if idle. Acts as the "gate" variable. */
     private volatile @Nullable TableBucket inflightTaskBucket;
 
     public RebalanceManager(
@@ -191,8 +199,9 @@ public class RebalanceManager {
         inProgressRebalanceTasks.clear();
         inProgressRebalanceTasksQueue.clear();
         finishedRebalanceTasks.clear();
-        inflightTaskStartMs = -1;
+        // Clear gate (bucket) first, then data (startMs).
         inflightTaskBucket = null;
+        inflightTaskStartMs = -1;
 
         currentRebalanceId = rebalanceId;
         if (rebalancePlan.isEmpty()) {
@@ -231,8 +240,9 @@ public class RebalanceManager {
             finishedRebalanceTasks.put(
                     tableBucket,
                     RebalanceResultForBucket.of(resultForBucket.plan(), statusForBucket));
-            inflightTaskStartMs = -1;
+            // Clear gate (bucket) first, then data (startMs).
             inflightTaskBucket = null;
+            inflightTaskStartMs = -1;
             LOG.info(
                     "Rebalance task {} in progress: {} tasks pending, {} completed.",
                     currentRebalanceId,
@@ -313,8 +323,9 @@ public class RebalanceManager {
         rebalanceStatus = CANCELED;
         inProgressRebalanceTasksQueue.clear();
         inProgressRebalanceTasks.clear();
-        inflightTaskStartMs = -1;
+        // Clear gate (bucket) first, then data (startMs).
         inflightTaskBucket = null;
+        inflightTaskStartMs = -1;
         // Here, it will not clear finishedRebalanceTasks, because it will be used by
         // listRebalanceProgress. It will be cleared when next register.
 
@@ -367,8 +378,9 @@ public class RebalanceManager {
     private void processNewRebalanceTask() {
         TableBucket tableBucket = inProgressRebalanceTasksQueue.peek();
         if (tableBucket != null && inProgressRebalanceTasks.containsKey(tableBucket)) {
-            inflightTaskBucket = tableBucket;
+            // Write data (startMs) first, then publish gate (bucket).
             inflightTaskStartMs = clock.milliseconds();
+            inflightTaskBucket = tableBucket;
             RebalanceResultForBucket resultForBucket = inProgressRebalanceTasks.get(tableBucket);
             RebalanceResultForBucket rebalanceResultForBucket =
                     RebalanceResultForBucket.of(resultForBucket.plan(), REBALANCING);
@@ -477,9 +489,12 @@ public class RebalanceManager {
 
     @VisibleForTesting
     void checkTimeout() {
-        long startMs = inflightTaskStartMs;
+        // Read gate (bucket) first, then data (startMs).
+        // If bucket is non-null, happens-before guarantees startMs is at least as
+        // fresh as the value written before bucket was published.
         TableBucket bucket = inflightTaskBucket;
-        if (startMs < 0 || bucket == null) {
+        long startMs = inflightTaskStartMs;
+        if (bucket == null || startMs < 0) {
             return;
         }
         long elapsed = clock.milliseconds() - startMs;
@@ -489,11 +504,10 @@ public class RebalanceManager {
                             + "Treating it as timed out and advancing to the next task.",
                     bucket,
                     elapsed);
-            // Clear inflight state to prevent duplicate timeout events from being
-            // enqueued on subsequent checks before the coordinator event thread
-            // processes this one.
-            inflightTaskStartMs = -1;
+            // Clear gate (bucket) first, then data (startMs), matching the
+            // publication idiom so the next checkTimeout sees bucket==null.
             inflightTaskBucket = null;
+            inflightTaskStartMs = -1;
             eventManager.put(new RebalanceTaskTimeoutEvent(bucket));
         }
     }
