@@ -786,7 +786,7 @@ class TableManagerITCase {
         List<String> partitions = new ArrayList<>();
         for (int i = 0; i < newPartitions; i++) {
             partitions.add(
-                    generateAutoPartition(partitionKeys, addDateTime, i, timeUnit)
+                    generateAutoPartition(partitionKeys, addDateTime, i, timeUnit, null)
                             .getPartitionName());
         }
         return partitions;

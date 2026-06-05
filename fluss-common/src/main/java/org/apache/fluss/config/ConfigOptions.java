@@ -1553,6 +1553,21 @@ public class ConfigOptions {
                                     + "If the value is `YEAR`, the partition format for "
                                     + "auto created is yyyy.");
 
+    public static final ConfigOption<String> TABLE_AUTO_PARTITION_TIME_FORMAT =
+            key("table.auto-partition.time-format")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The time format used for auto-created partition values. "
+                                    + "If not set, the format is derived from `table.auto-partition.time-unit` "
+                                    + "(e.g. `yyyyMMdd` for DAY, `yyyyMMddHH` for HOUR). "
+                                    + "When set, this value overrides the format derived from the time unit, "
+                                    + "while the partition granularity still follows `table.auto-partition.time-unit`. "
+                                    + "A custom format must use zero-padded fields covering at least the unit's precision, "
+                                    + "so partition values sort by time as strings (e.g. `yyyy-MM-dd` for DAY). "
+                                    + "The formatted value must contain only ASCII alphanumerics, `_` and `-`; "
+                                    + "patterns producing `/`, `.`, spaces or other separators are rejected.");
+
     public static final ConfigOption<String> TABLE_AUTO_PARTITION_TIMEZONE =
             key("table.auto-partition.time-zone")
                     .stringType()

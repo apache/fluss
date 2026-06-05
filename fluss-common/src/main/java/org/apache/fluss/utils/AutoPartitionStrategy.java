@@ -21,6 +21,8 @@ import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 
+import javax.annotation.Nullable;
+
 import java.util.Map;
 import java.util.TimeZone;
 
@@ -30,6 +32,7 @@ public class AutoPartitionStrategy {
     private final boolean autoPartitionEnable;
     private final String key;
     private final AutoPartitionTimeUnit timeUnit;
+    @Nullable private final String timeFormat;
     private final int numPreCreate;
     private final int numToRetain;
     private final TimeZone timeZone;
@@ -38,12 +41,14 @@ public class AutoPartitionStrategy {
             boolean autoPartitionEnable,
             String key,
             AutoPartitionTimeUnit autoPartitionTimeUnit,
+            @Nullable String timeFormat,
             int numPreCreate,
             int numToRetain,
             TimeZone timeZone) {
         this.autoPartitionEnable = autoPartitionEnable;
         this.key = key;
         this.timeUnit = autoPartitionTimeUnit;
+        this.timeFormat = timeFormat;
         this.numPreCreate = numPreCreate;
         this.numToRetain = numToRetain;
         this.timeZone = timeZone;
@@ -58,6 +63,7 @@ public class AutoPartitionStrategy {
                 conf.getBoolean(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED),
                 conf.getString(ConfigOptions.TABLE_AUTO_PARTITION_KEY),
                 conf.get(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT),
+                conf.getString(ConfigOptions.TABLE_AUTO_PARTITION_TIME_FORMAT),
                 conf.getInt(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE),
                 conf.getInt(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION),
                 TimeZone.getTimeZone(conf.getString(ConfigOptions.TABLE_AUTO_PARTITION_TIMEZONE)));
@@ -73,6 +79,11 @@ public class AutoPartitionStrategy {
 
     public AutoPartitionTimeUnit timeUnit() {
         return timeUnit;
+    }
+
+    @Nullable
+    public String timeFormat() {
+        return timeFormat;
     }
 
     public int numPreCreate() {

@@ -164,9 +164,36 @@ class PartitionUtilsTest {
                             Collections.singletonList("dt"),
                             zonedDateTime,
                             offsets[i],
-                            autoPartitionTimeUnit);
+                            autoPartitionTimeUnit,
+                            null);
             assertThat(resolvedPartitionSpec.getPartitionName()).isEqualTo(expected[i]);
         }
+    }
+
+    @Test
+    void testGenerateAutoPartitionNameWithCustomTimeFormat() {
+        ZonedDateTime zonedDateTime =
+                ZonedDateTime.of(LocalDateTime.of(2024, 11, 11, 11, 0), ZoneId.of("UTC-8"));
+
+        assertThat(
+                        generateAutoPartition(
+                                        Collections.singletonList("dt"),
+                                        zonedDateTime,
+                                        0,
+                                        AutoPartitionTimeUnit.DAY,
+                                        "yyyy-MM-dd")
+                                .getPartitionName())
+                .isEqualTo("2024-11-11");
+
+        assertThat(
+                        generateAutoPartition(
+                                        Collections.singletonList("dt"),
+                                        zonedDateTime,
+                                        1,
+                                        AutoPartitionTimeUnit.HOUR,
+                                        "yyyy-MM-dd-HH")
+                                .getPartitionName())
+                .isEqualTo("2024-11-11-12");
     }
 
     @Test

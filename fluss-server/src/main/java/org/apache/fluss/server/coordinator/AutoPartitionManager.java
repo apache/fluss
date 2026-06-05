@@ -427,11 +427,16 @@ public class AutoPartitionManager implements AutoCloseable {
                         currentInstant, autoPartitionStrategy.timeZone().toZoneId());
 
         int partitionToPreCreate = autoPartitionStrategy.numPreCreate();
+        String timeFormat = autoPartitionStrategy.timeFormat();
         List<ResolvedPartitionSpec> partitionsToCreate = new ArrayList<>();
         for (int idx = 0; idx < partitionToPreCreate; idx++) {
             ResolvedPartitionSpec partition =
                     generateAutoPartition(
-                            partitionKeys, currentZonedDateTime, idx, autoPartitionTimeUnit);
+                            partitionKeys,
+                            currentZonedDateTime,
+                            idx,
+                            autoPartitionTimeUnit,
+                            timeFormat);
             // if the partition already exists, we don't need to create it, otherwise, create it
             if (!currentPartitions.containsKey(partition.getPartitionName())) {
                 partitionsToCreate.add(partition);
@@ -459,7 +464,10 @@ public class AutoPartitionManager implements AutoCloseable {
         // Get the earliest one partition time that need to retain.
         String lastRetainPartitionTime =
                 generateAutoPartitionTime(
-                        currentZonedDateTime, -numToRetain, autoPartitionStrategy.timeUnit());
+                        currentZonedDateTime,
+                        -numToRetain,
+                        autoPartitionStrategy.timeUnit(),
+                        autoPartitionStrategy.timeFormat());
 
         // For partition table with a single partition key, for example dt(yyyyMMdd)
         // assuming now is 20250508, and table.auto-partition.num-retention=2 then partition
