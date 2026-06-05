@@ -397,7 +397,8 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
             assertThat(actual)
                     .as("LIMIT should still read expired partition data from Paimon")
                     .hasSize(2)
-                    .containsOnlyElementsOf(expectedRowsInExpiredPartition);
+                    .doesNotHaveDuplicates()
+                    .isSubsetOf(expectedRowsInExpiredPartition);
         } finally {
             jobClient.cancel().get();
         }
