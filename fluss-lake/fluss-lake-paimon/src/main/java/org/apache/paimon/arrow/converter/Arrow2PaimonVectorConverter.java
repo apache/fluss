@@ -96,22 +96,33 @@ import java.util.List;
 /**
  * Convert a {@link FieldVector} to {@link ColumnVector}.
  *
- * <p>This is copied from Paimon's {@code Arrow2PaimonVectorConverter} (paimon-arrow, version 1.3.1)
- * with the following bug fixes:
+ * <p>This is copied from Paimon's {@code Arrow2PaimonVectorConverter} (paimon-arrow) with the
+ * following bug fixes:
  *
  * <ul>
- *   <li>{@code LocalZonedTimestampType}: use {@code ((TimeStampVector) vector).get(i)} instead of
- *       {@code (long) vector.getObject(i)} to correctly read the timestamp value.
+ *   <li>{@code TimestampType} and {@code LocalZonedTimestampType}: read the raw long value via
+ *       {@code vector.getDataBuffer().getLong()} instead of {@code ((TimeStampVector)
+ *       vector).get(i)} or {@code (long) vector.getObject(i)}, which may return {@code
+ *       LocalDateTime} and cause {@code ClassCastException} for timezone-unaware timestamp vectors.
+ *   <li>{@code TimeType}: handle all Arrow time vector types ({@code TimeMilliVector}, {@code
+ *       TimeMicroVector}, {@code TimeNanoVector}, {@code TimeSecVector}) instead of hardcoding
+ *       {@code TimeMilliVector}.
  *   <li>{@code BinaryType}: use {@code FixedSizeBinaryVector} instead of {@code VarBinaryVector} to
  *       match the fixed-length binary Arrow type.
  * </ul>
  *
- * <p>TODO: remove this class once the fixes are available in upstream Paimon.
+ * <p>TODO: remove this class once https://github.com/apache/paimon/issues/8134 is fixed in upstream
+ * Paimon.
  */
 public interface Arrow2PaimonVectorConverter {
 
     static Arrow2PaimonVectorConverter construct(DataType type) {
         return type.accept(Arrow2PaimonVectorConvertorVisitor.INSTANCE);
+    }
+
+    static Arrow2PaimonVectorConverter construct(
+            Arrow2PaimonVectorConvertorVisitor visitor, DataType type) {
+        return type.accept(visitor);
     }
 
     ColumnVector convertVector(FieldVector vector);
@@ -120,7 +131,7 @@ public interface Arrow2PaimonVectorConverter {
     class Arrow2PaimonVectorConvertorVisitor
             implements DataTypeVisitor<Arrow2PaimonVectorConverter> {
 
-        private static final Arrow2PaimonVectorConvertorVisitor INSTANCE =
+        public static final Arrow2PaimonVectorConvertorVisitor INSTANCE =
                 new Arrow2PaimonVectorConvertorVisitor();
 
         @Override
@@ -416,7 +427,9 @@ public interface Arrow2PaimonVectorConverter {
 
                         @Override
                         public Timestamp getTimestamp(int i, int precision) {
-                            long value = ((TimeStampVector) vector).get(i);
+                            long value =
+                                    vector.getDataBuffer()
+                                            .getLong((long) i * TimeStampVector.TYPE_WIDTH);
                             if (precision == 0) {
                                 return Timestamp.fromEpochMillis(value * 1000);
                             } else if (precision >= 1 && precision <= 3) {
@@ -443,7 +456,9 @@ public interface Arrow2PaimonVectorConverter {
 
                         @Override
                         public Timestamp getTimestamp(int i, int precision) {
-                            long value = ((TimeStampVector) vector).get(i);
+                            long value =
+                                    vector.getDataBuffer()
+                                            .getLong((long) i * TimeStampVector.TYPE_WIDTH);
                             if (precision == 0) {
                                 return Timestamp.fromEpochMillis(value * 1000);
                             } else if (precision >= 1 && precision <= 3) {

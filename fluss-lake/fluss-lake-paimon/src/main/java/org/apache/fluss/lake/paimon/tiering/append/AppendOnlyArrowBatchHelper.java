@@ -122,32 +122,38 @@ class AppendOnlyArrowBatchHelper implements AutoCloseable {
 
     /**
      * Ensures the enriched VectorSchemaRoot is initialized with system column vectors. Reuses
-     * system column vectors if schema matches. The enrichedRoot references the current
-     * originalRoot's data vectors plus the system column vectors.
+     * system column vectors when the root allocator has not changed. The enrichedRoot references
+     * the current originalRoot's data vectors plus the system column vectors.
+     *
+     * <p>System column vectors must share the same root allocator as the data vectors. Batches from
+     * different poll rounds may use different root allocators (each {@code CompletedFetch} creates
+     * its own {@code LogRecordReadContext} with a fresh {@code RootAllocator}), so the system
+     * column vectors are recreated when the root allocator changes.
      */
     private void ensureEnrichedRootInitialized(
             VectorSchemaRoot originalRoot, BufferAllocator batchAllocator) {
         List<Field> originalFields = originalRoot.getSchema().getFields();
         int currentFieldCount = originalFields.size();
 
-        // initialize system column vectors and enriched schema on first call, using a child
-        // allocator that shares the same root as the batch allocator so all vectors are compatible
-        if (bucketVector == null) {
+        BufferAllocator currentRoot = batchAllocator.getRoot();
+
+        // (Re)create system column vectors when the root allocator has changed.
+        if (bucketVector == null || systemColumnAllocator.getRoot() != currentRoot) {
+            closeSystemColumns();
+
+            systemColumnAllocator =
+                    currentRoot.newChildAllocator("system-column-allocator", 0, Long.MAX_VALUE);
+            bucketVector = new IntVector(BUCKET_FIELD, systemColumnAllocator);
+            offsetVector = new BigIntVector(OFFSET_FIELD, systemColumnAllocator);
+            timestampVector = new TimeStampMilliVector(TIMESTAMP_FIELD, systemColumnAllocator);
+        }
+
+        if (enrichedSchema == null) {
             List<Field> enrichedFields = new ArrayList<>(originalFields);
             enrichedFields.add(BUCKET_FIELD);
             enrichedFields.add(OFFSET_FIELD);
             enrichedFields.add(TIMESTAMP_FIELD);
             enrichedSchema = new Schema(enrichedFields);
-
-            if (systemColumnAllocator == null) {
-                systemColumnAllocator =
-                        batchAllocator
-                                .getRoot()
-                                .newChildAllocator("system-column-allocator", 0, Long.MAX_VALUE);
-            }
-            bucketVector = new IntVector(BUCKET_FIELD, systemColumnAllocator);
-            offsetVector = new BigIntVector(OFFSET_FIELD, systemColumnAllocator);
-            timestampVector = new TimeStampMilliVector(TIMESTAMP_FIELD, systemColumnAllocator);
         }
 
         // recreate enrichedRoot to reference the current originalRoot's data vectors
@@ -160,6 +166,25 @@ class AppendOnlyArrowBatchHelper implements AutoCloseable {
         allVectors.add(timestampVector);
 
         enrichedRoot = new VectorSchemaRoot(enrichedSchema, allVectors, originalRoot.getRowCount());
+    }
+
+    private void closeSystemColumns() {
+        if (bucketVector != null) {
+            bucketVector.close();
+            bucketVector = null;
+        }
+        if (offsetVector != null) {
+            offsetVector.close();
+            offsetVector = null;
+        }
+        if (timestampVector != null) {
+            timestampVector.close();
+            timestampVector = null;
+        }
+        if (systemColumnAllocator != null) {
+            systemColumnAllocator.close();
+            systemColumnAllocator = null;
+        }
     }
 
     /**
@@ -198,22 +223,7 @@ class AppendOnlyArrowBatchHelper implements AutoCloseable {
 
     @Override
     public void close() {
-        if (bucketVector != null) {
-            bucketVector.close();
-            bucketVector = null;
-        }
-        if (offsetVector != null) {
-            offsetVector.close();
-            offsetVector = null;
-        }
-        if (timestampVector != null) {
-            timestampVector.close();
-            timestampVector = null;
-        }
-        if (systemColumnAllocator != null) {
-            systemColumnAllocator.close();
-            systemColumnAllocator = null;
-        }
+        closeSystemColumns();
         enrichedRoot = null;
         enrichedSchema = null;
     }
