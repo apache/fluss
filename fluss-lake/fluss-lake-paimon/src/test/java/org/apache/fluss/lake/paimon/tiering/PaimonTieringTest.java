@@ -19,10 +19,12 @@ package org.apache.fluss.lake.paimon.tiering;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.flink.tiering.source.watermark.SimpleWatermarkExtractor;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
+import org.apache.fluss.lake.watermark.WatermarkExtractor;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.metadata.TableBucket;
@@ -34,6 +36,7 @@ import org.apache.fluss.record.GenericRecord;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.apache.paimon.CoreOptions;
@@ -496,6 +499,122 @@ class PaimonTieringTest {
         }
     }
 
+    @Test
+    void testTieringWatermark() throws Exception {
+        int bucketNum = 3;
+        TablePath tablePath = TablePath.of("paimon", "test_tiering_watermark");
+        createWatermarkTable(tablePath);
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                org.apache.fluss.metadata.Schema.newBuilder()
+                                        .column("c1", org.apache.fluss.types.DataTypes.STRING())
+                                        .column("c2", org.apache.fluss.types.DataTypes.STRING())
+                                        .column(
+                                                "event_time",
+                                                org.apache.fluss.types.DataTypes.TIMESTAMP(3))
+                                        .build())
+                        .distributedBy(bucketNum)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .customProperty("schema.watermark.0.rowtime", "event_time")
+                        .customProperty(
+                                "schema.watermark.0.strategy.expr",
+                                "`event_time` - INTERVAL '5' SECOND")
+                        .customProperty("schema.watermark.0.strategy.data-type", "TIMESTAMP(3)")
+                        .build();
+        TableInfo tableInfo =
+                TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
+
+        List<PaimonWriteResult> paimonWriteResults = new ArrayList<>();
+        long[] timestamps = {20_000L, 30_000L, 40_000L};
+
+        for (int bucket = 0; bucket < bucketNum; bucket++) {
+            try (LakeWriter<PaimonWriteResult> lakeWriter =
+                    createLakeWriter(tablePath, bucket, null, null, tableInfo)) {
+                GenericRow row = new GenericRow(3);
+                row.setField(0, BinaryString.fromString("val" + bucket));
+                row.setField(1, BinaryString.fromString("data"));
+                row.setField(2, TimestampNtz.fromMillis(timestamps[bucket]));
+                LogRecord logRecord =
+                        new GenericRecord(0, timestamps[bucket], ChangeType.APPEND_ONLY, row);
+                lakeWriter.write(logRecord);
+                PaimonWriteResult writeResult = lakeWriter.complete();
+                paimonWriteResults.add(writeResult);
+
+                assertThat(writeResult.getWatermark()).isEqualTo(timestamps[bucket] - 5_000L);
+            }
+        }
+
+        try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo, new Configuration())) {
+            PaimonCommittable committable =
+                    lakeCommitter.toCommittable(paimonWriteResults, 15_000L);
+            Map<String, String> snapshotProperties = new HashMap<>();
+            snapshotProperties.put(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "offsets");
+            lakeCommitter.commit(committable, snapshotProperties);
+        }
+
+        FileStoreTable fileStoreTable =
+                (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath));
+        Long watermark = fileStoreTable.snapshotManager().snapshot(1).watermark();
+        assertThat(watermark).isEqualTo(15_000L);
+    }
+
+    @Test
+    void testTieringWithoutWatermarkDefinition() throws Exception {
+        int bucketNum = 2;
+        TablePath tablePath = TablePath.of("paimon", "test_tiering_without_watermark_def");
+        createWatermarkTable(tablePath);
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                org.apache.fluss.metadata.Schema.newBuilder()
+                                        .column("c1", org.apache.fluss.types.DataTypes.STRING())
+                                        .column("c2", org.apache.fluss.types.DataTypes.STRING())
+                                        .column(
+                                                "event_time",
+                                                org.apache.fluss.types.DataTypes.TIMESTAMP(3))
+                                        .build())
+                        .distributedBy(bucketNum)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .build();
+        TableInfo tableInfo =
+                TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
+
+        List<PaimonWriteResult> paimonWriteResults = new ArrayList<>();
+        for (int bucket = 0; bucket < bucketNum; bucket++) {
+            try (LakeWriter<PaimonWriteResult> lakeWriter =
+                    createLakeWriter(tablePath, bucket, null, null, tableInfo)) {
+                GenericRow row = new GenericRow(3);
+                row.setField(0, BinaryString.fromString("val" + bucket));
+                row.setField(1, BinaryString.fromString("data"));
+                row.setField(2, TimestampNtz.fromMillis(5000L));
+                LogRecord logRecord = new GenericRecord(0, 5000L, ChangeType.APPEND_ONLY, row);
+                lakeWriter.write(logRecord);
+
+                PaimonWriteResult writeResult = lakeWriter.complete();
+                paimonWriteResults.add(writeResult);
+
+                assertThat(writeResult.getWatermark()).isNull();
+            }
+        }
+
+        try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo, new Configuration())) {
+            PaimonCommittable committable = lakeCommitter.toCommittable(paimonWriteResults, null);
+            Map<String, String> snapshotProperties = new HashMap<>();
+            snapshotProperties.put(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "offsets");
+            lakeCommitter.commit(committable, snapshotProperties);
+        }
+
+        FileStoreTable fileStoreTable =
+                (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath));
+        Long watermark = fileStoreTable.snapshotManager().snapshot(1).watermark();
+        assertThat(watermark).isNull();
+    }
+
     private void verifyLogTableRecordsMultiPartition(
             CloseableIterator<InternalRow> actualRecords,
             List<LogRecord> expectRecords,
@@ -809,6 +928,12 @@ class PaimonTieringTest {
                     public TableInfo tableInfo() {
                         return tableInfo;
                     }
+
+                    @Nullable
+                    @Override
+                    public WatermarkExtractor watermarkExtractor() {
+                        return SimpleWatermarkExtractor.create(tableInfo);
+                    }
                 });
     }
 
@@ -869,6 +994,15 @@ class PaimonTieringTest {
             builder.option(CoreOptions.BUCKET.key(), String.valueOf(numBuckets));
         }
         builder.options(options);
+        doCreatePaimonTable(tablePath, builder);
+    }
+
+    private void createWatermarkTable(TablePath tablePath) throws Exception {
+        Schema.Builder builder =
+                Schema.newBuilder()
+                        .column("c1", DataTypes.STRING())
+                        .column("c2", DataTypes.STRING())
+                        .column("event_time", DataTypes.TIMESTAMP_MILLIS());
         doCreatePaimonTable(tablePath, builder);
     }
 

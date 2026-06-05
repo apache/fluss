@@ -26,6 +26,7 @@ import org.apache.fluss.flink.tiering.source.metrics.TieringMetrics;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.state.TieringSplitState;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
+import org.apache.fluss.lake.writer.LakeWriteResult;
 
 import org.apache.flink.api.connector.source.SourceEvent;
 import org.apache.flink.api.connector.source.SourceReader;
@@ -44,7 +45,7 @@ import static org.apache.fluss.flink.tiering.source.TieringSplitReader.DEFAULT_P
 
 /** A {@link SourceReader} that read records from Fluss and write to lake. */
 @Internal
-public final class TieringSourceReader<WriteResult>
+public final class TieringSourceReader<WriteResult extends LakeWriteResult>
         extends SingleThreadMultiplexSourceReaderBaseAdapter<
                 TableBucketWriteResult<WriteResult>,
                 TableBucketWriteResult<WriteResult>,
@@ -82,13 +83,15 @@ public final class TieringSourceReader<WriteResult>
         this.connection = connection;
     }
 
-    private static <WriteResult> TieringSourceFetcherManager<WriteResult> createFetcherManager(
-            FutureCompletingBlockingQueue<RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>>
-                    elementsQueue,
-            SourceReaderContext context,
-            Connection connection,
-            LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
-            Duration pollTimeout) {
+    private static <WriteResult extends LakeWriteResult>
+            TieringSourceFetcherManager<WriteResult> createFetcherManager(
+                    FutureCompletingBlockingQueue<
+                                    RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>>
+                            elementsQueue,
+                    SourceReaderContext context,
+                    Connection connection,
+                    LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
+                    Duration pollTimeout) {
         TieringMetrics tieringMetrics = new TieringMetrics(context.metricGroup());
         return new TieringSourceFetcherManager<>(
                 elementsQueue,
