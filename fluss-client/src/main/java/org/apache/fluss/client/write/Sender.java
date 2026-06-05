@@ -30,6 +30,7 @@ import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
@@ -267,12 +268,16 @@ public class Sender implements Runnable {
      *
      * <p>Marking prevents new appends to dropped partitions. Removal is deferred until all
      * in-flight batches for a path have been drained, so no data is silently lost.
+     *
+     * <p>Uses {@code partitionsIdByPath} / {@code tableIdByPath} as the drop signal, not {@code
+     * bucketLocationsByPath}. Leader election and server outages can transiently empty {@code
+     * bucketLocationsByPath} without the partition or table actually being dropped; using the
+     * partition/table ID maps avoids false positives.
      */
     private void cleanupStaleWriteBatches(Cluster cluster) {
-        Set<PhysicalTablePath> clusterPaths = cluster.getBucketLocationsByPath().keySet();
         Set<PhysicalTablePath> newStalePaths = new HashSet<>();
         for (PhysicalTablePath path : accumulator.getPhysicalTablePathsInBatches()) {
-            if (!clusterPaths.contains(path)) {
+            if (isPathDropped(cluster, path)) {
                 newStalePaths.add(path);
             }
         }
@@ -286,9 +291,22 @@ public class Sender implements Runnable {
 
         // Try to remove every path that has been marked stale and is now fully drained.
         for (PhysicalTablePath path : accumulator.getPhysicalTablePathsInBatches()) {
-            if (!clusterPaths.contains(path)) {
+            if (isPathDropped(cluster, path)) {
                 accumulator.removeStalePathIfEmpty(path);
             }
+        }
+    }
+
+    private boolean isPathDropped(Cluster cluster, PhysicalTablePath path) {
+        if (path.getPartitionName() != null) {
+            // Partitioned path: dropped if metadata no longer carries the partition ID.
+            // partitionsIdByPath is only cleared on an explicit metadata refresh that confirms the
+            // partition is gone; transient leader failures do NOT clear it.
+            return !cluster.getPartitionId(path).isPresent();
+        } else {
+            // Non-partitioned path: dropped iff the table itself is no longer known.
+            TablePath tablePath = path.getTablePath();
+            return !cluster.getTableId(tablePath).isPresent();
         }
     }
 
