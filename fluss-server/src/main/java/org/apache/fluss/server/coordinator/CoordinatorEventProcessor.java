@@ -806,11 +806,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
             }
         }
 
-        AutoPartitionStrategy autoPartitionStrategy =
+        AutoPartitionStrategy oldAutoPartitionStrategy =
+                oldTableInfo.getTableConfig().getAutoPartitionStrategy();
+        AutoPartitionStrategy newAutoPartitionStrategy =
                 newTableInfo.getTableConfig().getAutoPartitionStrategy();
-        if (autoPartitionStrategy.isAutoPartitionEnabled()
-                && autoPartitionStrategy.numToRetain()
-                        != oldTableInfo.getTableConfig().getAutoPartitionStrategy().numToRetain()) {
+        if (newAutoPartitionStrategy.isAutoPartitionEnabled()
+                && (newAutoPartitionStrategy.numToRetain() != oldAutoPartitionStrategy.numToRetain()
+                        || newAutoPartitionStrategy.numPreCreate()
+                                != oldAutoPartitionStrategy.numPreCreate())) {
             autoPartitionManager.updateAutoPartitionTables(newTableInfo);
         }
 
