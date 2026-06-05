@@ -335,6 +335,74 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         jobClient.cancel().get();
     }
 
+    @Test
+    void testLimitReadLogTablePartitionFromPaimon() throws Exception {
+        JobClient jobClient = buildTieringJob(execEnv);
+        try {
+            String tableName = "limit_expired_partition_logTable";
+            TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+            long tableId =
+                    createLogTable(
+                            tablePath,
+                            DEFAULT_BUCKET_NUM,
+                            true,
+                            Collections.emptyMap(),
+                            Collections.emptyMap());
+            Map<Long, String> partitionNameByIds = waitUntilPartitions(tablePath);
+
+            List<InternalRow> rows = new ArrayList<>();
+            for (String partitionName : partitionNameByIds.values()) {
+                for (int i = 0; i < 3; i++) {
+                    rows.add(row(i, "value_" + i, partitionName));
+                }
+            }
+            writeRows(tablePath, rows, true);
+
+            waitUntilBucketSynced(tablePath, tableId, DEFAULT_BUCKET_NUM, true);
+
+            Long partitionToDropId = partitionNameByIds.keySet().iterator().next();
+            String partitionToDropName = partitionNameByIds.get(partitionToDropId);
+            List<String> expectedRowsInExpiredPartition = new ArrayList<>();
+            for (int i = 0; i < 3; i++) {
+                expectedRowsInExpiredPartition.add(
+                        Row.of(i, "value_" + i, partitionToDropName).toString());
+            }
+
+            admin.dropPartition(
+                            tablePath,
+                            new PartitionSpec(Collections.singletonMap("c", partitionToDropName)),
+                            false)
+                    .get();
+            retry(
+                    Duration.ofSeconds(60),
+                    () -> {
+                        List<PartitionInfo> remainingPartitions =
+                                admin.listPartitionInfos(tablePath).get();
+                        assertThat(remainingPartitions.size()).isEqualTo(1);
+                    });
+
+            List<String> actual =
+                    CollectionUtil.iteratorToList(
+                                    batchTEnv
+                                            .executeSql(
+                                                    "select * from "
+                                                            + tableName
+                                                            + " where c = '"
+                                                            + partitionToDropName
+                                                            + "' LIMIT 2")
+                                            .collect())
+                            .stream()
+                            .map(Row::toString)
+                            .collect(Collectors.toList());
+            assertThat(actual)
+                    .as("LIMIT should still read expired partition data from Paimon")
+                    .hasSize(2)
+                    .containsOnlyElementsOf(expectedRowsInExpiredPartition);
+        } finally {
+            jobClient.cancel().get();
+        }
+    }
+
     private long prepareLogTable(
             TablePath tablePath, int bucketNum, boolean isPartitioned, List<Row> flinkRows)
             throws Exception {
