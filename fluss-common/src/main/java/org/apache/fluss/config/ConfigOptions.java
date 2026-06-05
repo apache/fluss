@@ -452,6 +452,15 @@ public class ConfigOptions {
                             "The interval for cleaning up expired producer offsets "
                                     + "and orphan files in remote storage. Default is 1 hour.");
 
+    /** The interval at which the coordinator resumes in-progress table and partition deletions. */
+    public static final ConfigOption<Duration> COORDINATOR_RESUME_DELETION_INTERVAL =
+            key("coordinator.resume-deletion.interval")
+                    .durationType()
+                    .defaultValue(Duration.ofHours(6))
+                    .withDescription(
+                            "The interval at which the coordinator resumes in-progress table and "
+                                    + "partition deletions via a periodic event. Default is 6 hours.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Tablet Server
     // ------------------------------------------------------------------------

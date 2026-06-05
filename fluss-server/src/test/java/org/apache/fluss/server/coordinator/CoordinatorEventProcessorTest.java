@@ -17,6 +17,23 @@
 
 package org.apache.fluss.server.coordinator;
 
+import static org.apache.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
+import static org.apache.fluss.server.coordinator.CoordinatorTestUtils.checkLeaderAndIsr;
+import static org.apache.fluss.server.coordinator.CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess;
+import static org.apache.fluss.server.coordinator.CoordinatorTestUtils.makeSendLeaderAndStopRequestFailContext;
+import static org.apache.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
+import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
+import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OfflineReplica;
+import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
+import static org.apache.fluss.server.testutils.KvTestUtils.mockCompletedSnapshot;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrResponseData;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
+import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
@@ -88,7 +105,6 @@ import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.types.Tuple2;
-
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -113,23 +129,6 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
-
-import static org.apache.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
-import static org.apache.fluss.server.coordinator.CoordinatorTestUtils.checkLeaderAndIsr;
-import static org.apache.fluss.server.coordinator.CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess;
-import static org.apache.fluss.server.coordinator.CoordinatorTestUtils.makeSendLeaderAndStopRequestFailContext;
-import static org.apache.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
-import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
-import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OfflineReplica;
-import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
-import static org.apache.fluss.server.testutils.KvTestUtils.mockCompletedSnapshot;
-import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrResponseData;
-import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
-import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
-import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
-import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link CoordinatorEventProcessor}. */
 class CoordinatorEventProcessorTest {
@@ -343,6 +342,38 @@ class CoordinatorEventProcessorTest {
         retry(
                 Duration.ofMinutes(1),
                 () -> assertThat(zookeeperClient.getTableAssignment(t1Id)).isEmpty());
+    }
+
+    @Test
+    void testScheduledResumeDeletionResumesPendingDeletion() throws Exception {
+        initCoordinatorChannel();
+
+        // create a table
+        TablePath tablePath = TablePath.of(defaultDatabase, "resume_pending");
+        final long tableId =
+                createTable(
+                        tablePath,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        retryVerifyContext(ctx -> assertThat(ctx.getTablePathById(tableId)).isNotNull());
+
+        // drop while the coordinator is down so the restart has a pending deletion to resume.
+        eventProcessor.shutdown();
+        metadataManager.dropTable(tablePath, false);
+
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.COORDINATOR_RESUME_DELETION_INTERVAL, Duration.ofMillis(100));
+        eventProcessor = buildCoordinatorEventProcessor(conf);
+        initCoordinatorChannel();
+        // eventProcessor.startup() boots its internal scheduler, which triggers ResumeDeletionEvent
+        eventProcessor.startup();
+
+        retry(
+                Duration.ofMinutes(1),
+                () -> assertThat(zookeeperClient.getTableAssignment(tableId)).isEmpty());
     }
 
     @Test
@@ -1379,7 +1410,10 @@ class CoordinatorEventProcessorTest {
     }
 
     private CoordinatorEventProcessor buildCoordinatorEventProcessor() {
-        Configuration conf = new Configuration();
+        return buildCoordinatorEventProcessor(new Configuration());
+    }
+
+    private CoordinatorEventProcessor buildCoordinatorEventProcessor(Configuration conf) {
         conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
         return new CoordinatorEventProcessor(
                 zookeeperClient,
