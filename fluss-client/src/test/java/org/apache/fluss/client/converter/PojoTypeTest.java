@@ -202,24 +202,4 @@ class PojoTypeTest {
             this.firstName = firstName;
         }
     }
-
-    public static class PojoWithMixedColumnNames {
-        @ColumnName("phone_number")
-        public String phoneNumber;
-
-        @ColumnName("last_name")
-        private String lastName;
-
-        public Boolean active;
-
-        public PojoWithMixedColumnNames() {}
-
-        public String getLastName() {
-            return lastName;
-        }
-
-        public void setLastName(String lastName) {
-            this.lastName = lastName;
-        }
-    }
 }
