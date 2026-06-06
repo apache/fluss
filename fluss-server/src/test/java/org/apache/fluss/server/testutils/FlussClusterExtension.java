@@ -715,6 +715,20 @@ public final class FlussClusterExtension
                 });
     }
 
+    /** Wait until the remote log end offset reaches the expected offset. */
+    public void waitUntilRemoteLogEndOffset(TableBucket tableBucket, long expectedEndOffset) {
+        ZooKeeperClient zkClient = getZooKeeperClient();
+        retry(
+                Duration.ofMinutes(2),
+                () -> {
+                    Optional<RemoteLogManifestHandle> remoteLogManifestHandle;
+                    remoteLogManifestHandle = zkClient.getRemoteLogManifestHandle(tableBucket);
+                    assertThat(remoteLogManifestHandle).isPresent();
+                    assertThat(remoteLogManifestHandle.get().getRemoteLogEndOffset())
+                            .isGreaterThanOrEqualTo(expectedEndOffset);
+                });
+    }
+
     public void triggerAndWaitSnapshot(TablePath tablePath) throws Exception {
         Optional<TableRegistration> table = zooKeeperClient.getTable(tablePath);
         //noinspection SimplifyOptionalCallChains (Java 8 compatibility)
