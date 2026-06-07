@@ -57,6 +57,7 @@ public final class ConvertersTestFixtures {
                 .field("offsetDateTimeField", DataTypes.TIMESTAMP_LTZ())
                 .field("arrayField", DataTypes.ARRAY(DataTypes.INT()))
                 .field("mapField", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()))
+                .field("enumField", DataTypes.STRING())
                 .build();
     }
 
@@ -81,6 +82,7 @@ public final class ConvertersTestFixtures {
         public OffsetDateTime offsetDateTimeField;
         public Integer[] arrayField;
         public Map<String, Integer> mapField;
+        public StatusEnum enumField;
 
         public TestPojo() {}
 
@@ -101,7 +103,8 @@ public final class ConvertersTestFixtures {
                 Instant timestampLtzField,
                 OffsetDateTime offsetDateTimeField,
                 Integer[] arrayField,
-                Map<String, Integer> mapField) {
+                Map<String, Integer> mapField,
+                StatusEnum enumField) {
             this.booleanField = booleanField;
             this.byteField = byteField;
             this.shortField = shortField;
@@ -119,6 +122,7 @@ public final class ConvertersTestFixtures {
             this.offsetDateTimeField = offsetDateTimeField;
             this.arrayField = arrayField;
             this.mapField = mapField;
+            this.enumField = enumField;
         }
 
         public static TestPojo sample() {
@@ -144,7 +148,8 @@ public final class ConvertersTestFixtures {
                             put("test_1", 1);
                             put("test_2", 2);
                         }
-                    });
+                    },
+                    StatusEnum.OK);
         }
 
         @Override
@@ -475,5 +480,11 @@ public final class ConvertersTestFixtures {
         public List<AddressPojo> addresses;
 
         public ListOfRowPojo() {}
+    }
+
+    /** Enum to test enum conversion. */
+    public enum StatusEnum {
+        OK,
+        error
     }
 }

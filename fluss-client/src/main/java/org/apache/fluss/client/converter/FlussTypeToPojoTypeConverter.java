@@ -31,9 +31,30 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** Shared utilities for Fluss type and Pojo type. */
 public class FlussTypeToPojoTypeConverter {
+
+    private static final Map<Class<?>, Map<String, Object>> ENUM_CONSTANTS_CACHE =
+            new ConcurrentHashMap<>();
+
+    /**
+     * Builds a map of enum name (uppercase) to enum constant for the given enum class. This map is
+     * cached to avoid recreating it for every enum conversion.
+     */
+    private static Map<String, Object> buildEnumConstantsMap(Class<?> enumClass) {
+        Map<String, Object> map = new HashMap<>();
+        for (Object constant : enumClass.getEnumConstants()) {
+            map.put(constant.toString(), constant);
+        }
+        return Collections.unmodifiableMap(map);
+    }
+
     /**
      * Converts a text value (CHAR/STRING) read from an InternalRow into the target Java type
      * declared by the POJO property.
@@ -74,6 +95,18 @@ public class FlussTypeToPojoTypeConverter {
                         ConverterCommons.charLengthExceptionMessage(fieldName, v.length()));
             }
             return v.charAt(0);
+        } else if (pojoType.isEnum()) {
+            Map<String, Object> enumMap =
+                    ENUM_CONSTANTS_CACHE.computeIfAbsent(
+                            pojoType, FlussTypeToPojoTypeConverter::buildEnumConstantsMap);
+            Object enumConstant = enumMap.get(v);
+            if (enumConstant == null) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Could not parse value for enum %s. Expected one of: %s",
+                                pojoType, Arrays.toString(pojoType.getEnumConstants())));
+            }
+            return enumConstant;
         }
         throw new IllegalArgumentException(
                 String.format(

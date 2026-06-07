@@ -148,6 +148,15 @@ final class ConverterCommons {
             }
             return;
         }
+        if (actual.isEnum()) {
+            if (typeRoot != DataTypeRoot.STRING) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Enum field '%s' must be a string type, got %s",
+                                prop.name, typeRoot));
+            }
+            return;
+        }
 
         Set<Class<?>> supported = SUPPORTED_TYPES.get(fieldType.getTypeRoot());
         if (supported == null) {
