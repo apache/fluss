@@ -275,7 +275,7 @@ public class MetricNames {
 
     // for scanner
     public static final String SCANNER_TIME_MS_BETWEEN_POLL = "timeMsBetweenPoll";
-    public static final String SCANNER_LAST_POLL_SECONDS_AGO = "lastPoolSecondsAgo";
+    public static final String SCANNER_LAST_POLL_SECONDS_AGO = "lastPollSecondsAgo";
     public static final String SCANNER_POLL_IDLE_RATIO = "pollIdleRatio";
     public static final String SCANNER_FETCH_LATENCY_MS = "fetchLatencyMs";
     public static final String SCANNER_FETCH_RATE = "fetchRequestsPerSecond";
