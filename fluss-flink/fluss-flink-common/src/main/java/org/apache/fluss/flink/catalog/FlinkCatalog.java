@@ -139,13 +139,11 @@ public class FlinkCatalog extends AbstractCatalog {
     private static final Map<String, String> BUILTIN_BITMAP_FUNCTIONS;
 
     static {
-        BUILTIN_BITMAP_FUNCTIONS = new HashMap<>();
-        BUILTIN_BITMAP_FUNCTIONS.put(
-                "rb_build_agg", "org.apache.fluss.flink.functions.bitmap.RbBuildAggFunction");
-        BUILTIN_BITMAP_FUNCTIONS.put(
-                "rb_or_agg", "org.apache.fluss.flink.functions.bitmap.RbOrAggFunction");
-        BUILTIN_BITMAP_FUNCTIONS.put(
-                "rb_and_agg", "org.apache.fluss.flink.functions.bitmap.RbAndAggFunction");
+        Map<String, String> map = new HashMap<>();
+        map.put("rb_build_agg", "org.apache.fluss.flink.functions.bitmap.RbBuildAggFunction");
+        map.put("rb_or_agg", "org.apache.fluss.flink.functions.bitmap.RbOrAggFunction");
+        map.put("rb_and_agg", "org.apache.fluss.flink.functions.bitmap.RbAndAggFunction");
+        BUILTIN_BITMAP_FUNCTIONS = Collections.unmodifiableMap(map);
     }
 
     public FlinkCatalog(
@@ -767,13 +765,16 @@ public class FlinkCatalog extends AbstractCatalog {
 
     @Override
     public boolean functionExists(ObjectPath objectPath) throws CatalogException {
-        return BUILTIN_BITMAP_FUNCTIONS.containsKey(objectPath.getObjectName().toLowerCase());
+        return BUILTIN_BITMAP_FUNCTIONS.containsKey(
+                objectPath.getObjectName().toLowerCase(java.util.Locale.ROOT));
     }
 
     @Override
     public CatalogFunction getFunction(ObjectPath functionPath)
             throws FunctionNotExistException, CatalogException {
-        String className = BUILTIN_BITMAP_FUNCTIONS.get(functionPath.getObjectName().toLowerCase());
+        String className =
+                BUILTIN_BITMAP_FUNCTIONS.get(
+                        functionPath.getObjectName().toLowerCase(java.util.Locale.ROOT));
         if (className == null) {
             throw new FunctionNotExistException(getName(), functionPath);
         }

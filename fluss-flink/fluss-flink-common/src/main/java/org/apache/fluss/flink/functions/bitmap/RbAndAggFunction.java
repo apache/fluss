@@ -121,6 +121,11 @@ public class RbAndAggFunction extends AggregateFunction<byte[], RbAndAggFunction
         acc.value.clear();
     }
 
+    public void retract(Accumulator acc, byte[] bitmapBytes) {
+        throw new UnsupportedOperationException(
+                "rb_and_agg does not support retraction. " + "Use it only on append-only streams.");
+    }
+
     @Override
     @Nullable
     public byte[] getValue(Accumulator acc) {
