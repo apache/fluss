@@ -31,6 +31,7 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Arrays;
 
 /** Shared utilities for Fluss type and Pojo type. */
 public class FlussTypeToPojoTypeConverter {
@@ -74,6 +75,17 @@ public class FlussTypeToPojoTypeConverter {
                         ConverterCommons.charLengthExceptionMessage(fieldName, v.length()));
             }
             return v.charAt(0);
+        } else if (pojoType.isEnum()) {
+            return Arrays.stream(pojoType.getEnumConstants())
+                    .filter(e -> e.toString().equals(v.toUpperCase()))
+                    .findAny()
+                    .orElseThrow(
+                            () ->
+                                    new IllegalArgumentException(
+                                            String.format(
+                                                    "Could not parse value for enum %s. Expected one of: [%s]",
+                                                    pojoType,
+                                                    Arrays.toString(pojoType.getEnumConstants()))));
         }
         throw new IllegalArgumentException(
                 String.format(
