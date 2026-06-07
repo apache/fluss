@@ -336,20 +336,23 @@ The Typed API provides a more user-friendly experience but comes with a performa
 
 ### Defining POJOs
 
-To use the Typed API, define a Java class where the field names and types match your Fluss table schema.
+To use the Typed API, define a Java class where the field names and types match your Fluss table schema. You can use
+@ColumnName to properly map the name.
 
 ```java
 public class User {
     public Integer id;
-    public String name;
-    public Integer age;
+    @ColumnName("first_name")
+    public String firstName;
+    @ColumnName("last_name")
+    public String lastName;
 
     public User() {}
 
-    public User(Integer id, String name, Integer age) {
+    public User(Integer id, String firstName, Sting lastName) {
         this.id = id;
-        this.name = name;
-        this.age = age;
+        this.firstName = firstName;
+        this.lastName = lastName;
     }
     
     // Getters, setters, equals, hashCode, toString...
