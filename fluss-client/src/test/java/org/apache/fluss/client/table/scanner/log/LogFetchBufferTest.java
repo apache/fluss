@@ -17,6 +17,7 @@
 
 package org.apache.fluss.client.table.scanner.log;
 
+import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.exception.WakeupException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecordReadContext;
@@ -26,6 +27,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
@@ -45,6 +47,7 @@ import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link LogFetchBuffer}. */
 public class LogFetchBufferTest {
@@ -223,7 +226,7 @@ public class LogFetchBufferTest {
 
             Future<Boolean> signal =
                     service.submit(() -> await(logFetchBuffer, Duration.ofSeconds(1)));
-            logFetchBuffer.tryComplete(pending1.tableBucket());
+            logFetchBuffer.tryComplete(pending1.tableBucket(), null);
             // nothing happen, as pending1 is not completed
             assertThat(logFetchBuffer.isEmpty()).isTrue();
             // no condition signal
@@ -231,7 +234,7 @@ public class LogFetchBufferTest {
 
             signal = service.submit(() -> await(logFetchBuffer, Duration.ofMinutes(1)));
             completed1.set(true);
-            logFetchBuffer.tryComplete(pending1.tableBucket());
+            logFetchBuffer.tryComplete(pending1.tableBucket(), null);
             assertThat(signal.get()).isTrue();
             assertThat(logFetchBuffer.isEmpty()).isFalse();
             assertThat(logFetchBuffer.poll().tableBucket).isEqualTo(tableBucket1);
@@ -241,15 +244,39 @@ public class LogFetchBufferTest {
 
             signal = service.submit(() -> await(logFetchBuffer, Duration.ofMinutes(1)));
             completed2.set(true);
-            logFetchBuffer.tryComplete(pending2.tableBucket());
+            logFetchBuffer.tryComplete(pending2.tableBucket(), null);
             assertThat(signal.get()).isTrue();
             assertThat(logFetchBuffer.isEmpty()).isFalse();
-            logFetchBuffer.tryComplete(pending3.tableBucket());
-            logFetchBuffer.tryComplete(pending4.tableBucket());
+            logFetchBuffer.tryComplete(pending3.tableBucket(), null);
+            logFetchBuffer.tryComplete(pending4.tableBucket(), null);
             assertThat(logFetchBuffer.poll().tableBucket).isEqualTo(tableBucket2);
             assertThat(logFetchBuffer.poll().tableBucket).isEqualTo(tableBucket3);
             assertThat(logFetchBuffer.poll().tableBucket).isEqualTo(tableBucket3);
             assertThat(logFetchBuffer.isEmpty()).isTrue();
+        }
+    }
+
+    @Test
+    void testFetchException() throws Exception {
+        try (LogFetchBuffer logFetchBuffer = new LogFetchBuffer()) {
+            AtomicBoolean completed = new AtomicBoolean(false);
+            PendingFetch pendingFetch = makePendingFetch(tableBucket1, completed);
+
+            logFetchBuffer.tryComplete(pendingFetch.tableBucket(), null);
+            assertThat(logFetchBuffer.isEmpty()).isTrue();
+            logFetchBuffer.pend(pendingFetch);
+            assertThat(logFetchBuffer.isEmpty()).isTrue();
+
+            completed.set(true);
+            logFetchBuffer.tryComplete(
+                    pendingFetch.tableBucket(), new IOException("Test fetch exception"));
+            assertThat(logFetchBuffer.isEmpty()).isFalse();
+            assertThatThrownBy(logFetchBuffer::poll)
+                    .isExactlyInstanceOf(FetchException.class)
+                    .hasMessageContaining("Test fetch exception");
+            assertThatThrownBy(logFetchBuffer::peek)
+                    .isExactlyInstanceOf(FetchException.class)
+                    .hasMessageContaining("Test fetch exception");
         }
     }
 
