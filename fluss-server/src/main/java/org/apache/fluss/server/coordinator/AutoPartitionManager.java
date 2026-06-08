@@ -190,6 +190,34 @@ public class AutoPartitionManager implements AutoCloseable {
         }
     }
 
+    /**
+     * Handles a table's auto-partition strategy change after table properties are updated.
+     *
+     * @param newTableInfo the updated table information
+     * @param oldStrategy the old auto partition strategy
+     * @param newStrategy the updated auto partition strategy
+     */
+    public void handleAutoPartitionStrategyChange(
+            TableInfo newTableInfo,
+            AutoPartitionStrategy oldStrategy,
+            AutoPartitionStrategy newStrategy) {
+        checkNotClosed();
+        long tableId = newTableInfo.getTableId();
+        boolean oldAutoPartitionEnabled = oldStrategy.isAutoPartitionEnabled();
+        boolean newAutoPartitionEnabled = newStrategy.isAutoPartitionEnabled();
+
+        if (!oldAutoPartitionEnabled && newAutoPartitionEnabled) {
+            LOG.info("Table {} auto partition enabled from false to true.", tableId);
+            addAutoPartitionTable(newTableInfo, true);
+        } else if (oldAutoPartitionEnabled && !newAutoPartitionEnabled) {
+            LOG.info("Table {} auto partition enabled from true to false.", tableId);
+            removeAutoPartitionTable(tableId);
+        } else if (newAutoPartitionEnabled) {
+            LOG.info("Table {} auto partition strategy changed.", tableId);
+            updateAutoPartitionTables(newTableInfo);
+        }
+    }
+
     /** Must be called while holding {@link #lock}. */
     @Nullable
     private TableInfo removeAutoPartitionTableLocked(long tableId) {
@@ -315,6 +343,12 @@ public class AutoPartitionManager implements AutoCloseable {
             }
 
             TableInfo tableInfo = autoPartitionTables.get(tableId);
+            if (tableInfo == null) {
+                LOG.info(
+                        "Skipping auto partitioning for table id {} as it is not registered.",
+                        tableId);
+                continue;
+            }
             TablePath tablePath = tableInfo.getTablePath();
             TreeMap<String, Set<String>> currentPartitions =
                     partitionsByTable.computeIfAbsent(

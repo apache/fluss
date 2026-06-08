@@ -22,6 +22,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 
 import java.util.Map;
+import java.util.Objects;
 import java.util.TimeZone;
 
 /** A class wrapping the strategy for auto partition. */
@@ -85,5 +86,47 @@ public class AutoPartitionStrategy {
 
     public TimeZone timeZone() {
         return timeZone;
+    }
+
+    @Override
+    public String toString() {
+        return "AutoPartitionStrategy{"
+                + "autoPartitionEnable="
+                + autoPartitionEnable
+                + ", key='"
+                + key
+                + '\''
+                + ", timeUnit="
+                + timeUnit
+                + ", numPreCreate="
+                + numPreCreate
+                + ", numToRetain="
+                + numToRetain
+                + ", timeZone="
+                + timeZone
+                + '}';
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+        AutoPartitionStrategy that = (AutoPartitionStrategy) o;
+        return autoPartitionEnable == that.autoPartitionEnable
+                && numPreCreate == that.numPreCreate
+                && numToRetain == that.numToRetain
+                && Objects.equals(key, that.key)
+                && timeUnit == that.timeUnit
+                && Objects.equals(timeZone, that.timeZone);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(
+                autoPartitionEnable, key, timeUnit, numPreCreate, numToRetain, timeZone);
     }
 }

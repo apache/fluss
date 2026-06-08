@@ -636,6 +636,67 @@ class AutoPartitionManagerTest {
                         "2024091003", "2024091004", "2024091005", "2024091006", "2024091007");
     }
 
+    @Test
+    void testUpdateAutoPartitionEnabled() throws Exception {
+        ZonedDateTime startTime =
+                LocalDateTime.parse("2024-09-10T00:00:00").atZone(ZoneId.systemDefault());
+        long startMs = startTime.toInstant().toEpochMilli();
+        ManualClock clock = new ManualClock(startMs);
+        ManuallyTriggeredScheduledExecutorService periodicExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+
+        AutoPartitionManager autoPartitionManager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        metadataManager,
+                        remoteDirDynamicLoader,
+                        new Configuration(),
+                        clock,
+                        periodicExecutor);
+        autoPartitionManager.start();
+
+        TableInfo table = createPartitionedTable(-1, 4, AutoPartitionTimeUnit.HOUR);
+        TablePath tablePath = table.getTablePath();
+        autoPartitionManager.addAutoPartitionTable(table, true);
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+
+        Map<String, PartitionRegistration> partitions =
+                zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder("2024091000", "2024091001", "2024091002", "2024091003");
+
+        TableInfo disabledTable = createUpdatedAutoPartitionEnabledTableInfo(table, false);
+        autoPartitionManager.handleAutoPartitionStrategyChange(
+                disabledTable,
+                table.getTableConfig().getAutoPartitionStrategy(),
+                disabledTable.getTableConfig().getAutoPartitionStrategy());
+
+        clock.advanceTime(Duration.ofHours(4));
+        periodicExecutor.triggerPeriodicScheduledTasks();
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder("2024091000", "2024091001", "2024091002", "2024091003");
+
+        TableInfo reEnabledTable = createUpdatedAutoPartitionEnabledTableInfo(disabledTable, true);
+        autoPartitionManager.handleAutoPartitionStrategyChange(
+                reEnabledTable,
+                disabledTable.getTableConfig().getAutoPartitionStrategy(),
+                reEnabledTable.getTableConfig().getAutoPartitionStrategy());
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder(
+                        "2024091000",
+                        "2024091001",
+                        "2024091002",
+                        "2024091003",
+                        "2024091004",
+                        "2024091005",
+                        "2024091006",
+                        "2024091007");
+    }
+
     private static class TestParams {
         final AutoPartitionTimeUnit timeUnit;
         final boolean multiplePartitionKeys;
@@ -917,6 +978,17 @@ class AutoPartitionManagerTest {
         Configuration newProperties = new Configuration(original.getProperties());
         newProperties.set(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION, newNumRetention);
         newProperties.set(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE, newNumPreCreate);
+        return createUpdatedTableInfo(original, newProperties);
+    }
+
+    private TableInfo createUpdatedAutoPartitionEnabledTableInfo(
+            TableInfo original, boolean autoPartitionEnabled) {
+        Configuration newProperties = new Configuration(original.getProperties());
+        newProperties.set(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, autoPartitionEnabled);
+        return createUpdatedTableInfo(original, newProperties);
+    }
+
+    private TableInfo createUpdatedTableInfo(TableInfo original, Configuration newProperties) {
         return new TableInfo(
                 original.getTablePath(),
                 original.getTableId(),

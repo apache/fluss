@@ -251,14 +251,22 @@ abstract class FlinkCatalogITCase {
 
         // alter table set an unsupported modification option should throw exception
         String unSupportedDml1 =
-                "alter table test_alter_table_append_only set ('table.auto-partition.enabled' = 'true', 'table.kv.format' = 'indexed')";
+                "alter table test_alter_table_append_only set ('table.kv.format' = 'indexed')";
 
         assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml1))
                 .rootCause()
                 .isInstanceOf(InvalidAlterTableException.class)
                 .hasMessageContaining("The following options are not supported to alter yet:")
-                .hasMessageContaining("table.kv.format")
-                .hasMessageContaining("table.auto-partition.enabled");
+                .hasMessageContaining("table.kv.format");
+
+        // alter table to enable auto partition for a non-partitioned table should fail validation
+        String invalidAutoPartitionDml =
+                "alter table test_alter_table_append_only set ('table.auto-partition.enabled' = 'true')";
+        assertThatThrownBy(() -> tEnv.executeSql(invalidAutoPartitionDml))
+                .rootCause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessage(
+                        "Currently, auto partition is only supported for partitioned table, please set table property 'table.auto-partition.enabled' to false.");
 
         String unSupportedDml2 =
                 "alter table test_alter_table_append_only set ('bucket.num' = '1000')";
@@ -633,6 +641,36 @@ abstract class FlinkCatalogITCase {
         CatalogTable table = (CatalogTable) catalog.getTable(objectPath);
         assertThat(table.getOptions().get(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION.key()))
                 .isEqualTo("1");
+    }
+
+    @Test
+    void testAlterAutoPartitionEnabled() throws Exception {
+        String tblName = "test_alter_auto_partition_enabled";
+        ObjectPath objectPath = new ObjectPath(DEFAULT_DB, tblName);
+        TablePath tablePath = new TablePath(DEFAULT_DB, tblName);
+
+        tEnv.executeSql(
+                "create table "
+                        + tblName
+                        + " (a int, dt string) partitioned by (dt) "
+                        + "with ('table.auto-partition.enabled' = 'false',"
+                        + " 'table.auto-partition.key' = 'dt',"
+                        + " 'table.auto-partition.time-unit' = 'hour',"
+                        + " 'table.auto-partition.num-precreate' = '2')");
+
+        tEnv.executeSql(
+                "alter table " + tblName + " set ('table.auto-partition.enabled' = 'true')");
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath, 2);
+
+        CatalogTable table = (CatalogTable) catalog.getTable(objectPath);
+        assertThat(table.getOptions().get(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key()))
+                .isEqualTo("true");
+
+        tEnv.executeSql(
+                "alter table " + tblName + " set ('table.auto-partition.enabled' = 'false')");
+        table = (CatalogTable) catalog.getTable(objectPath);
+        assertThat(table.getOptions().get(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key()))
+                .isEqualTo("false");
     }
 
     @Test
