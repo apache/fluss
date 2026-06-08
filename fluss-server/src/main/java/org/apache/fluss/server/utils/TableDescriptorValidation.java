@@ -323,6 +323,9 @@ public class TableDescriptorValidation {
     private static void checkMergeEngine(
             Configuration tableConf, boolean hasPrimaryKey, Schema schema) {
         MergeEngineType mergeEngine = tableConf.get(ConfigOptions.TABLE_MERGE_ENGINE);
+        if (mergeEngine != MergeEngineType.AGGREGATION) {
+            validateNoAggregationFunctions(schema);
+        }
         if (mergeEngine != null) {
             if (!hasPrimaryKey) {
                 throw new InvalidConfigException(
@@ -377,6 +380,20 @@ public class TableDescriptorValidation {
         }
     }
 
+    /** Validates that the schema doesn't contain any aggregation functions. */
+    public static void validateNoAggregationFunctions(Schema schema) {
+        for (Schema.Column column : schema.getColumns()) {
+            Optional<AggFunction> aggFunction = column.getAggFunction();
+            if (aggFunction.isPresent()) {
+                throw new InvalidConfigException(
+                        String.format(
+                                "Aggregation function is only supported for aggregation merge engine table, "
+                                        + "but column '%s' has aggregation function '%s'.",
+                                column.getName(), aggFunction.get()));
+            }
+        }
+    }
+
     /**
      * Validates aggregation function parameters in the schema.
      *
@@ -388,7 +405,7 @@ public class TableDescriptorValidation {
      * @throws InvalidConfigException if any aggregation function has invalid parameters or data
      *     types
      */
-    private static void validateAggregationFunctionParameters(Schema schema) {
+    public static void validateAggregationFunctionParameters(Schema schema) {
         // Get primary key columns for early exit
         List<String> primaryKeys = schema.getPrimaryKeyColumnNames();
 

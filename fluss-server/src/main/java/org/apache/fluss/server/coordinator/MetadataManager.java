@@ -39,6 +39,7 @@ import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.DatabaseSummary;
+import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -75,7 +76,9 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
 
+import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAggregationFunctionParameters;
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableProperties;
+import static org.apache.fluss.server.utils.TableDescriptorValidation.validateNoAggregationFunctions;
 
 /** A manager for metadata. */
 public class MetadataManager {
@@ -440,6 +443,7 @@ public class MetadataManager {
             if (!schemaChanges.isEmpty()) {
                 Schema newSchema =
                         SchemaUpdate.applySchemaChanges(table.getSchema(), schemaChanges);
+                validateAlterTableSchema(table, newSchema);
                 LakeCatalog.Context lakeCatalogContext =
                         new CoordinatorService.DefaultLakeCatalogContext(
                                 false,
@@ -470,6 +474,17 @@ public class MetadataManager {
             } else {
                 throw new FlussRuntimeException("Failed to alter table schema: " + tablePath, e);
             }
+        }
+    }
+
+    static void validateAlterTableSchema(TableInfo table, Schema newSchema) {
+        if (table.getTableConfig()
+                .getMergeEngineType()
+                .map(MergeEngineType.AGGREGATION::equals)
+                .orElse(false)) {
+            validateAggregationFunctionParameters(newSchema);
+        } else {
+            validateNoAggregationFunctions(newSchema);
         }
     }
 

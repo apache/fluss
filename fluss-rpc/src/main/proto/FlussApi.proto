@@ -1154,6 +1154,7 @@ message PbAddColumn {
   required bytes data_type_json = 2;
   optional string comment = 3;
   required int32 column_position_type = 4; // LAST=0,FIRST=1,AFTER=3
+  optional bytes serialized_agg_function = 5;
 }
 
 message PbDropColumn {
