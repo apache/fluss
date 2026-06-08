@@ -64,6 +64,9 @@ GRACE_SECS="${READINESS_GRACE_SECS:-60}"
 MARKER_DIR="/tmp/fluss-readiness"
 FIRST_READY_MARKER="${MARKER_DIR}/first-ready"
 API_UNSUPPORTED_SINCE="${MARKER_DIR}/api-unsupported-since"
+# Latched-once marker so the "now in TCP-only fast path" notice is logged
+# exactly one time per pod lifetime (avoids flooding kubectl logs every 3s).
+FAST_PATH_LOGGED="${MARKER_DIR}/fast-path-logged"
 
 mkdir -p "${MARKER_DIR}"
 
@@ -184,66 +187,76 @@ if ! check_tcp; then
     exit 1
 fi
 
-# ---- Step 2: Cluster health check ----
-
-# First-boot detection:
-# On the very first startup (no previous data), there's nothing to recover.
-# We use a marker file: once the cluster has been "ready" at least once, we
-# know subsequent probes after a restart are "upgrade" scenarios that need
-# the full recovery gate.
-if [[ ! -f "${FIRST_READY_MARKER}" ]]; then
-    run_recovery_check "${FLUSS_CONF_DIR}" "${TIMEOUT_MS}"
-    local_exit=$?
-
-    case $local_exit in
-        0)
-            log_to_main "[readiness-check] First boot: GREEN, marking ready"
-            touch "${FIRST_READY_MARKER}"
-            clear_api_unsupported
-            exit 0
-            ;;
-        1)
-            log_to_main "[readiness-check] First boot: not ready (exit 1)"
-            exit 1
-            ;;
-        2)
-            log_to_main "[readiness-check] First boot: API unsupported, TCP-only fallback"
-            touch "${FIRST_READY_MARKER}"
-            exit 0
-            ;;
-        *)
-            log_to_main "[readiness-check] Config error, falling back to TCP-only"
-            exit 0
-            ;;
-    esac
+# ---- Steady-state fast path ----
+#
+# K8s readinessProbe runs every periodSeconds FOREVER, not only during a
+# rolling upgrade. The cluster health gate (Step 2 below) is meant to gate
+# the FIRST readiness of a freshly created pod so that recovery finishes
+# before traffic flows. Running it on every probe cycle is unsafe:
+#
+#   1. Coordinator pod briefly goes down (e.g. its own rolling restart).
+#   2. ALL tablet-server probes call run_recovery_check at the same period,
+#      all fail to reach Coordinator → all flip to NotReady simultaneously.
+#   3. statefulset then rolls all tablet-servers together → cascade outage:
+#         coordinator-server-0   0/2   Init:0/1
+#         tablet-server-0/1/2    0/2   Init:0/1
+#
+# So once the cluster has been GREEN at least once in this pod's lifetime
+# (FIRST_READY_MARKER present), we DROP to TCP-only. The marker lives in
+# /tmp/fluss-readiness, which is wiped whenever the pod is recreated by an
+# upgrade — so each freshly created pod will run the recovery gate exactly
+# ONCE before flipping to the fast path.
+if [[ -f "${FIRST_READY_MARKER}" ]]; then
+    # Log the switch-over notice exactly once per pod lifetime so operators
+    # can confirm via `kubectl logs` that this pod has graduated from the
+    # cluster health gate to the cheap TCP-only port check.
+    if [[ ! -f "${FAST_PATH_LOGGED}" ]]; then
+        log_to_main "[readiness-check] Switched to TCP-only port-readiness check; cluster health gate will not run again until this pod is recreated"
+        touch "${FAST_PATH_LOGGED}"
+    fi
+    exit 0
 fi
 
-# Upgrade/restart scenario (marker file exists = has been ready before)
+# ---- Step 2: Cluster health check (first boot of this pod only) ----
+#
+# We reach here only if this pod has never been ready in its lifetime. Block
+# traffic until either (a) cluster reports GREEN/YELLOW, or (b) the API is
+# unsupported and the grace period has elapsed. Once we latch the marker,
+# subsequent probes take the fast path above.
 run_recovery_check "${FLUSS_CONF_DIR}" "${TIMEOUT_MS}"
 local_exit=$?
 
 case $local_exit in
     0)
-        log_to_main "[readiness-check] Upgrade check: PASSED (exit 0)"
+        # Recovery completed — latch fast path for the rest of this pod's life.
+        log_to_main "[readiness-check] Cluster health GREEN; latching fast path — next probe will switch to TCP-only port check"
+        touch "${FIRST_READY_MARKER}"
         clear_api_unsupported
         exit 0
         ;;
     1)
-        log_to_main "[readiness-check] Upgrade check: BLOCKED (exit 1) — waiting for recovery"
-        clear_api_unsupported
+        # Not recovered yet (or Coordinator temporarily unreachable) — stay
+        # unready. Next probe cycle will retry. This is the upgrade gate.
+        log_to_main "[readiness-check] First boot: BLOCKED (exit 1) — waiting for recovery"
         exit 1
         ;;
     2)
+        # API unsupported — after grace period, fall back to TCP-only and
+        # latch the fast path so we don't pay this cost forever.
         mark_api_unsupported
         if is_grace_period_elapsed; then
-            log_to_main "[readiness-check] API unsupported for >${GRACE_SECS}s, TCP fallback"
+            log_to_main "[readiness-check] API unsupported for >${GRACE_SECS}s, TCP fallback (latched)"
+            touch "${FIRST_READY_MARKER}"
             exit 0
         fi
         log_to_main "[readiness-check] API unsupported, waiting (grace period)"
         exit 1
         ;;
     *)
-        log_to_main "[readiness-check] Config error (exit $local_exit), treating as not ready"
-        exit 1
+        # Configuration error — fall back to TCP and latch fast path so a
+        # broken probe never wedges the rolling upgrade forever.
+        log_to_main "[readiness-check] Config error (exit $local_exit), TCP fallback (latched)"
+        touch "${FIRST_READY_MARKER}"
+        exit 0
         ;;
 esac
