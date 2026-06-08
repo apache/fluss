@@ -22,6 +22,7 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypes;
+
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
