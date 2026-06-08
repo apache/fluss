@@ -66,6 +66,10 @@ public class HudiConversions {
     private static final String HUDI_RECORD_KEY_FIELD_OPTION =
             HUDI_CONF_PREFIX + FlinkOptions.RECORD_KEY_FIELD.key();
 
+    public static final String FLUSS_BUCKET_KEYS_OPTION = "fluss.bucket.keys";
+    public static final String FLUSS_BUCKET_AWARE_OPTION = "fluss.bucket-aware";
+    public static final String FLUSS_PARTITION_KEYS_OPTION = "fluss.partition.keys";
+
     /** Hudi config options set by Fluss should not be set by users. */
     @VisibleForTesting public static final Set<String> HUDI_UNSETTABLE_OPTIONS = new HashSet<>();
 
@@ -209,6 +213,11 @@ public class HudiConversions {
         tableDescriptor
                 .getCustomProperties()
                 .forEach((k, v) -> setFlussPropertyToHudi(k, v, hudiProperties));
+
+        hudiProperties.put(FLUSS_BUCKET_KEYS_OPTION, String.join(DELIMITER, bucketKeys));
+        hudiProperties.put(
+                FLUSS_BUCKET_AWARE_OPTION, String.valueOf(isPkTable || !bucketKeys.isEmpty()));
+        hudiProperties.put(FLUSS_PARTITION_KEYS_OPTION, String.join(DELIMITER, partitionKeys));
 
         return hudiProperties;
     }

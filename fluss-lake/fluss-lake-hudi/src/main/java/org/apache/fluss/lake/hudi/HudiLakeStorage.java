@@ -18,6 +18,8 @@
 package org.apache.fluss.lake.hudi;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.hudi.source.HudiLakeSource;
+import org.apache.fluss.lake.hudi.source.HudiSplit;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
 import org.apache.fluss.lake.source.LakeSource;
@@ -47,12 +49,7 @@ public class HudiLakeStorage implements LakeStorage {
     }
 
     @Override
-    public LakeSource<?> createLakeSource(TablePath tablePath) {
-        throw new UnsupportedOperationException(
-                "HudiLakeStorage is currently a scaffold and does not support creating a "
-                        + "LakeSource for table '"
-                        + tablePath
-                        + "' yet. Verify that Hudi lake storage was selected intentionally "
-                        + "and that the required Hudi support/module is available.");
+    public LakeSource<HudiSplit> createLakeSource(TablePath tablePath) {
+        return new HudiLakeSource(hudiConfig, tablePath);
     }
 }
