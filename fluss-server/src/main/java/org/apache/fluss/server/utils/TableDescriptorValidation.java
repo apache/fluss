@@ -179,6 +179,15 @@ public class TableDescriptorValidation {
                             ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key()));
         }
 
+        if (tableKeysToChange.contains(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key())
+                && currentConfig.isDataLakeEnabled()) {
+            throw new InvalidAlterTableException(
+                    String.format(
+                            "The option '%s' cannot be altered when '%s' is enabled.",
+                            ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(),
+                            ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
+        }
+
         if (!currentConfig.getDataLakeFormat().isPresent()) {
             List<String> datalakeKeys =
                     tableKeysToChange.stream()
