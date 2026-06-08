@@ -181,6 +181,29 @@ case class FlussUpsertScan(
   }
 }
 
+/** Fluss Count Scan: fast path that returns a precomputed row count from server-side table stats. */
+case class FlussCountScan(
+    tablePath: TablePath,
+    tableInfo: TableInfo,
+    rowCount: Long,
+    requiredSchema: Option[StructType])
+  extends FlussScan {
+
+  override protected val scanType: String = "Count"
+
+  // A single LONG column matching the one-aggregate-no-group-by shape Spark expects.
+  override def readSchema(): StructType =
+    new StructType().add("count", org.apache.spark.sql.types.LongType, nullable = false)
+
+  override def toBatch: Batch = new FlussCountBatch(rowCount)
+
+  override def toMicroBatchStream(checkpointLocation: String): MicroBatchStream =
+    throw new UnsupportedOperationException(
+      "FlussCountScan does not support micro-batch streaming reads.")
+
+  override def description(): String = s"${super.description()} [RowCount: $rowCount]"
+}
+
 /** Fluss Lake Upsert Scan for lake-enabled primary key tables. */
 case class FlussLakeUpsertScan(
     tablePath: TablePath,
