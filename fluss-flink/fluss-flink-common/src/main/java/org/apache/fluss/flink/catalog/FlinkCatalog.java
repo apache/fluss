@@ -25,6 +25,9 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.adapter.CatalogTableAdapter;
+import org.apache.fluss.flink.functions.bitmap.RbAndAggFunction;
+import org.apache.fluss.flink.functions.bitmap.RbBuildAggFunction;
+import org.apache.fluss.flink.functions.bitmap.RbOrAggFunction;
 import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.procedure.ProcedureManager;
 import org.apache.fluss.flink.utils.CatalogExceptionUtils;
@@ -85,6 +88,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -140,9 +144,9 @@ public class FlinkCatalog extends AbstractCatalog {
 
     static {
         Map<String, String> map = new HashMap<>();
-        map.put("rb_build_agg", "org.apache.fluss.flink.functions.bitmap.RbBuildAggFunction");
-        map.put("rb_or_agg", "org.apache.fluss.flink.functions.bitmap.RbOrAggFunction");
-        map.put("rb_and_agg", "org.apache.fluss.flink.functions.bitmap.RbAndAggFunction");
+        map.put("rb_build_agg", RbBuildAggFunction.class.getName());
+        map.put("rb_or_agg", RbOrAggFunction.class.getName());
+        map.put("rb_and_agg", RbAndAggFunction.class.getName());
         BUILTIN_BITMAP_FUNCTIONS = Collections.unmodifiableMap(map);
     }
 
@@ -766,15 +770,14 @@ public class FlinkCatalog extends AbstractCatalog {
     @Override
     public boolean functionExists(ObjectPath objectPath) throws CatalogException {
         return BUILTIN_BITMAP_FUNCTIONS.containsKey(
-                objectPath.getObjectName().toLowerCase(java.util.Locale.ROOT));
+                objectPath.getObjectName().toLowerCase(Locale.ROOT));
     }
 
     @Override
     public CatalogFunction getFunction(ObjectPath functionPath)
             throws FunctionNotExistException, CatalogException {
         String className =
-                BUILTIN_BITMAP_FUNCTIONS.get(
-                        functionPath.getObjectName().toLowerCase(java.util.Locale.ROOT));
+                BUILTIN_BITMAP_FUNCTIONS.get(functionPath.getObjectName().toLowerCase(Locale.ROOT));
         if (className == null) {
             throw new FunctionNotExistException(getName(), functionPath);
         }
