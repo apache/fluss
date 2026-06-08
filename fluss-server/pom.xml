@@ -87,6 +87,12 @@
             <version>${roaringbitmap.version}</version>
         </dependency>
 
+        <dependency>
+            <groupId>org.apache.datasketches</groupId>
+            <artifactId>datasketches-java</artifactId>
+            <version>${datasketches-java.version}</version>
+        </dependency>
+
         <!--
         we will start zookeeper server when start a local cluster,
         need include this module for starting zookeeper requires it -->
