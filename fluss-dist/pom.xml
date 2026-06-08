@@ -270,8 +270,24 @@
                             <finalName>${project.artifactId}-${project.version}</finalName>
                             <artifactSet>
                                 <includes>
-                                    <!-- only include log4j-api to package source and javadoc to make sonatype happy -->
-                                    <include>org.apache.logging.log4j:log4j-api</include>
+                                    <!--
+                                        IMPORTANT: do NOT include log4j-api here.
+
+                                        fluss-dist.jar lives next to the standalone
+                                        log4j-api-*.jar in the binary distribution's lib/
+                                        directory. If we shade log4j-api classes (e.g.
+                                        org.apache.logging.log4j.util.LoaderUtil) into
+                                        fluss-dist.jar, and the bundled log4j-api version
+                                        differs from the one in lib/, classpath ordering
+                                        (e.g. `find ... | sort` puts fluss-dist before
+                                        log4j-api alphabetically) can cause the shaded
+                                        copy to win and trigger errors like
+                                        NoSuchMethodError on LoaderUtil#getClassLoaders().
+
+                                        Keep only META-INF entries so sonatype source/
+                                        javadoc packaging is still satisfied; log4j-api
+                                        itself is provided by the standalone jar in lib/.
+                                    -->
                                     <include>META-INF/*</include>
                                 </includes>
                             </artifactSet>
