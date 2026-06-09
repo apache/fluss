@@ -42,6 +42,7 @@ import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.data.InternalRow;
+import org.apache.paimon.io.DataFileMeta;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.partition.Partition;
 import org.apache.paimon.schema.Schema;
@@ -210,6 +211,66 @@ class PaimonTieringTest {
             // no any missing committed offset since the latest snapshot is 1L
             assertThat(committedLakeSnapshot).isNull();
         }
+    }
+
+    @Test
+    void testAutoCompactionCanBeEnabledAfterTieringStartedAndStillCompacts() throws Exception {
+        TablePath tablePath =
+                TablePath.of("paimon", "test_auto_compaction_can_be_enabled_after_tiering_started");
+        Map<String, String> options = new HashMap<>();
+        options.put(CoreOptions.NUM_SORTED_RUNS_COMPACTION_TRIGGER.key(), "2");
+        createTable(tablePath, true, false, 1, options);
+
+        TableDescriptor disabledAutoCompactionDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                org.apache.fluss.metadata.Schema.newBuilder()
+                                        .column("c1", org.apache.fluss.types.DataTypes.INT())
+                                        .column("c2", org.apache.fluss.types.DataTypes.STRING())
+                                        .column("c3", org.apache.fluss.types.DataTypes.STRING())
+                                        .build())
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION, false)
+                        .build();
+        TableInfo disabledAutoCompactionTableInfo =
+                TableInfo.of(
+                        tablePath,
+                        0,
+                        1,
+                        disabledAutoCompactionDescriptor,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        1L,
+                        1L);
+        Map<Long, String> nonPartitioned = Collections.singletonMap(null, null);
+
+        writeData(disabledAutoCompactionTableInfo, new HashMap<>(), nonPartitioned);
+        assertThat(dataFileLevels(tablePath)).contains(0).noneMatch(level -> level > 0);
+
+        TableDescriptor enabledAutoCompactionDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                org.apache.fluss.metadata.Schema.newBuilder()
+                                        .column("c1", org.apache.fluss.types.DataTypes.INT())
+                                        .column("c2", org.apache.fluss.types.DataTypes.STRING())
+                                        .column("c3", org.apache.fluss.types.DataTypes.STRING())
+                                        .build())
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION, true)
+                        .build();
+        TableInfo enabledAutoCompactionTableInfo =
+                TableInfo.of(
+                        tablePath,
+                        0,
+                        1,
+                        enabledAutoCompactionDescriptor,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        1L,
+                        1L);
+
+        writeData(enabledAutoCompactionTableInfo, new HashMap<>(), nonPartitioned);
+        assertThat(dataFileLevels(tablePath)).anyMatch(level -> level > 0);
     }
 
     @Test
@@ -912,6 +973,19 @@ class PaimonTieringTest {
         Identifier identifier = toPaimon(tablePath);
         FileStoreTable fileStoreTable = (FileStoreTable) paimonCatalog.getTable(identifier);
         return fileStoreTable.snapshotManager().snapshot(snapshotId).properties();
+    }
+
+    private List<Integer> dataFileLevels(TablePath tablePath) throws Exception {
+        Identifier identifier = toPaimon(tablePath);
+        FileStoreTable fileStoreTable = (FileStoreTable) paimonCatalog.getTable(identifier);
+        List<Integer> levels = new ArrayList<>();
+        for (Split split : fileStoreTable.newReadBuilder().newScan().plan().splits()) {
+            DataSplit dataSplit = (DataSplit) split;
+            for (DataFileMeta dataFile : dataSplit.dataFiles()) {
+                levels.add(dataFile.level());
+            }
+        }
+        return levels;
     }
 
     private void writeData(

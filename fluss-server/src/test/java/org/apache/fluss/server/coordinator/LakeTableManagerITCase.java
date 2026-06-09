@@ -20,7 +20,6 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
-import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.Schema;
@@ -240,7 +239,7 @@ class LakeTableManagerITCase {
     }
 
     @Test
-    void testAlterDatalakeAutoCompactionOnlyWhenLakeDisabled() throws Exception {
+    void testAlterDatalakeAutoCompaction() throws Exception {
         AdminGateway adminGateway = getAdminGateway();
 
         String db1 = "test_alter_datalake_auto_compaction_db";
@@ -294,35 +293,27 @@ class LakeTableManagerITCase {
 
         Map<String, String> resetProperties = new HashMap<>();
         resetProperties.put(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(), "false");
-        assertThatThrownBy(
-                        () ->
-                                adminGateway
-                                        .alterTable(
-                                                newAlterTableRequest(
-                                                        tablePath,
-                                                        resetProperties,
-                                                        Collections.emptyList(),
-                                                        Collections.emptyList(),
-                                                        false))
-                                        .get())
-                .cause()
-                .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessage(
-                        "The option '%s' cannot be altered when '%s' is enabled.",
-                        ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(),
-                        ConfigOptions.TABLE_DATALAKE_ENABLED.key());
+        adminGateway
+                .alterTable(
+                        newAlterTableRequest(
+                                tablePath,
+                                resetProperties,
+                                Collections.emptyList(),
+                                Collections.emptyList(),
+                                false))
+                .get();
 
-        TableDescriptor tableDescriptorAfterFailedAlter =
+        TableDescriptor tableDescriptorAfterReset =
                 TableDescriptor.fromJsonBytes(
                         adminGateway
                                 .getTableInfo(newGetTableInfoRequest(tablePath))
                                 .get()
                                 .getTableJson());
         assertThat(
-                        tableDescriptorAfterFailedAlter
+                        tableDescriptorAfterReset
                                 .getProperties()
                                 .get(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key()))
-                .isEqualTo("true");
+                .isEqualTo("false");
 
         adminGateway.dropTable(newDropTableRequest(db1, tb1, false)).get();
         adminGateway.dropDatabase(newDropDatabaseRequest(db1, false, true)).get();
