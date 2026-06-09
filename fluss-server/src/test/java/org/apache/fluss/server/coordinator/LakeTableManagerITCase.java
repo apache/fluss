@@ -248,7 +248,7 @@ class LakeTableManagerITCase {
         adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
 
         Map<String, String> initialProperties = new HashMap<>();
-        initialProperties.put(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "false");
+        initialProperties.put(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
         adminGateway
                 .createTable(
                         newCreateTableRequest(
@@ -278,18 +278,6 @@ class LakeTableManagerITCase {
                                 .getProperties()
                                 .get(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key()))
                 .isEqualTo("true");
-
-        Map<String, String> enableLakeProperties = new HashMap<>();
-        enableLakeProperties.put(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
-        adminGateway
-                .alterTable(
-                        newAlterTableRequest(
-                                tablePath,
-                                enableLakeProperties,
-                                Collections.emptyList(),
-                                Collections.emptyList(),
-                                false))
-                .get();
 
         Map<String, String> resetProperties = new HashMap<>();
         resetProperties.put(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(), "false");
