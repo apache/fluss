@@ -659,7 +659,7 @@ abstract class FlinkCatalogITCase {
                         + " 'table.auto-partition.num-retention' = '-1',"
                         + " 'table.auto-partition.num-precreate' = '1')");
         FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath, 1);
-      
+
         tEnv.executeSql(
                 "alter table " + tblName + " set ('table.auto-partition.num-precreate' = '3')");
         FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath, 3);
@@ -672,9 +672,8 @@ abstract class FlinkCatalogITCase {
         table = (CatalogTable) catalog.getTable(objectPath);
         assertThat(table.getOptions())
                 .doesNotContainKey(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.key());
-      
-      }
-      
+    }
+
     @Test
     void testAlterAutoPartitionEnabled() throws Exception {
         String tblName = "test_alter_auto_partition_enabled";
@@ -702,7 +701,7 @@ abstract class FlinkCatalogITCase {
                 "alter table " + tblName + " set ('table.auto-partition.enabled' = 'false')");
         table = (CatalogTable) catalog.getTable(objectPath);
         assertThat(table.getOptions().get(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key()))
-                .isEqualTo("false");   
+                .isEqualTo("false");
     }
 
     @Test
