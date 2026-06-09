@@ -123,7 +123,7 @@ public class HudiTableInfo implements AutoCloseable {
                             tableOptions.getOrDefault(
                                     FLUSS_PARTITION_KEYS_OPTION,
                                     tableOptions.get(FlinkOptions.PARTITION_PATH_FIELD.key())));
-            boolean bucketAware = resolveBucketAware(tableOptions);
+            boolean bucketAware = resolveBucketAware(tableOptions, tableType);
 
             return new HudiTableInfo(
                     tablePath,
@@ -180,16 +180,18 @@ public class HudiTableInfo implements AutoCloseable {
                 + tablePath.getTableName();
     }
 
-    private static boolean resolveBucketAware(Map<String, String> tableOptions) {
+    @VisibleForTesting
+    public static boolean resolveBucketAware(
+            Map<String, String> tableOptions, HoodieTableType tableType) {
         String bucketAware = tableOptions.get(FLUSS_BUCKET_AWARE_OPTION);
         if (bucketAware != null) {
-            return Boolean.parseBoolean(bucketAware);
+            return Boolean.parseBoolean(bucketAware.trim());
         }
         String bucketKeys = tableOptions.get(FLUSS_BUCKET_KEYS_OPTION);
         if (bucketKeys != null) {
             return !bucketKeys.trim().isEmpty();
         }
-        return true;
+        return tableType == HoodieTableType.MERGE_ON_READ;
     }
 
     @VisibleForTesting
@@ -200,11 +202,61 @@ public class HudiTableInfo implements AutoCloseable {
         }
 
         String[] pathSegments = partitionPath.split("/");
-        List<String> partitionValues = new ArrayList<>(pathSegments.length);
+        if (pathSegments.length != partitionFields.size()) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Hudi partition path '%s' does not match partition fields %s.",
+                            partitionPath, partitionFields));
+        }
+
+        boolean hiveStyle = false;
+        boolean rawStyle = false;
+        Map<String, String> hivePartitionValues = new HashMap<>();
+        List<String> rawPartitionValues = new ArrayList<>(pathSegments.length);
         for (String pathSegment : pathSegments) {
             int valueStart = pathSegment.indexOf('=');
-            partitionValues.add(
-                    valueStart < 0 ? pathSegment : pathSegment.substring(valueStart + 1));
+            if (valueStart > 0) {
+                hiveStyle = true;
+                String field = pathSegment.substring(0, valueStart);
+                if (!partitionFields.contains(field)) {
+                    throw new IllegalArgumentException(
+                            String.format(
+                                    "Hudi partition path '%s' contains unknown partition field '%s'.",
+                                    partitionPath, field));
+                }
+                if (hivePartitionValues.put(field, pathSegment.substring(valueStart + 1)) != null) {
+                    throw new IllegalArgumentException(
+                            String.format(
+                                    "Hudi partition path '%s' contains duplicate partition field '%s'.",
+                                    partitionPath, field));
+                }
+            } else {
+                rawStyle = true;
+                rawPartitionValues.add(pathSegment);
+            }
+        }
+
+        if (hiveStyle && rawStyle) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Hudi partition path '%s' mixes hive-style and raw partition segments.",
+                            partitionPath));
+        }
+
+        if (!hiveStyle) {
+            return rawPartitionValues;
+        }
+
+        List<String> partitionValues = new ArrayList<>(partitionFields.size());
+        for (String partitionField : partitionFields) {
+            String partitionValue = hivePartitionValues.get(partitionField);
+            if (partitionValue == null) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Hudi partition path '%s' does not contain partition field '%s'.",
+                                partitionPath, partitionField));
+            }
+            partitionValues.add(partitionValue);
         }
         return partitionValues;
     }

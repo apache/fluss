@@ -105,14 +105,59 @@ class HudiSplitPlannerTest {
                 .hasMessageContaining("does not exist");
     }
 
+    @Test
+    void testPlanBucketUnawareCopyOnWriteSplitsAsBucketMinusOne() throws Exception {
+        TablePath tablePath = TablePath.of(DATABASE, TABLE);
+        createCowTable(tablePath, false);
+        String partitionPath = "";
+        String fileId = "plainfileid";
+        String fileName = createBaseFile(tablePath, partitionPath, INSTANT_TIME, fileId);
+        createCompletedCommit(tablePath, partitionPath, INSTANT_TIME, fileId, fileName);
+        assertHudiFixtureVisible(tablePath, partitionPath);
+
+        List<HudiSplit> splits =
+                new HudiSplitPlanner(hudiConfig, tablePath, Long.parseLong(INSTANT_TIME)).plan();
+
+        assertThat(splits).hasSize(1);
+        assertThat(splits.get(0).bucket()).isEqualTo(-1);
+    }
+
+    @Test
+    void testPlanFailsForBucketAwareTableWithUnparsableFileId() throws Exception {
+        TablePath tablePath = TablePath.of(DATABASE, TABLE);
+        createCowTable(tablePath);
+        String partitionPath = "";
+        String fileId = "plainfileid";
+        String fileName = createBaseFile(tablePath, partitionPath, INSTANT_TIME, fileId);
+        createCompletedCommit(tablePath, partitionPath, INSTANT_TIME, fileId, fileName);
+        assertHudiFixtureVisible(tablePath, partitionPath);
+
+        assertThatThrownBy(
+                        () ->
+                                new HudiSplitPlanner(
+                                                hudiConfig, tablePath, Long.parseLong(INSTANT_TIME))
+                                        .plan())
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("Failed to extract Hudi bucket id")
+                .hasMessageContaining(fileId);
+    }
+
     private void createCowTable(TablePath tablePath) throws Exception {
+        createCowTable(tablePath, true);
+    }
+
+    private void createCowTable(TablePath tablePath, boolean bucketAware) throws Exception {
         Schema schema = Schema.newBuilder().column("id", DataTypes.BIGINT()).build();
-        TableDescriptor tableDescriptor =
+        TableDescriptor.Builder tableDescriptorBuilder =
                 TableDescriptor.builder()
                         .schema(schema)
-                        .distributedBy(4, "id")
-                        .property("hudi.hoodie.datasource.write.recordkey.field", "id")
-                        .build();
+                        .property("hudi.hoodie.datasource.write.recordkey.field", "id");
+        if (bucketAware) {
+            tableDescriptorBuilder.distributedBy(4, "id");
+        } else {
+            tableDescriptorBuilder.distributedBy(4);
+        }
+        TableDescriptor tableDescriptor = tableDescriptorBuilder.build();
         try (HudiLakeCatalog catalog = new HudiLakeCatalog(hudiConfig)) {
             catalog.createTable(tablePath, tableDescriptor, new TestingLakeCatalogContext());
         }

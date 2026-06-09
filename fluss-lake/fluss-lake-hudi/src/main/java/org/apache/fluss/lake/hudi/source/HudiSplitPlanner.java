@@ -89,20 +89,31 @@ public class HudiSplitPlanner implements Planner<HudiSplit> {
     }
 
     private List<HudiSplit> planPartition(
-            HudiTableInfo hudiTableInfo, String snapshotTime, String partitionPath) {
+            HudiTableInfo hudiTableInfo, String snapshotTime, String partitionPath)
+            throws IOException {
         HoodieTableFileSystemView fileSystemView = hudiTableInfo.getFileSystemView();
+        List<HudiSplit> splits = new ArrayList<>();
         if (hudiTableInfo.getTableType() == HoodieTableType.MERGE_ON_READ) {
-            return fileSystemView
-                    .getLatestMergedFileSlicesBeforeOrOn(partitionPath, snapshotTime)
-                    .map(fileSlice -> toHudiSplit(hudiTableInfo, partitionPath, fileSlice))
-                    .collect(Collectors.toList());
+            List<FileSlice> fileSlices =
+                    fileSystemView
+                            .getLatestMergedFileSlicesBeforeOrOn(partitionPath, snapshotTime)
+                            .collect(Collectors.toList());
+            for (FileSlice fileSlice : fileSlices) {
+                splits.add(toHudiSplit(hudiTableInfo, partitionPath, fileSlice));
+            }
+            return splits;
         }
 
-        return fileSystemView
-                .getLatestBaseFilesBeforeOrOn(partitionPath, snapshotTime)
-                .map(baseFile -> toFileSlice(partitionPath, baseFile))
-                .map(fileSlice -> toHudiSplit(hudiTableInfo, partitionPath, fileSlice))
-                .collect(Collectors.toList());
+        List<HoodieBaseFile> baseFiles =
+                fileSystemView
+                        .getLatestBaseFilesBeforeOrOn(partitionPath, snapshotTime)
+                        .collect(Collectors.toList());
+        for (HoodieBaseFile baseFile : baseFiles) {
+            splits.add(
+                    toHudiSplit(
+                            hudiTableInfo, partitionPath, toFileSlice(partitionPath, baseFile)));
+        }
+        return splits;
     }
 
     private FileSlice toFileSlice(String partitionPath, HoodieBaseFile baseFile) {
@@ -114,21 +125,33 @@ public class HudiSplitPlanner implements Planner<HudiSplit> {
     }
 
     private HudiSplit toHudiSplit(
-            HudiTableInfo hudiTableInfo, String partitionPath, FileSlice fileSlice) {
+            HudiTableInfo hudiTableInfo, String partitionPath, FileSlice fileSlice)
+            throws IOException {
         return new HudiSplit(
                 fileSlice,
                 extractBucket(hudiTableInfo, fileSlice),
                 hudiTableInfo.partitionValues(partitionPath));
     }
 
-    private int extractBucket(HudiTableInfo hudiTableInfo, FileSlice fileSlice) {
+    private int extractBucket(HudiTableInfo hudiTableInfo, FileSlice fileSlice) throws IOException {
         if (!hudiTableInfo.isBucketAware()) {
             return -1;
         }
         String fileId = fileSlice.getFileGroupId().getFileId();
         if (fileId == null || fileId.isEmpty()) {
-            return -1;
+            throw new IOException(
+                    String.format(
+                            "Failed to extract Hudi bucket id for bucket-aware table %s because file id is empty.",
+                            tablePath));
         }
-        return BucketIdentifier.bucketIdFromFileId(fileId);
+        try {
+            return BucketIdentifier.bucketIdFromFileId(fileId);
+        } catch (RuntimeException e) {
+            throw new IOException(
+                    String.format(
+                            "Failed to extract Hudi bucket id from file id '%s' for bucket-aware table %s.",
+                            fileId, tablePath),
+                    e);
+        }
     }
 }
