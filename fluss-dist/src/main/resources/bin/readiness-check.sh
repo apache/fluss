@@ -40,12 +40,14 @@
 #
 # Environment variables (set by helm template or container spec):
 #   FLUSS_HOME            - Fluss installation directory
-#   FLUSS_CONF_DIR        - Configuration directory (default: $FLUSS_HOME/conf)
 #   READINESS_TIMEOUT_MS  - Timeout for Health API call (default: 5000)
 #   READINESS_TCP_HOST    - Host for TCP check (default: $POD_IP or 127.0.0.1)
 #   READINESS_TCP_PORT    - Port for TCP check (default: 9124)
-#   READINESS_BOOTSTRAP_SERVERS - Coordinator bootstrap address
+#   READINESS_BOOTSTRAP_SERVERS - Coordinator bootstrap address (required by Java CLI)
 #   READINESS_GRACE_SECS  - Grace period when API is unsupported (default: 60)
+#   READINESS_HEALTH_CHECK_AUTH - Authentication properties for the health check
+#       Java CLI. Format: 'key1':'value1';'key2':'value2'
+#       If empty/unset, no authentication is applied.
 # ==============================================================================
 
 set -o pipefail
@@ -53,11 +55,9 @@ set -o pipefail
 # ---- Configuration ----
 
 FLUSS_HOME="${FLUSS_HOME:-/opt/fluss}"
-FLUSS_CONF_DIR="${FLUSS_CONF_DIR:-${FLUSS_HOME}/conf}"
 TIMEOUT_MS="${READINESS_TIMEOUT_MS:-5000}"
 TCP_HOST="${READINESS_TCP_HOST:-${POD_IP:-127.0.0.1}}"
 TCP_PORT="${READINESS_TCP_PORT:-9124}"
-BOOTSTRAP_SERVERS="${READINESS_BOOTSTRAP_SERVERS:-}"
 GRACE_SECS="${READINESS_GRACE_SECS:-60}"
 
 # Marker files for tracking state across probe invocations
@@ -81,9 +81,12 @@ check_tcp() {
 }
 
 # Step 2: Run the Java ClusterHealthReadinessCheck CLI tool (cluster health check)
+# All configuration comes from environment variables:
+#   READINESS_BOOTSTRAP_SERVERS  - Coordinator address (required)
+#   READINESS_HEALTH_CHECK_AUTH  - Auth properties (optional)
+# No --configDir needed; the Java CLI builds a clean Configuration from env.
 run_recovery_check() {
-    local conf_dir="$1"
-    local timeout_ms="$2"
+    local timeout_ms="$1"
 
     # Construct classpath (same logic as config.sh)
     local classpath=""
@@ -113,22 +116,15 @@ run_recovery_check() {
         java_cmd="${JAVA_HOME}/bin/java"
     fi
 
-    # Build optional --bootstrapServers argument
-    local bootstrap_arg=""
-    if [[ -n "${BOOTSTRAP_SERVERS}" ]]; then
-        bootstrap_arg="--bootstrapServers ${BOOTSTRAP_SERVERS}"
-    fi
-
-    # Run the check (suppress JVM startup noise, only care about exit code + output)
+    # Run the check — bootstrap servers and auth come from env vars directly,
+    # --timeoutMs is the only CLI arg needed.
     local output
     output=$("${java_cmd}" \
         -XX:+IgnoreUnrecognizedVMOptions \
         -Xmx64m \
         -classpath "${classpath}" \
         org.apache.fluss.dist.ClusterHealthReadinessCheck \
-        --configDir "${conf_dir}" \
-        --timeoutMs "${timeout_ms}" \
-        ${bootstrap_arg} 2>&1)
+        --timeoutMs "${timeout_ms}" 2>&1)
     local exit_code=$?
 
     # Log output to container's main process stderr (visible in kubectl logs)
@@ -223,7 +219,7 @@ fi
 # traffic until either (a) cluster reports GREEN/YELLOW, or (b) the API is
 # unsupported and the grace period has elapsed. Once we latch the marker,
 # subsequent probes take the fast path above.
-run_recovery_check "${FLUSS_CONF_DIR}" "${TIMEOUT_MS}"
+run_recovery_check "${TIMEOUT_MS}"
 local_exit=$?
 
 case $local_exit in
