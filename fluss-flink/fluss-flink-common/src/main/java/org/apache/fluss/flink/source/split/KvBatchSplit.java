@@ -22,9 +22,10 @@ import org.apache.fluss.metadata.TableBucket;
 import javax.annotation.Nullable;
 
 /**
- * A bounded split that reads the full primary-key state of a bucket via the server-side KV scan
- * (FIP-17). Emitted by the enumerator when a primary-key table has no KV snapshot file available
- * for the bucket and the source is running in bounded mode.
+ * A bounded split that reads the full primary-key state of a bucket via the server-side KV scan.
+ * Emitted by the enumerator for every bucket of a primary-key table when the source is running in
+ * bounded mode and the server-side KV scan is enabled (see {@code
+ * client.scanner.kv.server-side.enabled}).
  *
  * <p>This split has no resumable position: on Flink task restart the bucket is rescanned from
  * scratch. Snapshot isolation is provided by the server (a consistent point-in-time view of the

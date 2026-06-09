@@ -1424,9 +1424,11 @@ public class ConfigOptions {
                     .defaultValue(false)
                     .withDescription(
                             "Master switch for using the server-side KV scan in bounded reads "
-                                    + "of primary-key tables when no KV snapshot file is available. When "
-                                    + "false (default), bounded primary-key reads fall back to the prior "
-                                    + "behavior (log-only when lake is enabled, or fail when lake is disabled).");
+                                    + "of primary-key tables. When true, bounded primary-key reads "
+                                    + "scan the current KV state directly via the server-side KV scan. "
+                                    + "When false (default), bounded primary-key reads fall back to the "
+                                    + "prior behavior (log-only when lake is enabled, or fail when lake "
+                                    + "is disabled).");
 
     public static final ConfigOption<Integer> CLIENT_LOOKUP_QUEUE_SIZE =
             key("client.lookup.queue-size")
