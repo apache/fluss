@@ -37,15 +37,15 @@
 </p>
 
 <p align="center">
-  <a href="https://trendshift.io/repositories/14168" target="_blank"><img src="https://trendshift.io/api/badge/repositories/14168" alt="volcengine%2FOpenViking | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+  <a href="https://trendshift.io/repositories/14168" target="_blank"><img src="https://trendshift.io/api/badge/repositories/14168" alt="apache%2Ffluss | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 </p>
 
 ## What is Apache Fluss (Incubating)?
 
 Apache Fluss (Incubating) is a streaming storage built for real-time analytics & AI which can serve as the real-time data layer for Lakehouse architectures.
 
-It bridges the gap between **data streaming** and **data Lakehouse** by enabling low-latency, high-throughput data ingestion and processing while seamlessly integrating with popular compute engines like **Apache Flink**, while 
-Apache Spark, and StarRocks are coming soon.
+It bridges the gap between **data streaming** and **data Lakehouse** by enabling low-latency, high-throughput data ingestion and processing while seamlessly integrating with popular compute engines like **Apache Flink** and
+**Apache Spark**, with StarRocks coming soon.
 
 **Fluss (German: river, pronounced `/flus/`)** enables streaming data continuously converging, distributing and flowing into lakes, like a river 🌊
 

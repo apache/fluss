@@ -644,6 +644,38 @@ abstract class FlinkCatalogITCase {
     }
 
     @Test
+    void testAlterAutoPartitionNumPrecreate() throws Exception {
+        String tblName = "test_alter_auto_partition_num_precreate";
+        ObjectPath objectPath = new ObjectPath(DEFAULT_DB, tblName);
+        TablePath tablePath = new TablePath(DEFAULT_DB, tblName);
+
+        tEnv.executeSql(
+                "create table "
+                        + tblName
+                        + " (a int, dt string) partitioned by (dt) "
+                        + "with ('table.auto-partition.enabled' = 'true',"
+                        + " 'table.auto-partition.key' = 'dt',"
+                        + " 'table.auto-partition.time-unit' = 'hour',"
+                        + " 'table.auto-partition.num-retention' = '-1',"
+                        + " 'table.auto-partition.num-precreate' = '1')");
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath, 1);
+      
+        tEnv.executeSql(
+                "alter table " + tblName + " set ('table.auto-partition.num-precreate' = '3')");
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath, 3);
+
+        CatalogTable table = (CatalogTable) catalog.getTable(objectPath);
+        assertThat(table.getOptions().get(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.key()))
+                .isEqualTo("3");
+
+        tEnv.executeSql("alter table " + tblName + " reset ('table.auto-partition.num-precreate')");
+        table = (CatalogTable) catalog.getTable(objectPath);
+        assertThat(table.getOptions())
+                .doesNotContainKey(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.key());
+      
+      }
+      
+    @Test
     void testAlterAutoPartitionEnabled() throws Exception {
         String tblName = "test_alter_auto_partition_enabled";
         ObjectPath objectPath = new ObjectPath(DEFAULT_DB, tblName);
@@ -670,7 +702,7 @@ abstract class FlinkCatalogITCase {
                 "alter table " + tblName + " set ('table.auto-partition.enabled' = 'false')");
         table = (CatalogTable) catalog.getTable(objectPath);
         assertThat(table.getOptions().get(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key()))
-                .isEqualTo("false");
+                .isEqualTo("false");   
     }
 
     @Test
