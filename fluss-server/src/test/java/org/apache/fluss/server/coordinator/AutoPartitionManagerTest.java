@@ -636,6 +636,66 @@ class AutoPartitionManagerTest {
                         "2024091003", "2024091004", "2024091005", "2024091006", "2024091007");
     }
 
+    @Test
+    void testUpdateAutoPartitionNumPrecreate() throws Exception {
+        ZonedDateTime startTime =
+                LocalDateTime.parse("2024-09-10T00:00:00").atZone(ZoneId.systemDefault());
+        long startMs = startTime.toInstant().toEpochMilli();
+        ManualClock clock = new ManualClock(startMs);
+        ManuallyTriggeredScheduledExecutorService periodicExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+
+        AutoPartitionManager autoPartitionManager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        metadataManager,
+                        remoteDirDynamicLoader,
+                        new Configuration(),
+                        clock,
+                        periodicExecutor);
+        autoPartitionManager.start();
+
+        TableInfo table = createPartitionedTable(-1, 1, AutoPartitionTimeUnit.HOUR);
+        TablePath tablePath = table.getTablePath();
+        autoPartitionManager.addAutoPartitionTable(table, true);
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+
+        Map<String, PartitionRegistration> partitions =
+                zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet()).containsExactlyInAnyOrder("2024091000");
+
+        TableInfo increasedPrecreateTable =
+                createUpdatedTableInfo(table, /* numRetention= */ -1, /* numPreCreate= */ 3);
+        autoPartitionManager.updateAutoPartitionTables(increasedPrecreateTable);
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder("2024091000", "2024091001", "2024091002");
+
+        TableInfo decreasedPrecreateTable =
+                createUpdatedTableInfo(
+                        increasedPrecreateTable, /* numRetention= */ -1, /* numPreCreate= */ 1);
+        autoPartitionManager.updateAutoPartitionTables(decreasedPrecreateTable);
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder("2024091000", "2024091001", "2024091002");
+
+        clock.advanceTime(Duration.ofHours(1));
+        periodicExecutor.triggerPeriodicScheduledTasks();
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder("2024091000", "2024091001", "2024091002");
+
+        clock.advanceTime(Duration.ofHours(2));
+        periodicExecutor.triggerPeriodicScheduledTasks();
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder("2024091000", "2024091001", "2024091002", "2024091003");
+    }
+
     private static class TestParams {
         final AutoPartitionTimeUnit timeUnit;
         final boolean multiplePartitionKeys;
