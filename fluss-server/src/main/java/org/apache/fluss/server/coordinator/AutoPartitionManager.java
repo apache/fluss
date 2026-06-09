@@ -344,7 +344,7 @@ public class AutoPartitionManager implements AutoCloseable {
 
             TableInfo tableInfo = autoPartitionTables.get(tableId);
             if (tableInfo == null) {
-                LOG.info(
+                LOG.debug(
                         "Skipping auto partitioning for table id {} as it is not registered.",
                         tableId);
                 continue;

@@ -28,7 +28,7 @@ import java.util.TimeZone;
 /** A class wrapping the strategy for auto partition. */
 public class AutoPartitionStrategy {
 
-    private final boolean autoPartitionEnable;
+    private final boolean autoPartitionEnabled;
     private final String key;
     private final AutoPartitionTimeUnit timeUnit;
     private final int numPreCreate;
@@ -36,13 +36,13 @@ public class AutoPartitionStrategy {
     private final TimeZone timeZone;
 
     private AutoPartitionStrategy(
-            boolean autoPartitionEnable,
+            boolean autoPartitionEnabled,
             String key,
             AutoPartitionTimeUnit autoPartitionTimeUnit,
             int numPreCreate,
             int numToRetain,
             TimeZone timeZone) {
-        this.autoPartitionEnable = autoPartitionEnable;
+        this.autoPartitionEnabled = autoPartitionEnabled;
         this.key = key;
         this.timeUnit = autoPartitionTimeUnit;
         this.numPreCreate = numPreCreate;
@@ -65,7 +65,7 @@ public class AutoPartitionStrategy {
     }
 
     public boolean isAutoPartitionEnabled() {
-        return autoPartitionEnable;
+        return autoPartitionEnabled;
     }
 
     public String key() {
@@ -91,8 +91,8 @@ public class AutoPartitionStrategy {
     @Override
     public String toString() {
         return "AutoPartitionStrategy{"
-                + "autoPartitionEnable="
-                + autoPartitionEnable
+                + "autoPartitionEnabled="
+                + autoPartitionEnabled
                 + ", key='"
                 + key
                 + '\''
@@ -116,7 +116,7 @@ public class AutoPartitionStrategy {
             return false;
         }
         AutoPartitionStrategy that = (AutoPartitionStrategy) o;
-        return autoPartitionEnable == that.autoPartitionEnable
+        return autoPartitionEnabled == that.autoPartitionEnabled
                 && numPreCreate == that.numPreCreate
                 && numToRetain == that.numToRetain
                 && Objects.equals(key, that.key)
@@ -127,6 +127,6 @@ public class AutoPartitionStrategy {
     @Override
     public int hashCode() {
         return Objects.hash(
-                autoPartitionEnable, key, timeUnit, numPreCreate, numToRetain, timeZone);
+                autoPartitionEnabled, key, timeUnit, numPreCreate, numToRetain, timeZone);
     }
 }
