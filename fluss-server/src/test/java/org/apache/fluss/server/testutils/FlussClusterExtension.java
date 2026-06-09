@@ -1001,10 +1001,10 @@ public final class FlussClusterExtension
             // Use short cleanup timeouts so that a slow in-flight drop does not block
             // subsequent drops beyond the test's retry window.
             clusterConf.set(
-                    ConfigOptions.COORDINATOR_REPLICA_CLEANUP_INFLIGHT_TIMEOUT,
+                    ConfigOptions.COORDINATOR_LIFECYCLE_THROTTLER_INFLIGHT_TIMEOUT,
                     Duration.ofSeconds(2));
             clusterConf.set(
-                    ConfigOptions.COORDINATOR_REPLICA_CLEANUP_TIMEOUT_CHECK_INTERVAL,
+                    ConfigOptions.COORDINATOR_LIFECYCLE_THROTTLER_TIMEOUT_CHECK_INTERVAL,
                     Duration.ofSeconds(1));
         }
 

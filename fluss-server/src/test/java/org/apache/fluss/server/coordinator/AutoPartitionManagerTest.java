@@ -747,9 +747,9 @@ class AutoPartitionManagerTest {
     }
 
     // ---------------------------------------------------------------------------------------
-    // Batch / inflight tests previously housed here have moved to ReplicaCleanupManagerTest.
+    // Batch / inflight tests previously housed here have moved to TableLifecycleThrottlerTest.
     // The AutoPartitionManager now drops expired partitions synchronously and the asynchronous
-    // replica cleanup throttling is handled by ReplicaCleanupManager.
+    // replica cleanup throttling is handled by TableLifecycleThrottler.
     // ---------------------------------------------------------------------------------------
 
     private static class TestParams {

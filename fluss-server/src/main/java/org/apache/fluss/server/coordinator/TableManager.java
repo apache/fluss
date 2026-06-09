@@ -34,8 +34,6 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.annotation.Nullable;
-
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -54,14 +52,16 @@ public class TableManager {
     private final ExecutorService ioExecutor;
 
     /**
-     * Optional manager used to throttle the asynchronous replica cleanup that follows {@link
-     * #onDeleteTable(long)} / {@link #onDeletePartition(long, long)}. When set, {@link
-     * #resumeDeletions()} routes eligible drops through the manager (one at a time) instead of
-     * invoking the state-machine transitions directly, and {@link #completeDeleteTable(long)} /
-     * {@link #completeDeletePartition(TablePartition)} notify the manager so the next pending drop
-     * can be admitted.
+     * Throttler used to pace the asynchronous replica cleanup that follows {@link
+     * #onDeleteTable(long)} / {@link #onDeletePartition(long, long)}. {@link #resumeDeletions()}
+     * routes eligible drops through it (one at a time) instead of invoking the state-machine
+     * transitions directly, and {@link #completeDeleteTable(long)} / {@link
+     * #completeDeletePartition(TablePartition)} notify it so the next pending drop can be admitted.
+     *
+     * <p>Wired in via the constructor so that the reference publication is safe (final field) and
+     * cannot race with the coordinator event thread.
      */
-    @Nullable private ReplicaCleanupManager replicaCleanupManager;
+    private final TableLifecycleThrottler lifecycleThrottler;
 
     public TableManager(
             MetadataManager metadataManager,
@@ -69,17 +69,15 @@ public class TableManager {
             ReplicaStateMachine replicaStateMachine,
             TableBucketStateMachine tableBucketStateMachine,
             RemoteStorageCleaner remoteStorageCleaner,
-            ExecutorService ioExecutor) {
+            ExecutorService ioExecutor,
+            TableLifecycleThrottler lifecycleThrottler) {
         this.metadataManager = metadataManager;
         this.remoteStorageCleaner = remoteStorageCleaner;
         this.coordinatorContext = coordinatorContext;
         this.replicaStateMachine = replicaStateMachine;
         this.tableBucketStateMachine = tableBucketStateMachine;
         this.ioExecutor = ioExecutor;
-    }
-
-    public void setReplicaCleanupManager(@Nullable ReplicaCleanupManager replicaCleanupManager) {
-        this.replicaCleanupManager = replicaCleanupManager;
+        this.lifecycleThrottler = lifecycleThrottler;
     }
 
     public void startup() {
@@ -230,12 +228,7 @@ public class TableManager {
                 completeDeleteTable(tableId);
                 LOG.info("Deletion of table with id {} successfully completed.", tableId);
             } else if (isEligibleForDeletion(tableId)) {
-                if (replicaCleanupManager != null) {
-                    replicaCleanupManager.submitTableDropForResume(
-                            tableId, () -> onDeleteTable(tableId));
-                } else {
-                    onDeleteTable(tableId);
-                }
+                lifecycleThrottler.submitTableDropForResume(tableId);
             }
         }
     }
@@ -252,16 +245,9 @@ public class TableManager {
             } else if (isEligibleForDeletion(partition)) {
                 long tableId = partition.getTableId();
                 long partitionId = partition.getPartitionId();
-                if (replicaCleanupManager != null) {
-                    String partitionName = coordinatorContext.getPartitionName(partitionId);
-                    replicaCleanupManager.submitPartitionDropForResume(
-                            tableId,
-                            partitionId,
-                            partitionName,
-                            () -> onDeletePartition(tableId, partitionId));
-                } else {
-                    onDeletePartition(tableId, partitionId);
-                }
+                String partitionName = coordinatorContext.getPartitionName(partitionId);
+                lifecycleThrottler.submitPartitionDropForResume(
+                        tableId, partitionId, partitionName);
             }
         }
     }
@@ -272,10 +258,8 @@ public class TableManager {
         asyncDeleteRemoteDirectory(tableId);
         asyncDeleteTableMetadata(tableId);
         coordinatorContext.removeTable(tableId);
-        if (replicaCleanupManager != null) {
-            // Release the manager's in-flight tracking so the next batch can be submitted.
-            replicaCleanupManager.onTableDropCompleted(tableId);
-        }
+        // Release the manager's in-flight tracking so the next batch can be submitted.
+        lifecycleThrottler.onTableDropCompleted(tableId);
     }
 
     private void completeDeletePartition(TablePartition tablePartition) {
@@ -286,9 +270,7 @@ public class TableManager {
         asyncDeleteRemoteDirectory(tablePartition);
         asyncDeletePartitionMetadata(tablePartition.getPartitionId());
         coordinatorContext.removePartition(tablePartition);
-        if (replicaCleanupManager != null) {
-            replicaCleanupManager.onPartitionDropCompleted(tablePartition);
-        }
+        lifecycleThrottler.onPartitionDropCompleted(tablePartition);
     }
 
     private void asyncDeleteRemoteDirectory(long tableId) {

@@ -29,7 +29,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
-import org.apache.fluss.server.coordinator.ReplicaCleanupManager;
+import org.apache.fluss.server.coordinator.TableLifecycleThrottler;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.CreatePartitionEvent;
 import org.apache.fluss.server.coordinator.event.CreateTableEvent;
@@ -47,6 +47,7 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.clock.SystemClock;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -82,7 +83,7 @@ class TableChangeWatcherTest {
     private static ZooKeeperClient zookeeperClient;
     private static String remoteDataDir;
     private TestingEventManager eventManager;
-    private ReplicaCleanupManager replicaCleanupManager;
+    private TableLifecycleThrottler lifecycleThrottler;
     private TableChangeWatcher tableChangeWatcher;
     private static MetadataManager metadataManager;
 
@@ -111,16 +112,14 @@ class TableChangeWatcherTest {
         metadataManager.createDatabase(DEFAULT_DB, DatabaseDescriptor.builder().build(), false);
 
         eventManager = new TestingEventManager();
-        // Use a real ReplicaCleanupManager so that drop submissions are forwarded into the
+        // Use a real TableLifecycleThrottler so that drop submissions are forwarded into the
         // event manager as DropPartitionEvent / DropTableEvent (the existing assertions in this
         // test verify exactly that).
-        replicaCleanupManager =
-                new ReplicaCleanupManager(
-                        eventManager,
-                        org.apache.fluss.utils.clock.SystemClock.getInstance(),
-                        new org.apache.fluss.config.Configuration());
+        lifecycleThrottler =
+                new TableLifecycleThrottler(
+                        eventManager, SystemClock.getInstance(), new Configuration());
         tableChangeWatcher =
-                new TableChangeWatcher(zookeeperClient, eventManager, replicaCleanupManager);
+                new TableChangeWatcher(zookeeperClient, eventManager, lifecycleThrottler);
         tableChangeWatcher.start();
     }
 
@@ -129,8 +128,8 @@ class TableChangeWatcherTest {
         if (tableChangeWatcher != null) {
             tableChangeWatcher.stop();
         }
-        if (replicaCleanupManager != null) {
-            replicaCleanupManager.close();
+        if (lifecycleThrottler != null) {
+            lifecycleThrottler.close();
         }
     }
 
@@ -475,13 +474,11 @@ class TableChangeWatcherTest {
         // existing nodes with full data - the same code path as when the async
         // getData race causes NODE_CHANGED to be lost.
         TestingEventManager newEventManager = new TestingEventManager();
-        ReplicaCleanupManager newCleanupManager =
-                new ReplicaCleanupManager(
-                        newEventManager,
-                        org.apache.fluss.utils.clock.SystemClock.getInstance(),
-                        new org.apache.fluss.config.Configuration());
+        TableLifecycleThrottler newThrottler =
+                new TableLifecycleThrottler(
+                        newEventManager, SystemClock.getInstance(), new Configuration());
         TableChangeWatcher newWatcher =
-                new TableChangeWatcher(zookeeperClient, newEventManager, newCleanupManager);
+                new TableChangeWatcher(zookeeperClient, newEventManager, newThrottler);
         newWatcher.start();
 
         retry(
@@ -490,6 +487,6 @@ class TableChangeWatcherTest {
                         assertThat(newEventManager.getEvents())
                                 .containsExactlyInAnyOrderElementsOf(expectedEvents));
         newWatcher.stop();
-        newCleanupManager.close();
+        newThrottler.close();
     }
 }

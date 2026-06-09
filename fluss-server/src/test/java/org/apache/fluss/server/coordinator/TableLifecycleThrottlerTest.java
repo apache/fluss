@@ -22,6 +22,7 @@ import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.DropPartitionEvent;
 import org.apache.fluss.server.coordinator.event.DropTableEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.coordinator.event.ResumeDropEvent;
 import org.apache.fluss.utils.clock.ManualClock;
 
 import org.junit.jupiter.api.AfterEach;
@@ -33,13 +34,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Unit tests for {@link ReplicaCleanupManager}. */
-class ReplicaCleanupManagerTest {
+/** Unit tests for {@link TableLifecycleThrottler}. */
+class TableLifecycleThrottlerTest {
 
     private RecordingEventManager eventManager;
     private ManualClock clock;
@@ -59,7 +59,7 @@ class ReplicaCleanupManagerTest {
 
     @Test
     void testSubmitPartitionDropAdmitsImmediately() {
-        ReplicaCleanupManager manager = newManager();
+        TableLifecycleThrottler manager = newThrottler();
 
         manager.submitPartitionDrop(1L, 100L, "p20240101");
 
@@ -70,7 +70,7 @@ class ReplicaCleanupManagerTest {
 
     @Test
     void testSubmitTableDropAdmitsImmediately() {
-        ReplicaCleanupManager manager = newManager();
+        TableLifecycleThrottler manager = newThrottler();
 
         manager.submitTableDrop(7L, false, false, false);
 
@@ -80,7 +80,7 @@ class ReplicaCleanupManagerTest {
 
     @Test
     void testOneAtATimeThrottling() {
-        ReplicaCleanupManager manager = newManager();
+        TableLifecycleThrottler manager = newThrottler();
 
         // First drop is admitted immediately; subsequent drops pend.
         manager.submitPartitionDrop(1L, 100L, "p1");
@@ -94,7 +94,7 @@ class ReplicaCleanupManagerTest {
 
     @Test
     void testCompletionAdmitsNextPending() {
-        ReplicaCleanupManager manager = newManager();
+        TableLifecycleThrottler manager = newThrottler();
 
         manager.submitPartitionDrop(1L, 100L, "p1");
         manager.submitPartitionDrop(1L, 101L, "p2");
@@ -119,7 +119,7 @@ class ReplicaCleanupManagerTest {
 
     @Test
     void testTableDropCompletionAdmitsNext() {
-        ReplicaCleanupManager manager = newManager();
+        TableLifecycleThrottler manager = newThrottler();
 
         manager.submitTableDrop(1L, false, false, false);
         manager.submitPartitionDrop(2L, 200L, "p2");
@@ -136,7 +136,7 @@ class ReplicaCleanupManagerTest {
 
     @Test
     void testFifoOrder() {
-        ReplicaCleanupManager manager = newManager();
+        TableLifecycleThrottler manager = newThrottler();
 
         manager.submitPartitionDrop(1L, 10L, "p10");
         manager.submitPartitionDrop(1L, 11L, "p11");
@@ -153,7 +153,7 @@ class ReplicaCleanupManagerTest {
 
     @Test
     void testCompletionForUnknownDropIsNoOp() {
-        ReplicaCleanupManager manager = newManager();
+        TableLifecycleThrottler manager = newThrottler();
 
         manager.onPartitionDropCompleted(new TablePartition(99L, 999L));
         manager.onTableDropCompleted(123L);
@@ -164,7 +164,7 @@ class ReplicaCleanupManagerTest {
 
     @Test
     void testCompletionForMismatchedDropIsNoOp() {
-        ReplicaCleanupManager manager = newManager();
+        TableLifecycleThrottler manager = newThrottler();
 
         manager.submitPartitionDrop(1L, 100L, "p1");
 
@@ -179,7 +179,7 @@ class ReplicaCleanupManagerTest {
 
     @Test
     void testTimeoutAbandonsInflightDrop() {
-        ReplicaCleanupManager manager = newManager();
+        TableLifecycleThrottler manager = newThrottler();
 
         manager.submitTableDrop(1L, false, false, false);
         manager.submitPartitionDrop(2L, 200L, "px");
@@ -204,7 +204,7 @@ class ReplicaCleanupManagerTest {
 
     @Test
     void testDuplicateCompletionIsNoOp() {
-        ReplicaCleanupManager manager = newManager();
+        TableLifecycleThrottler manager = newThrottler();
         TablePartition tp = new TablePartition(1L, 100L);
 
         manager.submitPartitionDrop(tp.getTableId(), tp.getPartitionId(), "px");
@@ -220,7 +220,7 @@ class ReplicaCleanupManagerTest {
 
     @Test
     void testStartIsIdempotentAndCloseDisablesStart() {
-        ReplicaCleanupManager manager = newManager();
+        TableLifecycleThrottler manager = newThrottler();
 
         manager.start();
         manager.start(); // second start is a no-op
@@ -232,60 +232,67 @@ class ReplicaCleanupManagerTest {
 
     @Test
     void testCloseIsIdempotent() {
-        ReplicaCleanupManager manager = newManager();
+        TableLifecycleThrottler manager = newThrottler();
 
         manager.close();
         manager.close(); // must not throw
     }
 
     @Test
-    void testSubmitTableDropForResumeRunsRunnableInsteadOfEvent() {
-        ReplicaCleanupManager manager = newManager();
-        AtomicInteger invoked = new AtomicInteger();
+    void testSubmitTableDropForResumeEnqueuesResumeEvent() {
+        TableLifecycleThrottler manager = newThrottler();
 
-        manager.submitTableDropForResume(7L, invoked::incrementAndGet);
+        manager.submitTableDropForResume(7L);
 
-        assertThat(invoked).hasValue(1);
-        assertThat(eventManager.summaries()).isEmpty();
+        // Resume-mode submission enqueues an identity-only ResumeDropEvent for the event thread.
+        assertThat(eventManager.events).hasSize(1);
+        assertThat(eventManager.events.get(0)).isInstanceOf(ResumeDropEvent.class);
+        ResumeDropEvent resumeEvent = (ResumeDropEvent) eventManager.events.get(0);
+        assertThat(resumeEvent.getPartitionId()).isNull();
+        assertThat(resumeEvent.getTableId()).isEqualTo(7L);
         assertThat(manager.getInflightCount()).isOne();
     }
 
     @Test
-    void testSubmitPartitionDropForResumeRunsRunnableInsteadOfEvent() {
-        ReplicaCleanupManager manager = newManager();
-        AtomicInteger invoked = new AtomicInteger();
+    void testSubmitPartitionDropForResumeEnqueuesResumeEvent() {
+        TableLifecycleThrottler manager = newThrottler();
 
-        manager.submitPartitionDropForResume(1L, 100L, "p20240101", invoked::incrementAndGet);
+        manager.submitPartitionDropForResume(1L, 100L, "p20240101");
 
-        assertThat(invoked).hasValue(1);
-        assertThat(eventManager.summaries()).isEmpty();
+        assertThat(eventManager.events).hasSize(1);
+        assertThat(eventManager.events.get(0)).isInstanceOf(ResumeDropEvent.class);
+        ResumeDropEvent resumeEvent = (ResumeDropEvent) eventManager.events.get(0);
+        assertThat(resumeEvent.getTableId()).isEqualTo(1L);
+        assertThat(resumeEvent.getPartitionId()).isEqualTo(100L);
         assertThat(manager.getInflightCount()).isOne();
     }
 
     @Test
     void testForResumeDropRespectsOneAtATime() {
-        ReplicaCleanupManager manager = newManager();
-        AtomicInteger first = new AtomicInteger();
-        AtomicInteger second = new AtomicInteger();
+        TableLifecycleThrottler manager = newThrottler();
 
-        manager.submitTableDropForResume(1L, first::incrementAndGet);
-        manager.submitPartitionDropForResume(2L, 200L, "px", second::incrementAndGet);
+        manager.submitTableDropForResume(1L);
+        manager.submitPartitionDropForResume(2L, 200L, "px");
 
-        // First admitted, second pends.
-        assertThat(first).hasValue(1);
-        assertThat(second).hasValue(0);
+        // First admitted (resume event enqueued); second pends.
+        assertThat(eventManager.events).hasSize(1);
+        ResumeDropEvent firstEvent = (ResumeDropEvent) eventManager.events.get(0);
+        assertThat(firstEvent.getPartitionId()).isNull();
+        assertThat(firstEvent.getTableId()).isEqualTo(1L);
         assertThat(manager.getInflightCount()).isOne();
         assertThat(manager.getPendingDropCount()).isOne();
 
         // Completion of the first admits the second.
         manager.onTableDropCompleted(1L);
-        assertThat(second).hasValue(1);
-        assertThat(eventManager.summaries()).isEmpty();
+        assertThat(eventManager.events).hasSize(2);
+        ResumeDropEvent secondEvent = (ResumeDropEvent) eventManager.events.get(1);
+        assertThat(secondEvent.getTableId()).isEqualTo(2L);
+        assertThat(secondEvent.getPartitionId()).isEqualTo(200L);
     }
 
     @Test
     void testPartitionedTableDropIsFireAndForget() {
-        ReplicaCleanupManager manager = newManager();
+        TableLifecycleThrottler manager = newThrottler();
 
         // Submit a partition drop first (will be admitted as inflight).
         manager.submitPartitionDrop(1L, 100L, "p1");
@@ -313,7 +320,7 @@ class ReplicaCleanupManagerTest {
 
     @Test
     void testPartitionedTableDropAdmittedFirstIsAlsoFireAndForget() {
-        ReplicaCleanupManager manager = newManager();
+        TableLifecycleThrottler manager = newThrottler();
 
         // Submit a partitioned table drop as the first drop.
         manager.submitTableDrop(5L, true, true, false);
@@ -326,7 +333,7 @@ class ReplicaCleanupManagerTest {
 
     @Test
     void testPartitionedTableWithoutAutoPartitionIsAlsoFireAndForget() {
-        ReplicaCleanupManager manager = newManager();
+        TableLifecycleThrottler manager = newThrottler();
 
         // A partitioned table without auto-partition still has no table-level replicas.
         manager.submitTableDrop(5L, true, false, false);
@@ -339,7 +346,7 @@ class ReplicaCleanupManagerTest {
 
     @Test
     void testNonPartitionedTableDropIsNotFireAndForget() {
-        ReplicaCleanupManager manager = newManager();
+        TableLifecycleThrottler manager = newThrottler();
 
         // Non-partitioned table drop should be tracked normally.
         manager.submitTableDrop(5L, false, false, false);
@@ -353,12 +360,12 @@ class ReplicaCleanupManagerTest {
     // Helpers
     // ------------------------------------------------------------------------------------------
 
-    private ReplicaCleanupManager newManager() {
-        ReplicaCleanupManager manager =
-                new ReplicaCleanupManager(
+    private TableLifecycleThrottler newThrottler() {
+        TableLifecycleThrottler throttler =
+                new TableLifecycleThrottler(
                         eventManager, clock, timeoutExecutor, 3 * 60 * 1000L, 60 * 1000L);
-        manager.start(); // Activate throttling for unit tests.
-        return manager;
+        throttler.start(); // Activate throttling for unit tests.
+        return throttler;
     }
 
     /** Records the order of drop events admitted into the coordinator event queue. */
@@ -401,7 +408,7 @@ class ReplicaCleanupManagerTest {
 
     /**
      * A scheduled executor that never actually runs scheduled tasks, so tests retain full control
-     * over when {@link ReplicaCleanupManager#checkTimeouts()} is invoked.
+     * over when {@link TableLifecycleThrottler#checkTimeouts()} is invoked.
      */
     private static final class NoOpScheduledExecutor extends ScheduledThreadPoolExecutor
             implements ScheduledExecutorService {

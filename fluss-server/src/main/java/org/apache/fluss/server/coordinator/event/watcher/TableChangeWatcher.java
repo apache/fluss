@@ -23,7 +23,7 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.server.coordinator.ReplicaCleanupManager;
+import org.apache.fluss.server.coordinator.TableLifecycleThrottler;
 import org.apache.fluss.server.coordinator.event.CreatePartitionEvent;
 import org.apache.fluss.server.coordinator.event.CreateTableEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
@@ -57,18 +57,18 @@ public class TableChangeWatcher {
     private volatile boolean running;
 
     private final EventManager eventManager;
-    private final ReplicaCleanupManager replicaCleanupManager;
+    private final TableLifecycleThrottler lifecycleThrottler;
     private final ZooKeeperClient zooKeeperClient;
 
     public TableChangeWatcher(
             ZooKeeperClient zooKeeperClient,
             EventManager eventManager,
-            ReplicaCleanupManager replicaCleanupManager) {
+            TableLifecycleThrottler lifecycleThrottler) {
         this.zooKeeperClient = zooKeeperClient;
         this.curatorCache =
                 CuratorCache.build(zooKeeperClient.getCuratorClient(), DatabasesZNode.path());
         this.eventManager = eventManager;
-        this.replicaCleanupManager = replicaCleanupManager;
+        this.lifecycleThrottler = lifecycleThrottler;
         this.curatorCache.listenable().addListener(new TablePathChangeListener());
     }
 
@@ -177,7 +177,7 @@ public class TableChangeWatcher {
                             // starve unrelated coordinator work.
                             PartitionRegistration partition =
                                     PartitionZNode.decode(oldData.getData());
-                            replicaCleanupManager.submitPartitionDrop(
+                            lifecycleThrottler.submitPartitionDrop(
                                     partition.getTableId(),
                                     partition.getPartitionId(),
                                     physicalTablePath.getPartitionName());
@@ -191,7 +191,7 @@ public class TableChangeWatcher {
                             TableRegistration table = TableZNode.decode(oldData.getData());
                             TableConfig tableConfig =
                                     new TableConfig(Configuration.fromMap(table.properties));
-                            replicaCleanupManager.submitTableDrop(
+                            lifecycleThrottler.submitTableDrop(
                                     table.tableId,
                                     table.isPartitioned(),
                                     tableConfig.getAutoPartitionStrategy().isAutoPartitionEnabled(),

@@ -76,6 +76,10 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
  * An auto partition manager which will trigger auto partition for the tables in cluster
  * periodically. It'll use a {@link ScheduledExecutorService} to schedule the auto partition which
  * will trigger auto partition for them.
+ *
+ * <p>TODO: migrate the jittered partition-creation throttling logic into {@link
+ * TableLifecycleThrottler} so that partition creation and deletion share the same lifecycle gate.
+ * Tracked by https://github.com/apache/fluss/issues/3457.
  */
 public class AutoPartitionManager implements AutoCloseable {
 

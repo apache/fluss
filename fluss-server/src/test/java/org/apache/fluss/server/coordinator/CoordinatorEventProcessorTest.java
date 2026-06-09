@@ -802,13 +802,13 @@ class CoordinatorEventProcessorTest {
         // Drop partition1 via ZK (simulates the watcher path).
         zookeeperClient.deletePartition(tablePath, partition1Name);
 
-        // Verify the drop entered the cleanup manager and partition is fully deleted.
-        ReplicaCleanupManager cleanupManager = eventProcessor.getReplicaCleanupManager();
+        // Verify the drop entered the lifecycle throttler and partition is fully deleted.
+        TableLifecycleThrottler throttler = eventProcessor.getLifecycleThrottler();
         verifyPartitionDropped(tableId, partition1Id);
 
-        // After completion, the cleanup manager should have released tracking.
-        assertThat(cleanupManager.getInflightCount()).isZero();
-        assertThat(cleanupManager.getPendingDropCount()).isZero();
+        // After completion, the lifecycle throttler should have released tracking.
+        assertThat(throttler.getInflightCount()).isZero();
+        assertThat(throttler.getPendingDropCount()).isZero();
 
         // Partition2 should remain online.
         verifyPartitionCreated(
@@ -860,8 +860,8 @@ class CoordinatorEventProcessorTest {
         // Drop the entire table (triggers NODE_DELETED for partitions + table via watcher).
         metadataManager.dropTable(tablePath, false);
 
-        // Verify the drops entered the cleanup manager.
-        ReplicaCleanupManager cleanupManager = eventProcessor.getReplicaCleanupManager();
+        // Verify the drops entered the lifecycle throttler.
+        TableLifecycleThrottler cleanupManager = eventProcessor.getLifecycleThrottler();
         retry(
                 Duration.ofMinutes(1),
                 () ->
@@ -882,7 +882,7 @@ class CoordinatorEventProcessorTest {
         verifyPartitionDropped(tableId, partition2Id);
         verifyTableDropped(tableId);
 
-        // Cleanup manager returns to idle state after all completions propagate.
+        // Lifecycle throttler returns to idle state after all completions propagate.
         retry(
                 Duration.ofMinutes(1),
                 () -> {
@@ -941,8 +941,8 @@ class CoordinatorEventProcessorTest {
         initCoordinatorChannel();
         eventProcessor.startup();
 
-        // Verify partition2 is fully deleted (routed through cleanup manager on startup).
-        ReplicaCleanupManager cleanupManager = eventProcessor.getReplicaCleanupManager();
+        // Verify partition2 is fully deleted (routed through lifecycle throttler on startup).
+        TableLifecycleThrottler cleanupManager = eventProcessor.getLifecycleThrottler();
         verifyPartitionDropped(tableId, partition2Id);
 
         // Partition1 should remain online.
@@ -952,7 +952,7 @@ class CoordinatorEventProcessorTest {
                 nBuckets,
                 replicationFactor);
 
-        // Cleanup manager returns to idle.
+        // Lifecycle throttler returns to idle.
         assertThat(cleanupManager.getInflightCount()).isZero();
         assertThat(cleanupManager.getPendingDropCount()).isZero();
     }

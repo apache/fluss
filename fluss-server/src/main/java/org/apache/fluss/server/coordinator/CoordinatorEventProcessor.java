@@ -87,6 +87,7 @@ import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseRecei
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceTaskTimeoutEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
+import org.apache.fluss.server.coordinator.event.ResumeDropEvent;
 import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
 import org.apache.fluss.server.coordinator.event.TableRegistrationChangeEvent;
 import org.apache.fluss.server.coordinator.event.watcher.CoordinatorChangeWatcher;
@@ -175,7 +176,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final CoordinatorEventManager coordinatorEventManager;
     private final MetadataManager metadataManager;
     private final TableManager tableManager;
-    private final ReplicaCleanupManager replicaCleanupManager;
+    private final TableLifecycleThrottler lifecycleThrottler;
     private final AutoPartitionManager autoPartitionManager;
     private final LakeTableTieringManager lakeTableTieringManager;
     private final TableChangeWatcher tableChangeWatcher;
@@ -226,6 +227,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         zooKeeperClient);
         this.metadataManager = metadataManager;
 
+        this.lifecycleThrottler = new TableLifecycleThrottler(coordinatorEventManager, clock, conf);
         this.tableManager =
                 new TableManager(
                         metadataManager,
@@ -233,15 +235,13 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         replicaStateMachine,
                         tableBucketStateMachine,
                         new RemoteStorageCleaner(conf, ioExecutor),
-                        ioExecutor);
-        this.replicaCleanupManager =
-                new ReplicaCleanupManager(coordinatorEventManager, clock, conf);
-        this.tableManager.setReplicaCleanupManager(replicaCleanupManager);
+                        ioExecutor,
+                        lifecycleThrottler);
         this.coordinatorChangeWatcher =
                 new CoordinatorChangeWatcher(zooKeeperClient, coordinatorEventManager);
         this.tableChangeWatcher =
                 new TableChangeWatcher(
-                        zooKeeperClient, coordinatorEventManager, replicaCleanupManager);
+                        zooKeeperClient, coordinatorEventManager, lifecycleThrottler);
         this.tabletServerChangeWatcher =
                 new TabletServerChangeWatcher(zooKeeperClient, coordinatorEventManager);
         this.coordinatorRequestBatch =
@@ -280,8 +280,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     @VisibleForTesting
-    ReplicaCleanupManager getReplicaCleanupManager() {
-        return replicaCleanupManager;
+    TableLifecycleThrottler getLifecycleThrottler() {
+        return lifecycleThrottler;
     }
 
     public void startup() {
@@ -311,7 +311,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 coordinatorContext.getServerTags());
         updateTabletServerMetadataCacheWhenStartup(tabletServerInfoList);
 
-        replicaCleanupManager.start();
+        lifecycleThrottler.start();
 
         // start table manager
         tableManager.startup();
@@ -578,8 +578,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // first shutdown table manager
         tableManager.shutdown();
 
-        // shut down replica cleanup manager timeout checker
-        replicaCleanupManager.close();
+        // shut down lifecycle throttler timeout checker
+        lifecycleThrottler.close();
 
         // then stop watchers
         coordinatorChangeWatcher.stop();
@@ -675,6 +675,19 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     timeoutEvent.getTableBucket());
             rebalanceManager.finishRebalanceTask(
                     timeoutEvent.getTableBucket(), RebalanceStatus.TIMEOUT);
+        } else if (event instanceof ResumeDropEvent) {
+            // Resume-mode reconciliation queued by TableLifecycleThrottler: dispatch on the event
+            // thread so the @NotThreadSafe CoordinatorContext / state machines are only mutated
+            // here. The event carries identity-only (kind + ids); the handler chosen below is
+            // determined by the event-thread code path, not by the (potentially non-event-thread)
+            // submitter, so callers cannot smuggle in unsafe lambdas.
+            ResumeDropEvent resumeDropEvent = (ResumeDropEvent) event;
+            if (resumeDropEvent.getPartitionId() == null) {
+                tableManager.onDeleteTable(resumeDropEvent.getTableId());
+            } else {
+                tableManager.onDeletePartition(
+                        resumeDropEvent.getTableId(), resumeDropEvent.getPartitionId());
+            }
         } else if (event instanceof ListRebalanceProgressEvent) {
             ListRebalanceProgressEvent listRebalanceProgressEvent =
                     (ListRebalanceProgressEvent) event;
