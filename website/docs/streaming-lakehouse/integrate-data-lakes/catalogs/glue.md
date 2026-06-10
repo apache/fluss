@@ -150,7 +150,7 @@ CREATE TABLE customer_orders (
 );
 ```
 
-Fluss will automatically provision the database (if it does not exist) and create the corresponding Iceberg table within the AWS Glue Data Catalog. Once data is ingested and the tiering service runs, the parquet files are stored in S3.
+Fluss will automatically provision the database (if it does not exist) and create the corresponding Iceberg table within the AWS Glue Data Catalog. Once data is ingested and the tiering service runs, the Parquet files are stored in S3.
 
 ### Query Data with Athena
 
