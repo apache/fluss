@@ -604,7 +604,7 @@ public final class Replica {
                                 ? -1
                                 : logTablet.localMaxTimestamp() - logTablet.getLakeMaxTimestamp());
         lakeTieringMetricGroup.gauge(
-                MetricNames.LAKE_PENDING_RECORD_LAG,
+                MetricNames.LOG_LAKE_PENDING_RECORD_LAG,
                 () -> {
                     long ts = logTablet.getLakePendingTimestamp();
                     return ts <= 0L ? ts : Math.max(clock.milliseconds() - ts, 0L);
