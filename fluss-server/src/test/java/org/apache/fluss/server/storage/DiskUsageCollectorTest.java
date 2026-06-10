@@ -54,8 +54,10 @@ class DiskUsageCollectorTest {
         DiskUsageCollector twoDirs = new DiskUsageCollector(Arrays.asList(dataDir1, dataDir2));
         DiskUsageCollector oneDir = new DiskUsageCollector(Collections.singletonList(dataDir1));
 
-        // both directories share the same FileStore -> result should match a single-dir collector
-        assertThat(twoDirs.collect()).isEqualTo(oneDir.collect());
+        // both directories share the same FileStore -> result should be very close to a
+        // single-dir collector (not exact because usable space can change between calls)
+        assertThat(twoDirs.collect())
+                .isCloseTo(oneDir.collect(), org.assertj.core.data.Offset.offset(1e-4));
     }
 
     @Test

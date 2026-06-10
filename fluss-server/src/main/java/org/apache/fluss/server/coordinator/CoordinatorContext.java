@@ -30,7 +30,6 @@ import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
-import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -39,7 +38,6 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -58,16 +56,7 @@ public class CoordinatorContext {
     public static final int INITIAL_COORDINATOR_EPOCH = 0;
     public static final int INITIAL_COORDINATOR_EPOCH_ZK_VERSION = 0;
 
-    // for simplicity, we just use retry time, may consider make it a configurable value
-    // and use combine retry times and retry delay
-    public static final int DELETE_TRY_TIMES = 5;
-
     private int offlineBucketCount = 0;
-
-    // a map from the tablet replica to the delete fail number,
-    // once the delete fail number is greater than DELETE_TRY_TIMES, we consider it as
-    // a success deletion.
-    private final Map<TableBucketReplica, Integer> failDeleteNumbers = new HashMap<>();
 
     private final Set<String> liveCoordinatorServers = new HashSet<>();
     private final Map<Integer, ServerInfo> liveTabletServers = new HashMap<>();
@@ -97,6 +86,15 @@ public class CoordinatorContext {
     private final Set<Long> tablesToBeDeleted = new HashSet<>();
 
     private final Set<TablePartition> partitionsToBeDeleted = new HashSet<>();
+
+    /**
+     * Tables/partitions temporarily ineligible for deletion retry. Marked when a replica's hosting
+     * TabletServer is offline or stopReplica RPC failed; cleared when the TabletServer reconnects.
+     * The value stores the reason for diagnostic logging.
+     */
+    private final Map<Long, String> tablesIneligibleForDeletion = new HashMap<>();
+
+    private final Map<TablePartition, String> partitionsIneligibleForDeletion = new HashMap<>();
 
     /**
      * A mapping from tablet server to offline buckets. When the leader replica of a table bucket
@@ -480,46 +478,6 @@ public class CoordinatorContext {
         return allReplicas;
     }
 
-    /**
-     * Pick up the replicas that should retry delete and replicas that considered as success delete.
-     *
-     * @return A tuple of retry delete replicas and success delete replicas
-     */
-    public Tuple2<Set<TableBucketReplica>, Set<TableBucketReplica>>
-            retryDeleteAndSuccessDeleteReplicas(Collection<TableBucketReplica> failDeleteReplicas) {
-        Set<TableBucketReplica> retryDeleteReplicas = new HashSet<>();
-        Set<TableBucketReplica> successDeleteReplicas = new HashSet<>();
-        for (TableBucketReplica tableBucketReplica : failDeleteReplicas) {
-            if (failDeleteNumbers.getOrDefault(tableBucketReplica, 0) >= DELETE_TRY_TIMES) {
-                // if the current fail number is greater or equal than the threshold, we will
-                // consider it as success delete
-                LOG.warn(
-                        "Delete replica {} failed, retry times is equal to the max retry times {},"
-                                + " just mark it as a successful replica deletion directly.",
-                        tableBucketReplica,
-                        DELETE_TRY_TIMES);
-                failDeleteNumbers.remove(tableBucketReplica);
-                successDeleteReplicas.add(tableBucketReplica);
-            } else {
-                // increment the fail number
-                failDeleteNumbers.merge(tableBucketReplica, 1, Integer::sum);
-                LOG.warn(
-                        "Delete replica {} failed, retry times = {}.",
-                        tableBucketReplica,
-                        failDeleteNumbers.get(tableBucketReplica));
-                retryDeleteReplicas.add(tableBucketReplica);
-            }
-        }
-        return Tuple2.of(retryDeleteReplicas, successDeleteReplicas);
-    }
-
-    /** Clear fail delete number for the given replicas. */
-    public void clearFailDeleteNumbers(Collection<TableBucketReplica> replicas) {
-        for (TableBucketReplica tableBucketReplica : replicas) {
-            failDeleteNumbers.remove(tableBucketReplica);
-        }
-    }
-
     @VisibleForTesting
     protected int replicaCounts(long tableId) {
         return getTableAssignment(tableId).values().stream().mapToInt(List::size).sum();
@@ -652,8 +610,71 @@ public class CoordinatorContext {
         partitionsToBeDeleted.addAll(tablePartitions);
     }
 
+    /** Mark a table as ineligible for deletion (only effective if queued for deletion). */
+    public void markTableIneligibleForDeletion(long tableId, String reason) {
+        if (tablesToBeDeleted.contains(tableId)) {
+            String prev = tablesIneligibleForDeletion.put(tableId, reason);
+            if (prev == null) {
+                LOG.info("Marking table {} ineligible for deletion. Reason: {}", tableId, reason);
+            }
+        }
+    }
+
+    public void markPartitionIneligibleForDeletion(TablePartition tablePartition, String reason) {
+        if (partitionsToBeDeleted.contains(tablePartition)) {
+            String prev = partitionsIneligibleForDeletion.put(tablePartition, reason);
+            if (prev == null) {
+                LOG.info(
+                        "Marking partition {} ineligible for deletion. Reason: {}",
+                        tablePartition,
+                        reason);
+            }
+        }
+    }
+
+    /** Remove the ineligible mark, allowing deletion to be retried. */
+    public void removeTableFromIneligibleForDeletion(long tableId) {
+        tablesIneligibleForDeletion.remove(tableId);
+    }
+
+    public void removePartitionFromIneligibleForDeletion(TablePartition tablePartition) {
+        partitionsIneligibleForDeletion.remove(tablePartition);
+    }
+
+    public boolean isTableIneligibleForDeletion(long tableId) {
+        return tablesIneligibleForDeletion.containsKey(tableId);
+    }
+
+    public boolean isPartitionIneligibleForDeletion(TablePartition tablePartition) {
+        return partitionsIneligibleForDeletion.containsKey(tablePartition);
+    }
+
+    public int getTablesIneligibleToDeleteCount() {
+        return tablesIneligibleForDeletion.size();
+    }
+
+    public int getPartitionsIneligibleToDeleteCount() {
+        return partitionsIneligibleForDeletion.size();
+    }
+
+    public Set<TableBucketReplica> getReplicasInState(long tableId, ReplicaState state) {
+        return getAllReplicasForTable(tableId).stream()
+                .filter(r -> getReplicaState(r) == state)
+                .collect(Collectors.toSet());
+    }
+
+    public Set<TableBucketReplica> getReplicasInState(
+            TablePartition tablePartition, ReplicaState state) {
+        return getAllReplicasForPartition(
+                        tablePartition.getTableId(), tablePartition.getPartitionId())
+                .stream()
+                .filter(r -> getReplicaState(r) == state)
+                .collect(Collectors.toSet());
+    }
+
     public void removeTable(long tableId) {
         tablesToBeDeleted.remove(tableId);
+        tablesIneligibleForDeletion.remove(tableId);
         Map<Integer, List<Integer>> assignment = tableAssignments.remove(tableId);
         if (assignment != null) {
             // remove leadership info for each bucket from the context
@@ -671,6 +692,7 @@ public class CoordinatorContext {
 
     public void removePartition(TablePartition tablePartition) {
         partitionsToBeDeleted.remove(tablePartition);
+        partitionsIneligibleForDeletion.remove(tablePartition);
         Map<Integer, List<Integer>> assignment = partitionAssignments.remove(tablePartition);
         if (assignment != null) {
             // remove leadership info for each bucket from the context
@@ -728,6 +750,9 @@ public class CoordinatorContext {
 
     public void resetContext() {
         tablesToBeDeleted.clear();
+        partitionsToBeDeleted.clear();
+        tablesIneligibleForDeletion.clear();
+        partitionsIneligibleForDeletion.clear();
         clearTablesState();
         liveTabletServers.clear();
         liveCoordinatorServers.clear();

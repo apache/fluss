@@ -23,7 +23,6 @@ import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metrics.DescriptiveStatisticsHistogram;
 import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.metrics.MetricNames;
-import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.metrics.group.CoordinatorEventMetricGroup;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
@@ -37,6 +36,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
+import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionIneligible;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionSuccessful;
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
@@ -70,7 +70,12 @@ public final class CoordinatorEventManager implements EventManager {
     private volatile int lakeTableCount;
     private volatile int bucketCount;
     private volatile int partitionCount;
+    private volatile int tablesToDeleteCount;
+    private volatile int partitionsToDeleteCount;
     private volatile int replicasToDeleteCount;
+    private volatile int tablesIneligibleToDeleteCount;
+    private volatile int partitionsIneligibleToDeleteCount;
+    private volatile int replicasIneligibleToDeleteCount;
 
     private static final int WINDOW_SIZE = 100;
     private static final long METRICS_UPDATE_INTERVAL_MS = 5000; // 5 seconds
@@ -99,8 +104,19 @@ public final class CoordinatorEventManager implements EventManager {
         coordinatorMetricGroup.gauge(MetricNames.TABLE_COUNT, () -> tableCount);
         coordinatorMetricGroup.gauge(MetricNames.LAKE_TABLE_COUNT, () -> lakeTableCount);
         coordinatorMetricGroup.gauge(MetricNames.PARTITION_COUNT, () -> partitionCount);
+        coordinatorMetricGroup.gauge(MetricNames.TABLES_TO_DELETE_COUNT, () -> tablesToDeleteCount);
+        coordinatorMetricGroup.gauge(
+                MetricNames.PARTITIONS_TO_DELETE_COUNT, () -> partitionsToDeleteCount);
         coordinatorMetricGroup.gauge(
                 MetricNames.REPLICAS_TO_DELETE_COUNT, () -> replicasToDeleteCount);
+        coordinatorMetricGroup.gauge(
+                MetricNames.TABLES_INELIGIBLE_TO_DELETE_COUNT, () -> tablesIneligibleToDeleteCount);
+        coordinatorMetricGroup.gauge(
+                MetricNames.PARTITIONS_INELIGIBLE_TO_DELETE_COUNT,
+                () -> partitionsIneligibleToDeleteCount);
+        coordinatorMetricGroup.gauge(
+                MetricNames.REPLICAS_INELIGIBLE_TO_DELETE_COUNT,
+                () -> replicasIneligibleToDeleteCount);
     }
 
     /** Not thread safety! this method can only be executed in the CoordinatorEventThread. */
@@ -117,7 +133,11 @@ public final class CoordinatorEventManager implements EventManager {
                             int partitionCount = context.getTotalPartitionCount();
                             int offlineBucketCount = context.getOfflineBucketCount();
 
+                            int tablesToDelete = context.getTablesToBeDeleted().size();
+                            int partitionsToDelete = context.getPartitionsToBeDeleted().size();
+
                             int replicasToDeletes = 0;
+                            int replicasIneligibleToDelete = 0;
                             // for replica in partitions to be deleted
                             for (TablePartition tablePartition :
                                     context.getPartitionsToBeDeleted()) {
@@ -125,22 +145,33 @@ public final class CoordinatorEventManager implements EventManager {
                                         context.getAllReplicasForPartition(
                                                 tablePartition.getTableId(),
                                                 tablePartition.getPartitionId())) {
-                                    replicasToDeletes =
-                                            isReplicaToDelete(replica, context)
-                                                    ? replicasToDeletes + 1
-                                                    : replicasToDeletes;
+                                    ReplicaState state = context.getReplicaState(replica);
+                                    if (state != null && state != ReplicaDeletionSuccessful) {
+                                        replicasToDeletes++;
+                                    }
+                                    if (state == ReplicaDeletionIneligible) {
+                                        replicasIneligibleToDelete++;
+                                    }
                                 }
                             }
                             // for replica in tables to be deleted
                             for (long tableId : context.getTablesToBeDeleted()) {
                                 for (TableBucketReplica replica :
                                         context.getAllReplicasForTable(tableId)) {
-                                    replicasToDeletes =
-                                            isReplicaToDelete(replica, context)
-                                                    ? replicasToDeletes + 1
-                                                    : replicasToDeletes;
+                                    ReplicaState state = context.getReplicaState(replica);
+                                    if (state != null && state != ReplicaDeletionSuccessful) {
+                                        replicasToDeletes++;
+                                    }
+                                    if (state == ReplicaDeletionIneligible) {
+                                        replicasIneligibleToDelete++;
+                                    }
                                 }
                             }
+
+                            int tablesIneligibleToDelete =
+                                    context.getTablesIneligibleToDeleteCount();
+                            int partitionsIneligibleToDelete =
+                                    context.getPartitionsIneligibleToDeleteCount();
 
                             return new MetricsData(
                                     coordinatorServerCount,
@@ -150,7 +181,12 @@ public final class CoordinatorEventManager implements EventManager {
                                     bucketCount,
                                     partitionCount,
                                     offlineBucketCount,
-                                    replicasToDeletes);
+                                    tablesToDelete,
+                                    partitionsToDelete,
+                                    replicasToDeletes,
+                                    tablesIneligibleToDelete,
+                                    partitionsIneligibleToDelete,
+                                    replicasIneligibleToDelete);
                         });
 
         eventProcessor.process(accessContextEvent);
@@ -165,15 +201,15 @@ public final class CoordinatorEventManager implements EventManager {
             this.bucketCount = metricsData.bucketCount;
             this.partitionCount = metricsData.partitionCount;
             this.offlineBucketCount = metricsData.offlineBucketCount;
+            this.tablesToDeleteCount = metricsData.tablesToDeleteCount;
+            this.partitionsToDeleteCount = metricsData.partitionsToDeleteCount;
             this.replicasToDeleteCount = metricsData.replicasToDeleteCount;
+            this.tablesIneligibleToDeleteCount = metricsData.tablesIneligibleToDeleteCount;
+            this.partitionsIneligibleToDeleteCount = metricsData.partitionsIneligibleToDeleteCount;
+            this.replicasIneligibleToDeleteCount = metricsData.replicasIneligibleToDeleteCount;
         } catch (Exception e) {
             LOG.warn("Failed to update metrics via AccessContextEvent", e);
         }
-    }
-
-    private boolean isReplicaToDelete(TableBucketReplica replica, CoordinatorContext context) {
-        ReplicaState replicaState = context.getReplicaState(replica);
-        return replicaState != null && replicaState != ReplicaDeletionSuccessful;
     }
 
     public void start() {
@@ -297,7 +333,12 @@ public final class CoordinatorEventManager implements EventManager {
         private final int bucketCount;
         private final int partitionCount;
         private final int offlineBucketCount;
+        private final int tablesToDeleteCount;
+        private final int partitionsToDeleteCount;
         private final int replicasToDeleteCount;
+        private final int tablesIneligibleToDeleteCount;
+        private final int partitionsIneligibleToDeleteCount;
+        private final int replicasIneligibleToDeleteCount;
 
         public MetricsData(
                 int coordinatorServerCount,
@@ -307,7 +348,12 @@ public final class CoordinatorEventManager implements EventManager {
                 int bucketCount,
                 int partitionCount,
                 int offlineBucketCount,
-                int replicasToDeleteCount) {
+                int tablesToDeleteCount,
+                int partitionsToDeleteCount,
+                int replicasToDeleteCount,
+                int tablesIneligibleToDeleteCount,
+                int partitionsIneligibleToDeleteCount,
+                int replicasIneligibleToDeleteCount) {
             this.coordinatorServerCount = coordinatorServerCount;
             this.tabletServerCount = tabletServerCount;
             this.tableCount = tableCount;
@@ -315,7 +361,12 @@ public final class CoordinatorEventManager implements EventManager {
             this.bucketCount = bucketCount;
             this.partitionCount = partitionCount;
             this.offlineBucketCount = offlineBucketCount;
+            this.tablesToDeleteCount = tablesToDeleteCount;
+            this.partitionsToDeleteCount = partitionsToDeleteCount;
             this.replicasToDeleteCount = replicasToDeleteCount;
+            this.tablesIneligibleToDeleteCount = tablesIneligibleToDeleteCount;
+            this.partitionsIneligibleToDeleteCount = partitionsIneligibleToDeleteCount;
+            this.replicasIneligibleToDeleteCount = replicasIneligibleToDeleteCount;
         }
     }
 }

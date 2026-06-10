@@ -96,6 +96,7 @@ import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ControlledShutdownLeaderElection;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ReassignmentLeaderElection;
+import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaStateMachine;
 import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
@@ -152,6 +153,7 @@ import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.NewR
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.NonExistentReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OfflineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
+import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionIneligible;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionStarted;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionSuccessful;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaMigrationStarted;
@@ -310,10 +312,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     public void shutdown() {
-        // close the event manager
         coordinatorEventManager.close();
         rebalanceManager.close();
         onShutdown();
+        coordinatorChannelManager.shutdown();
         coordinatorContext.resetContext();
     }
 
@@ -458,6 +460,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 "Load table and partition assignment success in {}ms when initializing coordinator context.",
                 System.currentTimeMillis() - start4loadAssignment);
 
+        // Rebuild ineligible marks lost during failover by scanning queued-for-deletion
+        // tables/partitions for replicas on offline tablet servers.
+        initIneligibleForDeletion();
+
         long end = System.currentTimeMillis();
         LOG.info("Current total {} tables in the cluster.", coordinatorContext.allTables().size());
         LOG.info(
@@ -467,6 +473,36 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 "Detect partition {} to be deleted after initializing coordinator context. ",
                 coordinatorContext.getPartitionsToBeDeleted());
         LOG.info("End initializing coordinator context, cost {}ms", end - start);
+    }
+
+    private void initIneligibleForDeletion() {
+        Set<Integer> liveServers = coordinatorContext.liveTabletServerSet();
+        for (long tableId : coordinatorContext.getTablesToBeDeleted()) {
+            for (TableBucketReplica replica : coordinatorContext.getAllReplicasForTable(tableId)) {
+                if (!liveServers.contains(replica.getReplica())) {
+                    coordinatorContext.markTableIneligibleForDeletion(
+                            tableId,
+                            "tabletServer "
+                                    + replica.getReplica()
+                                    + " hosting replica is offline at coordinator startup");
+                    break;
+                }
+            }
+        }
+        for (TablePartition partition : coordinatorContext.getPartitionsToBeDeleted()) {
+            for (TableBucketReplica replica :
+                    coordinatorContext.getAllReplicasForPartition(
+                            partition.getTableId(), partition.getPartitionId())) {
+                if (!liveServers.contains(replica.getReplica())) {
+                    coordinatorContext.markPartitionIneligibleForDeletion(
+                            partition,
+                            "tabletServer "
+                                    + replica.getReplica()
+                                    + " hosting replica is offline at coordinator startup");
+                    break;
+                }
+            }
+        }
     }
 
     private void loadTableAssignment() throws Exception {
@@ -908,7 +944,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
         }
 
         coordinatorContext.queueTableDeletion(Collections.singleton(tableId));
-        tableManager.onDeleteTable(tableId);
+
+        // Route through resumeDeletions so that the eligibility check applies uniformly.
+        tableManager.resumeDeletions();
         if (dropTableEvent.isAutoPartitionTable()) {
             autoPartitionManager.removeAutoPartitionTable(tableId);
         }
@@ -943,7 +981,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
         }
 
         coordinatorContext.queuePartitionDeletion(Collections.singleton(tablePartition));
-        tableManager.onDeletePartition(tableId, dropPartitionEvent.getPartitionId());
+
+        // Route through resumeDeletions so that the eligibility check applies uniformly.
+        tableManager.resumeDeletions();
         autoPartitionManager.removePartition(tableId, dropPartitionEvent.getPartitionName());
 
         // send update metadata request.
@@ -958,43 +998,85 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 dropTableInfo.getTablePath(), tableId, tablePartition.getPartitionId());
     }
 
+    /**
+     * Handles StopReplica deletion responses from the sender thread. Partitions per-bucket results
+     * into succeeded/failed sets, then moves replicas to the appropriate state.
+     */
     private void processDeleteReplicaResponseReceived(
             DeleteReplicaResponseReceivedEvent deleteReplicaResponseReceivedEvent) {
         List<DeleteReplicaResultForBucket> deleteReplicaResultForBuckets =
                 deleteReplicaResponseReceivedEvent.getDeleteReplicaResults();
 
-        Set<TableBucketReplica> failDeletedReplicas = new HashSet<>();
-        Set<TableBucketReplica> successDeletedReplicas = new HashSet<>();
-        for (DeleteReplicaResultForBucket deleteReplicaResultForBucket :
-                deleteReplicaResultForBuckets) {
-            TableBucketReplica tableBucketReplica =
-                    deleteReplicaResultForBucket.getTableBucketReplica();
-            if (deleteReplicaResultForBucket.succeeded()) {
-                successDeletedReplicas.add(tableBucketReplica);
+        Set<TableBucketReplica> succeeded = new HashSet<>();
+        Set<TableBucketReplica> failed = new HashSet<>();
+        for (DeleteReplicaResultForBucket result : deleteReplicaResultForBuckets) {
+            if (result.succeeded()) {
+                succeeded.add(result.getTableBucketReplica());
             } else {
-                failDeletedReplicas.add(tableBucketReplica);
+                failed.add(result.getTableBucketReplica());
             }
         }
-        // clear the fail deleted number for the success deleted replicas
-        coordinatorContext.clearFailDeleteNumbers(successDeletedReplicas);
 
-        // pick up the replicas to retry delete and replicas that considered as success delete
-        Tuple2<Set<TableBucketReplica>, Set<TableBucketReplica>>
-                retryDeleteAndSuccessDeleteReplicas =
-                        coordinatorContext.retryDeleteAndSuccessDeleteReplicas(failDeletedReplicas);
+        if (!failed.isEmpty()) {
+            failReplicaDeletion(failed);
+        }
+        if (!succeeded.isEmpty()) {
+            completeReplicaDeletion(succeeded);
+        }
+    }
 
-        // transmit to deletion started for retry delete replicas
-        replicaStateMachine.handleStateChanges(
-                retryDeleteAndSuccessDeleteReplicas.f0, ReplicaDeletionStarted);
+    /**
+     * Filters to replicas whose owning table/partition is still queued for deletion, then moves
+     * them to {@code ReplicaDeletionIneligible} and marks the owning table/partition ineligible.
+     *
+     * <p>Marking the table/partition ineligible prevents an infinite retry loop: without it, {@code
+     * resumeDeletions} would immediately re-attempt deletion on the same (still-failing) server.
+     * The ineligible flag is cleared when the server reconnects via {@code processNewTabletServer}.
+     */
+    private void failReplicaDeletion(Set<TableBucketReplica> replicas) {
+        Set<TableBucketReplica> stillQueued =
+                replicas.stream()
+                        .filter(this::isStillQueuedForDeletion)
+                        .collect(Collectors.toSet());
+        if (stillQueued.isEmpty()) {
+            return;
+        }
+        replicaStateMachine.handleStateChanges(stillQueued, ReplicaDeletionIneligible);
+        markFailedReplicasIneligible(stillQueued, "stopReplica failed");
+        tableManager.resumeDeletions();
+    }
 
-        // add all the replicas that considered as success delete to success deleted replicas
-        successDeletedReplicas.addAll(retryDeleteAndSuccessDeleteReplicas.f1);
-        // transmit to deletion successful for success deleted replicas
-        replicaStateMachine.handleStateChanges(successDeletedReplicas, ReplicaDeletionSuccessful);
+    private void completeReplicaDeletion(Set<TableBucketReplica> replicas) {
+        Set<TableBucketReplica> stillQueued =
+                replicas.stream()
+                        .filter(this::isStillQueuedForDeletion)
+                        .collect(Collectors.toSet());
+        if (stillQueued.isEmpty()) {
+            return;
+        }
+        replicaStateMachine.handleStateChanges(stillQueued, ReplicaDeletionSuccessful);
+        tableManager.resumeDeletions();
+    }
 
-        // if any success deletion, we can resume
-        if (!successDeletedReplicas.isEmpty()) {
-            tableManager.resumeDeletions();
+    private boolean isStillQueuedForDeletion(TableBucketReplica replica) {
+        TableBucket tb = replica.getTableBucket();
+        if (tb.getPartitionId() != null) {
+            return coordinatorContext.isPartitionQueuedForDeletion(
+                    new TablePartition(tb.getTableId(), tb.getPartitionId()));
+        }
+        return coordinatorContext.isTableQueuedForDeletion(tb.getTableId());
+    }
+
+    private void markFailedReplicasIneligible(
+            Set<TableBucketReplica> failedReplicas, String reason) {
+        for (TableBucketReplica replica : failedReplicas) {
+            TableBucket tb = replica.getTableBucket();
+            if (tb.getPartitionId() != null) {
+                coordinatorContext.markPartitionIneligibleForDeletion(
+                        new TablePartition(tb.getTableId(), tb.getPartitionId()), reason);
+            } else {
+                coordinatorContext.markTableIneligibleForDeletion(tb.getTableId(), reason);
+            }
         }
     }
 
@@ -1155,6 +1237,32 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // and offline partitions to see if those tablet servers become leaders for some/all
         // of those
         tableBucketStateMachine.triggerOnlineBucketStateChange();
+
+        // Clear ineligible marks for tables/partitions with replicas on the reconnecting
+        // server and resume their deletion.
+        Set<TableBucketReplica> replicasOnReconnectingServer =
+                coordinatorContext.replicasOnTabletServer(tabletServerId);
+        Set<Long> tablesToResume =
+                replicasOnReconnectingServer.stream()
+                        .map(r -> r.getTableBucket().getTableId())
+                        .filter(coordinatorContext::isTableQueuedForDeletion)
+                        .collect(Collectors.toSet());
+        Set<TablePartition> partitionsToResume =
+                replicasOnReconnectingServer.stream()
+                        .filter(r -> r.getTableBucket().getPartitionId() != null)
+                        .map(
+                                r ->
+                                        new TablePartition(
+                                                r.getTableBucket().getTableId(),
+                                                r.getTableBucket().getPartitionId()))
+                        .filter(coordinatorContext::isPartitionQueuedForDeletion)
+                        .collect(Collectors.toSet());
+        if (!tablesToResume.isEmpty() || !partitionsToResume.isEmpty()) {
+            tablesToResume.forEach(coordinatorContext::removeTableFromIneligibleForDeletion);
+            partitionsToResume.forEach(
+                    coordinatorContext::removePartitionFromIneligibleForDeletion);
+            tableManager.resumeDeletions();
+        }
     }
 
     private void processDeadTabletServer(DeadTabletServerEvent deadTabletServerEvent) {
@@ -1213,6 +1321,38 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // trigger OfflineReplica state change for those newly offline replicas
         replicaStateMachine.handleStateChanges(replicas, OfflineReplica);
+
+        // For to-be-deleted replicas on the dead server, transition them to
+        // ReplicaDeletionIneligible and mark the owning table/partition ineligible
+        // until the TabletServer reconnects.
+        Set<TableBucketReplica> deletedReplicasInDeletion = new HashSet<>();
+        Set<TableBucketReplica> deletedReplicasNotInDeletion = new HashSet<>();
+        for (TableBucketReplica replica :
+                coordinatorContext.replicasOnTabletServer(tabletServerId)) {
+            if (!coordinatorContext.isToBeDeleted(replica.getTableBucket())) {
+                continue;
+            }
+            ReplicaState state = coordinatorContext.getReplicaState(replica);
+            if (state == ReplicaDeletionStarted) {
+                deletedReplicasInDeletion.add(replica);
+            } else if (state == OnlineReplica || state == NewReplica || state == OfflineReplica) {
+                deletedReplicasNotInDeletion.add(replica);
+            }
+        }
+        if (!deletedReplicasNotInDeletion.isEmpty()) {
+            replicaStateMachine.handleStateChanges(deletedReplicasNotInDeletion, OfflineReplica);
+            replicaStateMachine.handleStateChanges(
+                    deletedReplicasNotInDeletion, ReplicaDeletionIneligible);
+            markFailedReplicasIneligible(deletedReplicasNotInDeletion, "tabletServer offline");
+        }
+        if (!deletedReplicasInDeletion.isEmpty()) {
+            replicaStateMachine.handleStateChanges(
+                    deletedReplicasInDeletion, ReplicaDeletionIneligible);
+            markFailedReplicasIneligible(deletedReplicasInDeletion, "tabletServer offline");
+        }
+        if (!deletedReplicasInDeletion.isEmpty() || !deletedReplicasNotInDeletion.isEmpty()) {
+            tableManager.resumeDeletions();
+        }
 
         // update tabletServer metadata cache by send updateMetadata request.
         updateTabletServerMetadataCache(serverInfos, null, null, bucketsWithOfflineLeader);

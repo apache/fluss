@@ -312,18 +312,24 @@ public class CoordinatorServer extends ServerBase {
             this.clientMetricGroup = new ClientMetricGroup(metricRegistry, SERVER_NAME);
             this.rpcClient = RpcClient.create(conf, clientMetricGroup);
 
-            this.coordinatorChannelManager = new CoordinatorChannelManager(rpcClient);
+            // start coordinator event processor after we register coordinator leader to zk
+            // so that the event processor can get the coordinator leader node from zk during
+            // start up. In HA for coordinator server, the processor also need to know the leader
+            // node during start up
+            CoordinatorContext coordinatorContext = new CoordinatorContext(zkEpoch);
+
+            this.coordinatorChannelManager =
+                    new CoordinatorChannelManager(
+                            rpcClient,
+                            coordinatorContext::getCoordinatorEpoch,
+                            conf,
+                            serverMetricGroup);
 
             this.autoPartitionManager =
                     new AutoPartitionManager(
                             metadataCache, metadataManager, remoteDirDynamicLoader, conf);
             autoPartitionManager.start();
 
-            // start coordinator event processor after we register coordinator leader to zk
-            // so that the event processor can get the coordinator leader node from zk during
-            // start up. In HA for coordinator server, the processor also need to know the leader
-            // node during start up
-            CoordinatorContext coordinatorContext = new CoordinatorContext(zkEpoch);
             this.coordinatorEventProcessor =
                     new CoordinatorEventProcessor(
                             zkClient,

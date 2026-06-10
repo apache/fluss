@@ -39,6 +39,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
+import java.util.stream.Collectors;
 
 /** A manager for tables. */
 public class TableManager {
@@ -186,19 +187,57 @@ public class TableManager {
      *
      * <p>It does the following:
      *
-     * <p>1. Move all the replicas to offline state. This will send stop replica request to the
-     * replicas.
+     * <p>1. Skip replicas already in {@code ReplicaDeletionSuccessful}.
      *
-     * <p>2. Move all the replicas to deletion started state. This will send stop replica request
-     * with delete=true which will delete all persistent data from all the replicas of the all the
-     * respective buckets.
+     * <p>2. For dead replicas (owning TS not live): transition to {@code ReplicaDeletionIneligible}
+     * and mark the table/partition ineligible until the TS reconnects.
+     *
+     * <p>3. For alive replicas: transition through {@code OfflineReplica -> ReplicaDeletionStarted}
+     * which sends {@code stopReplica(delete=true)}.
      */
     private void onDeleteTableBucket(Set<TableBucketReplica> allReplicas) {
-        // to offline, send stop replica to all followers that are not in the OfflineReplica state
-        // so they stop sending fetch requests to the leader
-        replicaStateMachine.handleStateChanges(allReplicas, ReplicaState.OfflineReplica);
-        // to deletion started
-        replicaStateMachine.handleStateChanges(allReplicas, ReplicaState.ReplicaDeletionStarted);
+        Set<TableBucketReplica> pending =
+                allReplicas.stream()
+                        .filter(
+                                r ->
+                                        coordinatorContext.getReplicaState(r)
+                                                != ReplicaState.ReplicaDeletionSuccessful)
+                        .collect(Collectors.toSet());
+
+        Set<Integer> liveServers = coordinatorContext.liveTabletServerSet();
+        Set<TableBucketReplica> aliveReplicas = new HashSet<>();
+        Set<TableBucketReplica> deadReplicas = new HashSet<>();
+        for (TableBucketReplica replica : pending) {
+            if (liveServers.contains(replica.getReplica())) {
+                aliveReplicas.add(replica);
+            } else {
+                deadReplicas.add(replica);
+            }
+        }
+
+        if (!deadReplicas.isEmpty()) {
+            replicaStateMachine.handleStateChanges(deadReplicas, ReplicaState.OfflineReplica);
+            replicaStateMachine.handleStateChanges(
+                    deadReplicas, ReplicaState.ReplicaDeletionIneligible);
+            for (TableBucketReplica replica : deadReplicas) {
+                TableBucket tb = replica.getTableBucket();
+                if (tb.getPartitionId() != null) {
+                    coordinatorContext.markPartitionIneligibleForDeletion(
+                            new TablePartition(tb.getTableId(), tb.getPartitionId()),
+                            "tabletServer was not in live set at deletion kickoff");
+                } else {
+                    coordinatorContext.markTableIneligibleForDeletion(
+                            tb.getTableId(),
+                            "tabletServer was not in live set at deletion kickoff");
+                }
+            }
+        }
+
+        if (!aliveReplicas.isEmpty()) {
+            replicaStateMachine.handleStateChanges(aliveReplicas, ReplicaState.OfflineReplica);
+            replicaStateMachine.handleStateChanges(
+                    aliveReplicas, ReplicaState.ReplicaDeletionStarted);
+        }
     }
 
     public void resumeDeletions() {
@@ -208,19 +247,38 @@ public class TableManager {
 
     private void resumeTableDeletions() {
         Set<Long> tablesToBeDeleted = new HashSet<>(coordinatorContext.getTablesToBeDeleted());
+        Set<Long> tablesEligibleForRetry = new HashSet<>();
         Set<Long> eligibleTableDeletion = new HashSet<>();
 
         for (long tableId : tablesToBeDeleted) {
-            // if all replicas are marked as deleted successfully, then table deletion is done
+            // Step 1: if all replicas are marked as deleted successfully, complete deletion.
             if (coordinatorContext.areAllReplicasInState(
                     tableId, ReplicaState.ReplicaDeletionSuccessful)) {
                 completeDeleteTable(tableId);
                 LOG.info("Deletion of table with id {} successfully completed.", tableId);
+                continue;
             }
+
+            // Step 2: if no replica is in ReplicaDeletionStarted AND any is Ineligible,
+            // transition Ineligible replicas back to OfflineReplica for retry.
+            if (!coordinatorContext.isAnyReplicaInState(
+                            tableId, ReplicaState.ReplicaDeletionStarted)
+                    && coordinatorContext.isAnyReplicaInState(
+                            tableId, ReplicaState.ReplicaDeletionIneligible)) {
+                tablesEligibleForRetry.add(tableId);
+            }
+
+            // Step 3: only tables that pass the ineligible-flag guard get onDeleteTable.
             if (isEligibleForDeletion(tableId)) {
                 eligibleTableDeletion.add(tableId);
             }
         }
+
+        // Retry transitions run first so that eligible replicas can be re-started below.
+        if (!tablesEligibleForRetry.isEmpty()) {
+            retryDeletionForIneligibleReplicas(tablesEligibleForRetry);
+        }
+
         if (!eligibleTableDeletion.isEmpty()) {
             for (long tableId : eligibleTableDeletion) {
                 onDeleteTable(tableId);
@@ -231,23 +289,69 @@ public class TableManager {
     private void resumePartitionDeletions() {
         Set<TablePartition> partitionsToDelete =
                 new HashSet<>(coordinatorContext.getPartitionsToBeDeleted());
+        Set<TablePartition> partitionsEligibleForRetry = new HashSet<>();
         Set<TablePartition> eligiblePartitionDeletion = new HashSet<>();
 
         for (TablePartition partition : partitionsToDelete) {
-            // if all replicas are marked as deleted successfully, then partition deletion is done
             if (coordinatorContext.areAllReplicasInState(
                     partition, ReplicaState.ReplicaDeletionSuccessful)) {
                 completeDeletePartition(partition);
                 LOG.info("Deletion of partition {} successfully completed.", partition);
+                continue;
             }
+
+            if (!coordinatorContext.isAnyReplicaInState(
+                            partition, ReplicaState.ReplicaDeletionStarted)
+                    && coordinatorContext.isAnyReplicaInState(
+                            partition, ReplicaState.ReplicaDeletionIneligible)) {
+                partitionsEligibleForRetry.add(partition);
+            }
+
             if (isEligibleForDeletion(partition)) {
                 eligiblePartitionDeletion.add(partition);
             }
         }
+
+        if (!partitionsEligibleForRetry.isEmpty()) {
+            retryDeletionForIneligibleReplicasInPartitions(partitionsEligibleForRetry);
+        }
+
         if (!eligiblePartitionDeletion.isEmpty()) {
             for (TablePartition partition : eligiblePartitionDeletion) {
                 onDeletePartition(partition.getTableId(), partition.getPartitionId());
             }
+        }
+    }
+
+    /** Transitions all Ineligible replicas for the given tables to OfflineReplica. */
+    private void retryDeletionForIneligibleReplicas(Set<Long> tableIds) {
+        Set<TableBucketReplica> replicas =
+                tableIds.stream()
+                        .flatMap(
+                                id ->
+                                        coordinatorContext
+                                                .getReplicasInState(
+                                                        id, ReplicaState.ReplicaDeletionIneligible)
+                                                .stream())
+                        .collect(Collectors.toSet());
+        if (!replicas.isEmpty()) {
+            replicaStateMachine.handleStateChanges(replicas, ReplicaState.OfflineReplica);
+        }
+    }
+
+    /** Transitions all Ineligible replicas for the given partitions to OfflineReplica. */
+    private void retryDeletionForIneligibleReplicasInPartitions(Set<TablePartition> partitions) {
+        Set<TableBucketReplica> replicas =
+                partitions.stream()
+                        .flatMap(
+                                p ->
+                                        coordinatorContext
+                                                .getReplicasInState(
+                                                        p, ReplicaState.ReplicaDeletionIneligible)
+                                                .stream())
+                        .collect(Collectors.toSet());
+        if (!replicas.isEmpty()) {
+            replicaStateMachine.handleStateChanges(replicas, ReplicaState.OfflineReplica);
         }
     }
 
@@ -321,18 +425,20 @@ public class TableManager {
     }
 
     private boolean isEligibleForDeletion(long tableId) {
-        // the table is queued for deletion and
-        // no any replica is in state deletion started
+        // Three-guard check: queued, no replica in Started, not in ineligible set.
+        //   1. queued for deletion,
+        //   2. no replica currently in ReplicaDeletionStarted,
+        //   3. table not in ineligible set (e.g., owning TS still down).
         return coordinatorContext.isTableQueuedForDeletion(tableId)
                 && !coordinatorContext.isAnyReplicaInState(
-                        tableId, ReplicaState.ReplicaDeletionStarted);
+                        tableId, ReplicaState.ReplicaDeletionStarted)
+                && !coordinatorContext.isTableIneligibleForDeletion(tableId);
     }
 
     private boolean isEligibleForDeletion(TablePartition tablePartition) {
-        // the partition is queued for deletion and
-        // no any replica is in state deletion started
         return coordinatorContext.isPartitionQueuedForDeletion(tablePartition)
                 && !coordinatorContext.isAnyReplicaInState(
-                        tablePartition, ReplicaState.ReplicaDeletionStarted);
+                        tablePartition, ReplicaState.ReplicaDeletionStarted)
+                && !coordinatorContext.isPartitionIneligibleForDeletion(tablePartition);
     }
 }

@@ -26,6 +26,7 @@ import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.TestingEventManager;
+import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaStateMachine;
 import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine;
 import org.apache.fluss.server.entity.DeleteReplicaResultForBucket;
@@ -322,6 +323,359 @@ class TableManagerTest {
                 () -> assertThat(zookeeperClient.getPartitionAssignment(partitionId)).isEmpty());
         // the partition will also be removed from coordinator context
         assertThat(coordinatorContext.getAllReplicasForPartition(tableId, partitionId)).isEmpty();
+    }
+
+    @Test
+    void testResumeTableDeletionsCompletesWhenAllReplicasSuccessful() throws Exception {
+        // Step 1 happy-path: when all replicas are ReplicaDeletionSuccessful,
+        // resumeTableDeletions should finalize deletion (remove ZK assignment + replicas).
+        long tableId = zookeeperClient.getTableIdAndIncrement();
+        TableAssignment assignment = createAssignment();
+        zookeeperClient.registerTableAssignment(tableId, assignment);
+
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        DATA1_TABLE_PATH_PK,
+                        tableId,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR_PK,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
+        tableManager.onCreateNewTable(DATA1_TABLE_PATH_PK, tableId, assignment);
+
+        // queue table for deletion and put all replicas in ReplicaDeletionSuccessful
+        coordinatorContext.queueTableDeletion(Collections.singleton(tableId));
+        for (TableBucketReplica replica : getReplicas(tableId, assignment)) {
+            coordinatorContext.putReplicaState(replica, ReplicaDeletionSuccessful);
+        }
+
+        tableManager.resumeDeletions();
+
+        retry(
+                Duration.ofSeconds(30),
+                () -> assertThat(zookeeperClient.getTableAssignment(tableId)).isEmpty());
+        assertThat(coordinatorContext.getAllReplicasForTable(tableId)).isEmpty();
+    }
+
+    @Test
+    void testResumeTableDeletionsRetryStepTransitionsIneligibleToOffline() throws Exception {
+        // Step 2: when no replica is ReplicaDeletionStarted AND any replica is
+        // ReplicaDeletionIneligible, push Ineligible -> OfflineReplica regardless of the
+        // table-ineligible flag (Ineligible is transient). Step 3 guard still keeps the
+        // table from being onDeleteTable'd while the ineligible mark remains.
+        long tableId = zookeeperClient.getTableIdAndIncrement();
+        TableAssignment assignment = createAssignment();
+        zookeeperClient.registerTableAssignment(tableId, assignment);
+
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        DATA1_TABLE_PATH_PK,
+                        tableId,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR_PK,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
+        tableManager.onCreateNewTable(DATA1_TABLE_PATH_PK, tableId, assignment);
+
+        coordinatorContext.queueTableDeletion(Collections.singleton(tableId));
+        coordinatorContext.markTableIneligibleForDeletion(tableId, "test reason");
+
+        // half of the replicas in Ineligible, the rest in OfflineReplica; none Started
+        Set<TableBucketReplica> replicas = getReplicas(tableId, assignment);
+        Set<TableBucketReplica> ineligibleReplicas = new HashSet<>();
+        int idx = 0;
+        for (TableBucketReplica replica : replicas) {
+            if (idx % 2 == 0) {
+                coordinatorContext.putReplicaState(replica, ReplicaState.ReplicaDeletionIneligible);
+                ineligibleReplicas.add(replica);
+            } else {
+                coordinatorContext.putReplicaState(replica, ReplicaState.OfflineReplica);
+            }
+            idx++;
+        }
+
+        testingEventManager.clearEvents();
+        tableManager.resumeDeletions();
+
+        // (a) previously-Ineligible replicas now in OfflineReplica
+        for (TableBucketReplica replica : ineligibleReplicas) {
+            assertThat(coordinatorContext.getReplicaState(replica))
+                    .isEqualTo(ReplicaState.OfflineReplica);
+        }
+        // (b) the table is still ineligible (Step 3 guard kept it)
+        assertThat(coordinatorContext.isTableIneligibleForDeletion(tableId)).isTrue();
+        // (c) no DeleteReplicaResponseReceivedEvent emitted (onDeleteTable not invoked)
+        assertThat(collectDeleteReplicaSuccessEvents()).isEmpty();
+    }
+
+    @Test
+    void testResumeTableDeletionsStep3GuardBlocksWhenIneligible() throws Exception {
+        // Step 3 guard: a table queued for deletion but marked ineligible must NOT be
+        // onDeleteTable'd; replicas should remain in OfflineReplica (not transition to
+        // ReplicaDeletionStarted) and no stop-replica delete event should fire.
+        long tableId = zookeeperClient.getTableIdAndIncrement();
+        TableAssignment assignment = createAssignment();
+        zookeeperClient.registerTableAssignment(tableId, assignment);
+
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        DATA1_TABLE_PATH_PK,
+                        tableId,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR_PK,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
+        tableManager.onCreateNewTable(DATA1_TABLE_PATH_PK, tableId, assignment);
+
+        coordinatorContext.queueTableDeletion(Collections.singleton(tableId));
+        coordinatorContext.markTableIneligibleForDeletion(tableId, "guard test");
+
+        Set<TableBucketReplica> replicas = getReplicas(tableId, assignment);
+        for (TableBucketReplica replica : replicas) {
+            coordinatorContext.putReplicaState(replica, ReplicaState.OfflineReplica);
+        }
+
+        testingEventManager.clearEvents();
+        tableManager.resumeDeletions();
+
+        assertThat(collectDeleteReplicaSuccessEvents()).isEmpty();
+        for (TableBucketReplica replica : replicas) {
+            assertThat(coordinatorContext.getReplicaState(replica))
+                    .isEqualTo(ReplicaState.OfflineReplica);
+        }
+    }
+
+    @Test
+    void testResumeTableDeletionsStep3FiresWhenEligibilityRestored() throws Exception {
+        // After eligibility is restored (e.g., owning TS reconnected), the next
+        // resumeDeletions should pass the Step 3 guard and invoke onDeleteTable, which
+        // pushes replicas to ReplicaDeletionStarted and emits DeleteReplicaResponseReceivedEvent
+        // for each via the always-success gateway.
+        long tableId = zookeeperClient.getTableIdAndIncrement();
+        TableAssignment assignment = createAssignment();
+        zookeeperClient.registerTableAssignment(tableId, assignment);
+
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        DATA1_TABLE_PATH_PK,
+                        tableId,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR_PK,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
+        tableManager.onCreateNewTable(DATA1_TABLE_PATH_PK, tableId, assignment);
+
+        coordinatorContext.queueTableDeletion(Collections.singleton(tableId));
+        coordinatorContext.markTableIneligibleForDeletion(tableId, "before restore");
+
+        Set<TableBucketReplica> replicas = getReplicas(tableId, assignment);
+        for (TableBucketReplica replica : replicas) {
+            coordinatorContext.putReplicaState(replica, ReplicaState.OfflineReplica);
+        }
+
+        // simulate the TS-reconnect / eligibility-restore path
+        coordinatorContext.removeTableFromIneligibleForDeletion(tableId);
+
+        testingEventManager.clearEvents();
+        tableManager.resumeDeletions();
+
+        // gateway always succeeds; checkReplicaDelete asserts the expected
+        // DeleteReplicaResponseReceivedEvent set was emitted by onDeleteTable.
+        checkReplicaDelete(tableId, null, assignment);
+    }
+
+    @Test
+    void testOnDeleteTableBucketSplitsAliveAndDeadByLiveSet() throws Exception {
+        // Drop server 2 from the live set BEFORE the bucket is created so that
+        // onDeleteTableBucket sees an alive/dead split.
+        coordinatorContext.removeLiveTabletServer(2);
+        CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess(
+                coordinatorContext, testCoordinatorChannelManager);
+
+        long tableId = zookeeperClient.getTableIdAndIncrement();
+        TableAssignment assignment =
+                TableAssignment.builder().add(0, BucketAssignment.of(1, 2)).build();
+        zookeeperClient.registerTableAssignment(tableId, assignment);
+
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        DATA1_TABLE_PATH_PK,
+                        tableId,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR_PK,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
+        tableManager.onCreateNewTable(DATA1_TABLE_PATH_PK, tableId, assignment);
+
+        coordinatorContext.queueTableDeletion(Collections.singleton(tableId));
+        tableManager.onDeleteTable(tableId);
+
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        TableBucketReplica aliveReplica = new TableBucketReplica(tableBucket, 1);
+        TableBucketReplica deadReplica = new TableBucketReplica(tableBucket, 2);
+
+        // alive replica went OfflineReplica -> ReplicaDeletionStarted
+        assertThat(coordinatorContext.getReplicaState(aliveReplica))
+                .isEqualTo(ReplicaState.ReplicaDeletionStarted);
+        // dead replica went OfflineReplica -> ReplicaDeletionIneligible
+        assertThat(coordinatorContext.getReplicaState(deadReplica))
+                .isEqualTo(ReplicaState.ReplicaDeletionIneligible);
+        // and the table is marked ineligible (with the documented reason internally)
+        assertThat(coordinatorContext.isTableIneligibleForDeletion(tableId)).isTrue();
+    }
+
+    @Test
+    void testResumePartitionDeletionsMirrorsTablePath() throws Exception {
+        // Partition counterpart combining Step 1 (success completion) and
+        // Step 2 + Step 3 (ineligible-flag retry + guard) in one test.
+        long tableId = zookeeperClient.getTableIdAndIncrement();
+        TableAssignment tableAssignment = TableAssignment.builder().build();
+        zookeeperClient.registerTableAssignment(tableId, tableAssignment);
+
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        DATA1_TABLE_PATH,
+                        tableId,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
+        tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, tableAssignment);
+
+        // ----- Step 1: all replicas successful, partition deletion completes -----
+        PartitionAssignment partitionAssignment =
+                new PartitionAssignment(tableId, createAssignment().getBucketAssignments());
+        long partitionId = zookeeperClient.getPartitionIdAndIncrement();
+        // partition name is keyed off the auto-incremented partitionId so it is unique
+        // across all tests in the class — partition metadata znodes (PartitionZNode) are
+        // not removed by completeDeletePartition and would otherwise collide between tests.
+        String partitionName = "p_resume_step1_" + partitionId;
+        zookeeperClient.registerPartitionAssignmentAndMetadata(
+                partitionId,
+                partitionName,
+                partitionAssignment,
+                DEFAULT_REMOTE_DATA_DIR,
+                DATA1_TABLE_PATH,
+                tableId);
+        tableManager.onCreateNewPartition(
+                DATA1_TABLE_PATH, tableId, partitionId, partitionName, partitionAssignment);
+
+        TablePartition tp1 = new TablePartition(tableId, partitionId);
+        coordinatorContext.queuePartitionDeletion(Collections.singleton(tp1));
+        for (TableBucketReplica replica : getReplicas(tableId, partitionId, partitionAssignment)) {
+            coordinatorContext.putReplicaState(replica, ReplicaDeletionSuccessful);
+        }
+
+        tableManager.resumeDeletions();
+        retry(
+                Duration.ofSeconds(30),
+                () -> assertThat(zookeeperClient.getPartitionAssignment(partitionId)).isEmpty());
+        assertThat(coordinatorContext.getAllReplicasForPartition(tableId, partitionId)).isEmpty();
+
+        // ----- Step 2 + Step 3: ineligible-flag retry transition + guard -----
+        PartitionAssignment partitionAssignment2 =
+                new PartitionAssignment(tableId, createAssignment().getBucketAssignments());
+        long partitionId2 = zookeeperClient.getPartitionIdAndIncrement();
+        String partitionName2 = "p_resume_step23_" + partitionId2;
+        zookeeperClient.registerPartitionAssignmentAndMetadata(
+                partitionId2,
+                partitionName2,
+                partitionAssignment2,
+                DEFAULT_REMOTE_DATA_DIR,
+                DATA1_TABLE_PATH,
+                tableId);
+        tableManager.onCreateNewPartition(
+                DATA1_TABLE_PATH, tableId, partitionId2, partitionName2, partitionAssignment2);
+
+        TablePartition tp2 = new TablePartition(tableId, partitionId2);
+        coordinatorContext.queuePartitionDeletion(Collections.singleton(tp2));
+        coordinatorContext.markPartitionIneligibleForDeletion(tp2, "test reason");
+
+        Set<TableBucketReplica> replicas2 =
+                getReplicas(tableId, partitionId2, partitionAssignment2);
+        Set<TableBucketReplica> ineligibleReplicas = new HashSet<>();
+        int idx = 0;
+        for (TableBucketReplica replica : replicas2) {
+            if (idx % 2 == 0) {
+                coordinatorContext.putReplicaState(replica, ReplicaState.ReplicaDeletionIneligible);
+                ineligibleReplicas.add(replica);
+            } else {
+                coordinatorContext.putReplicaState(replica, ReplicaState.OfflineReplica);
+            }
+            idx++;
+        }
+
+        testingEventManager.clearEvents();
+        tableManager.resumeDeletions();
+
+        // Step 2: previously-Ineligible replicas now in OfflineReplica
+        for (TableBucketReplica replica : ineligibleReplicas) {
+            assertThat(coordinatorContext.getReplicaState(replica))
+                    .isEqualTo(ReplicaState.OfflineReplica);
+        }
+        // Step 3 guard: partition still marked ineligible, onDeletePartition NOT invoked
+        assertThat(coordinatorContext.isPartitionIneligibleForDeletion(tp2)).isTrue();
+        assertThat(collectDeleteReplicaSuccessEvents()).isEmpty();
+    }
+
+    @Test
+    void testOnDeletePartitionAliveDeadSplit() throws Exception {
+        // Partition variant of the alive/dead split: dead replicas go to
+        // ReplicaDeletionIneligible and the partition is marked ineligible.
+        coordinatorContext.removeLiveTabletServer(2);
+        CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess(
+                coordinatorContext, testCoordinatorChannelManager);
+
+        long tableId = zookeeperClient.getTableIdAndIncrement();
+        TableAssignment tableAssignment = TableAssignment.builder().build();
+        zookeeperClient.registerTableAssignment(tableId, tableAssignment);
+
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        DATA1_TABLE_PATH,
+                        tableId,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
+        tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, tableAssignment);
+
+        PartitionAssignment partitionAssignment =
+                new PartitionAssignment(
+                        tableId,
+                        TableAssignment.builder()
+                                .add(0, BucketAssignment.of(1, 2))
+                                .build()
+                                .getBucketAssignments());
+        long partitionId = zookeeperClient.getPartitionIdAndIncrement();
+        String partitionName = "p_alive_dead_" + partitionId;
+        zookeeperClient.registerPartitionAssignmentAndMetadata(
+                partitionId,
+                partitionName,
+                partitionAssignment,
+                DEFAULT_REMOTE_DATA_DIR,
+                DATA1_TABLE_PATH,
+                tableId);
+        tableManager.onCreateNewPartition(
+                DATA1_TABLE_PATH, tableId, partitionId, partitionName, partitionAssignment);
+
+        TablePartition tp = new TablePartition(tableId, partitionId);
+        coordinatorContext.queuePartitionDeletion(Collections.singleton(tp));
+        tableManager.onDeletePartition(tableId, partitionId);
+
+        TableBucket tableBucket = new TableBucket(tableId, partitionId, 0);
+        TableBucketReplica deadReplica = new TableBucketReplica(tableBucket, 2);
+
+        assertThat(coordinatorContext.getReplicaState(deadReplica))
+                .isEqualTo(ReplicaState.ReplicaDeletionIneligible);
+        assertThat(coordinatorContext.isPartitionIneligibleForDeletion(tp)).isTrue();
     }
 
     private TableAssignment createAssignment() {

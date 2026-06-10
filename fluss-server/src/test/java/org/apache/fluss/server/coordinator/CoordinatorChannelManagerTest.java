@@ -22,6 +22,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
+import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
@@ -54,7 +55,10 @@ class CoordinatorChannelManagerTest {
         Configuration configuration = new Configuration();
         CoordinatorChannelManager coordinatorChannelManager =
                 new CoordinatorChannelManager(
-                        RpcClient.create(configuration, TestingClientMetricGroup.newInstance()));
+                        RpcClient.create(configuration, TestingClientMetricGroup.newInstance()),
+                        () -> 0,
+                        configuration,
+                        TestingMetricGroups.COORDINATOR_METRICS);
         List<ServerNode> tabletServersNode = FLUSS_CLUSTER_EXTENSION.getTabletServerNodes();
 
         // test start up using server 0

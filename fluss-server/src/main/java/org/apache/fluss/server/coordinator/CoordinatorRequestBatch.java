@@ -440,79 +440,48 @@ public class CoordinatorRequestBatch {
     }
 
     private void sendStopRequest(int coordinatorEpoch) {
-        for (Map.Entry<Integer, Map<TableBucket, PbStopReplicaReqForBucket>> stopReplciaEntry :
+        for (Map.Entry<Integer, Map<TableBucket, PbStopReplicaReqForBucket>> stopReplicaEntry :
                 stopReplicaRequestMap.entrySet()) {
-            // send request for each tablet server
-            Integer serverId = stopReplciaEntry.getKey();
+            Integer serverId = stopReplicaEntry.getKey();
 
-            // construct the stop replica request
-            Map<TableBucket, PbStopReplicaReqForBucket> stopReplicas = stopReplciaEntry.getValue();
+            Map<TableBucket, PbStopReplicaReqForBucket> stopReplicas = stopReplicaEntry.getValue();
             StopReplicaRequest stopReplicaRequest = new StopReplicaRequest();
             stopReplicaRequest
                     .setCoordinatorEpoch(coordinatorEpoch)
                     .addAllStopReplicasReqs(stopReplicas.values());
 
-            // we collect the buckets whose replica is to be deleted
             Set<TableBucket> deletedReplicaBuckets =
                     stopReplicas.values().stream()
                             .filter(pbBucket -> pbBucket.isDelete() && pbBucket.isDeleteRemote())
                             .map(t -> toTableBucket(t.getTableBucket()))
                             .collect(Collectors.toSet());
 
+            Set<TableBucketReplica> deletionReplicas =
+                    deletedReplicaBuckets.stream()
+                            .map(bucket -> new TableBucketReplica(bucket, serverId))
+                            .collect(Collectors.toSet());
+
             coordinatorChannelManager.sendStopBucketReplicaRequest(
                     serverId,
                     stopReplicaRequest,
+                    coordinatorEpoch,
+                    deletionReplicas.isEmpty() ? null : deletionReplicas,
                     (response, throwable) -> {
-                        if (throwable != null) {
-                            // todo: in FLUSS-55886145, we will introduce a sender thread to send
-                            // the request.
-                            // in here, we just ignore the error.
-                            LOG.warn(
-                                    "Failed to send stop replica request to tablet server {}.",
-                                    serverId,
-                                    throwable);
-                            return;
-                        }
-                        // handle the response
                         List<DeleteReplicaResultForBucket> deleteReplicaResultForBuckets =
                                 new ArrayList<>();
                         List<PbStopReplicaRespForBucket> stopReplicasResps =
                                 response.getStopReplicasRespsList();
-                        // construct the result for stop replica
-                        // for each replica
                         for (PbStopReplicaRespForBucket stopReplicaRespForBucket :
                                 stopReplicasResps) {
                             TableBucket tableBucket =
                                     toTableBucket(stopReplicaRespForBucket.getTableBucket());
 
-                            // now, for stop replica(delete=false), it's best effort without any
-                            // error handling.
-                            // currently, it only happens in the two case:
-                            // 1. send stop replica(delete = false) for table deletion, if it fails,
-                            // the following step will trigger replica to ReplicaDeletionStarted
-                            // will send stop replica(delete =true) which will retry if fail.
-                            // 2. send notify leader and isr request to tablet server, but the
-                            // tablet server fail to init a replica
-                            // then, it'll send stop replica(delete = false) to the tablet server to
-                            // make the tablet server can stop the replica; It's still fine if
-                            // sending stop replica fail.
-                            // todo: let's revisit here to see whether we can
-                            // really ignore the error after
-                            // we finish the logic of tablet server.
-
-                            // but for stop replica(delete=true), we need to handle the error and
-                            // retry deletion.
-
-                            // filter out the  error response for replica deletion.
                             if (deletedReplicaBuckets.contains(tableBucket)) {
                                 DeleteReplicaResultForBucket deleteReplicaResultForBucket;
-                                TableBucketReplica tableBucketReplica =
-                                        new TableBucketReplica(tableBucket, serverId);
-                                // if fail;
                                 if (stopReplicaRespForBucket.hasErrorCode()) {
                                     deleteReplicaResultForBucket =
                                             new DeleteReplicaResultForBucket(
-                                                    tableBucketReplica.getTableBucket(),
+                                                    tableBucket,
                                                     serverId,
                                                     ApiError.fromErrorMessage(
                                                             stopReplicaRespForBucket));
@@ -523,13 +492,10 @@ public class CoordinatorRequestBatch {
                                 deleteReplicaResultForBuckets.add(deleteReplicaResultForBucket);
                             }
                         }
-                        // if there are any deleted replicas, construct
-                        // the DeleteReplicaResponseReceivedEvent and put into event manager
                         if (!deleteReplicaResultForBuckets.isEmpty()) {
-                            DeleteReplicaResponseReceivedEvent deleteReplicaResponseReceivedEvent =
+                            eventManager.put(
                                     new DeleteReplicaResponseReceivedEvent(
-                                            deleteReplicaResultForBuckets);
-                            eventManager.put(deleteReplicaResponseReceivedEvent);
+                                            deleteReplicaResultForBuckets));
                         }
                     });
         }

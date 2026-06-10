@@ -21,6 +21,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.types.DataTypes;
@@ -28,6 +29,7 @@ import org.apache.fluss.types.DataTypes;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
+import java.util.Collections;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
@@ -67,6 +69,81 @@ class CoordinatorContextTest {
 
         assertThat(context.allTables()).hasSize(3);
         assertThat(context.getLakeTableCount()).isEqualTo(2);
+    }
+
+    @Test
+    void testIneligibleForDeletionMarkAndRemove() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+
+        long queuedTableId = 100L;
+        long unqueuedTableId = 200L;
+        TablePartition queuedPartition = new TablePartition(300L, 1L);
+        TablePartition unqueuedPartition = new TablePartition(400L, 2L);
+
+        // only tables/partitions that are queued for deletion can be marked ineligible
+        context.queueTableDeletion(Collections.singleton(queuedTableId));
+        context.queuePartitionDeletion(Collections.singleton(queuedPartition));
+
+        // initially nothing is ineligible
+        assertThat(context.isTableIneligibleForDeletion(queuedTableId)).isFalse();
+        assertThat(context.isPartitionIneligibleForDeletion(queuedPartition)).isFalse();
+
+        // (a) mark-when-queued sets the ineligible flag
+        context.markTableIneligibleForDeletion(queuedTableId, "first reason");
+        context.markPartitionIneligibleForDeletion(queuedPartition, "first reason");
+        assertThat(context.isTableIneligibleForDeletion(queuedTableId)).isTrue();
+        assertThat(context.isPartitionIneligibleForDeletion(queuedPartition)).isTrue();
+
+        // (b) re-mark same id with new reason keeps the flag set (reason is overwritten)
+        context.markTableIneligibleForDeletion(queuedTableId, "updated reason");
+        context.markPartitionIneligibleForDeletion(queuedPartition, "updated reason");
+        assertThat(context.isTableIneligibleForDeletion(queuedTableId)).isTrue();
+        assertThat(context.isPartitionIneligibleForDeletion(queuedPartition)).isTrue();
+
+        // (c) mark-when-NOT-queued is a no-op
+        context.markTableIneligibleForDeletion(unqueuedTableId, "should be ignored");
+        context.markPartitionIneligibleForDeletion(unqueuedPartition, "should be ignored");
+        assertThat(context.isTableIneligibleForDeletion(unqueuedTableId)).isFalse();
+        assertThat(context.isPartitionIneligibleForDeletion(unqueuedPartition)).isFalse();
+
+        // (d) removeFromIneligibleForDeletion removes the ineligible flag
+        context.removeTableFromIneligibleForDeletion(queuedTableId);
+        context.removePartitionFromIneligibleForDeletion(queuedPartition);
+        assertThat(context.isTableIneligibleForDeletion(queuedTableId)).isFalse();
+        assertThat(context.isPartitionIneligibleForDeletion(queuedPartition)).isFalse();
+
+        // re-marking after eligible should set it back to ineligible
+        context.markTableIneligibleForDeletion(queuedTableId, "second-time reason");
+        context.markPartitionIneligibleForDeletion(queuedPartition, "second-time reason");
+        assertThat(context.isTableIneligibleForDeletion(queuedTableId)).isTrue();
+        assertThat(context.isPartitionIneligibleForDeletion(queuedPartition)).isTrue();
+    }
+
+    @Test
+    void testResetContextClearsAllDeletionState() {
+        CoordinatorContext context = new CoordinatorContext(ZkEpoch.INITIAL_EPOCH);
+
+        long tableId = 100L;
+        TablePartition partition = new TablePartition(200L, 1L);
+
+        // pre-seed all four collections covered by the fix
+        context.queueTableDeletion(Collections.singleton(tableId));
+        context.queuePartitionDeletion(Collections.singleton(partition));
+        context.markTableIneligibleForDeletion(tableId, "blocked");
+        context.markPartitionIneligibleForDeletion(partition, "blocked");
+
+        // sanity-check pre-conditions before reset
+        assertThat(context.getTablesToBeDeleted()).contains(tableId);
+        assertThat(context.getPartitionsToBeDeleted()).contains(partition);
+        assertThat(context.isTableIneligibleForDeletion(tableId)).isTrue();
+        assertThat(context.isPartitionIneligibleForDeletion(partition)).isTrue();
+
+        context.resetContext();
+
+        assertThat(context.getTablesToBeDeleted()).isEmpty();
+        assertThat(context.getPartitionsToBeDeleted()).isEmpty();
+        assertThat(context.isTableIneligibleForDeletion(tableId)).isFalse();
+        assertThat(context.isPartitionIneligibleForDeletion(partition)).isFalse();
     }
 
     private TableInfo createTableInfo(long tableId, TablePath tablePath, boolean isLake) {
