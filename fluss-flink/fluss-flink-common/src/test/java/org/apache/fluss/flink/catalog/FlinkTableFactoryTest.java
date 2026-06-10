@@ -245,11 +245,9 @@ abstract class FlinkTableFactoryTest {
     private ResolvedSchema createBinlogSchema() {
         return new ResolvedSchema(
                 Arrays.asList(
-                        Column.physical(
-                                "_change_type", DataTypes.STRING().notNull()),
+                        Column.physical("_change_type", DataTypes.STRING().notNull()),
                         Column.physical("_log_offset", DataTypes.BIGINT().notNull()),
-                        Column.physical(
-                                "_commit_timestamp", DataTypes.TIMESTAMP_LTZ(3).notNull()),
+                        Column.physical("_commit_timestamp", DataTypes.TIMESTAMP_LTZ(3).notNull()),
                         Column.physical(
                                 "before",
                                 DataTypes.ROW(
@@ -289,11 +287,7 @@ abstract class FlinkTableFactoryTest {
             Map<String, String> options,
             Map<String, String> enrichmentOptions) {
         return createTableSource(
-                OBJECT_IDENTIFIER,
-                schema,
-                options,
-                enrichmentOptions,
-                new Configuration());
+                OBJECT_IDENTIFIER, schema, options, enrichmentOptions, new Configuration());
     }
 
     private static DynamicTableSource createTableSource(
