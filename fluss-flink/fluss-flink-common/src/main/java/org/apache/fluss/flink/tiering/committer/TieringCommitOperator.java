@@ -242,6 +242,17 @@ public class TieringCommitOperator<WriteResult extends LakeWriteResult, Committa
                     tablePath,
                     logEndOffsets.keySet());
         }
+        if (nonEmptyResults.size() < committableWriteResults.size()) {
+            // Empty results means some splits has not been processed, possibly caused by forced
+            // completion. Do not update watermark here.
+            if (watermark != null) {
+                LOG.warn(
+                        "There are some empty write results for {}, do not update watermark. Watermark of non-empty splits is {}.",
+                        tablePath,
+                        watermark);
+            }
+            watermark = null;
+        }
 
         // Check if the table was dropped and recreated during tiering.
         // If the current table id differs from the committable's table id, fail this commit

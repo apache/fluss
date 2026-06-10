@@ -17,8 +17,11 @@
 
 package org.apache.fluss.flink.tiering.source.watermark;
 
+import org.apache.fluss.lake.batch.ArrowRecordBatch;
+import org.apache.fluss.lake.batch.RecordBatch;
 import org.apache.fluss.lake.watermark.WatermarkExtractor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.RowType;
 
@@ -116,8 +119,8 @@ public class SimpleWatermarkExtractor implements WatermarkExtractor {
             LOG.warn(
                     "Watermark rowtime column '{}' not found in row type for {}, "
                             + "computed column is not supported for watermark extraction.",
-                    tableInfo.getTablePath(),
-                    rowtimeColumn);
+                    rowtimeColumn,
+                    tableInfo.getTablePath());
             return null;
         }
 
@@ -162,6 +165,18 @@ public class SimpleWatermarkExtractor implements WatermarkExtractor {
         } else {
             return row.getTimestampNtz(fieldIndex, precision).getMillisecond() - delayMillis;
         }
+    }
+
+    /** Extracts the maximum epoch-millis watermark from the given record batch. */
+    @Override
+    @Nullable
+    public Long currentWatermark(RecordBatch recordBatch) {
+        if (!(recordBatch instanceof ArrowRecordBatch)) {
+            return null;
+        }
+        ArrowBatchData arrowBatchData = ((ArrowRecordBatch) recordBatch).getArrowBatchData();
+        Long maxTimestampMillis = arrowBatchData.getMaxTimestampMillis(fieldIndex);
+        return maxTimestampMillis == null ? null : maxTimestampMillis - delayMillis;
     }
 
     /**

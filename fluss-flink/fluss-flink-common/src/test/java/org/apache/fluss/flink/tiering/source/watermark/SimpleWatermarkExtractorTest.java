@@ -18,20 +18,30 @@
 package org.apache.fluss.flink.tiering.source.watermark;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.batch.ArrowRecordBatch;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypes;
 
+import org.apache.arrow.memory.BufferAllocator;
+import org.apache.arrow.memory.RootAllocator;
+import org.apache.arrow.vector.FieldVector;
+import org.apache.arrow.vector.IntVector;
+import org.apache.arrow.vector.TimeStampMilliVector;
+import org.apache.arrow.vector.VectorSchemaRoot;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -186,6 +196,75 @@ class SimpleWatermarkExtractorTest {
         assertThat(extractor.currentWatermark(row)).isEqualTo(5000L);
     }
 
+    @Test
+    void testCurrentWatermarkWithArrowRecordBatchUsesMaximumTimestamp() throws Exception {
+        TableInfo tableInfo =
+                createTableInfoWithWatermark("`ts` - INTERVAL '5' SECOND", "TIMESTAMP(3)");
+        SimpleWatermarkExtractor extractor = SimpleWatermarkExtractor.create(tableInfo);
+        assertThat(extractor).isNotNull();
+
+        try (ArrowRecordBatch recordBatch =
+                createArrowRecordBatch(
+                        new Object[] {1, TimestampNtz.fromMillis(10_000L)},
+                        new Object[] {2, TimestampNtz.fromMillis(30_000L)},
+                        new Object[] {3, TimestampNtz.fromMillis(20_000L)})) {
+            assertThat(extractor.currentWatermark(recordBatch)).isEqualTo(25_000L);
+        }
+    }
+
+    @Test
+    void testCurrentWatermarkWithArrowRecordBatchSkipsNullRowtime() throws Exception {
+        TableInfo tableInfo = createTableInfoWithWatermark("`ts`", "TIMESTAMP(3)");
+        SimpleWatermarkExtractor extractor = SimpleWatermarkExtractor.create(tableInfo);
+        assertThat(extractor).isNotNull();
+
+        try (ArrowRecordBatch recordBatch =
+                createArrowRecordBatch(
+                        new Object[] {1, null},
+                        new Object[] {2, TimestampNtz.fromMillis(8_000L)},
+                        new Object[] {3, null})) {
+            assertThat(extractor.currentWatermark(recordBatch)).isEqualTo(8_000L);
+        }
+    }
+
+    @Test
+    void testCurrentWatermarkWithArrowRecordBatchReturnsNullForAllNullRowtime() throws Exception {
+        TableInfo tableInfo = createTableInfoWithWatermark("`ts`", "TIMESTAMP(3)");
+        SimpleWatermarkExtractor extractor = SimpleWatermarkExtractor.create(tableInfo);
+        assertThat(extractor).isNotNull();
+
+        try (ArrowRecordBatch recordBatch =
+                createArrowRecordBatch(new Object[] {1, null}, new Object[] {2, null})) {
+            assertThat(extractor.currentWatermark(recordBatch)).isNull();
+        }
+    }
+
+    @Test
+    void testCurrentWatermarkWithArrowRecordBatchSupportsNegativeWatermark() throws Exception {
+        TableInfo tableInfo =
+                createTableInfoWithWatermark("`ts` - INTERVAL '5' SECOND", "TIMESTAMP(3)");
+        SimpleWatermarkExtractor extractor = SimpleWatermarkExtractor.create(tableInfo);
+        assertThat(extractor).isNotNull();
+
+        try (ArrowRecordBatch recordBatch =
+                createArrowRecordBatch(
+                        new Object[] {1, TimestampNtz.fromMillis(-10_000L)},
+                        new Object[] {2, TimestampNtz.fromMillis(-3_000L)})) {
+            assertThat(extractor.currentWatermark(recordBatch)).isEqualTo(-8_000L);
+        }
+    }
+
+    @Test
+    void testCurrentWatermarkWithEmptyArrowRecordBatchReturnsNull() throws Exception {
+        TableInfo tableInfo = createTableInfoWithWatermark("`ts`", "TIMESTAMP(3)");
+        SimpleWatermarkExtractor extractor = SimpleWatermarkExtractor.create(tableInfo);
+        assertThat(extractor).isNotNull();
+
+        try (ArrowRecordBatch recordBatch = createArrowRecordBatch()) {
+            assertThat(extractor.currentWatermark(recordBatch)).isNull();
+        }
+    }
+
     @ParameterizedTest
     @CsvSource({
         "TIMESTAMP, 0",
@@ -233,6 +312,7 @@ class SimpleWatermarkExtractorTest {
 
     private static TableInfo createTableInfoFromSchema(
             Schema schema, Map<String, String> customProps) {
+        Configuration tableConfig = new Configuration();
         return new TableInfo(
                 TablePath.of("test_db", "test_table"),
                 1L,
@@ -241,11 +321,51 @@ class SimpleWatermarkExtractorTest {
                 Collections.emptyList(),
                 Collections.emptyList(),
                 1,
-                new Configuration(),
+                tableConfig,
                 Configuration.fromMap(customProps),
                 null,
                 null,
                 System.currentTimeMillis(),
                 System.currentTimeMillis());
+    }
+
+    private static ArrowRecordBatch createArrowRecordBatch(Object[]... rows) {
+        BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE);
+        IntVector idVector = new IntVector("id", allocator);
+        TimeStampMilliVector timestampVector = new TimeStampMilliVector("ts", allocator);
+        for (int rowId = 0; rowId < rows.length; rowId++) {
+            idVector.setSafe(rowId, (Integer) rows[rowId][0]);
+            Object timestamp = rows[rowId][1];
+            if (timestamp == null) {
+                timestampVector.setNull(rowId);
+            } else {
+                timestampVector.setSafe(rowId, ((TimestampNtz) timestamp).getMillisecond());
+            }
+        }
+        idVector.setValueCount(rows.length);
+        timestampVector.setValueCount(rows.length);
+        List<FieldVector> vectors = Arrays.asList(idVector, timestampVector);
+        VectorSchemaRoot vectorSchemaRoot =
+                new VectorSchemaRoot(
+                        Arrays.asList(idVector.getField(), timestampVector.getField()),
+                        vectors,
+                        rows.length);
+        return new TestingArrowRecordBatch(
+                new ArrowBatchData(vectorSchemaRoot, 0L, 0L, rows.length), allocator);
+    }
+
+    private static class TestingArrowRecordBatch extends ArrowRecordBatch {
+        private final BufferAllocator allocator;
+
+        private TestingArrowRecordBatch(ArrowBatchData arrowBatchData, BufferAllocator allocator) {
+            super(arrowBatchData);
+            this.allocator = allocator;
+        }
+
+        @Override
+        public void close() {
+            super.close();
+            allocator.close();
+        }
     }
 }
