@@ -44,6 +44,7 @@ public class MetricNames {
     public static final String BUCKET_COUNT = "bucketCount";
     public static final String PARTITION_COUNT = "partitionCount";
     public static final String REPLICAS_TO_DELETE_COUNT = "replicasToDeleteCount";
+    public static final String PENDING_LEADER_ACTIVATION_COUNT = "pendingLeaderActivationCount";
 
     // for coordinator event processor
     public static final String EVENT_QUEUE_SIZE = "eventQueueSize";

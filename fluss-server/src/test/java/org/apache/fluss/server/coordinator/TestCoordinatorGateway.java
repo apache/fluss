@@ -70,6 +70,8 @@ import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionResponse;
 import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.DropTableResponse;
+import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
+import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
@@ -462,8 +464,8 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     }
 
     @Override
-    public CompletableFuture<org.apache.fluss.rpc.messages.GetClusterHealthResponse>
-            getClusterHealth(org.apache.fluss.rpc.messages.GetClusterHealthRequest request) {
+    public CompletableFuture<GetClusterHealthResponse> getClusterHealth(
+            GetClusterHealthRequest request) {
         throw new UnsupportedOperationException();
     }
 

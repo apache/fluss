@@ -196,10 +196,7 @@ public interface AdminReadOnlyGateway extends RpcGateway {
             DescribeClusterConfigsRequest request);
 
     /**
-     * Get the overall cluster health snapshot. The Coordinator owns the authoritative view; on a
-     * tablet server this call is forwarded to the Coordinator over the internal listener so that
-     * local tooling (e.g. the Kubernetes readiness probe) can hit {@code 127.0.0.1} on the tablet
-     * pod without needing to know the Coordinator's address.
+     * Get the overall cluster health snapshot.
      *
      * @return the cluster health response.
      */
