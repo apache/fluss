@@ -32,6 +32,7 @@ import org.apache.fluss.client.write.WriterClient;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.metadata.TablePath;
@@ -70,6 +71,7 @@ public final class FlussConnection implements Connection {
 
     FlussConnection(Configuration conf, MetricRegistry metricRegistry) {
         this.conf = conf;
+        FlussConfigUtils.validateClientConfigs(conf);
         // init Filesystem with configuration from FlussConnection,
         // only pass options with 'client.fs.' prefix
         FileSystem.initialize(
