@@ -53,6 +53,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ScheduledFuture;
 
+import static org.apache.fluss.record.TestData.ANOTHER_DATA1;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
@@ -268,6 +269,38 @@ final class LogTabletTest extends LogTestBase {
 
         logTablet.drop();
         assertThat(scheduler.taskRunning(writerExpireCheck)).isFalse();
+    }
+
+    @Test
+    void testLakePendingTimestamp() throws Exception {
+        logTablet.updateIsDataLakeEnabled(true);
+
+        // Initial state: unknown.
+        assertThat(logTablet.getLakePendingTimestamp()).isEqualTo(-1L);
+
+        // Append two batches with multiple records each.
+        LogAppendInfo firstAppend = logTablet.appendAsLeader(genMemoryLogRecordsByObject(DATA1));
+        logTablet.updateHighWatermark(logTablet.localLogEndOffset());
+
+        Thread.sleep(2L);
+        LogAppendInfo secondAppend =
+                logTablet.appendAsLeader(genMemoryLogRecordsByObject(ANOTHER_DATA1));
+        logTablet.updateHighWatermark(logTablet.localLogEndOffset());
+
+        // Lake consumes the first batch — pending timestamp points to the second.
+        logTablet.updateLakeLogEndOffset(secondAppend.firstOffset());
+        assertThat(logTablet.getLakePendingTimestamp()).isEqualTo(secondAppend.maxTimestamp());
+
+        // Lake catches up completely — no pending.
+        logTablet.updateLakeLogEndOffset(logTablet.localLogEndOffset());
+        assertThat(logTablet.getLakePendingTimestamp()).isEqualTo(0L);
+
+        // New data arrives while lake is caught up.
+        Thread.sleep(2L);
+        LogAppendInfo thirdAppend = logTablet.appendAsLeader(genMemoryLogRecordsByObject(DATA1));
+        logTablet.updateHighWatermark(logTablet.localLogEndOffset());
+        logTablet.maybeUpdateLakePendingTimestamp(thirdAppend);
+        assertThat(logTablet.getLakePendingTimestamp()).isEqualTo(thirdAppend.maxTimestamp());
     }
 
     @Test

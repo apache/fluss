@@ -132,6 +132,7 @@ public final class LogTablet {
     private volatile long lakeLogStartOffset = Long.MAX_VALUE;
     private volatile long lakeLogEndOffset = -1L;
     private volatile long lakeMaxTimestamp = -1;
+    private volatile long lakePendingTimestamp = -1L;
 
     private LogTablet(
             File dataDir,
@@ -275,6 +276,10 @@ public final class LogTablet {
 
     public long getLakeMaxTimestamp() {
         return lakeMaxTimestamp;
+    }
+
+    public long getLakePendingTimestamp() {
+        return lakePendingTimestamp;
     }
 
     public int getWriterIdCount() {
@@ -599,12 +604,56 @@ public final class LogTablet {
     public void updateLakeLogEndOffset(long lakeLogEndOffset) {
         if (lakeLogEndOffset > this.lakeLogEndOffset) {
             this.lakeLogEndOffset = lakeLogEndOffset;
+            refreshLakePendingTimestamp();
         }
     }
 
     public void updateLakeMaxTimestamp(long lakeMaxTimestamp) {
         if (lakeMaxTimestamp > this.lakeMaxTimestamp) {
             this.lakeMaxTimestamp = lakeMaxTimestamp;
+        }
+    }
+
+    public void refreshLakePendingTimestamp() {
+        long pendingOffset =
+                lakeLogEndOffset < 0L
+                        ? localLogStartOffset()
+                        : Math.max(lakeLogEndOffset, localLogStartOffset());
+        if (pendingOffset >= getHighWatermark()) {
+            lakePendingTimestamp = 0L;
+            return;
+        }
+
+        try {
+            lakePendingTimestamp = readCommitTimestamp(pendingOffset);
+        } catch (Exception e) {
+            LOG.debug(
+                    "Failed to read pending record timestamp at offset {} for bucket {}",
+                    pendingOffset,
+                    getTableBucket(),
+                    e);
+            lakePendingTimestamp = -1L;
+        }
+    }
+
+    private long readCommitTimestamp(long offset) throws IOException {
+        FetchDataInfo fetchDataInfo = read(offset, 1, FetchIsolation.LOG_END, true, null, null);
+        for (LogRecordBatch batch : fetchDataInfo.getRecords().batches()) {
+            return batch.commitTimestamp();
+        }
+        throw new IOException(
+                String.format(
+                        "Failed to read pending batch timestamp at offset %s for bucket %s",
+                        offset, getTableBucket()));
+    }
+
+    /**
+     * Called after a leader append to update {@link #lakePendingTimestamp} when lake tiering was
+     * caught up before this append.
+     */
+    public void maybeUpdateLakePendingTimestamp(LogAppendInfo appendInfo) {
+        if (isDataLakeEnabled && lakeLogEndOffset >= appendInfo.firstOffset()) {
+            lakePendingTimestamp = appendInfo.maxTimestamp();
         }
     }
 
