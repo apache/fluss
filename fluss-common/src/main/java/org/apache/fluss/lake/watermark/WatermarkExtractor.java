@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.watermark;
 
+import org.apache.fluss.lake.batch.RecordBatch;
 import org.apache.fluss.row.InternalRow;
 
 import javax.annotation.Nullable;
@@ -38,4 +39,14 @@ public interface WatermarkExtractor {
      */
     @Nullable
     Long currentWatermark(InternalRow row);
+
+    /**
+     * Extracts the maximum watermark for the given record batch.
+     *
+     * @param recordBatch the record batch to extract the watermark from
+     * @return the maximum watermark in epoch milliseconds, or {@code null} if the batch does not
+     *     provide a watermark value
+     */
+    @Nullable
+    Long currentWatermark(RecordBatch recordBatch);
 }

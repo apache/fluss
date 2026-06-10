@@ -20,23 +20,32 @@ package org.apache.fluss.lake.paimon.tiering;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.tiering.source.watermark.SimpleWatermarkExtractor;
+import org.apache.fluss.lake.batch.ArrowRecordBatch;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.watermark.WatermarkExtractor;
 import org.apache.fluss.lake.writer.LakeWriter;
+import org.apache.fluss.lake.writer.SupportsRecordBatchWrite;
 import org.apache.fluss.lake.writer.WriterInitContext;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.GenericRecord;
 import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.record.LogRecordBatch;
+import org.apache.fluss.record.LogRecordReadContext;
+import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.TestingSchemaGetter;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.testutils.DataTestUtils;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.apache.paimon.CoreOptions;
@@ -73,8 +82,10 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
@@ -84,6 +95,9 @@ import static org.apache.fluss.record.ChangeType.DELETE;
 import static org.apache.fluss.record.ChangeType.INSERT;
 import static org.apache.fluss.record.ChangeType.UPDATE_AFTER;
 import static org.apache.fluss.record.ChangeType.UPDATE_BEFORE;
+import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
+import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
+import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -562,6 +576,78 @@ class PaimonTieringTest {
     }
 
     @Test
+    void testTieringWatermarkWithArrowRecordBatch() throws Exception {
+        int bucketNum = 3;
+        TablePath tablePath = TablePath.of("paimon", "test_tiering_watermark_arrow_batch");
+        createWatermarkTable(tablePath);
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                org.apache.fluss.metadata.Schema.newBuilder()
+                                        .column("c1", org.apache.fluss.types.DataTypes.STRING())
+                                        .column("c2", org.apache.fluss.types.DataTypes.STRING())
+                                        .column(
+                                                "event_time",
+                                                org.apache.fluss.types.DataTypes.TIMESTAMP(3))
+                                        .build())
+                        .logFormat(LogFormat.ARROW)
+                        .distributedBy(bucketNum)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .customProperty("schema.watermark.0.rowtime", "event_time")
+                        .customProperty(
+                                "schema.watermark.0.strategy.expr",
+                                "`event_time` - INTERVAL '5' SECOND")
+                        .customProperty("schema.watermark.0.strategy.data-type", "TIMESTAMP(3)")
+                        .build();
+        TableInfo tableInfo =
+                TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
+
+        List<PaimonWriteResult> paimonWriteResults = new ArrayList<>();
+        long[] maxTimestamps = {20_000L, 30_000L, 40_000L};
+
+        for (int bucket = 0; bucket < bucketNum; bucket++) {
+            try (LogRecordReadContext readContext = createArrowReadContext(tableInfo);
+                    LakeWriter<PaimonWriteResult> lakeWriter =
+                            createLakeWriter(tablePath, bucket, null, null, tableInfo);
+                    ArrowRecordBatch recordBatch =
+                            createArrowRecordBatch(
+                                    tableInfo,
+                                    readContext,
+                                    new Object[] {
+                                        "low" + bucket,
+                                        "data",
+                                        TimestampNtz.fromMillis(maxTimestamps[bucket] - 1_000L)
+                                    },
+                                    new Object[] {
+                                        "max" + bucket,
+                                        "data",
+                                        TimestampNtz.fromMillis(maxTimestamps[bucket])
+                                    })) {
+                ((SupportsRecordBatchWrite) lakeWriter).write(recordBatch);
+                PaimonWriteResult writeResult = lakeWriter.complete();
+                paimonWriteResults.add(writeResult);
+
+                assertThat(writeResult.getWatermark()).isEqualTo(maxTimestamps[bucket] - 5_000L);
+            }
+        }
+
+        try (LakeCommitter<PaimonWriteResult, PaimonCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo, new Configuration())) {
+            PaimonCommittable committable =
+                    lakeCommitter.toCommittable(paimonWriteResults, 15_000L);
+            Map<String, String> snapshotProperties = new HashMap<>();
+            snapshotProperties.put(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "offsets");
+            lakeCommitter.commit(committable, snapshotProperties);
+        }
+
+        FileStoreTable fileStoreTable =
+                (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath));
+        Long watermark = fileStoreTable.snapshotManager().snapshot(1).watermark();
+        assertThat(watermark).isEqualTo(15_000L);
+    }
+
+    @Test
     void testTieringWithoutWatermarkDefinition() throws Exception {
         int bucketNum = 2;
         TablePath tablePath = TablePath.of("paimon", "test_tiering_without_watermark_def");
@@ -935,6 +1021,39 @@ class PaimonTieringTest {
                         return SimpleWatermarkExtractor.create(tableInfo);
                     }
                 });
+    }
+
+    private static LogRecordReadContext createArrowReadContext(TableInfo tableInfo) {
+        return LogRecordReadContext.createReadContext(
+                tableInfo,
+                false,
+                null,
+                new TestingSchemaGetter(tableInfo.getSchemaId(), tableInfo.getSchema()));
+    }
+
+    private static ArrowRecordBatch createArrowRecordBatch(
+            TableInfo tableInfo, LogRecordReadContext readContext, Object[]... rows)
+            throws Exception {
+        List<Object[]> objects = Arrays.asList(rows);
+        List<ChangeType> changeTypes =
+                objects.stream().map(row -> ChangeType.APPEND_ONLY).collect(Collectors.toList());
+        MemoryLogRecords records =
+                DataTestUtils.createBasicMemoryLogRecords(
+                        tableInfo.getRowType(),
+                        tableInfo.getSchemaId(),
+                        0L,
+                        0L,
+                        CURRENT_LOG_MAGIC_VALUE,
+                        NO_WRITER_ID,
+                        NO_BATCH_SEQUENCE,
+                        changeTypes,
+                        objects,
+                        LogFormat.ARROW,
+                        DEFAULT_COMPRESSION,
+                        true);
+        LogRecordBatch recordBatch = records.batches().iterator().next();
+        ArrowBatchData arrowBatchData = recordBatch.loadArrowBatch(readContext);
+        return new ArrowRecordBatch(arrowBatchData);
     }
 
     private LakeCommitter<PaimonWriteResult, PaimonCommittable> createLakeCommitter(
