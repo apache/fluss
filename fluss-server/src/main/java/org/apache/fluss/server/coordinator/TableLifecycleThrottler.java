@@ -73,10 +73,10 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
  * CoordinatorContext} off the event thread.
  *
  * <p>Timeout-based abandon: the in-flight drop is timestamped at admission time. A periodic task
- * checks whether the completion callback has not arrived within the hardcoded timeout (3 minutes)
- * and abandons the drop with a WARN log. Abandonment only releases the throttler's in-memory
- * tracking; any residual replica state machine entries are reconciled on the next coordinator
- * startup via {@link TableManager#resumeDeletions()}.
+ * checks whether the completion callback has not arrived within the configured timeout and abandons
+ * the drop with a WARN log. Abandonment only releases the throttler's in-memory tracking; any
+ * residual replica state machine entries are reconciled on the next coordinator startup via {@link
+ * TableManager#resumeDeletions()}.
  */
 public class TableLifecycleThrottler implements AutoCloseable {
 
@@ -128,7 +128,7 @@ public class TableLifecycleThrottler implements AutoCloseable {
         this.timeoutCheckIntervalMs = timeoutCheckIntervalMs;
     }
 
-    /** Starts the periodic timeout checker and activates one-at-a-time throttling. Idempotent. */
+    /** Starts the periodic timeout checker. Idempotent. */
     public void start() {
         if (closed.get()) {
             throw new IllegalStateException("TableLifecycleThrottler is already closed.");
@@ -140,7 +140,7 @@ public class TableLifecycleThrottler implements AutoCloseable {
                     timeoutCheckIntervalMs,
                     TimeUnit.MILLISECONDS);
             LOG.info(
-                    "TableLifecycleThrottler started: one-at-a-time throttling, "
+                    "TableLifecycleThrottler timeout checker started: "
                             + "inflightTimeoutMs={}, timeoutCheckIntervalMs={}",
                     inflightTimeoutMs,
                     timeoutCheckIntervalMs);
@@ -199,32 +199,31 @@ public class TableLifecycleThrottler implements AutoCloseable {
      * DeletionSuccessful} state. Releases the in-flight slot and admits the next pending drop.
      */
     public void onPartitionDropCompleted(TablePartition tablePartition) {
-        PendingDrop next;
-        lock.lock();
-        try {
-            if (currentInflight == null) {
-                return;
-            }
-            PendingDrop inflight = currentInflight.drop;
-            if (!(inflight instanceof PendingPartitionDrop)) {
-                return;
-            }
-            PendingPartitionDrop p = (PendingPartitionDrop) inflight;
-            if (p.tableId != tablePartition.getTableId()
-                    || p.partitionId != tablePartition.getPartitionId()) {
-                return;
-            }
-            LOG.debug(
-                    "Partition drop completed: {} after {}ms; pending={}",
-                    tablePartition,
-                    clock.milliseconds() - currentInflight.submittedAtMs,
-                    pendingDrops.size());
-            currentInflight = null;
-            next = admitNext();
-        } finally {
-            lock.unlock();
-        }
-        executeOutsideLock(next);
+        PendingDrop next =
+                inLock(
+                        lock,
+                        () -> {
+                            if (currentInflight == null) {
+                                return null;
+                            }
+                            PendingDrop inflight = currentInflight.drop;
+                            if (!(inflight instanceof PendingPartitionDrop)) {
+                                return null;
+                            }
+                            PendingPartitionDrop p = (PendingPartitionDrop) inflight;
+                            if (p.tableId != tablePartition.getTableId()
+                                    || p.partitionId != tablePartition.getPartitionId()) {
+                                return null;
+                            }
+                            LOG.debug(
+                                    "Partition drop completed: {} after {}ms; pending={}",
+                                    tablePartition,
+                                    clock.milliseconds() - currentInflight.submittedAtMs,
+                                    pendingDrops.size());
+                            currentInflight = null;
+                            return admitNext();
+                        });
+        executeUntilBlocked(next);
     }
 
     /**
@@ -232,31 +231,30 @@ public class TableLifecycleThrottler implements AutoCloseable {
      * DeletionSuccessful} state. Releases the in-flight slot and admits the next pending drop.
      */
     public void onTableDropCompleted(long tableId) {
-        PendingDrop next;
-        lock.lock();
-        try {
-            if (currentInflight == null) {
-                return;
-            }
-            PendingDrop inflight = currentInflight.drop;
-            if (!(inflight instanceof PendingTableDrop)) {
-                return;
-            }
-            PendingTableDrop t = (PendingTableDrop) inflight;
-            if (t.tableId != tableId) {
-                return;
-            }
-            LOG.debug(
-                    "Table drop completed: tableId={} after {}ms; pending={}",
-                    tableId,
-                    clock.milliseconds() - currentInflight.submittedAtMs,
-                    pendingDrops.size());
-            currentInflight = null;
-            next = admitNext();
-        } finally {
-            lock.unlock();
-        }
-        executeOutsideLock(next);
+        PendingDrop next =
+                inLock(
+                        lock,
+                        () -> {
+                            if (currentInflight == null) {
+                                return null;
+                            }
+                            PendingDrop inflight = currentInflight.drop;
+                            if (!(inflight instanceof PendingTableDrop)) {
+                                return null;
+                            }
+                            PendingTableDrop t = (PendingTableDrop) inflight;
+                            if (t.tableId != tableId) {
+                                return null;
+                            }
+                            LOG.debug(
+                                    "Table drop completed: tableId={} after {}ms; pending={}",
+                                    tableId,
+                                    clock.milliseconds() - currentInflight.submittedAtMs,
+                                    pendingDrops.size());
+                            currentInflight = null;
+                            return admitNext();
+                        });
+        executeUntilBlocked(next);
     }
 
     private void admit(PendingDrop drop) {
@@ -266,27 +264,28 @@ public class TableLifecycleThrottler implements AutoCloseable {
                     drop);
             return;
         }
-        PendingDrop toExecute;
-        lock.lock();
-        try {
-            // Deduplicate: skip if the same target is already in-flight or pending.
-            // This prevents stale resume drops from accumulating when resumeDeletions()
-            // is called while the original watcher-triggered drop is still in progress.
-            if (isDuplicate(drop)) {
-                LOG.debug("Skipping duplicate drop submission: {}", drop);
-                return;
-            }
-            pendingDrops.add(drop);
-            LOG.debug(
-                    "Submitted drop: {}; pending={} inflight={}",
-                    drop,
-                    pendingDrops.size(),
-                    currentInflight != null);
-            toExecute = admitNext();
-        } finally {
-            lock.unlock();
-        }
-        executeOutsideLock(toExecute);
+        PendingDrop toExecute =
+                inLock(
+                        lock,
+                        () -> {
+                            // Deduplicate: skip if the same target is already in-flight or pending.
+                            // This prevents stale resume drops from accumulating when
+                            // resumeDeletions()
+                            // is called while the original watcher-triggered drop is still in
+                            // progress.
+                            if (isDuplicate(drop)) {
+                                LOG.debug("Skipping duplicate drop submission: {}", drop);
+                                return null;
+                            }
+                            pendingDrops.add(drop);
+                            LOG.debug(
+                                    "Submitted drop: {}; pending={} inflight={}",
+                                    drop,
+                                    pendingDrops.size(),
+                                    currentInflight != null);
+                            return admitNext();
+                        });
+        executeUntilBlocked(toExecute);
     }
 
     /**
@@ -323,39 +322,29 @@ public class TableLifecycleThrottler implements AutoCloseable {
         return next;
     }
 
-    /** Executes a drop outside the lock. No-op if {@code drop} is null. */
-    private void executeOutsideLock(@Nullable PendingDrop drop) {
-        if (drop == null) {
-            return;
+    /** Executes admitted drops until one needs an asynchronous completion callback. */
+    private void executeUntilBlocked(@Nullable PendingDrop drop) {
+        PendingDrop current = drop;
+        while (current != null) {
+            if (!executeDrop(current)) {
+                return;
+            }
+            current = releaseInflightAndAdmitNext();
         }
-        try {
-            drop.execute(eventManager);
-            // For fire-and-forget drops (e.g., auto-partition table drops), no completion
-            // callback will ever arrive because there are no table-level replicas to delete.
-            // Release the inflight slot immediately and admit the next pending drop.
-            if (drop.isFireAndForget()) {
-                PendingDrop next;
-                lock.lock();
-                try {
+    }
+
+    private boolean executeDrop(PendingDrop drop) {
+        drop.putEventInto(eventManager);
+        return drop.isFireAndForget();
+    }
+
+    private PendingDrop releaseInflightAndAdmitNext() {
+        return inLock(
+                lock,
+                () -> {
                     currentInflight = null;
-                    next = admitNext();
-                } finally {
-                    lock.unlock();
-                }
-                executeOutsideLock(next);
-            }
-        } catch (Throwable t) {
-            LOG.error("Failed to execute drop {}; abandoning in-memory tracking.", drop, t);
-            PendingDrop next;
-            lock.lock();
-            try {
-                currentInflight = null;
-                next = admitNext();
-            } finally {
-                lock.unlock();
-            }
-            executeOutsideLock(next);
-        }
+                    return admitNext();
+                });
     }
 
     private void checkTimeoutsSafely() {
@@ -368,29 +357,28 @@ public class TableLifecycleThrottler implements AutoCloseable {
 
     @VisibleForTesting
     void checkTimeouts() {
-        PendingDrop next;
-        lock.lock();
-        try {
-            if (currentInflight == null) {
-                return;
-            }
-            long elapsed = clock.milliseconds() - currentInflight.submittedAtMs;
-            if (elapsed <= inflightTimeoutMs) {
-                return;
-            }
-            LOG.warn(
-                    "In-flight drop {} timed out after {}ms with no completion callback. "
-                            + "Abandoning in-memory tracking; ZK metadata is already gone, "
-                            + "any residual replica state will be reconciled on next "
-                            + "coordinator startup.",
-                    currentInflight.drop,
-                    elapsed);
-            currentInflight = null;
-            next = admitNext();
-        } finally {
-            lock.unlock();
-        }
-        executeOutsideLock(next);
+        PendingDrop next =
+                inLock(
+                        lock,
+                        () -> {
+                            if (currentInflight == null) {
+                                return null;
+                            }
+                            long elapsed = clock.milliseconds() - currentInflight.submittedAtMs;
+                            if (elapsed <= inflightTimeoutMs) {
+                                return null;
+                            }
+                            LOG.warn(
+                                    "In-flight drop {} timed out after {}ms with no completion callback. "
+                                            + "Abandoning in-memory tracking; ZK metadata is already gone, "
+                                            + "any residual replica state will be reconciled on next "
+                                            + "coordinator startup.",
+                                    currentInflight.drop,
+                                    elapsed);
+                            currentInflight = null;
+                            return admitNext();
+                        });
+        executeUntilBlocked(next);
     }
 
     @VisibleForTesting
@@ -416,7 +404,7 @@ public class TableLifecycleThrottler implements AutoCloseable {
 
     /** A unit of work queued for admission into the coordinator event queue. */
     interface PendingDrop {
-        void execute(EventManager eventManager);
+        void putEventInto(EventManager eventManager);
 
         /**
          * Whether this drop completes immediately without waiting for a completion callback.
@@ -451,7 +439,7 @@ public class TableLifecycleThrottler implements AutoCloseable {
         }
 
         @Override
-        public void execute(EventManager eventManager) {
+        public void putEventInto(EventManager eventManager) {
             if (forResume) {
                 // Resume-mode reconciliation: dispatch identity-only event to the coordinator
                 // event thread, which mutates the @NotThreadSafe CoordinatorContext. The
@@ -517,7 +505,7 @@ public class TableLifecycleThrottler implements AutoCloseable {
         }
 
         @Override
-        public void execute(EventManager eventManager) {
+        public void putEventInto(EventManager eventManager) {
             if (forResume) {
                 // See PendingPartitionDrop#execute.
                 eventManager.put(ResumeDropEvent.forTable(tableId));

@@ -183,21 +183,21 @@ class TableChangeWatcherTest {
             expectedTableEvents.add(new DropTableEvent(tableInfo.getTableId(), false, false));
         }
 
-        // collect all events and check the all events.
         // The throttler admits one drop at a time; drive it by completing each drop
         // as it appears so the next pending drop is admitted.
+        for (CoordinatorEvent event : expectedTableEvents) {
+            DropTableEvent drop = (DropTableEvent) event;
+            lifecycleThrottler.onTableDropCompleted(drop.getTableId());
+        }
+
+        // collect all events and check the all events.
         List<CoordinatorEvent> allEvents = new ArrayList<>(expectedEvents);
         allEvents.addAll(expectedTableEvents);
         retry(
                 Duration.ofMinutes(1),
-                () -> {
-                    for (CoordinatorEvent event : expectedTableEvents) {
-                        DropTableEvent drop = (DropTableEvent) event;
-                        lifecycleThrottler.onTableDropCompleted(drop.getTableId());
-                    }
-                    assertThat(eventManager.getEvents())
-                            .containsExactlyInAnyOrderElementsOf(allEvents);
-                });
+                () ->
+                        assertThat(eventManager.getEvents())
+                                .containsExactlyInAnyOrderElementsOf(allEvents));
     }
 
     @Test
