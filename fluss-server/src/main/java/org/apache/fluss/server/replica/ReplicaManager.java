@@ -1347,6 +1347,10 @@ public class ReplicaManager implements ServerReconfigurable {
                 validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPutKvRequests().inc();
+                // Pre-write backpressure gate: a single L0 read drives both the hard rejection
+                // (throws StorageBackpressureException) and the proactive throttle pressure
+                // signal piggybacked on the response.
+                float pressure = replica.checkBackpressure();
                 LogAppendInfo appendInfo =
                         replica.putRecordsToLeader(
                                 entry.getValue(), targetColumns, mergeMode, requiredAcks);
@@ -1356,7 +1360,9 @@ public class ReplicaManager implements ServerReconfigurable {
                         appendInfo.firstOffset(),
                         appendInfo.lastOffset());
                 putResultForBucketMap.put(
-                        tb, new PutKvResultForBucket(tb, appendInfo.lastOffset() + 1));
+                        tb,
+                        new PutKvResultForBucket(tb, appendInfo.lastOffset() + 1)
+                                .setPressure(pressure));
 
                 // metric for kv
                 tableMetrics.incKvMessageIn(entry.getValue().getRecordCount());

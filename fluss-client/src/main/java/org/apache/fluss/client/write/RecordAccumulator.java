@@ -122,6 +122,10 @@ public final class RecordAccumulator {
     private final Clock clock;
     private final DynamicWriteBatchSizeEstimator batchSizeEstimator;
 
+    // Backpressure throttle state: per-bucket expiry timestamp for throttle
+    private final ConcurrentMap<TableBucket, Long> throttleExpiryMs = new CopyOnWriteMap<>();
+    private final long maxThrottleMs;
+
     // TODO add retryBackoffMs to retry the produce request upon receiving an error.
     // TODO add deliveryTimeoutMs to report success or failure on record delivery.
     // TODO add nextBatchExpiryTimeMs
@@ -155,6 +159,7 @@ public final class RecordAccumulator {
                         (int) conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE).getBytes());
         this.idempotenceManager = idempotenceManager;
         this.clock = clock;
+        this.maxThrottleMs = conf.get(ConfigOptions.CLIENT_WRITER_KV_BACKPRESSURE_MAX_THROTTLE_MS);
         registerMetrics(writerMetricGroup);
     }
 
@@ -520,6 +525,19 @@ public final class RecordAccumulator {
             } else {
                 TableBucket tableBucket =
                         cluster.getTableBucket(tableIdOpt.get(), physicalTablePath, bucketId);
+
+                // If this bucket is throttled, don't mark its node as ready.
+                // Instead, factor the remaining throttle time into the next check delay.
+                Long throttleExpiry = throttleExpiryMs.get(tableBucket);
+                if (throttleExpiry != null) {
+                    long now = clock.milliseconds();
+                    if (now < throttleExpiry) {
+                        nextReadyCheckDelayMs =
+                                Math.min(nextReadyCheckDelayMs, throttleExpiry - now);
+                        continue;
+                    }
+                }
+
                 Integer leader = cluster.leaderFor(tableBucket);
                 if (leader == null) {
                     // This is a bucket for which leader is not known, but messages are
@@ -762,7 +780,7 @@ public final class RecordAccumulator {
                         // request size due to compression; in this case we will still
                         // eventually send this batch in a single request.
                         break;
-                    } else if (shouldStopDrainBatchesForBucket(first, tableBucket)) {
+                    } else if (shouldSkipBucket(first, tableBucket)) {
                         // Buckets are independent — skip this one, keep draining others.
                         continue;
                     }
@@ -777,7 +795,7 @@ public final class RecordAccumulator {
                         // we update it and reset the batch sequence. This should be only done when
                         // all
                         // its in-flight batches have completed. This is guarantee in
-                        // `shouldStopDrainBatchesForBucket`.
+                        // `shouldSkipBucket`.
                         idempotenceManager.maybeUpdateWriterId(tableBucket);
 
                         // If the batch already has an assigned batch sequence, then we should not
@@ -845,7 +863,11 @@ public final class RecordAccumulator {
         return ready;
     }
 
-    private boolean shouldStopDrainBatchesForBucket(WriteBatch first, TableBucket tableBucket) {
+    private boolean shouldSkipBucket(WriteBatch first, TableBucket tableBucket) {
+        // Backpressure throttle check: skip this bucket if still under throttle
+        if (isThrottled(tableBucket)) {
+            return true;
+        }
         if (idempotenceManager.idempotenceEnabled()) {
             if (!idempotenceManager.isWriterIdValid()) {
                 // we cannot send the batch until we have refreshed writer id.
@@ -881,6 +903,62 @@ public final class RecordAccumulator {
             }
         }
         return false;
+    }
+
+    // ---- Backpressure throttle methods ----
+
+    /**
+     * Check if a bucket is currently under backpressure throttle.
+     *
+     * <p>Performs lazy eviction: if the throttle has expired, the entry is removed from the map to
+     * prevent unbounded growth.
+     *
+     * @return true if the bucket should be skipped during drain
+     */
+    boolean isThrottled(TableBucket tableBucket) {
+        Long expiry = throttleExpiryMs.get(tableBucket);
+        if (expiry == null) {
+            return false;
+        }
+        if (clock.milliseconds() < expiry) {
+            return true;
+        }
+        // Expired — evict to prevent map leak
+        throttleExpiryMs.remove(tableBucket);
+        return false;
+    }
+
+    /**
+     * Update the throttle state for a bucket based on the received pressure signal.
+     *
+     * <p>The delay grows cubically with pressure: {@code delay = maxThrottleMs * p^3}, where {@code
+     * p ∈ [0, 1)}. Low-pressure values stay gentle while high-pressure values approach the
+     * configured upper bound, providing a finite, smoothly converging back-off curve.
+     *
+     * @param tableBucket the bucket to update
+     * @param pressure value in {@code [0, 1)}; {@code 0} means recovered, positive values trigger a
+     *     throttle window
+     */
+    void updateThrottle(TableBucket tableBucket, float pressure) {
+        if (pressure > 0f) {
+            long delay = (long) (maxThrottleMs * pressure * pressure * pressure);
+            if (delay > 0) {
+                throttleExpiryMs.put(tableBucket, clock.milliseconds() + delay);
+                return;
+            }
+        }
+        // Recovered or below the meaningful resolution: remove throttle
+        throttleExpiryMs.remove(tableBucket);
+    }
+
+    /**
+     * Apply a hard back-off after the server rejected the write with a {@code
+     * StorageBackpressureException}. This signals that the storage engine has reached its own
+     * slowdown threshold; we stall the bucket for the full {@link #maxThrottleMs} window so the
+     * standard retry path can take effect.
+     */
+    void applyStorageBackpressureBackoff(TableBucket tableBucket) {
+        throttleExpiryMs.put(tableBucket, clock.milliseconds() + maxThrottleMs);
     }
 
     private int getDrainIndex(int id) {

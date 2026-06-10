@@ -18,6 +18,7 @@
 package org.apache.fluss.server.kv.rocksdb;
 
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.rocksdb.RocksDBOperationUtils;
@@ -34,6 +35,8 @@ import org.rocksdb.RocksDBException;
 import org.rocksdb.RocksIterator;
 import org.rocksdb.Statistics;
 import org.rocksdb.WriteOptions;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -43,6 +46,11 @@ import java.util.List;
 
 /** A wrapper for the operation of {@link org.rocksdb.RocksDB}. */
 public class RocksDBKv implements AutoCloseable {
+
+    private static final Logger LOG = LoggerFactory.getLogger(RocksDBKv.class);
+
+    /** RocksDB property name for the number of SST files at level 0 (column-family scoped). */
+    private static final String NUM_FILES_AT_LEVEL0 = "rocksdb.num-files-at-level0";
 
     /** The container of RocksDB option factory and predefined options. */
     private final RocksDBResourceContainer optionsContainer;
@@ -70,6 +78,17 @@ public class RocksDBKv implements AutoCloseable {
     /** RocksDB Statistics for metrics collection. */
     private final @Nullable Statistics statistics;
 
+    /** L0 file count at which RocksDB starts throttling writes. Read from ColumnFamilyOptions. */
+    private final int level0SlowdownWritesTrigger;
+
+    /**
+     * L0 file count at which Fluss starts emitting proactive backpressure signals (piggybacked on
+     * PutKv responses) so clients can throttle before the storage engine blocks writes. Strictly
+     * below {@link #level0SlowdownWritesTrigger}; when {@code >=} the RocksDB L0 slowdown trigger,
+     * proactive backpressure is treated as misconfigured and disabled.
+     */
+    private final int flussL0SlowdownTrigger;
+
     // mark whether this kv is already closed and prevent duplicate closing
     private volatile boolean closed = false;
 
@@ -78,13 +97,17 @@ public class RocksDBKv implements AutoCloseable {
             RocksDB db,
             ResourceGuard rocksDBResourceGuard,
             ColumnFamilyHandle defaultColumnFamilyHandle,
-            @Nullable Statistics statistics) {
+            @Nullable Statistics statistics,
+            int level0SlowdownWritesTrigger,
+            int flussL0SlowdownTrigger) {
         this.optionsContainer = optionsContainer;
         this.db = db;
         this.rocksDBResourceGuard = rocksDBResourceGuard;
         this.writeOptions = optionsContainer.getWriteOptions();
         this.defaultColumnFamilyHandle = defaultColumnFamilyHandle;
         this.statistics = statistics;
+        this.level0SlowdownWritesTrigger = level0SlowdownWritesTrigger;
+        this.flussL0SlowdownTrigger = flussL0SlowdownTrigger;
     }
 
     public ResourceGuard getResourceGuard() {
@@ -229,5 +252,74 @@ public class RocksDBKv implements AutoCloseable {
 
     public ColumnFamilyHandle getDefaultColumnFamilyHandle() {
         return defaultColumnFamilyHandle;
+    }
+
+    /**
+     * Pre-write backpressure gate. Reads the current L0 file count once via RocksDB JNI (returning
+     * {@code long} directly, no string allocation) and uses the snapshot for both branches of the
+     * backpressure model.
+     *
+     * <ul>
+     *   <li><b>Hard rejection</b>: when {@code l0 >= level0SlowdownWritesTrigger}, throws {@link
+     *       StorageBackpressureException} so the RPC handler is not blocked by the storage engine's
+     *       internal sleep.
+     *   <li><b>Proactive throttle signal</b>: otherwise returns a normalized pressure in {@code [0,
+     *       1)} that the server piggybacks on PutKv responses for clients to compute a proactive
+     *       throttle delay. Mapping:
+     *       <ul>
+     *         <li>{@code l0 < flussL0SlowdownTrigger}: returns {@code 0} (no throttle).
+     *         <li>{@code flussL0SlowdownTrigger <= l0 < level0SlowdownWritesTrigger}: returns
+     *             {@code (l0 - flussL0SlowdownTrigger) / (level0SlowdownWritesTrigger -
+     *             flussL0SlowdownTrigger)}.
+     *       </ul>
+     * </ul>
+     *
+     * <p>Caller is expected to invoke this once per write request, before any {@code put}, so the
+     * same L0 snapshot drives both the rejection decision and the piggyback signal.
+     */
+    public float checkBackpressure() {
+        if (level0SlowdownWritesTrigger <= flussL0SlowdownTrigger) {
+            // Misconfiguration or proactive backpressure disabled.
+            return 0f;
+        }
+        long l0Files = currentL0FileCount();
+        if (l0Files >= level0SlowdownWritesTrigger) {
+            throw new StorageBackpressureException(
+                    String.format(
+                            "Write rejected for kv at %s: L0 file count %d has reached the "
+                                    + "storage engine's slowdown trigger %d. Retry after backoff.",
+                            optionsContainer.getInstanceRocksDBPath(),
+                            l0Files,
+                            level0SlowdownWritesTrigger));
+        }
+        if (l0Files < flussL0SlowdownTrigger) {
+            return 0f;
+        }
+        int window = level0SlowdownWritesTrigger - flussL0SlowdownTrigger;
+        // Clamp to (0, window-1]/window so p stays strictly below 1.
+        long offset = Math.min(l0Files - flussL0SlowdownTrigger, (long) window - 1);
+        return (float) offset / window;
+    }
+
+    /**
+     * Reads the current L0 file count via {@link RocksDB#getProperty(ColumnFamilyHandle, String)}.
+     *
+     * <p>Note: {@code rocksdb.num-files-at-level<N>} is a parametric <em>string</em> property in
+     * RocksDB, not registered as an int property. {@code getLongProperty} (which maps to C++ {@code
+     * GetIntProperty}) returns NotFound for it. We therefore use the string accessor and parse the
+     * result. Returns {@code 0} when the property is unavailable so the caller treats it as "no
+     * pressure".
+     */
+    private long currentL0FileCount() {
+        try {
+            String value = db.getProperty(defaultColumnFamilyHandle, NUM_FILES_AT_LEVEL0);
+            if (value == null || value.isEmpty()) {
+                return 0L;
+            }
+            return Long.parseLong(value);
+        } catch (RocksDBException e) {
+            LOG.warn("Failed to query L0 file count for backpressure", e);
+            return 0L;
+        }
     }
 }

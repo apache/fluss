@@ -901,6 +901,10 @@ message PbPutKvRespForBucket {
   // the log end offset (LEO) of the changelog after this write
   // this is the offset of the next record to be written, used for exactly-once semantics
   optional int64 log_end_offset = 5;
+  // backpressure signal from RocksDB write stall detection:
+  // 0 = normal (no pressure), (0,1) = DELAYED zone (normalized L0 ratio),
+  // -1 = STOPPED (client should halt sending to this bucket)
+  optional float pressure = 6;
 }
 
 message PbLookupReqForBucket {

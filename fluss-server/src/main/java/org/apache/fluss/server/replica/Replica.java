@@ -31,6 +31,7 @@ import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.NotEnoughReplicasException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
+import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.exception.TooManyScannersException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.ChangelogImage;
@@ -1069,6 +1070,49 @@ public final class Replica {
     public LogAppendInfo appendRecordsToFollower(MemoryLogRecords memoryLogRecords)
             throws Exception {
         return logTablet.appendAsFollower(memoryLogRecords);
+    }
+
+    /**
+     * Pre-write backpressure gate executed before {@link #putRecordsToLeader}. Performs the
+     * leader/ISR validation in the same lock as the actual write so that the rejection decision and
+     * the piggyback pressure measurement come from a coherent leader snapshot, then delegates to
+     * {@link KvTablet#checkBackpressure()} for the single L0 read.
+     *
+     * <p>The observed pressure (or {@code 1.0} when the storage engine hard-rejects with {@link
+     * StorageBackpressureException}) is recorded on this bucket's {@link BucketMetricGroup} so the
+     * table-level aggregating gauges can read it without going through RocksDB again. Hard
+     * rejections additionally bump the table-level rejected-requests counter.
+     *
+     * @return pressure in {@code [0, 1)} for piggyback throttle; throws {@link
+     *     StorageBackpressureException} if the storage engine is in the hard-rejection zone.
+     */
+    public float checkBackpressure() {
+        return inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    if (!isLeader()) {
+                        throw new NotLeaderOrFollowerException(
+                                String.format(
+                                        "Leader not local for bucket %s on tabletServer %d",
+                                        tableBucket, localTabletServerId));
+                    }
+                    KvTablet kv = this.kvTablet;
+                    if (kv == null) {
+                        return 0f;
+                    }
+                    try {
+                        float pressure = kv.checkBackpressure();
+                        bucketMetricGroup.recordKvBackpressureLevel(pressure);
+                        return pressure;
+                    } catch (StorageBackpressureException e) {
+                        // Hard rejection: pin this bucket's KV pressure level at the ceiling and
+                        // bump the table-level rejected-requests counter before propagating the
+                        // exception.
+                        bucketMetricGroup.recordKvBackpressureLevel(1f);
+                        bucketMetricGroup.getTableMetricGroup().incKvBackpressureRejectedRequests();
+                        throw e;
+                    }
+                });
     }
 
     public LogAppendInfo putRecordsToLeader(

@@ -254,9 +254,12 @@ public final class KvTablet {
                 new RocksDBResourceContainer(configuration, kvDir, true, sharedRateLimiter);
         RocksDBKvBuilder rocksDBKvBuilder =
                 new RocksDBKvBuilder(
-                        kvDir,
-                        rocksDBResourceContainer,
-                        rocksDBResourceContainer.getColumnOptions());
+                                kvDir,
+                                rocksDBResourceContainer,
+                                rocksDBResourceContainer.getColumnOptions())
+                        .setFlussL0SlowdownTrigger(
+                                configuration.get(
+                                        ConfigOptions.KV_BACKPRESSURE_L0_SLOWDOWN_TRIGGER));
         return rocksDBKvBuilder.build();
     }
 
@@ -893,5 +896,16 @@ public final class KvTablet {
     @VisibleForTesting
     public RocksDBKv getRocksDBKv() {
         return rocksDBKv;
+    }
+
+    /**
+     * Pre-write backpressure gate. Delegates to {@link RocksDBKv#checkBackpressure()} so that the
+     * proactive throttle signal and the hard rejection share a single L0 snapshot from the storage
+     * engine. See {@link RocksDBKv#checkBackpressure()} for the full contract.
+     *
+     * <p>Caller is expected to invoke this once per write request, before {@link #putAsLeader}.
+     */
+    public float checkBackpressure() {
+        return rocksDBKv.checkBackpressure();
     }
 }

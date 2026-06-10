@@ -1235,6 +1235,19 @@ public class ConfigOptions {
                                     + " Dynamic partition strategy refers to creating partitions based on the data "
                                     + "being written for partitioned table if the wrote partition don't exists.");
 
+    public static final ConfigOption<Long> CLIENT_WRITER_KV_BACKPRESSURE_MAX_THROTTLE_MS =
+            key("client.writer.kv-backpressure.max-throttle-ms")
+                    .longType()
+                    .defaultValue(1000L)
+                    .withDescription(
+                            "The upper bound of the per-bucket throttle delay the client applies in response to "
+                                    + "KV backpressure signals piggybacked by the server. "
+                                    + "Throttle delay is computed as: max_throttle_ms * p^3, where p is the "
+                                    + "normalized pressure in [0, 1) reported by the server. "
+                                    + "Once the server rejects a write with StorageBackpressureException, "
+                                    + "the client also uses this value as the initial retry backoff so that the "
+                                    + "transition between throttle and rejection is continuous.");
+
     public static final ConfigOption<Duration> CLIENT_REQUEST_TIMEOUT =
             key("client.request-timeout")
                     .durationType()
@@ -2062,6 +2075,21 @@ public class ConfigOptions {
                             "The number of threads used to download remote log segments during "
                                     + "KV recovery. Should be less than or equal to "
                                     + "'kv.recover.remote-log.prefetch-num'.");
+
+    // ------------------------------------------------------------------------
+    //  ConfigOptions for KV backpressure
+    // ------------------------------------------------------------------------
+
+    public static final ConfigOption<Integer> KV_BACKPRESSURE_L0_SLOWDOWN_TRIGGER =
+            key("kv.backpressure.l0-slowdown-trigger")
+                    .intType()
+                    .defaultValue(12)
+                    .withDescription(
+                            "The L0 file count at which Fluss starts emitting proactive backpressure to clients. "
+                                    + "This value should be lower than the underlying storage engine's own "
+                                    + "L0 slowdown trigger (RocksDB level0_slowdown_writes_trigger, default 20), "
+                                    + "so that clients begin throttling before the storage engine is forced to throttle itself. "
+                                    + "The gap between this value and the storage trigger forms the throttle ramp-up window.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for metrics

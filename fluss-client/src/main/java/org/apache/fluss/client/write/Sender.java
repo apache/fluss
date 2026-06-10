@@ -27,6 +27,7 @@ import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RetriableException;
+import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -498,7 +499,16 @@ public class Sender implements Runnable {
                             tableId,
                             respForBucket.hasPartitionId() ? respForBucket.getPartitionId() : null,
                             respForBucket.getBucketId());
+
+            // Update backpressure throttle from pressure signal
+            if (respForBucket.hasPressure()) {
+                accumulator.updateThrottle(tb, respForBucket.getPressure());
+            }
+
             ReadyWriteBatch writeBatch = recordsByBucket.get(tb);
+            if (writeBatch == null) {
+                continue;
+            }
             if (respForBucket.hasErrorCode()) {
                 Set<PhysicalTablePath> invalidMetadataTables =
                         handleWriteBatchException(
@@ -534,6 +544,12 @@ public class Sender implements Runnable {
             ReadyWriteBatch readyWriteBatch, ApiError error) {
         Set<PhysicalTablePath> invalidMetadataTables = new HashSet<>();
         WriteBatch writeBatch = readyWriteBatch.writeBatch();
+        if (error.exception() instanceof StorageBackpressureException) {
+            // Hard rejection: the storage engine reached its slowdown trigger and rejected the
+            // write. Apply a hard back-off equal to the configured max throttle window before
+            // letting the standard retry path re-enqueue the batch.
+            accumulator.applyStorageBackpressureBackoff(readyWriteBatch.tableBucket());
+        }
         if (error.error() == Errors.DUPLICATE_SEQUENCE_EXCEPTION) {
             // If we have received a duplicate batch sequence error, it means that the batch
             // sequence has advanced beyond the sequence of the current batch.
