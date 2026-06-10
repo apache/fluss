@@ -44,22 +44,45 @@ tablet:
     size: 1Gi
     storageClass:
   # Readiness probe configuration for rolling upgrade gate.
-  # The probe calls the Coordinator's Cluster Health API to verify that
-  # cluster status is GREEN before marking the pod Ready. If the
-  # Coordinator does not support the API (older version), the probe
-  # automatically falls back to TCP-only after the grace period.
+  # The probe talks to the LOCAL tablet server (127.0.0.1:client-port) and
+  # asks it to forward a getClusterHealth RPC to the Coordinator over the
+  # internal listener. Pod is marked Ready only when the cluster is GREEN.
+  # If the server does not support the API (older version), the probe
+  # immediately falls back to TCP-only port readiness.
   readinessProbe:
-    # Timeout in ms for the RPC call to Coordinator.
+    # Timeout in ms for the RPC call.
     rpcTimeoutMs: 5000
-    # Grace period (seconds) before falling back to TCP-only when the
-    # Coordinator does not support the Cluster Health API (e.g., mixed-version
-    # upgrade). After this period, TCP port reachability is sufficient.
-    gracePeriodSecs: 60
     # Standard Kubernetes probe parameters (tuned for recovery checks).
-    failureThreshold: 200
+    #
+    # The total time Kubernetes will wait before flipping the pod to NotReady is
+    #     initialDelaySeconds + failureThreshold * periodSeconds
+    #   = 15 + 360 * 5 = 1815s (~30 minutes) by default.
+    # IMPORTANT: this window MUST be larger than healthCheckTimeoutSeconds
+    # below, otherwise Kubernetes will mark the pod NotReady BEFORE the
+    # in-script health-check fallback has a chance to latch the TCP fast path,
+    # which would still wedge the rolling upgrade. If you tune
+    # healthCheckTimeoutSeconds upward, raise failureThreshold accordingly so
+    # the inequality (failureThreshold * periodSeconds > healthCheckTimeoutSeconds)
+    # always holds.
+    failureThreshold: 360
     timeoutSeconds: 10
     initialDelaySeconds: 15
     periodSeconds: 5
+    # Maximum wall-clock seconds the cluster health gate is allowed to keep a
+    # freshly-created tablet pod NotReady on its first boot. After this budget
+    # is exhausted the probe latches the TCP-only fast path so a permanently-
+    # unrecoverable cluster cannot wedge a rolling upgrade indefinitely.
+    # Default: 1200 (20 minutes).
+    healthCheckTimeoutSeconds: 1200
+    # Optional newline-separated key=value properties passed to the probe's
+    # client Configuration. Required only when the local client listener
+    # enforces SASL. Example:
+    #   healthCheckAuth: |
+    #     client.security.protocol=SASL
+    #     client.sasl.mechanism=PLAIN
+    #     client.security.sasl.username=admin
+    #     client.security.sasl.password=admin-pass
+    healthCheckAuth: ""
   extraVolumes: []
   extraVolumeMounts: []
   initContainers: []

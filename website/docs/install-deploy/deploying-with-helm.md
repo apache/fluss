@@ -781,7 +781,7 @@ The TabletServer readiness probe performs a two-step check to ensure safe rollin
 
 Only when both steps pass is the pod marked as Ready, allowing the StatefulSet controller to proceed to the next pod.
 If the Coordinator does not support the Cluster Health API (e.g., during a mixed-version upgrade from an older version),
-the probe automatically falls back to TCP-only after the grace period.
+the probe immediately falls back to TCP-only port readiness.
 
 You can tune the probe parameters in your values:
 
@@ -790,9 +790,6 @@ tablet:
   readinessProbe:
     # Timeout in ms for the RPC call to Coordinator (default: 5000)
     rpcTimeoutMs: 5000
-    # Grace period (seconds) before falling back to TCP-only when the
-    # Coordinator does not support the Cluster Health API (default: 60)
-    gracePeriodSecs: 60
     # Standard Kubernetes probe parameters (tuned for recovery checks)
     failureThreshold: 200
     timeoutSeconds: 10
@@ -803,7 +800,6 @@ tablet:
 | Parameter          | Default | Description                                                                                                                                    |
 |--------------------|---------|------------------------------------------------------------------------------------------------------------------------------------------------|
 | `rpcTimeoutMs`     | `5000`  | Timeout in milliseconds for the RPC call to the Coordinator.                                                                                   |
-| `gracePeriodSecs`  | `60`    | When the Coordinator does not support the Cluster Health API (older version), the probe falls back to TCP-only after this grace period.        |
 | `failureThreshold` | `200`   | Max consecutive probe failures before marking the pod as unready. With `periodSeconds=5`, this allows up to ~16 minutes for recovery.          |
 | `periodSeconds`    | `5`     | How often the probe runs.                                                                                                                      |
 

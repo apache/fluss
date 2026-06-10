@@ -130,7 +130,7 @@ spec:
             tcpSocket:
               port: {{ .Values.listeners.client.port }}
           readinessProbe:
-            failureThreshold: {{ .Values.tablet.readinessProbe.failureThreshold | default 200 }}
+            failureThreshold: {{ .Values.tablet.readinessProbe.failureThreshold | default 360 }}
             timeoutSeconds: {{ .Values.tablet.readinessProbe.timeoutSeconds | default 10 }}
             initialDelaySeconds: {{ .Values.tablet.readinessProbe.initialDelaySeconds | default 15 }}
             periodSeconds: {{ .Values.tablet.readinessProbe.periodSeconds | default 5 }}
@@ -142,8 +142,16 @@ spec:
                   export FLUSS_SERVER_ID=${POD_NAME##*-}
                   export READINESS_TIMEOUT_MS={{ .Values.tablet.readinessProbe.rpcTimeoutMs | default 5000 }}
                   export READINESS_TCP_PORT={{ .Values.listeners.client.port }}
-                  export READINESS_BOOTSTRAP_SERVERS="coordinator-server-hs.${POD_NAMESPACE}.svc.cluster.local:{{ .Values.listeners.client.port }}"
-                  export READINESS_GRACE_SECS={{ .Values.tablet.readinessProbe.gracePeriodSecs | default 60 }}
+                  # bind.listeners binds the tablet's CLIENT endpoint to ${POD_IP},
+                  # not 0.0.0.0, so we must probe the pod's own IP instead of
+                  # 127.0.0.1. The local tablet then forwards getClusterHealth
+                  # to coordinator via the internal listener.
+                  export READINESS_ADDRESS=${POD_IP}:${READINESS_TCP_PORT}
+                  export READINESS_TCP_HOST=${POD_IP}
+                  export READINESS_HEALTH_CHECK_TIMEOUT_SECONDS={{ .Values.tablet.readinessProbe.healthCheckTimeoutSeconds | default 1200 }}
+                  {{- with .Values.tablet.readinessProbe.healthCheckAuth }}
+                  export READINESS_HEALTH_CHECK_AUTH={{ . | quote }}
+                  {{- end }}
                   exec $FLUSS_HOME/bin/readiness-check.sh
           resources:
             {{- toYaml .Values.resources.tabletServer | nindent 12 }}

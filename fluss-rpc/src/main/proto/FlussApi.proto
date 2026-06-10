@@ -767,6 +767,15 @@ message DeleteProducerOffsetsRequest {
 message DeleteProducerOffsetsResponse {
 }
 
+message GetClusterHealthRequest { }
+
+message GetClusterHealthResponse {
+  required int32 num_replicas = 1;
+  required int32 in_sync_replicas = 2;
+  required int32 num_leader_replicas = 3;
+  required int32 active_leader_replicas = 4;
+  required int32 status = 5; // PbClusterHealthStatus: GREEN=0, YELLOW=1, RED=2, UNKNOWN=3
+}
 
 
 // --------------- Inner classes ----------------
@@ -1369,14 +1378,4 @@ message PbLiteralValue {
   optional int64 timestamp_millis_value = 11;      // Epoch millis
   optional int32 timestamp_nano_of_millis_value = 12; // Nano of millis
   optional bytes decimal_bytes = 13;   // Serialized decimal (non-compact mode)
-}
-
-message GetClusterHealthRequest { }
-
-message GetClusterHealthResponse {
-  required int32 num_replicas = 1;
-  required int32 in_sync_replicas = 2;
-  required int32 num_leader_replicas = 3;
-  required int32 active_leader_replicas = 4;
-  required int32 status = 5; // PbClusterHealthStatus: GREEN=0, YELLOW=1, RED=2, UNKNOWN=3
 }

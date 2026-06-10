@@ -49,8 +49,6 @@ import org.apache.fluss.rpc.messages.DropPartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionResponse;
 import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.DropTableResponse;
-import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
-import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
@@ -215,9 +213,6 @@ public interface AdminGateway extends AdminReadOnlyGateway {
     @RPC(api = ApiKeys.DROP_KV_SNAPSHOT_LEASE)
     CompletableFuture<DropKvSnapshotLeaseResponse> dropKvSnapshotLease(
             DropKvSnapshotLeaseRequest request);
-
-    @RPC(api = ApiKeys.GET_CLUSTER_HEALTH)
-    CompletableFuture<GetClusterHealthResponse> getClusterHealth(GetClusterHealthRequest request);
 
     // todo: rename table & alter table
 
