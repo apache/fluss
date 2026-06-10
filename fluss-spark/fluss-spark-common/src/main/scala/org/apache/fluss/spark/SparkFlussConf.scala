@@ -27,7 +27,7 @@ object SparkFlussConf {
   val SPARK_FLUSS_CONF_PREFIX = "spark.sql.fluss."
 
   val READ_OPTIMIZED_OPTION: ConfigOption[java.lang.Boolean] =
-    key("read.optimized")
+    key("readOptimized")
       .booleanType()
       .defaultValue(false)
       .withDescription(
@@ -39,21 +39,21 @@ object SparkFlussConf {
 
   val SCAN_START_UP_MODE: ConfigOption[String] =
     ConfigBuilder
-      .key("scan.startup.mode")
+      .key("scanStartupMode")
       .stringType()
       .defaultValue(StartUpMode.FULL.toString)
       .withDescription("The start up mode when read Fluss table.")
 
   val SCAN_POLL_TIMEOUT: ConfigOption[Duration] =
     ConfigBuilder
-      .key("scan.poll.timeout")
+      .key("scanPollTimeout")
       .durationType()
       .defaultValue(Duration.ofMillis(10000L))
       .withDescription("The timeout for log scanner to poll records.")
 
   val SCAN_MAX_RECORDS_PER_PARTITION: ConfigOption[java.lang.Long] =
     ConfigBuilder
-      .key("scan.maxRecordsPerPartition")
+      .key("scanMaxRecordsPerPartition")
       .longType()
       .noDefaultValue()
       .withDescription(

@@ -54,7 +54,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
       val tablePath = createTablePath("t")
       sql(s"""
              |CREATE TABLE $DEFAULT_DATABASE.t (orderId BIGINT, itemId BIGINT, amount INT, address STRING)
-             |TBLPROPERTIES("primary.key" = "orderId", "bucket.num" = 1)
+             |TBLPROPERTIES("primaryKey" = "orderId", "bucketNum" = 1)
              |""".stripMargin)
 
       sql(s"""
@@ -151,7 +151,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
       sql(s"""
              |CREATE TABLE $DEFAULT_DATABASE.t (orderId BIGINT, itemId BIGINT, amount INT, address STRING, dt STRING)
              |PARTITIONED BY (dt)
-             |TBLPROPERTIES("primary.key" = "orderId,dt", "bucket.num" = 1)
+             |TBLPROPERTIES("primaryKey" = "orderId,dt", "bucketNum" = 1)
              |""".stripMargin)
 
       sql(s"""
@@ -248,7 +248,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
   test("Spark Read: primary key table with random project") {
     withTable("t") {
       sql(
-        "CREATE TABLE t (id int, name string, pk int, pk2 string) TBLPROPERTIES('primary.key'='pk,pk2')")
+        "CREATE TABLE t (id int, name string, pk int, pk2 string) TBLPROPERTIES('primaryKey'='pk,pk2')")
       checkAnswer(sql("SELECT * FROM t"), Nil)
       sql("INSERT INTO t VALUES (1, 'a', 10, 'x'), (2, 'b', 20, 'y')")
       checkAnswer(
@@ -269,7 +269,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
              |arr ARRAY<INT>,
              |struct_col STRUCT<col1: INT, col2: STRING>,
              |ts_ltz TIMESTAMP_LTZ
-             |) TBLPROPERTIES("primary.key" = "pk", "bucket.num" = 1)
+             |) TBLPROPERTIES("primaryKey" = "pk", "bucketNum" = 1)
              |""".stripMargin)
 
       sql(s"""
@@ -344,7 +344,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
       val tablePath = createTablePath("t")
       sql(s"""
              |CREATE TABLE $DEFAULT_DATABASE.t (id INT, name STRING)
-             |TBLPROPERTIES("primary.key" = "id", "bucket.num" = 1)
+             |TBLPROPERTIES("primaryKey" = "id", "bucketNum" = 1)
              |""".stripMargin)
 
       sql(s"""
@@ -491,7 +491,7 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
            |  orderId BIGINT, itemId BIGINT, amount INT, address STRING, dt STRING
            |)
            |PARTITIONED BY (dt)
-           |TBLPROPERTIES("primary.key" = "orderId,dt", "bucket.num" = 1)""".stripMargin)
+           |TBLPROPERTIES("primaryKey" = "orderId,dt", "bucketNum" = 1)""".stripMargin)
     sql(s"""
            |INSERT INTO $DEFAULT_DATABASE.t VALUES
            |(600L, 21L, 601, "addr1", "2026-01-01"), (700L, 22L, 602, "addr2", "2026-01-01"),
