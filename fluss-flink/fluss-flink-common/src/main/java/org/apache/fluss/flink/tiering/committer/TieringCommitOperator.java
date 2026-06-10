@@ -249,7 +249,7 @@ public class TieringCommitOperator<WriteResult extends LakeWriteResult, Committa
             }
 
             if (nonEmptyResults.size() < committableWriteResults.size()) {
-                // Empty results means some splits has not been processed, possibly caused by force
+                // Empty results means some splits has not been processed, possibly caused by forced
                 // completion. Do not update watermark here.
                 if (watermark != null) {
                     LOG.warn(

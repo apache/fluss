@@ -86,10 +86,7 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
         try {
             recordWriter.write(record);
             if (watermarkExtractor != null) {
-                Long ts = watermarkExtractor.currentWatermark(record.getRow());
-                if (ts != null) {
-                    maxWatermark = maxWatermark == null ? ts : Math.max(maxWatermark, ts);
-                }
+                updateMaxWatermark(watermarkExtractor.currentWatermark(record.getRow()));
             }
         } catch (Exception e) {
             throw new IOException("Failed to write Fluss record to Paimon.", e);
@@ -110,6 +107,9 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
         try {
             ((AppendOnlyWriter) recordWriter)
                     .writeArrowBatch(((ArrowRecordBatch) recordBatch).getArrowBatchData());
+            if (watermarkExtractor != null) {
+                updateMaxWatermark(watermarkExtractor.currentWatermark(recordBatch));
+            }
         } catch (Exception e) {
             throw new IOException("Failed to write Arrow record batch to Paimon.", e);
         }
@@ -151,6 +151,12 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
             return table.copy(compactionOptions);
         } catch (Exception e) {
             throw new IOException("Failed to get table " + tablePath + " in Paimon.", e);
+        }
+    }
+
+    private void updateMaxWatermark(@Nullable Long watermark) {
+        if (watermark != null) {
+            maxWatermark = maxWatermark == null ? watermark : Math.max(maxWatermark, watermark);
         }
     }
 }
