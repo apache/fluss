@@ -26,6 +26,7 @@ import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
@@ -112,9 +113,6 @@ class TableChangeWatcherTest {
         metadataManager.createDatabase(DEFAULT_DB, DatabaseDescriptor.builder().build(), false);
 
         eventManager = new TestingEventManager();
-        // Use a real TableLifecycleThrottler so that drop submissions are forwarded into the
-        // event manager as DropPartitionEvent / DropTableEvent (the existing assertions in this
-        // test verify exactly that).
         lifecycleThrottler =
                 new TableLifecycleThrottler(
                         eventManager, SystemClock.getInstance(), new Configuration());
@@ -185,14 +183,21 @@ class TableChangeWatcherTest {
             expectedTableEvents.add(new DropTableEvent(tableInfo.getTableId(), false, false));
         }
 
-        // collect all events and check the all events
+        // collect all events and check the all events.
+        // The throttler admits one drop at a time; drive it by completing each drop
+        // as it appears so the next pending drop is admitted.
         List<CoordinatorEvent> allEvents = new ArrayList<>(expectedEvents);
         allEvents.addAll(expectedTableEvents);
         retry(
                 Duration.ofMinutes(1),
-                () ->
-                        assertThat(eventManager.getEvents())
-                                .containsExactlyInAnyOrderElementsOf(allEvents));
+                () -> {
+                    for (CoordinatorEvent event : expectedTableEvents) {
+                        DropTableEvent drop = (DropTableEvent) event;
+                        lifecycleThrottler.onTableDropCompleted(drop.getTableId());
+                    }
+                    assertThat(eventManager.getEvents())
+                            .containsExactlyInAnyOrderElementsOf(allEvents);
+                });
     }
 
     @Test
@@ -270,11 +275,16 @@ class TableChangeWatcherTest {
         // drop table event
         expectedEvents.add(new DropTableEvent(tableId, true, false));
 
+        // The throttler admits one drop at a time; drive it by completing partition
+        // drops as they arrive (the table drop is fire-and-forget for partitioned tables).
         retry(
                 Duration.ofMinutes(1),
-                () ->
-                        assertThat(eventManager.getEvents())
-                                .containsExactlyInAnyOrderElementsOf(expectedEvents));
+                () -> {
+                    lifecycleThrottler.onPartitionDropCompleted(new TablePartition(tableId, 1L));
+                    lifecycleThrottler.onPartitionDropCompleted(new TablePartition(tableId, 2L));
+                    assertThat(eventManager.getEvents())
+                            .containsExactlyInAnyOrderElementsOf(expectedEvents);
+                });
     }
 
     @Test
