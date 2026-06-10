@@ -30,11 +30,7 @@ import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.utils.ExceptionUtils;
 
-import java.io.IOException;
-import java.io.StringReader;
 import java.util.Collections;
-import java.util.Map;
-import java.util.Properties;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -56,13 +52,15 @@ import java.util.concurrent.TimeoutException;
  *
  * <ul>
  *   <li>{@code --timeoutMs <ms>}: optional, defaults to {@value #DEFAULT_TIMEOUT_MS}.
- *   <li>{@code --address <host:port>} / env {@value #ENV_ADDRESS}: the tablet server endpoint to
- *       probe. Required.
- *   <li>{@code --healthCheckAuth <props>} / env {@value #ENV_HEALTH_CHECK_AUTH}: optional, a Java
- *       properties string (newline-separated {@code key=value} pairs) that supplies client auth
- *       configuration such as {@code client.security.protocol}, {@code
- *       client.security.sasl.mechanism}, etc. When absent, the probe uses unauthenticated
- *       PLAINTEXT.
+ *   <li>{@code --host <host>} / env {@value #ENV_TCP_HOST}: tablet server host. Defaults to {@code
+ *       127.0.0.1}.
+ *   <li>{@code --port <port>} / env {@value #ENV_TCP_PORT}: tablet server port. Defaults to {@value
+ *       #DEFAULT_TCP_PORT}.
+ *   <li>{@code --healthCheckAuth <props>} / env {@value #ENV_HEALTH_CHECK_AUTH}: optional client
+ *       auth configuration as semicolon-separated {@code key:value} pairs (e.g. {@code
+ *       client.security.protocol:SASL;client.sasl.mechanism:PLAIN;
+ *       client.security.sasl.username:admin;client.security.sasl.password:admin-pass}). When
+ *       absent, the probe uses unauthenticated PLAINTEXT.
  * </ul>
  *
  * <h3>Exit codes</h3>
@@ -84,14 +82,19 @@ public final class ClusterHealthReadinessCheck {
     public static final int EXIT_ERROR = 3;
 
     private static final long DEFAULT_TIMEOUT_MS = 5000;
+    private static final String DEFAULT_TCP_HOST = "127.0.0.1";
+    private static final int DEFAULT_TCP_PORT = 9124;
 
-    /** Environment variable carrying the tablet server endpoint as {@code host:port}. */
-    static final String ENV_ADDRESS = "READINESS_ADDRESS";
+    /** Environment variable carrying the tablet server host. */
+    static final String ENV_TCP_HOST = "READINESS_TCP_HOST";
+
+    /** Environment variable carrying the tablet server port. */
+    static final String ENV_TCP_PORT = "READINESS_TCP_PORT";
 
     /**
-     * Environment variable carrying client auth configuration as a Java properties string
-     * (newline-separated {@code key=value} pairs). Values are forwarded verbatim to {@link
-     * Configuration} before {@link RpcClient#create} is called.
+     * Environment variable carrying client auth configuration as semicolon-separated {@code
+     * key:value} pairs. Values are forwarded verbatim to {@link Configuration} before {@link
+     * RpcClient#create} is called.
      */
     static final String ENV_HEALTH_CHECK_AUTH = "READINESS_HEALTH_CHECK_AUTH";
 
@@ -109,7 +112,8 @@ public final class ClusterHealthReadinessCheck {
 
     static int run(String[] args) {
         long timeoutMs = DEFAULT_TIMEOUT_MS;
-        String addressArg = null;
+        String hostArg = null;
+        String portArg = null;
         String authArg = null;
         for (int i = 0; i < args.length; i++) {
             if ("--timeoutMs".equals(args[i]) && i + 1 < args.length) {
@@ -121,40 +125,36 @@ public final class ClusterHealthReadinessCheck {
                             "[readiness-check] ERROR: invalid --timeoutMs value: " + raw);
                     return EXIT_ERROR;
                 }
-            } else if ("--address".equals(args[i]) && i + 1 < args.length) {
-                addressArg = args[++i];
+            } else if ("--host".equals(args[i]) && i + 1 < args.length) {
+                hostArg = args[++i];
+            } else if ("--port".equals(args[i]) && i + 1 < args.length) {
+                portArg = args[++i];
             } else if ("--healthCheckAuth".equals(args[i]) && i + 1 < args.length) {
                 authArg = args[++i];
             }
         }
 
         // CLI flag takes precedence over env so operators can override ad-hoc.
-        String address = addressArg != null ? addressArg : System.getenv(ENV_ADDRESS);
-        if (address == null || address.trim().isEmpty()) {
-            System.err.println(
-                    "[readiness-check] ERROR: address not set (pass --address or env "
-                            + ENV_ADDRESS
-                            + ", expected host:port)");
-            return EXIT_ERROR;
+        String host = firstNonBlank(hostArg, System.getenv(ENV_TCP_HOST), DEFAULT_TCP_HOST);
+        String portStr = firstNonBlank(portArg, System.getenv(ENV_TCP_PORT), null);
+        int port = DEFAULT_TCP_PORT;
+        if (portStr != null) {
+            try {
+                port = Integer.parseInt(portStr.trim());
+            } catch (NumberFormatException e) {
+                System.err.println("[readiness-check] ERROR: invalid port \"" + portStr + "\"");
+                return EXIT_ERROR;
+            }
         }
-
-        ServerNode tabletServer;
-        try {
-            tabletServer = parseAddress(address.trim());
-        } catch (IllegalArgumentException e) {
-            System.err.println(
-                    "[readiness-check] ERROR: invalid address \""
-                            + address
-                            + "\": "
-                            + e.getMessage());
-            return EXIT_ERROR;
-        }
+        // The server id is irrelevant for a one-shot probe; pick a sentinel value.
+        ServerNode tabletServer = new ServerNode(0, host, port, ServerType.TABLET_SERVER);
+        String address = host + ":" + port;
 
         String authPropsString = authArg != null ? authArg : System.getenv(ENV_HEALTH_CHECK_AUTH);
         Configuration conf;
         try {
             conf = buildConfiguration(authPropsString);
-        } catch (IOException e) {
+        } catch (IllegalArgumentException e) {
             System.err.println(
                     "[readiness-check] ERROR: cannot parse auth properties ("
                             + (authArg != null ? "--healthCheckAuth" : ENV_HEALTH_CHECK_AUTH)
@@ -209,37 +209,40 @@ public final class ClusterHealthReadinessCheck {
         }
     }
 
-    /** Parse a {@code host:port} string into a {@link ServerNode} pointing at the tablet server. */
-    private static ServerNode parseAddress(String addr) {
-        int idx = addr.lastIndexOf(':');
-        if (idx <= 0 || idx >= addr.length() - 1) {
-            throw new IllegalArgumentException("expected host:port");
+    /** Returns the first argument that is non-null and non-blank; otherwise {@code fallback}. */
+    private static String firstNonBlank(String... candidates) {
+        for (int i = 0; i < candidates.length - 1; i++) {
+            String c = candidates[i];
+            if (c != null && !c.trim().isEmpty()) {
+                return c;
+            }
         }
-        String host = addr.substring(0, idx);
-        int port;
-        try {
-            port = Integer.parseInt(addr.substring(idx + 1));
-        } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("invalid port: " + addr.substring(idx + 1));
-        }
-        // The server id is irrelevant for a one-shot probe; pick a sentinel value.
-        return new ServerNode(0, host, port, ServerType.TABLET_SERVER);
+        return candidates[candidates.length - 1];
     }
 
     /**
      * Build the {@link Configuration} fed to {@link RpcClient#create} from the optional auth
-     * properties string.
+     * configuration string. Format: semicolon-separated {@code key:value} pairs, e.g. {@code
+     * client.security.protocol:SASL;client.sasl.mechanism:PLAIN}.
      */
-    private static Configuration buildConfiguration(String authPropertiesString)
-            throws IOException {
+    private static Configuration buildConfiguration(String authString) {
         Configuration conf = new Configuration();
-        if (authPropertiesString == null || authPropertiesString.trim().isEmpty()) {
+        if (authString == null || authString.trim().isEmpty()) {
             return conf;
         }
-        Properties props = new Properties();
-        props.load(new StringReader(authPropertiesString));
-        for (Map.Entry<Object, Object> e : props.entrySet()) {
-            conf.setString(String.valueOf(e.getKey()), String.valueOf(e.getValue()));
+        for (String pair : authString.split(";")) {
+            String trimmed = pair.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            int idx = trimmed.indexOf(':');
+            if (idx <= 0 || idx == trimmed.length() - 1) {
+                throw new IllegalArgumentException(
+                        "expected 'key:value' pairs separated by ';', got: \"" + pair + "\"");
+            }
+            String key = trimmed.substring(0, idx).trim();
+            String value = trimmed.substring(idx + 1).trim();
+            conf.setString(key, value);
         }
         return conf;
     }

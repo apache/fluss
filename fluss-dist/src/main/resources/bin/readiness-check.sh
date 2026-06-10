@@ -42,19 +42,18 @@
 # Environment variables (set by helm template or container spec):
 #   FLUSS_HOME                    - Fluss installation directory
 #   READINESS_TIMEOUT_MS          - Timeout for Health API call (default: 5000)
-#   READINESS_TCP_HOST            - Host for TCP check (default: $POD_IP or 127.0.0.1)
-#   READINESS_TCP_PORT            - Port for TCP check (default: 9124)
-#   READINESS_ADDRESS             - TabletServer endpoint (host:port) for the
-#       probe to talk to. Defaults to ${POD_IP}:${READINESS_TCP_PORT} when POD_IP
-#       is set (the typical Kubernetes case where bind.listeners binds the
-#       tablet's CLIENT endpoint to the pod IP rather than 0.0.0.0), and falls
-#       back to 127.0.0.1:${READINESS_TCP_PORT} otherwise. Either way the probe
-#       talks to the local sidecar tablet, which forwards getClusterHealth to
-#       the Coordinator over the internal listener — so the probe never needs
-#       to know the Coordinator's address.
-#   READINESS_HEALTH_CHECK_AUTH   - Optional newline-separated key=value
-#       properties (e.g. client.security.protocol=SASL, ...) loaded into the
-#       client Configuration. Required when the local listener enforces SASL.
+#   READINESS_TCP_HOST            - TabletServer host the probe talks to. Defaults
+#       to ${POD_IP} when set (the typical Kubernetes case where bind.listeners
+#       binds the tablet's CLIENT endpoint to the pod IP rather than 0.0.0.0),
+#       falling back to 127.0.0.1 otherwise. The probe always talks to the local
+#       sidecar tablet, which forwards getClusterHealth to the Coordinator over
+#       the internal listener — so the probe never needs to know the
+#       Coordinator's address.
+#   READINESS_TCP_PORT            - TabletServer client port (default: 9124).
+#   READINESS_HEALTH_CHECK_AUTH   - Optional client auth configuration as
+#       semicolon-separated key:value pairs (e.g.
+#       client.security.protocol:SASL;client.sasl.mechanism:PLAIN). Required only
+#       when the local client listener enforces SASL.
 #   READINESS_HEALTH_CHECK_TIMEOUT_SECONDS - Maximum wall-clock seconds the
 #       cluster health gate is allowed to keep this pod NotReady on first boot.
 #       After this budget is exhausted the probe latches the TCP-only fast path
@@ -68,14 +67,13 @@ set -o pipefail
 
 FLUSS_HOME="${FLUSS_HOME:-/opt/fluss}"
 TIMEOUT_MS="${READINESS_TIMEOUT_MS:-5000}"
+# Probe the local sidecar tablet inside the same pod — it forwards the request
+# to the Coordinator internally, so the probe never has to know the
+# Coordinator's address. Prefer ${POD_IP} when set (typical K8s case where
+# bind.listeners binds the CLIENT endpoint to the pod IP, not 0.0.0.0); fall
+# back to 127.0.0.1 for local/non-K8s invocations.
 TCP_HOST="${READINESS_TCP_HOST:-${POD_IP:-127.0.0.1}}"
 TCP_PORT="${READINESS_TCP_PORT:-9124}"
-# Default the probe to the sidecar tablet inside the same pod so it never has
-# to know the Coordinator's pod IP. The tablet forwards the request internally.
-# Prefer ${POD_IP} when set (the typical K8s case where bind.listeners binds
-# the CLIENT endpoint to the pod IP, not 0.0.0.0); fall back to 127.0.0.1 for
-# local/non-K8s invocations.
-export READINESS_ADDRESS="${READINESS_ADDRESS:-${POD_IP:-127.0.0.1}:${TCP_PORT}}"
 # Wall-clock budget for the first-boot cluster health gate. Once exhausted, the
 # probe latches the TCP fast path so a permanently-unhealthy cluster cannot
 # wedge a rolling upgrade indefinitely.
@@ -109,9 +107,9 @@ check_tcp() {
 # The tool ships inside fluss-server-${version}.jar; no extra jar (fluss-client,
 # fluss-dist) is required.
 #
-# TabletServer endpoint comes from env var READINESS_ADDRESS (host:port,
-# defaults to 127.0.0.1:<tcp-port>). Optional auth properties come from env
-# var READINESS_HEALTH_CHECK_AUTH. The Java CLI only takes --timeoutMs.
+# Host/port are passed explicitly via --host/--port (derived from TCP_HOST and
+# TCP_PORT above). Optional auth properties come from env var
+# READINESS_HEALTH_CHECK_AUTH (semicolon-separated key:value pairs).
 run_recovery_check() {
     local timeout_ms="$1"
 
@@ -139,14 +137,16 @@ run_recovery_check() {
         java_cmd="${JAVA_HOME}/bin/java"
     fi
 
-    # Run the check — server address (and optional auth) come from env vars
-    # directly; --timeoutMs is the only CLI arg needed.
+    # Run the check — host/port are explicit CLI flags; optional auth is read
+    # from READINESS_HEALTH_CHECK_AUTH env (already in the process environment).
     local output
     output=$("${java_cmd}" \
         -XX:+IgnoreUnrecognizedVMOptions \
         -Xmx64m \
         -classpath "${classpath}" \
         org.apache.fluss.server.tools.ClusterHealthReadinessCheck \
+        --host "${TCP_HOST}" \
+        --port "${TCP_PORT}" \
         --timeoutMs "${timeout_ms}" 2>&1)
     local exit_code=$?
 

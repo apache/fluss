@@ -146,7 +146,6 @@ spec:
                   # not 0.0.0.0, so we must probe the pod's own IP instead of
                   # 127.0.0.1. The local tablet then forwards getClusterHealth
                   # to coordinator via the internal listener.
-                  export READINESS_ADDRESS=${POD_IP}:${READINESS_TCP_PORT}
                   export READINESS_TCP_HOST=${POD_IP}
                   export READINESS_HEALTH_CHECK_TIMEOUT_SECONDS={{ .Values.tablet.readinessProbe.healthCheckTimeoutSeconds | default 1200 }}
                   {{- with .Values.tablet.readinessProbe.healthCheckAuth }}

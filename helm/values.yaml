@@ -74,14 +74,11 @@ tablet:
     # unrecoverable cluster cannot wedge a rolling upgrade indefinitely.
     # Default: 1200 (20 minutes).
     healthCheckTimeoutSeconds: 1200
-    # Optional newline-separated key=value properties passed to the probe's
-    # client Configuration. Required only when the local client listener
+    # Optional client auth configuration passed to the probe's RpcClient as a
+    # single-line string of semicolon-separated `key:value` pairs (no quoting
+    # or escaping needed). Required only when the local client listener
     # enforces SASL. Example:
-    #   healthCheckAuth: |
-    #     client.security.protocol=SASL
-    #     client.sasl.mechanism=PLAIN
-    #     client.security.sasl.username=admin
-    #     client.security.sasl.password=admin-pass
+    #   healthCheckAuth: "client.security.protocol:SASL;client.sasl.mechanism:PLAIN;client.security.sasl.username:admin;client.security.sasl.password:admin-pass"
     healthCheckAuth: ""
   extraVolumes: []
   extraVolumeMounts: []
