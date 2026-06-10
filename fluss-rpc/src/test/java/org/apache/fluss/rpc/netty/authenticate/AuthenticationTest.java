@@ -242,7 +242,7 @@ public class AuthenticationTest {
         configuration.setString(
                 ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT1:mutual,CLIENT2:sasl");
         configuration.setString("security.sasl.enabled.mechanisms", "plain");
-        configuration.setString("security.sasl.users", "root:password,guest:password2");
+        configuration.setString("security.sasl.plain.users", "root:password,guest:password2");
         configuration.set(ConfigOptions.SUPER_USERS, "User:root");
         configuration.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         // 3 worker threads is enough for this test

@@ -520,7 +520,7 @@ public class ConfigOptions {
                                     + "Listeners not included in the map will use PLAINTEXT by default, which does not require authentication.");
 
     public static final ConfigOption<List<String>> SERVER_SASL_USERS =
-            key("security.sasl.users")
+            key("security.sasl.plain.users")
                     .stringType()
                     .asList()
                     .noDefaultValue()

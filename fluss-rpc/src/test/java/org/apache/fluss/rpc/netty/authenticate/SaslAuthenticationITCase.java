@@ -187,7 +187,8 @@ public class SaslAuthenticationITCase {
         Configuration serverConfig = new Configuration();
         serverConfig.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
         serverConfig.setString("security.sasl.enabled.mechanisms", "plain");
-        serverConfig.setString("security.sasl.users", "admin:admin-secret,alice:alice-secret");
+        serverConfig.setString(
+                "security.sasl.plain.users", "admin:admin-secret,alice:alice-secret");
         serverConfig.setString(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS.key(), "3");
 
         MetricGroup metricGroup = NOPMetricsGroup.newInstance();
@@ -225,7 +226,8 @@ public class SaslAuthenticationITCase {
             addBobConfig.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
             addBobConfig.setString("security.sasl.enabled.mechanisms", "plain");
             addBobConfig.setString(
-                    "security.sasl.users", "admin:admin-secret,alice:alice-secret,bob:bob-secret");
+                    "security.sasl.plain.users",
+                    "admin:admin-secret,alice:alice-secret,bob:bob-secret");
             plugin.validate(addBobConfig);
             plugin.reconfigure(addBobConfig);
 
@@ -239,7 +241,8 @@ public class SaslAuthenticationITCase {
             removeAdminConfig.setString(
                     ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
             removeAdminConfig.setString("security.sasl.enabled.mechanisms", "plain");
-            removeAdminConfig.setString("security.sasl.users", "alice:alice-secret,bob:bob-secret");
+            removeAdminConfig.setString(
+                    "security.sasl.plain.users", "alice:alice-secret,bob:bob-secret");
             plugin.validate(removeAdminConfig);
             plugin.reconfigure(removeAdminConfig);
 

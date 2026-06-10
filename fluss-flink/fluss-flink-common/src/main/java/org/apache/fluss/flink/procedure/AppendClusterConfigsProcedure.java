@@ -32,7 +32,7 @@ import java.util.List;
  * Procedure to append values to list-type cluster configurations dynamically.
  *
  * <p>This procedure appends new values to existing list-type configurations. The APPEND operation
- * only works on configurations defined as list types (e.g., {@code security.sasl.users}). The
+ * only works on configurations defined as list types (e.g., {@code security.sasl.plain.users}). The
  * changes are:
  *
  * <ul>
@@ -46,10 +46,10 @@ import java.util.List;
  *
  * <pre>
  * -- Append a user to the SASL user list
- * CALL sys.append_cluster_configs('security.sasl.users', 'bob:bob-secret');
+ * CALL sys.append_cluster_configs('security.sasl.plain.users', 'bob:bob-secret');
  *
  * -- Append multiple key-value pairs at one time
- * CALL sys.append_cluster_configs('security.sasl.users', 'bob:bob-secret', 'security.sasl.users', 'alice:alice-secret');
+ * CALL sys.append_cluster_configs('security.sasl.plain.users', 'bob:bob-secret', 'security.sasl.plain.users', 'alice:alice-secret');
  * </pre>
  *
  * <p><b>Note:</b> APPEND operations are only supported for list-type configuration keys. The server

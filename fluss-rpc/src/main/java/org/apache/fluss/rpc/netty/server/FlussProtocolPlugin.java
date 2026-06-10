@@ -106,13 +106,13 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
             if (colonIdx <= 0 || colonIdx == entry.length() - 1) {
                 throw new ConfigException(
                         String.format(
-                                "security.sasl.users[%d] must be in 'username:password' format, but got '%s'.",
+                                "security.sasl.plain.users[%d] must be in 'username:password' format, but got '%s'.",
                                 i, entry));
             }
             String username = entry.substring(0, colonIdx);
             if (!uniqueUsernames.add(username)) {
                 throw new ConfigException(
-                        "security.sasl.users must not contain duplicate usernames: '"
+                        "security.sasl.plain.users must not contain duplicate usernames: '"
                                 + username
                                 + "'.");
             }
@@ -126,7 +126,7 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
 
     /**
      * Enriches the given configuration with a generated JAAS config string derived from the
-     * security.sasl.users list (format: 'username:password'). If the list is not present, the
+     * security.sasl.plain.users list (format: 'username:password'). If the list is not present, the
      * original configuration is returned unchanged.
      */
     private static Configuration enrichWithJaasConfig(Configuration config) {

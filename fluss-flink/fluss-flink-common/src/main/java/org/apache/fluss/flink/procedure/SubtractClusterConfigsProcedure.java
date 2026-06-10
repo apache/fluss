@@ -32,9 +32,9 @@ import java.util.List;
  * Procedure to subtract (remove) values from list-type cluster configurations dynamically.
  *
  * <p>This procedure removes specific values from existing list-type configurations. The SUBTRACT
- * operation only works on configurations defined as list types (e.g., {@code security.sasl.users}).
- * If the list becomes empty after subtraction, the configuration key is removed entirely. The
- * changes are:
+ * operation only works on configurations defined as list types (e.g., {@code
+ * security.sasl.plain.users}). If the list becomes empty after subtraction, the configuration key
+ * is removed entirely. The changes are:
  *
  * <ul>
  *   <li>Validated by the CoordinatorServer before persistence
@@ -47,10 +47,10 @@ import java.util.List;
  *
  * <pre>
  * -- Remove a user from the SASL user list
- * CALL sys.subtract_cluster_configs('security.sasl.users', 'bob:bob-secret');
+ * CALL sys.subtract_cluster_configs('security.sasl.plain.users', 'bob:bob-secret');
  *
  * -- Remove multiple key-value pairs at one time
- * CALL sys.subtract_cluster_configs('security.sasl.users', 'bob:bob-secret', 'security.sasl.users', 'alice:alice-secret');
+ * CALL sys.subtract_cluster_configs('security.sasl.plain.users', 'bob:bob-secret', 'security.sasl.plain.users', 'alice:alice-secret');
  * </pre>
  *
  * <p><b>Note:</b> SUBTRACT operations are only supported for list-type configuration keys. The

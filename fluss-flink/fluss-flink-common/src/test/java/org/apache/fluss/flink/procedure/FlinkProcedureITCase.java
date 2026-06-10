@@ -833,7 +833,9 @@ public abstract class FlinkProcedureITCase {
                         .collect()) {
             List<Row> results = CollectionUtil.iteratorToList(resultIterator);
             assertThat(results).hasSize(1);
-            assertThat((String) results.get(0).getField(1)).contains("bob:bob_pass");
+            assertThat(results.stream().map(Row::toString).collect(Collectors.toList()))
+                    .containsExactly(
+                            "+I[security.sasl.plain.users, root:password,guest:passwords,bob:bob_pass, DYNAMIC_SERVER_CONFIG]");
         }
 
         // Verify "bob" can authenticate by creating a catalog with bob's credentials
@@ -854,24 +856,18 @@ public abstract class FlinkProcedureITCase {
                                         bobCatalog, ConfigOptions.SERVER_SASL_USERS.key()))
                         .collect()) {
             List<Row> results = CollectionUtil.iteratorToList(resultIterator);
-            assertThat(results).hasSize(1);
+            assertThat(results.stream().map(Row::toString).collect(Collectors.toList()))
+                    .containsExactly(
+                            "+I[security.sasl.plain.users, root:password,guest:passwords,bob:bob_pass, DYNAMIC_SERVER_CONFIG]");
         }
         tEnv.executeSql("drop catalog " + bobCatalog);
 
         // Step 2: Delete user "bob" via subtract_cluster_configs
-        try (CloseableIterator<Row> resultIterator =
-                tEnv.executeSql(
-                                String.format(
-                                        "Call %s.sys.subtract_cluster_configs('%s', 'bob:bob_pass')",
-                                        CATALOG_NAME, ConfigOptions.SERVER_SASL_USERS.key()))
-                        .collect()) {
-            List<Row> results = CollectionUtil.iteratorToList(resultIterator);
-            assertThat(results).hasSize(1);
-            assertThat(results.get(0).getField(0))
-                    .asString()
-                    .contains("Successfully subtracted")
-                    .contains(ConfigOptions.SERVER_SASL_USERS.key());
-        }
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.subtract_cluster_configs('%s', 'bob:bob_pass')",
+                                CATALOG_NAME, ConfigOptions.SERVER_SASL_USERS.key()))
+                .await();
 
         // Verify "bob" was deleted from config
         try (CloseableIterator<Row> resultIterator =
@@ -882,9 +878,9 @@ public abstract class FlinkProcedureITCase {
                         .collect()) {
             List<Row> results = CollectionUtil.iteratorToList(resultIterator);
             // After subtracting the only dynamically-added entry, the config may be empty
-            if (!results.isEmpty()) {
-                assertThat((String) results.get(0).getField(1)).doesNotContain("bob");
-            }
+            assertThat(results.stream().map(Row::toString).collect(Collectors.toList()))
+                    .containsExactly(
+                            "+I[security.sasl.plain.users, root:password,guest:passwords, DYNAMIC_SERVER_CONFIG]");
         }
 
         // Verify "bob" can no longer authenticate
@@ -952,11 +948,7 @@ public abstract class FlinkProcedureITCase {
         // set security information.
         conf.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
         conf.setString("security.sasl.enabled.mechanisms", "plain");
-        conf.setString(
-                "security.sasl.plain.jaas.config",
-                "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required "
-                        + "    user_root=\"password\" "
-                        + "    user_guest=\"password2\";");
+        conf.setString(ConfigOptions.SERVER_SASL_USERS.key(), "root:password,guest:passwords");
         conf.set(ConfigOptions.SUPER_USERS, "User:root");
         conf.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         return conf;

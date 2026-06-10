@@ -36,7 +36,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
@@ -150,8 +149,17 @@ public class DynamicConfigManager {
                             break;
                         case APPEND:
                             validateListType(configPropName);
-                            String existingAppend = configsProps.getOrDefault(configPropName, "");
-                            if (existingAppend.isEmpty()) {
+                            String existingAppend;
+                            if (configsProps.containsKey(configPropName)) {
+                                existingAppend = configsProps.get(configPropName);
+                            } else {
+                                // Fall back to static config
+                                existingAppend =
+                                        dynamicServerConfig
+                                                .getInitialServerConfigs()
+                                                .get(configPropName);
+                            }
+                            if (existingAppend == null || existingAppend.isEmpty()) {
                                 configsProps.put(configPropName, configPropValue);
                             } else {
                                 configsProps.put(
@@ -160,13 +168,27 @@ public class DynamicConfigManager {
                             break;
                         case SUBTRACT:
                             validateListType(configPropName);
-                            String existingSubtract = configsProps.get(configPropName);
-                            if (existingSubtract != null) {
-                                List<String> items =
-                                        new ArrayList<>(Arrays.asList(existingSubtract.split(",")));
-                                items.remove(configPropValue);
+                            String existingSubtract;
+                            if (configsProps.containsKey(configPropName)) {
+                                existingSubtract = configsProps.get(configPropName);
+                            } else {
+                                // Fall back to static config
+                                existingSubtract =
+                                        dynamicServerConfig
+                                                .getInitialServerConfigs()
+                                                .get(configPropName);
+                            }
+                            if (existingSubtract != null && !existingSubtract.isEmpty()) {
+                                List<String> items = new ArrayList<>();
+                                for (String item : existingSubtract.split(",")) {
+                                    String trimmed = item.trim();
+                                    if (!trimmed.isEmpty()) {
+                                        items.add(trimmed);
+                                    }
+                                }
+                                items.removeIf(v -> v.equals(configPropValue));
                                 if (items.isEmpty()) {
-                                    configsProps.remove(configPropName);
+                                    configsProps.put(configPropName, null);
                                 } else {
                                     configsProps.put(configPropName, String.join(",", items));
                                 }
