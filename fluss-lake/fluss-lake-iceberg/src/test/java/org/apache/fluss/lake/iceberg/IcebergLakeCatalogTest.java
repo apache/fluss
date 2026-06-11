@@ -17,12 +17,16 @@
 
 package org.apache.fluss.lake.iceberg;
 
+import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
+import org.apache.fluss.metadata.DateTruncPartitionTransform;
+import org.apache.fluss.metadata.PartitionExpression;
+import org.apache.fluss.metadata.PartitionKey;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -115,6 +119,19 @@ class IcebergLakeCatalogTest {
         assertThat(created.properties()).containsEntry("fluss.table.datalake.freshness", "30s");
         assertThat(created.properties())
                 .doesNotContainKeys("iceberg.commit.retry.num-retries", "table.datalake.freshness");
+    }
+
+    @Test
+    void testCreateTableRejectsImplicitPartition() {
+        assertThatThrownBy(
+                        () ->
+                                flussIcebergCatalog.createTable(
+                                        TablePath.of("test_db", "implicit_partition_table"),
+                                        implicitPartitionDescriptor(),
+                                        new TestingLakeCatalogContext()))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessage(
+                        "Iceberg lake tables do not support implicit partition expressions yet.");
     }
 
     @Test
@@ -1146,5 +1163,23 @@ class IcebergLakeCatalogTest {
 
     private TableDescriptor getTableDescriptor(Schema schema) {
         return TableDescriptor.builder().schema(schema).distributedBy(3).build();
+    }
+
+    private static TableDescriptor implicitPartitionDescriptor() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("event_time", DataTypes.TIMESTAMP().copy(false))
+                        .column("payload", DataTypes.STRING())
+                        .build();
+        return TableDescriptor.builder()
+                .schema(schema)
+                .partitionedByKeys(
+                        PartitionKey.expression(
+                                PartitionExpression.of(
+                                        "event_day",
+                                        DateTruncPartitionTransform.of(
+                                                "event_time", AutoPartitionTimeUnit.DAY))))
+                .distributedBy(1)
+                .build();
     }
 }

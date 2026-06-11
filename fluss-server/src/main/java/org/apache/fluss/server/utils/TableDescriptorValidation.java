@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.utils;
 
+import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -29,13 +30,17 @@ import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.metadata.AggFunction;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.DateTruncPartitionTransform;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
+import org.apache.fluss.metadata.PartitionExpression;
+import org.apache.fluss.metadata.PartitionTransform;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TransformType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
@@ -63,6 +68,8 @@ import static org.apache.fluss.metadata.TableDescriptor.COMMIT_TIMESTAMP_COLUMN;
 import static org.apache.fluss.metadata.TableDescriptor.LOG_OFFSET_COLUMN;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
+import static org.apache.fluss.metadata.TablePath.detectInvalidName;
+import static org.apache.fluss.metadata.TablePath.validatePrefix;
 import static org.apache.fluss.utils.PartitionUtils.PARTITION_KEY_SUPPORTED_TYPES;
 
 /** Validator of {@link TableDescriptor}. */
@@ -123,7 +130,8 @@ public class TableDescriptorValidation {
         checkMergeEngine(tableConf, hasPrimaryKey, schema);
         checkDeleteBehavior(tableConf, hasPrimaryKey);
         checkTieredLog(tableConf);
-        checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema.getRowType());
+        checkPartition(tableConf, tableDescriptor, schema.getRowType());
+        checkImplicitPartitionDatalake(tableConf, tableDescriptor);
         checkSystemColumns(schema.getRowType());
         validateStatisticsConfig(tableDescriptor);
         checkTableLakeFormatMatchesCluster(tableConf, clusterDataLakeFormat);
@@ -153,6 +161,17 @@ public class TableDescriptorValidation {
         }
     }
 
+    private static void checkImplicitPartitionDatalake(
+            Configuration tableConf, TableDescriptor tableDescriptor) {
+        if (tableDescriptor.hasPartitionExpressions()
+                && tableConf.get(ConfigOptions.TABLE_DATALAKE_ENABLED)) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "Currently, implicit partition table does not support '%s'=true.",
+                            ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
+        }
+    }
+
     public static void validateAlterTableProperties(
             TableInfo currentTable, Set<String> tableKeysToChange) {
         TableConfig currentConfig = currentTable.getTableConfig();
@@ -177,6 +196,14 @@ public class TableDescriptorValidation {
                     String.format(
                             "'%s' can only be altered on primary key tables.",
                             ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key()));
+        }
+
+        if (currentTable.hasPartitionExpressions()
+                && tableKeysToChange.contains(ConfigOptions.TABLE_DATALAKE_ENABLED.key())) {
+            throw new InvalidAlterTableException(
+                    String.format(
+                            "'%s' cannot be altered on implicit partitioned tables.",
+                            ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
         }
 
         if (!currentConfig.getDataLakeFormat().isPresent()) {
@@ -427,7 +454,8 @@ public class TableDescriptorValidation {
     }
 
     private static void checkPartition(
-            Configuration tableConf, List<String> partitionKeys, RowType rowType) {
+            Configuration tableConf, TableDescriptor tableDescriptor, RowType rowType) {
+        List<String> partitionKeys = tableDescriptor.getPartitionKeys();
         boolean isPartitioned = !partitionKeys.isEmpty();
         AutoPartitionStrategy autoPartition = AutoPartitionStrategy.from(tableConf);
 
@@ -438,8 +466,18 @@ public class TableDescriptorValidation {
                             ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key()));
         }
 
+        if (tableDescriptor.hasPartitionExpressions()) {
+            if (autoPartition.isAutoPartitionEnabled()) {
+                throw new InvalidConfigException(
+                        String.format(
+                                "Currently, implicit partition table does not support '%s'=true.",
+                                ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key()));
+            }
+            checkPartitionExpressions(tableDescriptor, rowType);
+        }
+
         if (isPartitioned) {
-            for (String partitionKey : partitionKeys) {
+            for (String partitionKey : tableDescriptor.getPhysicalPartitionKeys()) {
                 int partitionIndex = rowType.getFieldIndex(partitionKey);
                 DataType partitionDataType = rowType.getTypeAt(partitionIndex);
                 if (!PARTITION_KEY_SUPPORTED_TYPES.contains(partitionDataType.getTypeRoot())) {
@@ -488,6 +526,67 @@ public class TableDescriptorValidation {
                                     ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key()));
                 }
             }
+        }
+    }
+
+    private static void checkPartitionExpressions(
+            TableDescriptor tableDescriptor, RowType rowType) {
+        for (String virtualPartitionKey : tableDescriptor.getVirtualPartitionKeys()) {
+            if (SYSTEM_COLUMNS.contains(virtualPartitionKey)) {
+                throw new InvalidTableException(
+                        String.format(
+                                "Virtual partition spec key '%s' is reserved for system columns.",
+                                virtualPartitionKey));
+            }
+            String invalidNameError = detectInvalidName(virtualPartitionKey);
+            String invalidPrefixError = validatePrefix(virtualPartitionKey);
+            if (invalidNameError != null || invalidPrefixError != null) {
+                throw new InvalidTableException(
+                        String.format(
+                                "Virtual partition spec key '%s' is invalid: %s.",
+                                virtualPartitionKey,
+                                invalidNameError != null ? invalidNameError : invalidPrefixError));
+            }
+        }
+
+        for (PartitionExpression partitionExpression : tableDescriptor.getPartitionExpressions()) {
+            PartitionTransform transform = partitionExpression.getTransform();
+            if (transform.getType() != TransformType.DATE_TRUNC
+                    || !(transform instanceof DateTruncPartitionTransform)) {
+                throw new InvalidTableException(
+                        "Unsupported partition transform type: " + transform.getType());
+            }
+            checkDateTruncPartitionTransform((DateTruncPartitionTransform) transform, rowType);
+        }
+    }
+
+    private static void checkDateTruncPartitionTransform(
+            DateTruncPartitionTransform transform, RowType rowType) {
+        int sourceColumnIndex = rowType.getFieldIndex(transform.getSourceColumn());
+        if (sourceColumnIndex < 0) {
+            throw new InvalidTableException(
+                    String.format(
+                            "Partition transform source column '%s' does not exist in schema.",
+                            transform.getSourceColumn()));
+        }
+
+        DataTypeRoot sourceTypeRoot = rowType.getTypeAt(sourceColumnIndex).getTypeRoot();
+        EnumSet<DataTypeRoot> supportedSourceTypes =
+                EnumSet.of(
+                        DataTypeRoot.DATE,
+                        DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE,
+                        DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE);
+        if (!supportedSourceTypes.contains(sourceTypeRoot)) {
+            throw new InvalidTableException(
+                    String.format(
+                            "DATE_TRUNC partition transform does not support source column '%s' with data type %s.",
+                            transform.getSourceColumn(), rowType.getTypeAt(sourceColumnIndex)));
+        }
+
+        if (sourceTypeRoot == DataTypeRoot.DATE
+                && transform.getTimeUnit() == AutoPartitionTimeUnit.HOUR) {
+            throw new InvalidTableException(
+                    "DATE_TRUNC partition transform does not support DATE + HOUR.");
         }
     }
 

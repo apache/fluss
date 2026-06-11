@@ -17,17 +17,30 @@
 
 package org.apache.fluss.server.zk.data;
 
+import org.apache.fluss.config.AutoPartitionTimeUnit;
+import org.apache.fluss.metadata.DateTruncPartitionTransform;
+import org.apache.fluss.metadata.PartitionExpression;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableDescriptor.TableDistribution;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.TestData;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Maps;
+import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.json.JsonSerdeTestBase;
+import org.apache.fluss.utils.json.JsonSerdeUtils;
 
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
+import java.time.ZoneId;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link org.apache.fluss.server.zk.data.TableRegistrationJsonSerde}. */
@@ -67,9 +80,129 @@ class TableRegistrationJsonSerdeTest extends JsonSerdeTestBase<TableRegistration
                 .hasMessage("Table distribution is required for table registration.");
     }
 
+    @Test
+    void testLifecycleCopiesPreservePartitionExpressions() {
+        TableRegistration registration = createObjects()[2];
+
+        TableRegistration withNewProperties =
+                registration.newProperties(
+                        Collections.singletonMap("k", "v"),
+                        Collections.singletonMap("custom-k", "custom-v"));
+        assertThat(withNewProperties.partitionExpressions)
+                .isEqualTo(registration.partitionExpressions);
+
+        TableRegistration withNewRemoteDataDir =
+                registration.newRemoteDataDir("file://local/other-remote");
+        assertThat(withNewRemoteDataDir.partitionExpressions)
+                .isEqualTo(registration.partitionExpressions);
+    }
+
+    @Test
+    void testInvalidPartitionExpressions() {
+        assertThatThrownBy(
+                        () ->
+                                tableRegistration(
+                                        Collections.singletonList("event_day"),
+                                        Collections.singletonList(
+                                                PartitionExpression.of(
+                                                        DateTruncPartitionTransform.of(
+                                                                "event_time",
+                                                                AutoPartitionTimeUnit.DAY)))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "Partition expression must contain a resolved virtual partition spec key.");
+
+        assertThatThrownBy(
+                        () ->
+                                tableRegistration(
+                                        Collections.singletonList("event_day"),
+                                        Collections.singletonList(
+                                                PartitionExpression.of(
+                                                        "event_month",
+                                                        DateTruncPartitionTransform.of(
+                                                                "event_time",
+                                                                AutoPartitionTimeUnit.MONTH)))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "Virtual partition spec key 'event_month' is not present in partition keys [event_day].");
+
+        assertThatThrownBy(
+                        () ->
+                                tableRegistration(
+                                        Collections.singletonList("event_day"),
+                                        Collections.singletonList(
+                                                PartitionExpression.of(
+                                                        "event_day",
+                                                        DateTruncPartitionTransform.of(
+                                                                "event_time",
+                                                                AutoPartitionTimeUnit.DAY)))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "Persisted DATE_TRUNC partition transform must contain resolved time zone.");
+
+        assertThatThrownBy(
+                        () ->
+                                tableRegistration(
+                                        Collections.singletonList("event_day"),
+                                        Arrays.asList(
+                                                PartitionExpression.of(
+                                                        "event_day",
+                                                        DateTruncPartitionTransform.of(
+                                                                "event_time",
+                                                                AutoPartitionTimeUnit.DAY,
+                                                                ZoneId.of("UTC"))),
+                                                PartitionExpression.of(
+                                                        "event_day",
+                                                        DateTruncPartitionTransform.of(
+                                                                "event_time",
+                                                                AutoPartitionTimeUnit.MONTH,
+                                                                ZoneId.of("UTC"))))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Duplicate virtual partition spec key 'event_day'.");
+    }
+
+    @Test
+    void testRejectsPersistedDateTruncWithoutTimeZone() {
+        String json =
+                "{\"version\":1,\"table_id\":1234,\"partition_key\":[\"event_day\"],"
+                        + "\"partition_expressions\":[{\"virtual_partition_spec_key\":\"event_day\","
+                        + "\"transform\":{\"type\":\"date_trunc\",\"source_column\":\"event_time\",\"unit\":\"DAY\"}}],"
+                        + "\"bucket_count\":32,\"properties\":{},\"custom_properties\":{},"
+                        + "\"created_time\":1735538268,\"modified_time\":1735538270}";
+
+        assertThatThrownBy(
+                        () ->
+                                JsonSerdeUtils.readValue(
+                                        json.getBytes(StandardCharsets.UTF_8),
+                                        TableRegistrationJsonSerde.INSTANCE))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "Persisted DATE_TRUNC partition transform must contain resolved time zone.");
+    }
+
+    @Test
+    void testToTableInfoPreservesPartitionExpressions() {
+        TableRegistration registration = createObjects()[2];
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT().copy(false))
+                        .column("event_time", DataTypes.TIMESTAMP().copy(false))
+                        .primaryKey("id", "event_time")
+                        .build();
+
+        TableInfo tableInfo =
+                registration.toTableInfo(TablePath.of("db", "t"), new SchemaInfo(schema, 3));
+
+        assertThat(tableInfo.getPartitionExpressions())
+                .isEqualTo(registration.partitionExpressions);
+        assertThat(tableInfo.toTableDescriptor().getPartitionExpressions())
+                .isEqualTo(registration.partitionExpressions);
+        assertThat(registration.toString()).contains("partitionExpressions");
+    }
+
     @Override
     protected TableRegistration[] createObjects() {
-        TableRegistration[] tableRegistrations = new TableRegistration[2];
+        TableRegistration[] tableRegistrations = new TableRegistration[3];
 
         tableRegistrations[0] =
                 new TableRegistration(
@@ -95,6 +228,25 @@ class TableRegistrationJsonSerdeTest extends JsonSerdeTestBase<TableRegistration
                         -1,
                         -1);
 
+        tableRegistrations[2] =
+                new TableRegistration(
+                        1234L,
+                        "implicit-partition-table",
+                        Collections.singletonList("event_day"),
+                        Collections.singletonList(
+                                PartitionExpression.of(
+                                        "event_day",
+                                        DateTruncPartitionTransform.of(
+                                                "event_time",
+                                                AutoPartitionTimeUnit.DAY,
+                                                ZoneId.of("UTC")))),
+                        new TableDistribution(32, Collections.singletonList("id")),
+                        Maps.newHashMap(),
+                        Maps.newHashMap(),
+                        null,
+                        1735538268L,
+                        1735538270L);
+
         return tableRegistrations;
     }
 
@@ -104,6 +256,22 @@ class TableRegistrationJsonSerdeTest extends JsonSerdeTestBase<TableRegistration
             "{\"version\":1,\"table_id\":1234,\"comment\":\"first-table\",\"partition_key\":[\"a\",\"b\"],"
                     + "\"bucket_key\":[\"b\",\"c\"],\"bucket_count\":16,\"properties\":{},\"custom_properties\":{\"custom-3\":\"\\\"300\\\"\"},\"remote_data_dir\":\"file://local/remote\",\"created_time\":1735538268,\"modified_time\":1735538270}",
             "{\"version\":1,\"table_id\":1234,\"comment\":\"second-table\",\"bucket_count\":32,\"properties\":{\"option-3\":\"300\"},\"custom_properties\":{},\"created_time\":-1,\"modified_time\":-1}",
+            "{\"version\":1,\"table_id\":1234,\"comment\":\"implicit-partition-table\",\"partition_key\":[\"event_day\"],\"partition_expressions\":[{\"virtual_partition_spec_key\":\"event_day\",\"transform\":{\"type\":\"date_trunc\",\"source_column\":\"event_time\",\"unit\":\"DAY\",\"time_zone\":\"UTC\"}}],\"bucket_key\":[\"id\"],\"bucket_count\":32,\"properties\":{},\"custom_properties\":{},\"created_time\":1735538268,\"modified_time\":1735538270}",
         };
+    }
+
+    private static TableRegistration tableRegistration(
+            List<String> partitionKeys, List<PartitionExpression> partitionExpressions) {
+        return new TableRegistration(
+                1234L,
+                "implicit-partition-table",
+                partitionKeys,
+                partitionExpressions,
+                new TableDistribution(32, Collections.singletonList("id")),
+                Maps.newHashMap(),
+                Maps.newHashMap(),
+                null,
+                1735538268L,
+                1735538270L);
     }
 }

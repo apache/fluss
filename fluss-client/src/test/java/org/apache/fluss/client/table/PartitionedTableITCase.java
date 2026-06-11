@@ -21,22 +21,35 @@ import org.apache.fluss.client.admin.ClientToServerITCaseBase;
 import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.TooManyPartitionsException;
+import org.apache.fluss.metadata.DateTruncPartitionTransform;
+import org.apache.fluss.metadata.PartitionExpression;
 import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PartitionKey;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 
+import java.nio.file.Path;
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -47,6 +60,8 @@ import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
+import static org.apache.fluss.utils.FlussPaths.KV_TABLET_DIR_PREFIX;
+import static org.apache.fluss.utils.FlussPaths.LOG_TABLET_DIR_PREFIX;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -57,6 +72,503 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * AutoPartitionedTableITCase}.
  */
 class PartitionedTableITCase extends ClientToServerITCaseBase {
+
+    @Test
+    void testImplicitPartitionedPrimaryKeyTableEndToEndWithDirectoryLayout() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_implicit_partitioned_pk_e2e_table_1");
+        Schema schema = createImplicitPartitionedTable(tablePath, true);
+        Table table = conn.getTable(tablePath);
+        TimestampNtz eventTime =
+                TimestampNtz.fromLocalDateTime(LocalDateTime.of(2024, 3, 15, 10, 30));
+        InternalRow writtenRow = row(schema.getRowType(), "us", 1, eventTime, 10, "e2e-value-10");
+
+        UpsertWriter upsertWriter = table.newUpsert().createWriter();
+        upsertWriter.upsert(writtenRow).get();
+        upsertWriter.flush();
+
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        assertThat(tableInfo.getRowType().getFieldNames())
+                .containsExactly("region", "id", "event_time", "seq", "payload");
+        assertThat(tableInfo.getRowType().getFieldNames()).doesNotContain("event_day");
+        assertThat(tableInfo.getPrimaryKeys()).containsExactly("region", "id", "event_time", "seq");
+        assertThat(tableInfo.getPartitionKeys()).containsExactly("region", "event_day");
+        assertThat(tableInfo.getPhysicalPartitionKeys()).containsExactly("region");
+        assertThat(tableInfo.getVirtualPartitionKeys()).containsExactly("event_day");
+        assertThat(tableInfo.getPartitionSourceColumns()).containsExactly("event_time");
+        assertThat(tableInfo.getPartitionExpressions()).hasSize(1);
+        assertThat(tableInfo.getPartitionExpressions().get(0).getVirtualPartitionSpecKey())
+                .hasValue("event_day");
+
+        List<PartitionInfo> partitionInfos = waitForPartitionInfos(tablePath, 1);
+        PartitionInfo partitionInfo = partitionInfos.get(0);
+        assertThat(partitionInfo.getPartitionName()).isEqualTo("us$20240315");
+        assertThat(partitionInfo.getPartitionSpec().getSpecMap())
+                .containsEntry("region", "us")
+                .containsEntry("event_day", "20240315");
+        assertThat(FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath, 1))
+                .containsEntry("us$20240315", partitionInfo.getPartitionId());
+
+        Lookuper lookuper = table.newLookup().createLookuper();
+        assertThatRow(lookupRow(lookuper, row("us", 1, eventTime, 10)))
+                .withSchema(schema.getRowType())
+                .isEqualTo(writtenRow);
+
+        assertPartitionReplicaDirectories(
+                tablePath, tableInfo.getTableId(), partitionInfo.getPartitionId(), "us$20240315");
+    }
+
+    @Test
+    void testImplicitPartitionedPrimaryKeyTableWriteLookupAndDelete() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_implicit_partitioned_pk_table_1");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("region", DataTypes.STRING())
+                        .column("id", DataTypes.INT())
+                        .column("event_time", DataTypes.TIMESTAMP())
+                        .column("seq", DataTypes.INT())
+                        .column("payload", DataTypes.STRING())
+                        .primaryKey("region", "id", "event_time", "seq")
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .partitionedByKeys(
+                                PartitionKey.column("region"),
+                                PartitionKey.expression(
+                                        PartitionExpression.of(
+                                                "event_day",
+                                                DateTruncPartitionTransform.of(
+                                                        "event_time", AutoPartitionTimeUnit.DAY))))
+                        .distributedBy(2, "id", "event_time")
+                        .build();
+        createTable(tablePath, descriptor, false);
+        admin.createPartition(
+                        tablePath,
+                        newPartitionSpec(
+                                Arrays.asList("region", "event_day"),
+                                Arrays.asList("us", "20240315")),
+                        false)
+                .get();
+        Map<String, Long> partitionIdByNames =
+                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath, 1);
+        assertThat(partitionIdByNames).containsKey("us$20240315");
+        assertThat(
+                        admin.listPartitionInfos(
+                                        tablePath, newPartitionSpec("event_day", "20240315"))
+                                .get())
+                .hasSize(1);
+
+        TimestampNtz eventTime =
+                TimestampNtz.fromLocalDateTime(LocalDateTime.of(2024, 3, 15, 10, 30));
+        InternalRow firstRow = row(schema.getRowType(), "us", 1, eventTime, 10, "value-10");
+        InternalRow secondRow = row(schema.getRowType(), "us", 1, eventTime, 11, "value-11");
+
+        Table table = conn.getTable(tablePath);
+        UpsertWriter upsertWriter = table.newUpsert().createWriter();
+        upsertWriter.upsert(firstRow).get();
+        upsertWriter.upsert(secondRow).get();
+        upsertWriter.flush();
+
+        Lookuper lookuper = table.newLookup().createLookuper();
+        assertThatRow(lookupRow(lookuper, row("us", 1, eventTime, 10)))
+                .withSchema(schema.getRowType())
+                .isEqualTo(firstRow);
+
+        Lookuper prefixLookuper =
+                table.newLookup()
+                        .lookupBy(Arrays.asList("region", "id", "event_time"))
+                        .createLookuper();
+        List<InternalRow> prefixRows =
+                prefixLookuper.lookup(row("us", 1, eventTime)).get().getRowList();
+        assertThat(prefixRows).hasSize(2);
+
+        Lookuper reorderedPrefixLookuper =
+                table.newLookup()
+                        .lookupBy(Arrays.asList("id", "event_time", "region"))
+                        .createLookuper();
+        assertThat(reorderedPrefixLookuper.lookup(row(1, eventTime, "us")).get().getRowList())
+                .hasSize(2);
+        assertThat(reorderedPrefixLookuper.lookup(row(1, eventTime, "eu")).get().getRowList())
+                .isEmpty();
+
+        upsertWriter.delete(row("us", 1, eventTime, 10)).get();
+        upsertWriter.flush();
+
+        assertThat(lookupRow(lookuper, row("us", 1, eventTime, 10))).isNull();
+        prefixRows = prefixLookuper.lookup(row("us", 1, eventTime)).get().getRowList();
+        assertThat(prefixRows).hasSize(1);
+        assertThatRow(prefixRows.get(0)).withSchema(schema.getRowType()).isEqualTo(secondRow);
+    }
+
+    @Test
+    void testImplicitPartitionPrefixLookupWithRoutingOnlyTransformSource() throws Exception {
+        TablePath tablePath =
+                TablePath.of("test_db_1", "test_implicit_partitioned_prefix_lookup_table_1");
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("event_time", DataTypes.TIMESTAMP())
+                        .column("seq", DataTypes.INT())
+                        .column("payload", DataTypes.STRING())
+                        .primaryKey("id", "event_time", "seq")
+                        .build();
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .partitionedByKeys(
+                                PartitionKey.expression(
+                                        PartitionExpression.of(
+                                                "event_day",
+                                                DateTruncPartitionTransform.of(
+                                                        "event_time", AutoPartitionTimeUnit.DAY))))
+                        .distributedBy(2, "id")
+                        .build();
+        createTable(tablePath, descriptor, false);
+        admin.createPartition(tablePath, newPartitionSpec("event_day", "20240315"), false).get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath, 1);
+
+        TimestampNtz firstEventTime =
+                TimestampNtz.fromLocalDateTime(LocalDateTime.of(2024, 3, 15, 10, 30));
+        TimestampNtz secondEventTime =
+                TimestampNtz.fromLocalDateTime(LocalDateTime.of(2024, 3, 15, 11, 30));
+        InternalRow firstRow = row(schema.getRowType(), 1, firstEventTime, 10, "value-10");
+        InternalRow secondRow = row(schema.getRowType(), 1, secondEventTime, 11, "value-11");
+        InternalRow otherIdRow = row(schema.getRowType(), 2, firstEventTime, 12, "value-12");
+
+        Table table = conn.getTable(tablePath);
+        UpsertWriter upsertWriter = table.newUpsert().createWriter();
+        upsertWriter.upsert(firstRow).get();
+        upsertWriter.upsert(secondRow).get();
+        upsertWriter.upsert(otherIdRow).get();
+        upsertWriter.flush();
+
+        Lookuper prefixLookuper =
+                table.newLookup().lookupBy(Arrays.asList("id", "event_time")).createLookuper();
+        List<InternalRow> prefixRows =
+                prefixLookuper.lookup(row(1, firstEventTime)).get().getRowList();
+        assertThat(prefixRows).hasSize(2);
+
+        assertThat(prefixLookuper.lookup(row(2, firstEventTime)).get().getRowList()).hasSize(1);
+    }
+
+    @Test
+    void testImplicitPartitionedPrimaryKeyTableDynamicCreatePartition() throws Exception {
+        TablePath tablePath =
+                TablePath.of("test_db_1", "test_implicit_partitioned_pk_dynamic_table_1");
+        Schema schema = createImplicitPartitionedTable(tablePath, true);
+        Table table = conn.getTable(tablePath);
+        UpsertWriter upsertWriter = table.newUpsert().createWriter();
+
+        TimestampNtz eventTime =
+                TimestampNtz.fromLocalDateTime(LocalDateTime.of(2024, 3, 15, 10, 30));
+        InternalRow row = row(schema.getRowType(), "us", 1, eventTime, 10, "value-10");
+        upsertWriter.upsert(row).get();
+        upsertWriter.flush();
+
+        List<PartitionInfo> partitionInfoList =
+                waitValue(
+                        () -> {
+                            List<PartitionInfo> partitionInfos =
+                                    admin.listPartitionInfos(tablePath).get();
+                            if (partitionInfos.size() == 1) {
+                                return Optional.of(partitionInfos);
+                            } else {
+                                return Optional.empty();
+                            }
+                        },
+                        Duration.ofMinutes(1),
+                        "Fail to wait for the implicit partition created.");
+        assertThat(partitionInfoList.get(0).getPartitionName()).isEqualTo("us$20240315");
+
+        Lookuper lookuper = table.newLookup().createLookuper();
+        assertThatRow(lookupRow(lookuper, row("us", 1, eventTime, 10)))
+                .withSchema(schema.getRowType())
+                .isEqualTo(row);
+    }
+
+    @Test
+    void testImplicitPartitionedLogTableAppend() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_implicit_partitioned_log_table_1");
+        Schema schema = createImplicitPartitionedTable(tablePath, false);
+        admin.createPartition(
+                        tablePath,
+                        newPartitionSpec(
+                                Arrays.asList("region", "event_day"),
+                                Arrays.asList("us", "20240315")),
+                        false)
+                .get();
+        Map<String, Long> partitionIdByNames =
+                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath, 1);
+        assertThat(partitionIdByNames).containsKey("us$20240315");
+
+        TimestampNtz firstEventTime =
+                TimestampNtz.fromLocalDateTime(LocalDateTime.of(2024, 3, 15, 10, 30));
+        TimestampNtz secondEventTime =
+                TimestampNtz.fromLocalDateTime(LocalDateTime.of(2024, 3, 15, 23, 59));
+        List<InternalRow> expectedRows =
+                Arrays.asList(
+                        row(schema.getRowType(), "us", 1, firstEventTime, 10, "value-10"),
+                        row(schema.getRowType(), "us", 2, secondEventTime, 20, "value-20"));
+
+        Table table = conn.getTable(tablePath);
+        AppendWriter appendWriter = table.newAppend().createWriter();
+        for (InternalRow row : expectedRows) {
+            appendWriter.append(row).get();
+        }
+        appendWriter.flush();
+
+        Map<Long, List<InternalRow>> expectPartitionAppendRows = new HashMap<>();
+        expectPartitionAppendRows.put(partitionIdByNames.get("us$20240315"), expectedRows);
+        verifyPartitionLogs(table, schema.getRowType(), expectPartitionAppendRows);
+    }
+
+    @Test
+    void testImplicitPartitionedLogTableDynamicCreatePartitions() throws Exception {
+        TablePath tablePath =
+                TablePath.of("test_db_1", "test_implicit_partitioned_log_dynamic_table_1");
+        Schema schema = createImplicitPartitionedTable(tablePath, false);
+        TimestampNtz firstEventTime =
+                TimestampNtz.fromLocalDateTime(LocalDateTime.of(2024, 3, 15, 10, 30));
+        TimestampNtz secondEventTime =
+                TimestampNtz.fromLocalDateTime(LocalDateTime.of(2024, 3, 16, 0, 30));
+        InternalRow firstRow = row(schema.getRowType(), "us", 1, firstEventTime, 10, "value-10");
+        InternalRow secondRow = row(schema.getRowType(), "us", 2, secondEventTime, 20, "value-20");
+
+        Table table = conn.getTable(tablePath);
+        AppendWriter appendWriter = table.newAppend().createWriter();
+        appendWriter.append(firstRow).get();
+        appendWriter.append(secondRow).get();
+        appendWriter.flush();
+
+        List<PartitionInfo> partitionInfos = waitForPartitionInfos(tablePath, 2);
+        assertThat(partitionInfos)
+                .extracting(PartitionInfo::getPartitionName)
+                .containsExactlyInAnyOrder("us$20240315", "us$20240316");
+
+        Map<Long, List<InternalRow>> expectPartitionAppendRows = new HashMap<>();
+        for (PartitionInfo partitionInfo : partitionInfos) {
+            if (partitionInfo.getPartitionName().equals("us$20240315")) {
+                expectPartitionAppendRows.put(
+                        partitionInfo.getPartitionId(), Arrays.asList(firstRow));
+            } else {
+                expectPartitionAppendRows.put(
+                        partitionInfo.getPartitionId(), Arrays.asList(secondRow));
+            }
+        }
+        verifyPartitionLogs(table, schema.getRowType(), expectPartitionAppendRows);
+    }
+
+    @Test
+    void testImplicitPartitionedLogTableWriteNewPartitionFailsWhenDynamicDisabled()
+            throws Exception {
+        clientConf.set(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED, false);
+        TablePath tablePath =
+                TablePath.of("test_db_1", "test_implicit_partitioned_log_disabled_dynamic_table_1");
+        Schema schema = createImplicitPartitionedTable(tablePath, false);
+        Table table = conn.getTable(tablePath);
+        AppendWriter appendWriter = table.newAppend().createWriter();
+        TimestampNtz eventTime =
+                TimestampNtz.fromLocalDateTime(LocalDateTime.of(2024, 3, 15, 10, 30));
+        InternalRow row = row(schema.getRowType(), "us", 1, eventTime, 10, "value-10");
+
+        assertThatThrownBy(() -> appendWriter.append(row).get())
+                .cause()
+                .isInstanceOf(PartitionNotExistException.class)
+                .hasMessageContaining(
+                        "Table partition '%s' does not exist.",
+                        PhysicalTablePath.of(tablePath, "us$20240315"));
+    }
+
+    @Test
+    void testImplicitPartitionManagementUsesFinalSpecKeysOnly() throws Exception {
+        TablePath tablePath =
+                TablePath.of("test_db_1", "test_implicit_partition_management_table_1");
+        createImplicitPartitionedTable(tablePath, false);
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        assertThat(tableInfo.getRowType().getFieldNames()).doesNotContain("event_day");
+        DateTruncPartitionTransform transform =
+                (DateTruncPartitionTransform)
+                        tableInfo.getPartitionExpressions().get(0).getTransform();
+        assertThat(transform.getTimeZone()).isPresent();
+        admin.createPartition(
+                        tablePath,
+                        newPartitionSpec(
+                                Arrays.asList("region", "event_day"),
+                                Arrays.asList("us", "20240315")),
+                        false)
+                .get();
+
+        assertThat(
+                        admin.listPartitionInfos(
+                                        tablePath, newPartitionSpec("event_day", "20240315"))
+                                .get())
+                .hasSize(1);
+        assertThatThrownBy(
+                        () ->
+                                admin.listPartitionInfos(
+                                                tablePath,
+                                                newPartitionSpec("event_time", "2024-03-15"))
+                                        .get())
+                .cause()
+                .isInstanceOf(FlussRuntimeException.class)
+                .hasMessageContaining("table don't contains this partitionKey: event_time");
+        assertThatThrownBy(
+                        () ->
+                                admin.createPartition(
+                                                tablePath,
+                                                newPartitionSpec(
+                                                        Arrays.asList("region", "event_time"),
+                                                        Arrays.asList("us", "2024-03-15")),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining("partition key 'event_day'");
+    }
+
+    @Test
+    void testImplicitPartitionExpressionsSurviveSchemaReload() throws Exception {
+        TablePath tablePath =
+                TablePath.of("test_db_1", "test_implicit_partition_schema_reload_table_1");
+        Schema schema = createImplicitPartitionedTable(tablePath, true);
+        TableInfo beforeAlter = admin.getTableInfo(tablePath).get();
+
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "extra",
+                                        DataTypes.STRING(),
+                                        "extra column",
+                                        TableChange.ColumnPosition.last())),
+                        false)
+                .get();
+
+        TableInfo afterAlter = admin.getTableInfo(tablePath).get();
+        assertThat(afterAlter.getPartitionExpressions())
+                .isEqualTo(beforeAlter.getPartitionExpressions());
+        assertThat(afterAlter.getPartitionKeys()).containsExactly("region", "event_day");
+        assertThat(afterAlter.getRowType().getFieldNames()).contains("extra");
+
+        admin.createPartition(
+                        tablePath,
+                        newPartitionSpec(
+                                Arrays.asList("region", "event_day"),
+                                Arrays.asList("us", "20240315")),
+                        false)
+                .get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath, 1);
+        Table table = conn.getTable(tablePath);
+        UpsertWriter upsertWriter = table.newUpsert().createWriter();
+        TimestampNtz eventTime =
+                TimestampNtz.fromLocalDateTime(LocalDateTime.of(2024, 3, 15, 10, 30));
+        InternalRow row =
+                row(afterAlter.getRowType(), "us", 1, eventTime, 10, "value-10", "extra-value");
+
+        upsertWriter.upsert(row).get();
+        upsertWriter.flush();
+
+        Lookuper lookuper = table.newLookup().createLookuper();
+        assertThatRow(lookupRow(lookuper, row("us", 1, eventTime, 10)))
+                .withSchema(afterAlter.getRowType())
+                .isEqualTo(row);
+        assertThat(afterAlter.getSchema().getColumns()).hasSize(schema.getColumns().size() + 1);
+    }
+
+    @Test
+    void testImplicitPartitionedPrimaryKeyTableLookupMissingPartitionAndOverwrite()
+            throws Exception {
+        TablePath tablePath =
+                TablePath.of("test_db_1", "test_implicit_partitioned_pk_overwrite_table_1");
+        Schema schema = createImplicitPartitionedTable(tablePath, true);
+        admin.createPartition(
+                        tablePath,
+                        newPartitionSpec(
+                                Arrays.asList("region", "event_day"),
+                                Arrays.asList("us", "20240315")),
+                        false)
+                .get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath, 1);
+        Table table = conn.getTable(tablePath);
+        UpsertWriter upsertWriter = table.newUpsert().createWriter();
+        TimestampNtz eventTime =
+                TimestampNtz.fromLocalDateTime(LocalDateTime.of(2024, 3, 15, 10, 30));
+        InternalRow oldRow = row(schema.getRowType(), "us", 1, eventTime, 10, "old-value");
+        InternalRow newRow = row(schema.getRowType(), "us", 1, eventTime, 10, "new-value");
+
+        upsertWriter.upsert(oldRow).get();
+        upsertWriter.upsert(newRow).get();
+        upsertWriter.flush();
+
+        Lookuper lookuper = table.newLookup().createLookuper();
+        assertThatRow(lookupRow(lookuper, row("us", 1, eventTime, 10)))
+                .withSchema(schema.getRowType())
+                .isEqualTo(newRow);
+
+        TimestampNtz missingPartitionEventTime =
+                TimestampNtz.fromLocalDateTime(LocalDateTime.of(2024, 3, 16, 10, 30));
+        assertThat(lookupRow(lookuper, row("us", 1, missingPartitionEventTime, 10))).isNull();
+    }
+
+    @Test
+    void testImplicitPartitionedPrimaryKeyTableDistinguishesSourceValuesInSamePartition()
+            throws Exception {
+        TablePath tablePath =
+                TablePath.of("test_db_1", "test_implicit_partitioned_pk_same_partition_table_1");
+        Schema schema = createImplicitPartitionedTable(tablePath, true);
+        admin.createPartition(
+                        tablePath,
+                        newPartitionSpec(
+                                Arrays.asList("region", "event_day"),
+                                Arrays.asList("us", "20240315")),
+                        false)
+                .get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath, 1);
+        Table table = conn.getTable(tablePath);
+        UpsertWriter upsertWriter = table.newUpsert().createWriter();
+        TimestampNtz firstEventTime =
+                TimestampNtz.fromLocalDateTime(LocalDateTime.of(2024, 3, 15, 10, 30));
+        TimestampNtz secondEventTime =
+                TimestampNtz.fromLocalDateTime(LocalDateTime.of(2024, 3, 15, 11, 30));
+        InternalRow firstRow = row(schema.getRowType(), "us", 1, firstEventTime, 10, "value-10");
+        InternalRow secondRow = row(schema.getRowType(), "us", 1, secondEventTime, 10, "value-11");
+
+        upsertWriter.upsert(firstRow).get();
+        upsertWriter.upsert(secondRow).get();
+        upsertWriter.flush();
+
+        Lookuper lookuper = table.newLookup().createLookuper();
+        assertThatRow(lookupRow(lookuper, row("us", 1, firstEventTime, 10)))
+                .withSchema(schema.getRowType())
+                .isEqualTo(firstRow);
+        assertThatRow(lookupRow(lookuper, row("us", 1, secondEventTime, 10)))
+                .withSchema(schema.getRowType())
+                .isEqualTo(secondRow);
+
+        upsertWriter.delete(row("us", 1, firstEventTime, 10)).get();
+        upsertWriter.flush();
+
+        assertThat(lookupRow(lookuper, row("us", 1, firstEventTime, 10))).isNull();
+        assertThatRow(lookupRow(lookuper, row("us", 1, secondEventTime, 10)))
+                .withSchema(schema.getRowType())
+                .isEqualTo(secondRow);
+    }
+
+    @Test
+    void testImplicitPartitionedPrimaryKeyPrefixLookupRequiresTransformSource() throws Exception {
+        TablePath tablePath =
+                TablePath.of("test_db_1", "test_implicit_partitioned_pk_prefix_table_1");
+        createImplicitPartitionedTable(tablePath, true);
+        Table table = conn.getTable(tablePath);
+
+        assertThatThrownBy(
+                        () ->
+                                table.newLookup()
+                                        .lookupBy(Arrays.asList("region", "id"))
+                                        .createLookuper())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must contain all partition fields [region, event_time]");
+    }
 
     @Test
     void testPartitionedPrimaryKeyTable() throws Exception {
@@ -236,6 +748,105 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
                                                 + "test_db_1.test_pk_table_1, only allow 10 partitions."));
     }
 
+    private List<PartitionInfo> waitForPartitionInfos(TablePath tablePath, int expectedSize)
+            throws Exception {
+        return waitValue(
+                () -> {
+                    List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
+                    if (partitionInfos.size() == expectedSize) {
+                        return Optional.of(partitionInfos);
+                    } else {
+                        return Optional.empty();
+                    }
+                },
+                Duration.ofMinutes(1),
+                "Fail to wait for the implicit partition created.");
+    }
+
+    private void assertPartitionReplicaDirectories(
+            TablePath tablePath, long tableId, long partitionId, String partitionName) {
+        String expectedPartitionDir = partitionName + "-p" + partitionId;
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    List<PhysicalTablePath> physicalTablePaths = new ArrayList<>();
+                    List<Path> logTabletDirs = new ArrayList<>();
+                    List<Path> kvTabletDirs = new ArrayList<>();
+                    FLUSS_CLUSTER_EXTENSION
+                            .getTabletServers()
+                            .forEach(
+                                    tabletServer ->
+                                            tabletServer
+                                                    .getReplicaManager()
+                                                    .onlineReplicas()
+                                                    .filter(
+                                                            replica ->
+                                                                    replica.getTableBucket()
+                                                                                    .getTableId()
+                                                                            == tableId)
+                                                    .filter(
+                                                            replica ->
+                                                                    Long.valueOf(partitionId)
+                                                                            .equals(
+                                                                                    replica.getTableBucket()
+                                                                                            .getPartitionId()))
+                                                    .forEach(
+                                                            replica -> {
+                                                                physicalTablePaths.add(
+                                                                        replica
+                                                                                .getPhysicalTablePath());
+                                                                logTabletDirs.add(
+                                                                        replica.getLogTablet()
+                                                                                .getLogDir()
+                                                                                .toPath());
+                                                                if (replica.getKvTablet() != null) {
+                                                                    kvTabletDirs.add(
+                                                                            replica.getKvTablet()
+                                                                                    .getKvTabletDir()
+                                                                                    .toPath());
+                                                                }
+                                                            }));
+                    assertThat(physicalTablePaths)
+                            .isNotEmpty()
+                            .containsOnly(PhysicalTablePath.of(tablePath, partitionName));
+                    assertThat(logTabletDirs)
+                            .isNotEmpty()
+                            .allSatisfy(
+                                    logTabletDir ->
+                                            assertTabletDir(
+                                                    logTabletDir,
+                                                    expectedPartitionDir,
+                                                    tablePath,
+                                                    tableId,
+                                                    LOG_TABLET_DIR_PREFIX));
+                    assertThat(kvTabletDirs)
+                            .isNotEmpty()
+                            .allSatisfy(
+                                    kvTabletDir ->
+                                            assertTabletDir(
+                                                    kvTabletDir,
+                                                    expectedPartitionDir,
+                                                    tablePath,
+                                                    tableId,
+                                                    KV_TABLET_DIR_PREFIX));
+                });
+    }
+
+    private void assertTabletDir(
+            Path tabletDir,
+            String expectedPartitionDir,
+            TablePath tablePath,
+            long tableId,
+            String tabletDirPrefix) {
+        assertThat(tabletDir).exists().isDirectory();
+        assertThat(tabletDir.getFileName().toString()).startsWith(tabletDirPrefix);
+        assertThat(tabletDir.getParent().getFileName().toString()).isEqualTo(expectedPartitionDir);
+        assertThat(tabletDir.getParent().getParent().getFileName().toString())
+                .isEqualTo(tablePath.getTableName() + "-" + tableId);
+        assertThat(tabletDir.getParent().getParent().getParent().getFileName().toString())
+                .isEqualTo(tablePath.getDatabaseName());
+    }
+
     private Schema createPartitionedTable(TablePath tablePath, boolean isPrimaryTable)
             throws Exception {
         Schema.Builder schemaBuilder =
@@ -256,6 +867,41 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
         TableDescriptor partitionTableDescriptor =
                 TableDescriptor.builder().schema(schema).partitionedBy("c").build();
         createTable(tablePath, partitionTableDescriptor, false);
+        return schema;
+    }
+
+    private Schema createImplicitPartitionedTable(TablePath tablePath, boolean isPrimaryTable)
+            throws Exception {
+        Schema.Builder schemaBuilder =
+                Schema.newBuilder()
+                        .column("region", DataTypes.STRING())
+                        .column("id", DataTypes.INT())
+                        .column("event_time", DataTypes.TIMESTAMP().copy(false))
+                        .column("seq", DataTypes.INT())
+                        .column("payload", DataTypes.STRING());
+
+        if (isPrimaryTable) {
+            schemaBuilder.primaryKey("region", "id", "event_time", "seq");
+        }
+
+        Schema schema = schemaBuilder.build();
+        TableDescriptor.Builder tableDescriptorBuilder =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .partitionedByKeys(
+                                PartitionKey.column("region"),
+                                PartitionKey.expression(
+                                        PartitionExpression.of(
+                                                "event_day",
+                                                DateTruncPartitionTransform.of(
+                                                        "event_time", AutoPartitionTimeUnit.DAY))));
+        if (isPrimaryTable) {
+            tableDescriptorBuilder.distributedBy(2, "id", "event_time");
+        } else {
+            tableDescriptorBuilder.distributedBy(1);
+        }
+        TableDescriptor tableDescriptor = tableDescriptorBuilder.build();
+        createTable(tablePath, tableDescriptor, false);
         return schema;
     }
 }

@@ -168,6 +168,10 @@ public class PaimonConversions {
         // validate paimon options first
         validatePaimonOptions(tableDescriptor.getProperties());
         validatePaimonOptions(tableDescriptor.getCustomProperties());
+        if (tableDescriptor.hasPartitionExpressions()) {
+            throw new UnsupportedOperationException(
+                    "Paimon lake tables do not support implicit partition expressions yet.");
+        }
 
         Schema.Builder schemaBuilder = Schema.newBuilder();
         Options options = new Options();

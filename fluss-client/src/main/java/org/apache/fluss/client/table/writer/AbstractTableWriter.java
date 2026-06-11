@@ -17,7 +17,6 @@
 
 package org.apache.fluss.client.table.writer;
 
-import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.client.write.WriteRecord;
 import org.apache.fluss.client.write.WriterClient;
 import org.apache.fluss.config.ConfigOptions;
@@ -26,6 +25,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.utils.PartitionComputer;
 
 import javax.annotation.Nullable;
 
@@ -38,16 +38,16 @@ public abstract class AbstractTableWriter implements TableWriter {
     protected final TablePath tablePath;
     protected final WriterClient writerClient;
     protected final int fieldCount;
-    private final @Nullable PartitionGetter partitionFieldGetter;
+    private final @Nullable PartitionComputer partitionComputer;
 
     protected AbstractTableWriter(
             TablePath tablePath, TableInfo tableInfo, WriterClient writerClient) {
         this.tablePath = tablePath;
         this.writerClient = writerClient;
         this.fieldCount = tableInfo.getRowType().getFieldCount();
-        this.partitionFieldGetter =
+        this.partitionComputer =
                 tableInfo.isPartitioned()
-                        ? new PartitionGetter(tableInfo.getRowType(), tableInfo.getPartitionKeys())
+                        ? new PartitionComputer(tableInfo, tableInfo.getRowType())
                         : null;
     }
 
@@ -108,11 +108,11 @@ public abstract class AbstractTableWriter implements TableWriter {
 
     protected PhysicalTablePath getPhysicalPath(InternalRow row) {
         // not partitioned table, return the original physical path
-        if (partitionFieldGetter == null) {
+        if (partitionComputer == null) {
             return PhysicalTablePath.of(tablePath);
         } else {
             // partitioned table, extract partition from the row
-            String partition = partitionFieldGetter.getPartition(row);
+            String partition = partitionComputer.getPartition(row);
             return PhysicalTablePath.of(tablePath, partition);
         }
     }
