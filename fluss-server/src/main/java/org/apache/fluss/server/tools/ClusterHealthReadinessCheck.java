@@ -19,6 +19,7 @@ package org.apache.fluss.server.tools;
 
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.metrics.registry.MetricRegistryImpl;
@@ -230,6 +231,9 @@ public final class ClusterHealthReadinessCheck {
         if (authString == null || authString.trim().isEmpty()) {
             return conf;
         }
+        // Enable plugin discovery so the client authenticator can discover authentication
+        // plugins shipped in the server's plugins/ directory.
+        conf.setBoolean(ConfigOptions.CLIENT_SECURITY_ENABLE_PLUGIN_DISCOVERY, true);
         for (String pair : authString.split(";")) {
             String trimmed = pair.trim();
             if (trimmed.isEmpty()) {

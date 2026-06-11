@@ -1291,6 +1291,18 @@ public class ConfigOptions {
                     .withDescription(
                             "The authentication protocol used to authenticate the client.");
 
+    public static final ConfigOption<Boolean> CLIENT_SECURITY_ENABLE_PLUGIN_DISCOVERY =
+            key("client.security.enable-plugin-discovery")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "When set to true, the client will additionally discover "
+                                    + "authentication plugins from the configured plugins/ folder "
+                                    + "via the PluginManager, in addition to the default classpath. "
+                                    + "This is useful for standalone tools or scripts that run outside "
+                                    + "the server JVM but still need to load authentication plugins "
+                                    + "shipped in plugins/.");
+
     public static final ConfigOption<MemorySize> CLIENT_SCANNER_LOG_FETCH_MAX_BYTES =
             key("client.scanner.log.fetch.max-bytes")
                     .memoryType()
