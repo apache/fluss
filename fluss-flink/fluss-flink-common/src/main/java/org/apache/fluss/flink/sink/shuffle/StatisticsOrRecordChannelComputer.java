@@ -20,16 +20,17 @@ package org.apache.fluss.flink.sink.shuffle;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.bucketing.BucketingFunction;
-import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.flink.row.RowWithOp;
 import org.apache.fluss.flink.sink.ChannelComputer;
 import org.apache.fluss.flink.sink.serializer.FlussSerializationSchema;
 import org.apache.fluss.flink.sink.serializer.SerializerInitContextImpl;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.PartitionExpression;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.encode.KeyEncoder;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.PartitionComputer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,6 +38,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -62,12 +64,13 @@ public class StatisticsOrRecordChannelComputer<InputT>
     private final RowType flussRowType;
     private final List<String> bucketKeys;
     private final List<String> partitionKeys;
+    private final List<PartitionExpression> partitionExpressions;
     private final FlussSerializationSchema<InputT> serializationSchema;
     private final int bucketNum;
 
     private transient int downstreamNumChannels;
     private transient KeyEncoder bucketKeyEncoder;
-    private transient PartitionGetter partitionGetter;
+    private transient PartitionComputer partitionComputer;
     private transient MapPartitioner delegatePartitioner;
     private transient AtomicLong roundRobinCounter;
     private transient BucketingFunction bucketingFunction;
@@ -80,12 +83,31 @@ public class StatisticsOrRecordChannelComputer<InputT>
             int bucketNum,
             @Nullable DataLakeFormat lakeFormat,
             FlussSerializationSchema<InputT> serializationSchema) {
+        this(
+                flussRowType,
+                bucketKeys,
+                partitionKeys,
+                Collections.emptyList(),
+                bucketNum,
+                lakeFormat,
+                serializationSchema);
+    }
+
+    public StatisticsOrRecordChannelComputer(
+            RowType flussRowType,
+            List<String> bucketKeys,
+            List<String> partitionKeys,
+            List<PartitionExpression> partitionExpressions,
+            int bucketNum,
+            @Nullable DataLakeFormat lakeFormat,
+            FlussSerializationSchema<InputT> serializationSchema) {
         checkArgument(
                 partitionKeys != null && !partitionKeys.isEmpty(),
                 "Partition keys cannot be empty.");
         this.flussRowType = flussRowType;
         this.bucketKeys = bucketKeys;
         this.partitionKeys = partitionKeys;
+        this.partitionExpressions = partitionExpressions;
         this.bucketNum = bucketNum;
         this.lakeFormat = lakeFormat;
         this.serializationSchema = serializationSchema;
@@ -97,7 +119,8 @@ public class StatisticsOrRecordChannelComputer<InputT>
         this.downstreamNumChannels = numChannels;
         this.bucketingFunction = BucketingFunction.of(lakeFormat);
         this.bucketKeyEncoder = KeyEncoder.ofBucketKeyEncoder(flussRowType, bucketKeys, lakeFormat);
-        this.partitionGetter = new PartitionGetter(flussRowType, partitionKeys);
+        this.partitionComputer =
+                new PartitionComputer(partitionKeys, partitionExpressions, flussRowType);
         try {
             this.serializationSchema.open(new SerializerInitContextImpl(flussRowType, false));
         } catch (Exception e) {
@@ -125,7 +148,7 @@ public class StatisticsOrRecordChannelComputer<InputT>
 
                 RowWithOp rowWithOp = serializationSchema.serialize(wrapper.record());
                 InternalRow row = rowWithOp.getRow();
-                String partitionName = partitionGetter.getPartition(row);
+                String partitionName = partitionComputer.getPartition(row);
                 return delegatePartitioner.select(partitionName, row, downstreamNumChannels);
             }
         } catch (Exception e) {

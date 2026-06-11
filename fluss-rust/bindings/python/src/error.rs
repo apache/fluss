@@ -70,14 +70,18 @@ impl FlussError {
     }
 
     pub fn from_core_error(error: &Error) -> PyErr {
-        // Transport failures map to `NetworkException` (Java parity,
-        // retriable).
-        let (msg, code) = match error {
-            Error::FlussAPIError { api_error } => (api_error.message.clone(), api_error.code),
-            Error::RpcError { .. } => (error.to_string(), CoreFlussError::NetworkException.code()),
-            _ => (error.to_string(), CLIENT_ERROR_CODE),
-        };
+        let (msg, code) = core_error_details(error);
         PyErr::new::<FlussError, _>((msg, code))
+    }
+}
+
+/// Converts a core error to the message and code exposed by the Python binding.
+fn core_error_details(error: &Error) -> (String, i32) {
+    // Transport failures map to `NetworkException` (Java parity, retriable).
+    match error {
+        Error::FlussAPIError { api_error } => (api_error.message.clone(), api_error.code),
+        Error::RpcError { .. } => (error.to_string(), CoreFlussError::NetworkException.code()),
+        _ => (error.to_string(), CLIENT_ERROR_CODE),
     }
 }
 
@@ -273,4 +277,20 @@ impl ErrorCode {
     /// Deletion operations are disabled on this table.
     #[classattr]
     const DELETION_DISABLED_EXCEPTION: i32 = 57;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preserves_implicit_partition_unsupported_operation_from_core() {
+        let message = "Rust client v1 does not support append for implicit partitioned Fluss tables. Full Rust PartitionComputer support is planned for v2.";
+        let (actual_message, code) = core_error_details(&Error::UnsupportedOperation {
+            message: message.to_string(),
+        });
+
+        assert!(actual_message.contains(message));
+        assert_eq!(code, CLIENT_ERROR_CODE);
+    }
 }

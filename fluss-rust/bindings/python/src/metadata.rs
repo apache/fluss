@@ -416,6 +416,21 @@ impl TableInfo {
         self.__table_info.get_partition_keys().to_vec()
     }
 
+    /// Check if the table has implicit partition expressions.
+    pub fn has_partition_expressions(&self) -> bool {
+        self.__table_info.has_partition_expressions()
+    }
+
+    /// Get virtual partition keys introduced by implicit partition expressions.
+    pub fn get_virtual_partition_keys(&self) -> Vec<String> {
+        self.__table_info.get_virtual_partition_keys()
+    }
+
+    /// Get physical partition keys, excluding implicit virtual partition keys.
+    pub fn get_physical_partition_keys(&self) -> Vec<String> {
+        self.__table_info.get_physical_partition_keys()
+    }
+
     /// Get number of buckets
     #[getter]
     pub fn num_buckets(&self) -> i32 {
@@ -763,5 +778,59 @@ impl DatabaseInfo {
 impl DatabaseInfo {
     pub fn from_core(info: fcore::metadata::DatabaseInfo) -> Self {
         Self { __info: info }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn table_info_exposes_implicit_partition_capability() {
+        let descriptor = fcore::metadata::TableDescriptor::builder()
+            .schema(
+                fcore::metadata::Schema::builder()
+                    .column("event_time", fcore::metadata::DataTypes::timestamp())
+                    .build()
+                    .unwrap(),
+            )
+            .partitioned_by(vec!["event_day"])
+            .partition_expressions(vec![fcore::metadata::PartitionExpression::new(
+                "event_day",
+                fcore::metadata::PartitionTransform::DateTrunc(
+                    fcore::metadata::DateTruncPartitionTransform::new(
+                        "event_time",
+                        "DAY",
+                        Some("UTC".to_string()),
+                    ),
+                ),
+            )])
+            .distributed_by(Some(1), Vec::new())
+            .build()
+            .unwrap();
+        let core_info = fcore::metadata::TableInfo::of(
+            fcore::metadata::TablePath::new("db".to_string(), "tbl".to_string()),
+            1,
+            1,
+            descriptor,
+            0,
+            0,
+        );
+
+        let table_info = TableInfo::from_core(core_info);
+
+        assert!(table_info.has_partition_expressions());
+        assert_eq!(
+            table_info.get_partition_keys(),
+            vec!["event_day".to_string()]
+        );
+        assert_eq!(
+            table_info.get_virtual_partition_keys(),
+            vec!["event_day".to_string()]
+        );
+        assert_eq!(
+            table_info.get_physical_partition_keys(),
+            Vec::<String>::new()
+        );
     }
 }

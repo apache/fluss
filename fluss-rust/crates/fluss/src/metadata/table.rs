@@ -552,12 +552,77 @@ impl TableDistribution {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DateTruncPartitionTransform {
+    source_column: String,
+    unit: String,
+    time_zone: Option<String>,
+}
+
+impl DateTruncPartitionTransform {
+    pub fn new<S: Into<String>, U: Into<String>>(
+        source_column: S,
+        unit: U,
+        time_zone: Option<String>,
+    ) -> Self {
+        Self {
+            source_column: source_column.into(),
+            unit: unit.into(),
+            time_zone,
+        }
+    }
+
+    pub fn source_column(&self) -> &str {
+        &self.source_column
+    }
+
+    pub fn unit(&self) -> &str {
+        &self.unit
+    }
+
+    pub fn time_zone(&self) -> Option<&str> {
+        self.time_zone.as_deref()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PartitionTransform {
+    DateTrunc(DateTruncPartitionTransform),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PartitionExpression {
+    virtual_partition_spec_key: String,
+    transform: PartitionTransform,
+}
+
+impl PartitionExpression {
+    pub fn new<S: Into<String>>(
+        virtual_partition_spec_key: S,
+        transform: PartitionTransform,
+    ) -> Self {
+        Self {
+            virtual_partition_spec_key: virtual_partition_spec_key.into(),
+            transform,
+        }
+    }
+
+    pub fn virtual_partition_spec_key(&self) -> &str {
+        &self.virtual_partition_spec_key
+    }
+
+    pub fn transform(&self) -> &PartitionTransform {
+        &self.transform
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct TableDescriptorBuilder {
     schema: Option<Schema>,
     properties: HashMap<String, String>,
     custom_properties: HashMap<String, String>,
     partition_keys: Arc<[String]>,
+    partition_expressions: Arc<[PartitionExpression]>,
     comment: Option<String>,
     table_distribution: Option<TableDistribution>,
 }
@@ -624,6 +689,14 @@ impl TableDescriptorBuilder {
         self
     }
 
+    pub fn partition_expressions(
+        mut self,
+        partition_expressions: Vec<PartitionExpression>,
+    ) -> Self {
+        self.partition_expressions = Arc::from(partition_expressions);
+        self
+    }
+
     pub fn distributed_by(mut self, bucket_count: Option<i32>, bucket_keys: Vec<String>) -> Self {
         self.table_distribution = Some(TableDistribution {
             bucket_count,
@@ -639,15 +712,20 @@ impl TableDescriptorBuilder {
 
     pub fn build(self) -> Result<TableDescriptor> {
         let schema = self.schema.expect("Schema must be set");
+        let physical_partition_keys = TableDescriptor::physical_partition_keys_of(
+            &self.partition_keys,
+            &self.partition_expressions,
+        );
         let table_distribution = TableDescriptor::normalize_distribution(
             &schema,
-            &self.partition_keys,
+            &physical_partition_keys,
             self.table_distribution,
         )?;
         Ok(TableDescriptor {
             schema,
             comment: self.comment,
             partition_keys: self.partition_keys,
+            partition_expressions: self.partition_expressions,
             table_distribution,
             properties: self.properties,
             custom_properties: self.custom_properties,
@@ -660,6 +738,7 @@ pub struct TableDescriptor {
     schema: Schema,
     comment: Option<String>,
     partition_keys: Arc<[String]>,
+    partition_expressions: Arc<[PartitionExpression]>,
     table_distribution: Option<TableDistribution>,
     properties: HashMap<String, String>,
     custom_properties: HashMap<String, String>,
@@ -686,7 +765,7 @@ impl TableDescriptor {
             Ok(self.bucket_keys()
                 == Self::default_bucket_key_of_primary_key_table(
                     self.schema(),
-                    &self.partition_keys,
+                    &self.get_physical_partition_keys(),
                 )?
                 .iter()
                 .map(|s| s.as_str())
@@ -706,6 +785,25 @@ impl TableDescriptor {
 
     pub fn partition_keys(&self) -> &[String] {
         &self.partition_keys
+    }
+
+    pub fn partition_expressions(&self) -> &[PartitionExpression] {
+        &self.partition_expressions
+    }
+
+    pub fn has_partition_expressions(&self) -> bool {
+        !self.partition_expressions.is_empty()
+    }
+
+    pub fn get_virtual_partition_keys(&self) -> Vec<String> {
+        self.partition_expressions
+            .iter()
+            .map(|expr| expr.virtual_partition_spec_key.clone())
+            .collect()
+    }
+
+    pub fn get_physical_partition_keys(&self) -> Vec<String> {
+        Self::physical_partition_keys_of(&self.partition_keys, &self.partition_expressions)
     }
 
     pub fn table_distribution(&self) -> Option<&TableDistribution> {
@@ -790,6 +888,21 @@ impl TableDescriptor {
         }
 
         Ok(bucket_keys)
+    }
+
+    fn physical_partition_keys_of(
+        partition_keys: &[String],
+        partition_expressions: &[PartitionExpression],
+    ) -> Vec<String> {
+        let virtual_partition_keys: HashSet<&str> = partition_expressions
+            .iter()
+            .map(|expr| expr.virtual_partition_spec_key())
+            .collect();
+        partition_keys
+            .iter()
+            .filter(|key| !virtual_partition_keys.contains(key.as_str()))
+            .cloned()
+            .collect()
     }
 
     fn normalize_distribution(
@@ -1055,6 +1168,7 @@ pub struct TableInfo {
     pub physical_primary_keys: Vec<String>,
     pub bucket_keys: Vec<String>,
     pub partition_keys: Arc<[String]>,
+    pub partition_expressions: Arc<[PartitionExpression]>,
     pub num_buckets: i32,
     pub properties: HashMap<String, String>,
     pub table_config: TableConfig,
@@ -1215,6 +1329,7 @@ impl TableInfo {
             table_distribution,
             comment,
             partition_keys,
+            partition_expressions,
             properties,
             custom_properties,
         } = table_descriptor;
@@ -1222,13 +1337,14 @@ impl TableInfo {
             bucket_count,
             bucket_keys,
         } = table_distribution.unwrap();
-        TableInfo::new(
+        TableInfo::new_with_partition_expressions(
             table_path,
             table_id,
             schema_id,
             schema,
             bucket_keys,
             partition_keys,
+            partition_expressions,
             bucket_count.unwrap(),
             properties,
             custom_properties,
@@ -1253,14 +1369,49 @@ impl TableInfo {
         created_time: i64,
         modified_time: i64,
     ) -> Self {
+        Self::new_with_partition_expressions(
+            table_path,
+            table_id,
+            schema_id,
+            schema,
+            bucket_keys,
+            partition_keys,
+            Arc::from(Vec::<PartitionExpression>::new()),
+            num_buckets,
+            properties,
+            custom_properties,
+            comment,
+            created_time,
+            modified_time,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_partition_expressions(
+        table_path: TablePath,
+        table_id: TableId,
+        schema_id: i32,
+        schema: Schema,
+        bucket_keys: Vec<String>,
+        partition_keys: Arc<[String]>,
+        partition_expressions: Arc<[PartitionExpression]>,
+        num_buckets: i32,
+        properties: HashMap<String, String>,
+        custom_properties: HashMap<String, String>,
+        comment: Option<String>,
+        created_time: i64,
+        modified_time: i64,
+    ) -> Self {
         let row_type = schema.row_type.clone();
         let primary_keys: Vec<String> = schema
             .primary_key_column_names()
             .iter()
             .map(|col| (*col).to_string())
             .collect();
+        let physical_partition_keys =
+            TableDescriptor::physical_partition_keys_of(&partition_keys, &partition_expressions);
         let physical_primary_keys =
-            Self::generate_physical_primary_key(&primary_keys, &partition_keys);
+            Self::generate_physical_primary_key(&primary_keys, &physical_partition_keys);
         let table_config = TableConfig::from_properties(properties.clone());
 
         TableInfo {
@@ -1273,6 +1424,7 @@ impl TableInfo {
             physical_primary_keys,
             bucket_keys,
             partition_keys,
+            partition_expressions,
             num_buckets,
             properties,
             table_config,
@@ -1347,6 +1499,28 @@ impl TableInfo {
         &self.partition_keys
     }
 
+    pub fn get_partition_expressions(&self) -> &Arc<[PartitionExpression]> {
+        &self.partition_expressions
+    }
+
+    pub fn has_partition_expressions(&self) -> bool {
+        !self.partition_expressions.is_empty()
+    }
+
+    pub fn get_virtual_partition_keys(&self) -> Vec<String> {
+        self.partition_expressions
+            .iter()
+            .map(|expr| expr.virtual_partition_spec_key.clone())
+            .collect()
+    }
+
+    pub fn get_physical_partition_keys(&self) -> Vec<String> {
+        TableDescriptor::physical_partition_keys_of(
+            &self.partition_keys,
+            &self.partition_expressions,
+        )
+    }
+
     pub fn get_num_buckets(&self) -> i32 {
         self.num_buckets
     }
@@ -1379,6 +1553,7 @@ impl TableInfo {
         let mut builder = TableDescriptor::builder()
             .schema(self.schema.clone())
             .partitioned_by(self.partition_keys.to_vec())
+            .partition_expressions(self.partition_expressions.to_vec())
             .distributed_by(Some(self.num_buckets), self.bucket_keys.clone())
             .properties(self.properties.clone())
             .custom_properties(self.custom_properties.clone());
@@ -1406,7 +1581,7 @@ impl Display for TableInfo {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "TableInfo{{ table_path={:?}, table_id={}, schema_id={}, schema={:?}, physical_primary_keys={:?}, bucket_keys={:?}, partition_keys={:?}, num_buckets={}, properties={:?}, custom_properties={:?}, comment={:?}, created_time={}, modified_time={} }}",
+            "TableInfo{{ table_path={:?}, table_id={}, schema_id={}, schema={:?}, physical_primary_keys={:?}, bucket_keys={:?}, partition_keys={:?}, partition_expressions={:?}, num_buckets={}, properties={:?}, custom_properties={:?}, comment={:?}, created_time={}, modified_time={} }}",
             self.table_path,
             self.table_id,
             self.schema_id,
@@ -1414,6 +1589,7 @@ impl Display for TableInfo {
             self.physical_primary_keys,
             self.bucket_keys,
             self.partition_keys,
+            self.partition_expressions,
             self.num_buckets,
             self.properties,
             self.custom_properties,
@@ -1527,6 +1703,68 @@ impl LakeSnapshot {
 mod tests {
     use super::*;
     use crate::metadata::DataTypes;
+
+    #[test]
+    fn table_info_preserves_implicit_partition_metadata() {
+        let descriptor = TableDescriptor::builder()
+            .schema(
+                Schema::builder()
+                    .column("id", DataTypes::int())
+                    .column("event_time", DataTypes::timestamp())
+                    .primary_key(vec!["id".to_string(), "event_time".to_string()])
+                    .build()
+                    .unwrap(),
+            )
+            .partitioned_by(vec!["event_day"])
+            .partition_expressions(vec![PartitionExpression::new(
+                "event_day",
+                PartitionTransform::DateTrunc(DateTruncPartitionTransform::new(
+                    "event_time",
+                    "DAY",
+                    Some("UTC".to_string()),
+                )),
+            )])
+            .distributed_by(Some(1), vec!["id".to_string(), "event_time".to_string()])
+            .build()
+            .unwrap();
+
+        let table_info = TableInfo::of(
+            TablePath::new("db".to_string(), "tbl".to_string()),
+            1,
+            1,
+            descriptor,
+            0,
+            0,
+        );
+
+        assert!(table_info.has_partition_expressions());
+        assert_eq!(
+            table_info.get_partition_keys().as_ref(),
+            &["event_day".to_string()]
+        );
+        assert_eq!(
+            table_info.get_virtual_partition_keys(),
+            vec!["event_day".to_string()]
+        );
+        assert_eq!(
+            table_info.get_physical_partition_keys(),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            table_info.get_primary_keys(),
+            &vec!["id".to_string(), "event_time".to_string()]
+        );
+        assert_eq!(
+            table_info.get_physical_primary_keys(),
+            &vec!["id".to_string(), "event_time".to_string()]
+        );
+
+        let round_tripped = table_info.to_table_descriptor().unwrap();
+        assert_eq!(
+            round_tripped.partition_expressions(),
+            table_info.get_partition_expressions().as_ref()
+        );
+    }
 
     #[test]
     fn test_validate() {

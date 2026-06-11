@@ -19,6 +19,7 @@ package org.apache.fluss.flink.sink.shuffle;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.flink.sink.serializer.FlussSerializationSchema;
+import org.apache.fluss.metadata.PartitionExpression;
 import org.apache.fluss.types.RowType;
 
 import org.apache.flink.runtime.jobgraph.OperatorID;
@@ -30,6 +31,7 @@ import org.apache.flink.streaming.api.operators.OneInputStreamOperatorFactory;
 import org.apache.flink.streaming.api.operators.StreamOperator;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
 
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -45,14 +47,24 @@ public class DataStatisticsOperatorFactory<InputT>
 
     private final RowType rowType;
     private final List<String> partitionKeys;
+    private final List<PartitionExpression> partitionExpressions;
     private final FlussSerializationSchema<InputT> flussSerializationSchema;
 
     public DataStatisticsOperatorFactory(
             RowType rowType,
             List<String> partitionKeys,
             FlussSerializationSchema<InputT> flussSerializationSchema) {
+        this(rowType, partitionKeys, Collections.emptyList(), flussSerializationSchema);
+    }
+
+    public DataStatisticsOperatorFactory(
+            RowType rowType,
+            List<String> partitionKeys,
+            List<PartitionExpression> partitionExpressions,
+            FlussSerializationSchema<InputT> flussSerializationSchema) {
         this.rowType = rowType;
         this.partitionKeys = partitionKeys;
+        this.partitionExpressions = partitionExpressions;
         this.flussSerializationSchema = flussSerializationSchema;
     }
 
@@ -77,6 +89,7 @@ public class DataStatisticsOperatorFactory<InputT>
                         operatorName,
                         rowType,
                         partitionKeys,
+                        partitionExpressions,
                         gateway,
                         flussSerializationSchema);
         parameters

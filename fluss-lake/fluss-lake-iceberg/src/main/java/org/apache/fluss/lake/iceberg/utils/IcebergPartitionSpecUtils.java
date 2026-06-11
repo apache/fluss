@@ -19,12 +19,16 @@ package org.apache.fluss.lake.iceberg.utils;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.metadata.DateTruncPartitionTransform;
+import org.apache.fluss.metadata.PartitionExpression;
 import org.apache.fluss.metadata.TableDescriptor;
 
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.iceberg.types.Type.TypeID.STRING;
@@ -51,6 +55,7 @@ public final class IcebergPartitionSpecUtils {
                 tableDescriptor.hasPrimaryKey(),
                 tableDescriptor.getBucketKeys(),
                 tableDescriptor.getPartitionKeys(),
+                tableDescriptor.getPartitionExpressions(),
                 bucketCount);
     }
 
@@ -59,6 +64,7 @@ public final class IcebergPartitionSpecUtils {
             boolean isPrimaryKeyTable,
             List<String> bucketKeys,
             List<String> partitionKeys,
+            List<PartitionExpression> partitionExpressions,
             int bucketCount) {
         if (bucketKeys.size() > 1) {
             throw new UnsupportedOperationException(
@@ -71,14 +77,26 @@ public final class IcebergPartitionSpecUtils {
         }
 
         PartitionSpec.Builder builder = PartitionSpec.builderFor(icebergSchema);
-        for (String partitionKey : partitionKeys) {
-            if (!icebergSchema.findType(partitionKey).typeId().equals(STRING)) {
+        Map<String, DateTruncPartitionTransform> transformByPartitionKey = new HashMap<>();
+        for (PartitionExpression partitionExpression : partitionExpressions) {
+            transformByPartitionKey.put(
+                    partitionExpression.getVirtualPartitionSpecKey().get(),
+                    (DateTruncPartitionTransform) partitionExpression.getTransform());
+        }
+        for (int i = 0; i < partitionKeys.size(); i++) {
+            String partitionKey = partitionKeys.get(i);
+            DateTruncPartitionTransform transform = transformByPartitionKey.get(partitionKey);
+            if (transform != null) {
+                addIcebergTimeTransform(
+                        builder, transform, "__fluss_implicit_partition_" + i);
+            } else if (!icebergSchema.findType(partitionKey).typeId().equals(STRING)) {
                 throw new InvalidTableException(
                         String.format(
                                 "Partition key only support string type for iceberg currently. Column `%s` is not string type.",
                                 partitionKey));
+            } else {
+                builder.identity(partitionKey);
             }
-            builder.identity(partitionKey);
         }
 
         if (bucketKeys.isEmpty()) {
@@ -89,5 +107,30 @@ public final class IcebergPartitionSpecUtils {
             builder.bucket(bucketKeys.get(0), bucketCount);
         }
         return builder.build();
+    }
+
+    private static void addIcebergTimeTransform(
+            PartitionSpec.Builder builder,
+            DateTruncPartitionTransform transform,
+            String partitionFieldName) {
+        switch (transform.getTimeUnit()) {
+            case HOUR:
+                builder.hour(transform.getSourceColumn(), partitionFieldName);
+                break;
+            case DAY:
+                builder.day(transform.getSourceColumn(), partitionFieldName);
+                break;
+            case MONTH:
+                builder.month(transform.getSourceColumn(), partitionFieldName);
+                break;
+            case YEAR:
+                builder.year(transform.getSourceColumn(), partitionFieldName);
+                break;
+            case QUARTER:
+            default:
+                throw new InvalidTableException(
+                        "Iceberg does not have an equivalent native partition transform for "
+                                + transform.getTimeUnit());
+        }
     }
 }

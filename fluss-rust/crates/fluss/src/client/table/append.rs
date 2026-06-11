@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::client::table::partition_getter::{PartitionGetter, get_physical_path};
+use crate::client::table::unsupported_implicit_partition_operation;
 use crate::client::{WriteRecord, WriteResultFuture, WriterClient};
 use crate::error::Error::IllegalArgument;
 use crate::error::Result;
@@ -44,6 +45,9 @@ impl TableAppend {
     }
 
     pub fn create_writer(&self) -> Result<AppendWriter> {
+        if self.table_info.has_partition_expressions() {
+            return Err(unsupported_implicit_partition_operation("append"));
+        }
         let partition_getter = if self.table_info.is_partitioned() {
             Some(PartitionGetter::new(
                 self.table_info.row_type(),

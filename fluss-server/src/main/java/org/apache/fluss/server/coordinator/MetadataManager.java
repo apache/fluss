@@ -526,6 +526,7 @@ public class MetadataManager {
                     getUpdatedTableDescriptor(tableDescriptor, tablePropertyChanges);
 
             if (newDescriptor != null) {
+                newDescriptor = CoordinatorService.applyImplicitPartitionDefaults(newDescriptor);
                 // is to enable datalake for the table
                 if (isDataLakeEnabled(newDescriptor) && !isDataLakeEnabled(tableDescriptor)) {
                     // The table was created before cluster-level datalake was enabled.
@@ -600,6 +601,7 @@ public class MetadataManager {
             // to enable lake table
             if (!isDataLakeEnabled(tableDescriptor)) {
                 // before create table in fluss, we may create in lake
+                lakeCatalog.validateTable(newDescriptor, lakeCatalogContext);
                 try {
                     lakeCatalog.createTable(tablePath, newDescriptor, lakeCatalogContext);
                 } catch (TableAlreadyExistException e) {

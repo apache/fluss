@@ -22,12 +22,14 @@ import org.apache.fluss.annotation.PublicStable;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.ConfigurationUtils;
+import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 import org.apache.fluss.utils.json.TableDescriptorJsonSerde;
 
 import javax.annotation.Nullable;
 
 import java.io.Serializable;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -72,6 +74,7 @@ public final class TableDescriptor implements Serializable {
     private final Schema schema;
     private final @Nullable String comment;
     private final List<String> partitionKeys;
+    private final List<PartitionExpression> partitionExpressions;
     private final @Nullable TableDistribution tableDistribution;
     private final Map<String, String> properties;
     private final Map<String, String> customProperties;
@@ -80,43 +83,39 @@ public final class TableDescriptor implements Serializable {
             Schema schema,
             @Nullable String comment,
             List<String> partitionKeys,
+            List<PartitionExpression> partitionExpressions,
             @Nullable TableDistribution tableDistribution,
             Map<String, String> properties,
             Map<String, String> customProperties) {
         this.schema = checkNotNull(schema, "schema must not be null.");
         this.comment = comment;
-        this.partitionKeys = checkNotNull(partitionKeys, "partition keys must not be null.");
+        this.partitionKeys =
+                Collections.unmodifiableList(
+                        new ArrayList<>(
+                                checkNotNull(partitionKeys, "partition keys must not be null.")));
+        this.partitionExpressions =
+                Collections.unmodifiableList(
+                        new ArrayList<>(
+                                checkNotNull(
+                                        partitionExpressions,
+                                        "partition expressions must not be null.")));
         this.properties = unmodifiableMap(checkNotNull(properties, "options must not be null."));
         this.customProperties =
                 unmodifiableMap(
                         checkNotNull(customProperties, "customProperties must not be null."));
 
-        // validate and normalize bucket keys.
-        this.tableDistribution = normalizeDistribution(schema, partitionKeys, tableDistribution);
+        validatePartitionMetadata(schema, this.partitionKeys, this.partitionExpressions);
+        List<String> physicalPartitionKeys =
+                getPhysicalPartitionKeys(this.partitionKeys, this.partitionExpressions);
 
-        // validate partition keys and bucket keys
+        // validate and normalize bucket keys.
+        this.tableDistribution =
+                normalizeDistribution(schema, physicalPartitionKeys, tableDistribution);
+
         Set<String> columnNames =
                 schema.getColumns().stream()
                         .map(Schema.Column::getName)
                         .collect(Collectors.toSet());
-        if (schema.getPrimaryKey().isPresent()) {
-            List<String> pkColumns = schema.getPrimaryKey().get().getColumnNames();
-            partitionKeys.forEach(
-                    f ->
-                            checkArgument(
-                                    pkColumns.contains(f),
-                                    "Partitioned Primary Key Table requires partition key %s is a subset of the primary key %s.",
-                                    partitionKeys,
-                                    pkColumns));
-        } else {
-            partitionKeys.forEach(
-                    f ->
-                            checkArgument(
-                                    columnNames.contains(f),
-                                    "Partition key '%s' does not exist in the schema.",
-                                    f));
-        }
-
         if (this.tableDistribution != null) {
             this.tableDistribution
                     .getBucketKeys()
@@ -169,7 +168,8 @@ public final class TableDescriptor implements Serializable {
      */
     public boolean isDefaultBucketKey() {
         if (schema.getPrimaryKey().isPresent()) {
-            return getBucketKeys().equals(defaultBucketKeyOfPrimaryKeyTable(schema, partitionKeys));
+            return getBucketKeys()
+                    .equals(defaultBucketKeyOfPrimaryKeyTable(schema, getPhysicalPartitionKeys()));
         } else {
             return getBucketKeys().isEmpty();
         }
@@ -190,13 +190,49 @@ public final class TableDescriptor implements Serializable {
     }
 
     /**
-     * Get the partition keys of the table. This will be an empty set if the table is not
-     * partitioned.
+     * Returns the ordered final partition spec keys.
      *
-     * @return partition keys of the table
+     * <p>The returned list may contain virtual keys produced by partition expressions. Use {@link
+     * #getPhysicalPartitionKeys()} when schema-backed partition columns are required.
      */
     public List<String> getPartitionKeys() {
         return partitionKeys;
+    }
+
+    /** Returns partition expressions for virtual partition keys. */
+    public List<PartitionExpression> getPartitionExpressions() {
+        return partitionExpressions;
+    }
+
+    /** Returns true when the table contains virtual partition expressions. */
+    public boolean hasPartitionExpressions() {
+        return !partitionExpressions.isEmpty();
+    }
+
+    /** Returns schema-backed physical partition keys only. */
+    public List<String> getPhysicalPartitionKeys() {
+        return getPhysicalPartitionKeys(partitionKeys, partitionExpressions);
+    }
+
+    /** Returns virtual partition spec keys only. */
+    public List<String> getVirtualPartitionKeys() {
+        return getVirtualPartitionKeys(partitionExpressions);
+    }
+
+    /** Returns physical columns referenced by partition transforms. */
+    public List<String> getPartitionSourceColumns() {
+        return getPartitionSourceColumns(partitionExpressions);
+    }
+
+    /** Returns physical columns required to compute partition specs. */
+    public List<String> getPartitionInputColumns() {
+        List<String> partitionInputColumns = new ArrayList<>(getPhysicalPartitionKeys());
+        for (String sourceColumn : getPartitionSourceColumns()) {
+            if (!partitionInputColumns.contains(sourceColumn)) {
+                partitionInputColumns.add(sourceColumn);
+            }
+        }
+        return partitionInputColumns;
     }
 
     /** Returns the distribution of the table if the {@code DISTRIBUTED} clause is defined. */
@@ -242,7 +278,13 @@ public final class TableDescriptor implements Serializable {
      */
     public TableDescriptor withProperties(Map<String, String> newProperties) {
         return new TableDescriptor(
-                schema, comment, partitionKeys, tableDistribution, newProperties, customProperties);
+                schema,
+                comment,
+                partitionKeys,
+                partitionExpressions,
+                tableDistribution,
+                newProperties,
+                customProperties);
     }
 
     /**
@@ -255,6 +297,7 @@ public final class TableDescriptor implements Serializable {
                 schema,
                 comment,
                 partitionKeys,
+                partitionExpressions,
                 tableDistribution,
                 newProperties,
                 newCustomProperties);
@@ -302,11 +345,48 @@ public final class TableDescriptor implements Serializable {
                 schema,
                 comment,
                 partitionKeys,
+                partitionExpressions,
                 new TableDistribution(
                         newBucketCount,
                         Optional.ofNullable(tableDistribution)
                                 .map(TableDistribution::getBucketKeys)
                                 .orElse(Collections.emptyList())),
+                properties,
+                customProperties);
+    }
+
+    /** Returns a copy whose implicit partition transforms have resolved time-zone metadata. */
+    public TableDescriptor withResolvedPartitionExpressionTimeZone(ZoneId defaultTimeZone) {
+        checkNotNull(defaultTimeZone, "default time zone must not be null.");
+        if (partitionExpressions.isEmpty()) {
+            return this;
+        }
+        List<PartitionExpression> resolvedPartitionExpressions = new ArrayList<>();
+        for (PartitionExpression partitionExpression : partitionExpressions) {
+            PartitionTransform transform = partitionExpression.getTransform();
+            if (transform instanceof DateTruncPartitionTransform) {
+                DateTruncPartitionTransform dateTruncTransform =
+                        (DateTruncPartitionTransform) transform;
+                DataTypeRoot sourceType =
+                        schema.getRowType()
+                                .getTypeAt(
+                                        schema.getRowType()
+                                                .getFieldIndex(
+                                                        dateTruncTransform.getSourceColumn()))
+                                .getTypeRoot();
+                if (sourceType == DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE
+                        && !dateTruncTransform.getTimeZone().isPresent()) {
+                    transform = dateTruncTransform.withTimeZone(defaultTimeZone);
+                }
+            }
+            resolvedPartitionExpressions.add(partitionExpression.withTransform(transform));
+        }
+        return new TableDescriptor(
+                schema,
+                comment,
+                partitionKeys,
+                resolvedPartitionExpressions,
+                tableDistribution,
                 properties,
                 customProperties);
     }
@@ -345,6 +425,7 @@ public final class TableDescriptor implements Serializable {
         return Objects.equals(schema, table.schema)
                 && Objects.equals(comment, table.comment)
                 && Objects.equals(partitionKeys, table.partitionKeys)
+                && Objects.equals(partitionExpressions, table.partitionExpressions)
                 && Objects.equals(tableDistribution, table.tableDistribution)
                 && Objects.equals(properties, table.properties)
                 && Objects.equals(customProperties, table.customProperties);
@@ -353,7 +434,13 @@ public final class TableDescriptor implements Serializable {
     @Override
     public int hashCode() {
         return Objects.hash(
-                schema, comment, partitionKeys, tableDistribution, properties, customProperties);
+                schema,
+                comment,
+                partitionKeys,
+                partitionExpressions,
+                tableDistribution,
+                properties,
+                customProperties);
     }
 
     @Override
@@ -366,6 +453,9 @@ public final class TableDescriptor implements Serializable {
                 + '\''
                 + ", partitionKeys="
                 + partitionKeys
+                + (partitionExpressions.isEmpty()
+                        ? ""
+                        : ", partitionExpressions=" + partitionExpressions)
                 + ", tableDistribution="
                 + tableDistribution
                 + ", properties="
@@ -380,17 +470,17 @@ public final class TableDescriptor implements Serializable {
     @Nullable
     private static TableDistribution normalizeDistribution(
             Schema schema,
-            List<String> partitionKeys,
+            List<String> physicalPartitionKeys,
             @Nullable TableDistribution originDistribution) {
         if (originDistribution != null) {
             // we may need to check and normalize bucket key
             List<String> bucketKeys = originDistribution.getBucketKeys();
             // bucket key shouldn't include partition key
-            if (bucketKeys.stream().anyMatch(partitionKeys::contains)) {
+            if (bucketKeys.stream().anyMatch(physicalPartitionKeys::contains)) {
                 throw new IllegalArgumentException(
                         String.format(
                                 "Bucket key %s shouldn't include any column in partition keys %s.",
-                                bucketKeys, partitionKeys));
+                                bucketKeys, physicalPartitionKeys));
             }
 
             // if primary key set
@@ -399,7 +489,7 @@ public final class TableDescriptor implements Serializable {
                 if (bucketKeys.isEmpty()) {
                     return new TableDistribution(
                             originDistribution.getBucketCount().orElse(null),
-                            defaultBucketKeyOfPrimaryKeyTable(schema, partitionKeys));
+                            defaultBucketKeyOfPrimaryKeyTable(schema, physicalPartitionKeys));
                 } else {
                     // check the provided bucket key
                     List<String> pkColumns = schema.getPrimaryKey().get().getColumnNames();
@@ -410,7 +500,7 @@ public final class TableDescriptor implements Serializable {
                                                 + "keys for primary-key tables. The primary keys are %s, the "
                                                 + "partition keys are %s, but "
                                                 + "the user-defined bucket keys are %s.",
-                                        pkColumns, partitionKeys, bucketKeys));
+                                        pkColumns, physicalPartitionKeys, bucketKeys));
                     }
                     return new TableDistribution(
                             originDistribution.getBucketCount().orElse(null), bucketKeys);
@@ -423,7 +513,7 @@ public final class TableDescriptor implements Serializable {
             // to primary key (exclude partition key if it is partitioned table)
             if (schema.getPrimaryKey().isPresent()) {
                 return new TableDistribution(
-                        null, defaultBucketKeyOfPrimaryKeyTable(schema, partitionKeys));
+                        null, defaultBucketKeyOfPrimaryKeyTable(schema, physicalPartitionKeys));
             } else {
                 return originDistribution;
             }
@@ -432,18 +522,168 @@ public final class TableDescriptor implements Serializable {
 
     /** The default bucket key of primary key table is the primary key excluding partition keys. */
     private static List<String> defaultBucketKeyOfPrimaryKeyTable(
-            Schema schema, List<String> partitionKeys) {
+            Schema schema, List<String> physicalPartitionKeys) {
         checkArgument(schema.getPrimaryKey().isPresent(), "Primary key must be set.");
         List<String> bucketKeys = new ArrayList<>(schema.getPrimaryKey().get().getColumnNames());
-        bucketKeys.removeAll(partitionKeys);
+        bucketKeys.removeAll(physicalPartitionKeys);
         if (bucketKeys.isEmpty()) {
             throw new IllegalArgumentException(
                     String.format(
                             "Primary Key constraint %s should not be same with partition fields %s.",
-                            schema.getPrimaryKey().get().getColumnNames(), partitionKeys));
+                            schema.getPrimaryKey().get().getColumnNames(), physicalPartitionKeys));
         }
 
         return bucketKeys;
+    }
+
+    private static void validatePartitionMetadata(
+            Schema schema,
+            List<String> partitionKeys,
+            List<PartitionExpression> partitionExpressions) {
+        Set<String> partitionKeySet = new HashSet<>(partitionKeys);
+        checkArgument(
+                partitionKeySet.size() == partitionKeys.size(),
+                "Duplicate partition keys are not allowed: %s.",
+                partitionKeys);
+
+        Set<String> columnNames =
+                schema.getColumns().stream()
+                        .map(Schema.Column::getName)
+                        .collect(Collectors.toSet());
+        List<String> virtualPartitionKeys = getVirtualPartitionKeys(partitionExpressions);
+        Set<String> virtualPartitionKeySet = new HashSet<>(virtualPartitionKeys);
+        checkArgument(
+                virtualPartitionKeySet.size() == virtualPartitionKeys.size(),
+                "Duplicate virtual partition spec keys are not allowed: %s.",
+                virtualPartitionKeys);
+
+        for (String virtualPartitionKey : virtualPartitionKeys) {
+            checkArgument(
+                    partitionKeySet.contains(virtualPartitionKey),
+                    "Virtual partition spec key '%s' is not present in partition keys %s.",
+                    virtualPartitionKey,
+                    partitionKeys);
+            if (columnNames.contains(virtualPartitionKey)) {
+                PartitionExpression expression =
+                        partitionExpressions.stream()
+                                .filter(
+                                        candidate ->
+                                                candidate
+                                                        .getVirtualPartitionSpecKey()
+                                                        .filter(virtualPartitionKey::equals)
+                                                        .isPresent())
+                                .findFirst()
+                                .get();
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Virtual partition spec key '%s' for transform %s conflicts with physical column '%s'. Specify a different virtual partition spec key explicitly with PartitionExpression.of(...).",
+                                virtualPartitionKey,
+                                expression.getTransform(),
+                                virtualPartitionKey));
+            }
+        }
+
+        List<String> physicalPartitionKeys =
+                getPhysicalPartitionKeys(partitionKeys, partitionExpressions);
+        for (String partitionKey : partitionKeys) {
+            if (!columnNames.contains(partitionKey)
+                    && !virtualPartitionKeySet.contains(partitionKey)) {
+                if (partitionExpressions.isEmpty()) {
+                    throw new IllegalArgumentException(
+                            String.format(
+                                    "Partition key '%s' does not exist in the schema.",
+                                    partitionKey));
+                }
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Partition key '%s' does not exist in the schema or partition expressions.",
+                                partitionKey));
+            }
+        }
+        for (String sourceColumn : getPartitionSourceColumns(partitionExpressions)) {
+            int sourceColumnIndex = schema.getRowType().getFieldIndex(sourceColumn);
+            checkArgument(
+                    sourceColumnIndex >= 0,
+                    "Partition transform source column '%s' does not exist in the schema.",
+                    sourceColumn);
+            checkArgument(
+                    !schema.getRowType().getTypeAt(sourceColumnIndex).isNullable(),
+                    "Partition transform source column '%s' must be non-nullable.",
+                    sourceColumn);
+        }
+        for (PartitionExpression partitionExpression : partitionExpressions) {
+            PartitionTransform transform = partitionExpression.getTransform();
+            if (transform instanceof DateTruncPartitionTransform) {
+                DateTruncPartitionTransform dateTruncTransform =
+                        (DateTruncPartitionTransform) transform;
+                int sourceColumnIndex =
+                        schema.getRowType().getFieldIndex(dateTruncTransform.getSourceColumn());
+                DataTypeRoot sourceType =
+                        sourceColumnIndex < 0
+                                ? null
+                                : schema.getRowType().getTypeAt(sourceColumnIndex).getTypeRoot();
+                if (sourceType == DataTypeRoot.DATE
+                        || sourceType == DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE) {
+                    checkArgument(
+                            !dateTruncTransform.getTimeZone().isPresent(),
+                            "DATE_TRUNC partition transform time zone is only supported for TIMESTAMP_LTZ source columns, but source column '%s' has type %s. TIMESTAMP_NTZ and DATE values are truncated directly as local calendar values.",
+                            dateTruncTransform.getSourceColumn(),
+                            schema.getRowType().getTypeAt(sourceColumnIndex));
+                }
+            }
+        }
+
+        if (schema.getPrimaryKey().isPresent()) {
+            List<String> pkColumns = schema.getPrimaryKey().get().getColumnNames();
+            for (String partitionKey : physicalPartitionKeys) {
+                checkArgument(
+                        pkColumns.contains(partitionKey),
+                        "Partitioned Primary Key Table requires physical partition keys %s is a subset of the primary key %s.",
+                        physicalPartitionKeys,
+                        pkColumns);
+            }
+            for (String sourceColumn : getPartitionSourceColumns(partitionExpressions)) {
+                checkArgument(
+                        pkColumns.contains(sourceColumn),
+                        "Partitioned Primary Key Table requires transform source column '%s' is in the primary key %s.",
+                        sourceColumn,
+                        pkColumns);
+            }
+        }
+    }
+
+    private static List<String> getPhysicalPartitionKeys(
+            List<String> partitionKeys, List<PartitionExpression> partitionExpressions) {
+        Set<String> virtualPartitionKeys =
+                new HashSet<>(getVirtualPartitionKeys(partitionExpressions));
+        return partitionKeys.stream()
+                .filter(partitionKey -> !virtualPartitionKeys.contains(partitionKey))
+                .collect(Collectors.toList());
+    }
+
+    private static List<String> getVirtualPartitionKeys(
+            List<PartitionExpression> partitionExpressions) {
+        List<String> virtualPartitionKeys = new ArrayList<>();
+        for (PartitionExpression partitionExpression : partitionExpressions) {
+            checkArgument(
+                    partitionExpression.getVirtualPartitionSpecKey().isPresent(),
+                    "Virtual partition expression must have a resolved partition spec key.");
+            virtualPartitionKeys.add(partitionExpression.getVirtualPartitionSpecKey().get());
+        }
+        return virtualPartitionKeys;
+    }
+
+    private static List<String> getPartitionSourceColumns(
+            List<PartitionExpression> partitionExpressions) {
+        List<String> sourceColumns = new ArrayList<>();
+        for (PartitionExpression partitionExpression : partitionExpressions) {
+            for (String sourceColumn : partitionExpression.getTransform().getSourceColumns()) {
+                if (!sourceColumns.contains(sourceColumn)) {
+                    sourceColumns.add(sourceColumn);
+                }
+            }
+        }
+        return sourceColumns;
     }
 
     // ----------------------------------------------------------------------------------------
@@ -508,12 +748,15 @@ public final class TableDescriptor implements Serializable {
         private final Map<String, String> properties;
         private final Map<String, String> customProperties;
         private final List<String> partitionKeys;
+        private final List<PartitionExpression> partitionExpressions;
         private @Nullable String comment;
         private @Nullable TableDistribution tableDistribution;
+        private @Nullable PartitionDeclarationMode partitionDeclarationMode;
 
         protected Builder() {
             this.properties = new HashMap<>();
             this.partitionKeys = new ArrayList<>();
+            this.partitionExpressions = new ArrayList<>();
             this.customProperties = new HashMap<>();
         }
 
@@ -522,8 +765,15 @@ public final class TableDescriptor implements Serializable {
             this.properties = new HashMap<>(descriptor.getProperties());
             this.customProperties = new HashMap<>(descriptor.getCustomProperties());
             this.partitionKeys = new ArrayList<>(descriptor.getPartitionKeys());
+            this.partitionExpressions = new ArrayList<>(descriptor.getPartitionExpressions());
             this.comment = descriptor.getComment().orElse(null);
             this.tableDistribution = descriptor.getTableDistribution().orElse(null);
+            if (!partitionKeys.isEmpty()) {
+                this.partitionDeclarationMode =
+                        partitionExpressions.isEmpty()
+                                ? PartitionDeclarationMode.LEGACY_PHYSICAL
+                                : PartitionDeclarationMode.PARTITION_KEYS;
+            }
         }
 
         /** Define the schema of the {@link TableDescriptor}. */
@@ -614,8 +864,41 @@ public final class TableDescriptor implements Serializable {
 
         /** Define which columns this table is partitioned by. */
         public Builder partitionedBy(List<String> partitionKeys) {
+            checkArgument(
+                    partitionDeclarationMode == null
+                            || partitionDeclarationMode == PartitionDeclarationMode.LEGACY_PHYSICAL,
+                    "partitionedBy(...) and partitionedByKeys(...) cannot be mixed in the same builder.");
+            partitionDeclarationMode = PartitionDeclarationMode.LEGACY_PHYSICAL;
             this.partitionKeys.clear();
             this.partitionKeys.addAll(partitionKeys);
+            this.partitionExpressions.clear();
+            return this;
+        }
+
+        /** Define ordered partition keys, including physical columns and virtual expressions. */
+        public Builder partitionedByKeys(PartitionKey... partitionKeys) {
+            return partitionedByKeys(Arrays.asList(partitionKeys));
+        }
+
+        /** Define ordered partition keys, including physical columns and virtual expressions. */
+        public Builder partitionedByKeys(List<PartitionKey> partitionKeys) {
+            checkArgument(
+                    partitionDeclarationMode == null
+                            || partitionDeclarationMode == PartitionDeclarationMode.PARTITION_KEYS,
+                    "partitionedBy(...) and partitionedByKeys(...) cannot be mixed in the same builder.");
+            partitionDeclarationMode = PartitionDeclarationMode.PARTITION_KEYS;
+            this.partitionKeys.clear();
+            this.partitionExpressions.clear();
+            for (PartitionKey partitionKey : partitionKeys) {
+                if (partitionKey.getKind() == PartitionKey.Kind.COLUMN) {
+                    this.partitionKeys.add(partitionKey.getColumnName().get());
+                } else {
+                    PartitionExpression resolvedExpression =
+                            resolvePartitionExpression(partitionKey.getExpression().get());
+                    this.partitionKeys.add(resolvedExpression.getVirtualPartitionSpecKey().get());
+                    this.partitionExpressions.add(resolvedExpression);
+                }
+            }
             return this;
         }
 
@@ -653,9 +936,32 @@ public final class TableDescriptor implements Serializable {
                     schema,
                     comment,
                     partitionKeys,
+                    partitionExpressions,
                     tableDistribution,
                     properties,
                     customProperties);
+        }
+
+        private static PartitionExpression resolvePartitionExpression(
+                PartitionExpression partitionExpression) {
+            if (partitionExpression.getVirtualPartitionSpecKey().isPresent()) {
+                return partitionExpression;
+            }
+
+            PartitionTransform transform = partitionExpression.getTransform();
+            checkArgument(
+                    transform instanceof DateTruncPartitionTransform,
+                    "Unsupported partition transform type: %s.",
+                    transform.getType());
+            DateTruncPartitionTransform dateTruncTransform =
+                    (DateTruncPartitionTransform) transform;
+            return partitionExpression.withVirtualPartitionSpecKey(
+                    dateTruncTransform.defaultPartitionSpecKey());
+        }
+
+        private enum PartitionDeclarationMode {
+            LEGACY_PHYSICAL,
+            PARTITION_KEYS
         }
     }
 }
