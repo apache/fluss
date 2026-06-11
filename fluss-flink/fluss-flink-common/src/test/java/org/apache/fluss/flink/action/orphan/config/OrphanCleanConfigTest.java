@@ -22,7 +22,8 @@ import org.apache.fluss.flink.adapter.MultipleParameterToolAdapter;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -32,7 +33,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class OrphanCleanConfigTest {
 
     private static final DateTimeFormatter CUTOFF_FORMATTER =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+            DateTimeFormatter.ISO_OFFSET_DATE_TIME;
 
     @Test
     void parsesAllDatabasesWithDefaults() {
@@ -74,7 +75,7 @@ class OrphanCleanConfigTest {
 
     @Test
     void cutoffCloserThanOneDayRejected() {
-        LocalDateTime tooClose = LocalDateTime.now().minusMinutes(30);
+        OffsetDateTime tooClose = OffsetDateTime.now(ZoneOffset.UTC).minusMinutes(30);
         assertThatThrownBy(
                         () ->
                                 OrphanCleanConfig.fromParams(
@@ -88,6 +89,39 @@ class OrphanCleanConfigTest {
                                                 })))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("at least 1d before now");
+    }
+
+    @Test
+    void cutoffWithoutExplicitOffsetRejected() {
+        assertThatThrownBy(
+                        () ->
+                                OrphanCleanConfig.fromParams(
+                                        MultipleParameterToolAdapter.fromArgs(
+                                                new String[] {
+                                                    "--bootstrap-server",
+                                                    "h:9123",
+                                                    "--all-databases",
+                                                    "--older-than",
+                                                    "2024-01-01 00:00:00"
+                                                })))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("ISO-8601");
+    }
+
+    @Test
+    void cutoffWithExplicitOffsetParsed() {
+        OffsetDateTime cutoff = OffsetDateTime.now(ZoneOffset.UTC).minusDays(2).withNano(0);
+        OrphanCleanConfig cfg =
+                OrphanCleanConfig.fromParams(
+                        MultipleParameterToolAdapter.fromArgs(
+                                new String[] {
+                                    "--bootstrap-server",
+                                    "h:9123",
+                                    "--all-databases",
+                                    "--older-than",
+                                    cutoff.format(CUTOFF_FORMATTER)
+                                }));
+        assertThat(cfg.olderThanMillis()).isEqualTo(cutoff.toInstant().toEpochMilli());
     }
 
     @Test

@@ -779,21 +779,16 @@ public final class FlussClusterExtension
                 PeriodicSnapshotManager kvSnapshotManager = r.getKvSnapshotManager();
                 if (r.isLeader() && kvSnapshotManager != null) {
                     long snapshotId = kvSnapshotManager.currentSnapshotId();
+                    // KvTablet#getGuardedExecutor runs the submitted task synchronously
+                    // on the calling thread inside the kv write lock, so initSnapshot()
+                    // has already completed by the time triggerSnapshot() returns. The
+                    // counter is either bumped (a new snapshot was scheduled) or left
+                    // unchanged (no new data since the last snapshot — legitimate no-op).
                     kvSnapshotManager.triggerSnapshot();
-                    // triggerSnapshot() submits to guardedExecutor asynchronously.
-                    // Wait for the counter to advance; if it does not, initSnapshot()
-                    // determined there is no new data (logOffset <= lastSnapshotOffset)
-                    // and the trigger was a legitimate no-op — return null.
-                    try {
-                        waitUntil(
-                                () -> kvSnapshotManager.currentSnapshotId() > snapshotId,
-                                Duration.ofSeconds(3),
-                                Duration.ofMillis(50),
-                                "");
-                    } catch (AssertionError e) {
-                        return null;
+                    if (kvSnapshotManager.currentSnapshotId() > snapshotId) {
+                        return snapshotId;
                     }
-                    return snapshotId;
+                    return null;
                 }
             }
         }

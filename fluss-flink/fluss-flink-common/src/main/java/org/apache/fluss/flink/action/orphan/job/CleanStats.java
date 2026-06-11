@@ -24,9 +24,10 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Aggregatable cleanup statistics emitted by each {@link ScanAndCleanFunction} subtask. The {@code
- * touchedDirs} list is collected by the final aggregator for empty-directory sweeping after all
- * subtasks complete.
+ * Per-task cleanup statistics emitted by each {@link ScanAndCleanFunction} subtask. The scalar
+ * counters are accumulated by {@link StatsAggregateOperator} via simple addition; the short {@code
+ * touchedDirs} list (typically 1–2 entries per task) is inserted into a {@code HashSet} for O(1)
+ * deduplication — no list concatenation or O(n²) merge is needed.
  */
 @Internal
 public final class CleanStats implements Serializable {
@@ -49,11 +50,11 @@ public final class CleanStats implements Serializable {
         this.deleted = deleted;
         this.deleteFailures = deleteFailures;
         this.bytesReclaimed = bytesReclaimed;
-        this.touchedDirs = new ArrayList<>(touchedDirs);
+        this.touchedDirs = new ArrayList<String>(touchedDirs);
     }
 
     public static CleanStats empty() {
-        return new CleanStats(0L, 0L, 0L, 0L, new ArrayList<String>());
+        return new CleanStats(0L, 0L, 0L, 0L, new ArrayList<String>(0));
     }
 
     public long scanned() {
@@ -74,16 +75,5 @@ public final class CleanStats implements Serializable {
 
     public List<String> touchedDirs() {
         return touchedDirs;
-    }
-
-    public CleanStats merge(CleanStats other) {
-        List<String> mergedDirs = new ArrayList<>(this.touchedDirs);
-        mergedDirs.addAll(other.touchedDirs);
-        return new CleanStats(
-                this.scanned + other.scanned,
-                this.deleted + other.deleted,
-                this.deleteFailures + other.deleteFailures,
-                this.bytesReclaimed + other.bytesReclaimed,
-                mergedDirs);
     }
 }

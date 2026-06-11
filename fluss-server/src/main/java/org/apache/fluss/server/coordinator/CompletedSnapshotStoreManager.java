@@ -291,10 +291,14 @@ public class CompletedSnapshotStoreManager {
         if (snapshots.isEmpty()) {
             return Collections.emptySet();
         }
-        int retainCount = Math.min(snapshots.size(), maxNumberOfSnapshotsToRetain);
-        Set<Long> ids = new HashSet<>(retainCount);
-        for (int i = snapshots.size() - retainCount; i < snapshots.size(); i++) {
-            ids.add(snapshots.get(i).getSnapshotId());
+        // Treat every snapshot still referenced in ZK as active. As long as the
+        // coordinator has not pruned a snapshot's ZK handle, it is potentially in use
+        // (lease, in-flight RPC, recovery, etc.), so the orphan cleaner must keep its
+        // files. Orphan cleanup is conservative by design — a slightly broader active
+        // set is harmless, while excluding a still-referenced snapshot is not.
+        Set<Long> ids = new HashSet<>(snapshots.size());
+        for (ZooKeeperClient.BucketSnapshotIdAndData snapshot : snapshots) {
+            ids.add(snapshot.getSnapshotId());
         }
         return ids;
     }

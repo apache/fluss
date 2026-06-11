@@ -196,4 +196,15 @@ public final class AuditLogger {
         AUDIT.info(
                 "action=skip_orphan_partition reason={} path={} ts={}", reason, dir, Instant.now());
     }
+
+    /** Skip a bucket target because its metadata-resolved root is outside cluster config. */
+    public void logSkipBucketOutOfScope(long tableId, Long partitionId, String resolvedRoot) {
+        AUDIT.info(
+                "action=skip_bucket_target reason=out-of-scope-root table_id={} partition_id={}"
+                        + " resolved_root={} ts={}",
+                tableId,
+                partitionId,
+                resolvedRoot,
+                Instant.now());
+    }
 }

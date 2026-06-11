@@ -22,6 +22,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.action.orphan.audit.AuditLogger;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.shaded.guava32.com.google.common.util.concurrent.RateLimiter;
 
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.BoundedOneInput;
@@ -32,32 +33,44 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.List;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 /**
- * Stage 3 of the orphan files cleanup job. Runs at parallelism=1 to aggregate {@link CleanStats}
- * from all Stage 2 subtasks and perform the final empty-directory sweep.
+ * Stage 3 of the orphan files cleanup job. Runs at parallelism=1 to aggregate per-subtask {@link
+ * CleanStats} records and perform the final empty-directory sweep.
  *
  * <p>Implemented as a custom operator (not ProcessFunction) because {@code ProcessOperator} does
- * not implement {@link BoundedOneInput} — the {@code endInput()} callback would never fire. This
- * operator accumulates all incoming stats and performs the empty-dir sweep in {@code endInput()}.
+ * not implement {@link BoundedOneInput} — the {@code endInput()} callback would never fire.
+ *
+ * <p>Scalar counters are accumulated into four longs; directory paths from each incoming {@link
+ * CleanStats#touchedDirs()} are inserted into a {@link HashSet} for O(1) deduplication. The final
+ * empty-dir sweep happens in {@link #endInput()}.
  */
 @Internal
 public final class StatsAggregateOperator extends AbstractStreamOperator<CleanStats>
         implements OneInputStreamOperator<CleanStats, CleanStats>, BoundedOneInput {
 
-    private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 2L;
     private static final Logger LOG = LoggerFactory.getLogger(StatsAggregateOperator.class);
 
     private final boolean dryRun;
     private final Map<String, String> extraConfigs;
+    private final long deleteRateLimitPerSecond;
 
-    private transient CleanStats accumulated;
+    private transient long scanned;
+    private transient long deleted;
+    private transient long deleteFailures;
+    private transient long bytesReclaimed;
+    private transient Set<String> touchedDirs;
+    private transient RateLimiter sweepRateLimiter;
 
-    public StatsAggregateOperator(boolean dryRun, Map<String, String> extraConfigs) {
+    public StatsAggregateOperator(
+            boolean dryRun, Map<String, String> extraConfigs, long deleteRateLimitPerSecond) {
         this.dryRun = dryRun;
         this.extraConfigs = extraConfigs;
+        this.deleteRateLimitPerSecond = deleteRateLimitPerSecond;
     }
 
     @Override
@@ -66,39 +79,43 @@ public final class StatsAggregateOperator extends AbstractStreamOperator<CleanSt
         if (!extraConfigs.isEmpty()) {
             FileSystem.initialize(Configuration.fromMap(extraConfigs), null);
         }
+        scanned = 0L;
+        deleted = 0L;
+        deleteFailures = 0L;
+        bytesReclaimed = 0L;
+        touchedDirs = new HashSet<String>();
+        sweepRateLimiter = RateLimiter.create((double) deleteRateLimitPerSecond);
     }
 
     @Override
     public void processElement(StreamRecord<CleanStats> element) {
-        if (accumulated == null) {
-            accumulated = CleanStats.empty();
-        }
-        accumulated = accumulated.merge(element.getValue());
+        CleanStats stats = element.getValue();
+        scanned += stats.scanned();
+        deleted += stats.deleted();
+        deleteFailures += stats.deleteFailures();
+        bytesReclaimed += stats.bytesReclaimed();
+        touchedDirs.addAll(stats.touchedDirs());
     }
 
     @Override
     public void endInput() {
-        if (accumulated == null) {
-            accumulated = CleanStats.empty();
-        }
-
-        long emptyDirsRemoved = sweepEmptyDirs(accumulated.touchedDirs());
-        long totalDeleted = accumulated.deleted() + emptyDirsRemoved;
+        long emptyDirsRemoved = sweepEmptyDirs(touchedDirs);
+        long totalDeleted = deleted + emptyDirsRemoved;
 
         CleanStats finalStats =
                 new CleanStats(
-                        accumulated.scanned(),
+                        scanned,
                         totalDeleted,
-                        accumulated.deleteFailures(),
-                        accumulated.bytesReclaimed(),
-                        new ArrayList<String>());
+                        deleteFailures,
+                        bytesReclaimed,
+                        new ArrayList<String>(0));
 
         LOG.info(
                 "Orphan cleanup complete: scanned={}, deleted={} (files={}, emptyDirs={}), "
                         + "failures={}, bytesReclaimed={}",
                 finalStats.scanned(),
                 totalDeleted,
-                accumulated.deleted(),
+                deleted,
                 emptyDirsRemoved,
                 finalStats.deleteFailures(),
                 finalStats.bytesReclaimed());
@@ -106,13 +123,13 @@ public final class StatsAggregateOperator extends AbstractStreamOperator<CleanSt
         output.collect(new StreamRecord<>(finalStats));
     }
 
-    private long sweepEmptyDirs(List<String> touchedDirs) {
-        if (touchedDirs.isEmpty()) {
+    private long sweepEmptyDirs(Set<String> dirs) {
+        if (dirs.isEmpty()) {
             return 0L;
         }
         AuditLogger audit = new AuditLogger();
-        EmptyDirSweeper sweeper = new EmptyDirSweeper(dryRun, audit);
-        for (String dir : touchedDirs) {
+        EmptyDirSweeper sweeper = new EmptyDirSweeper(dryRun, audit, sweepRateLimiter);
+        for (String dir : dirs) {
             sweeper.registerTouched(new FsPath(dir));
         }
         try {

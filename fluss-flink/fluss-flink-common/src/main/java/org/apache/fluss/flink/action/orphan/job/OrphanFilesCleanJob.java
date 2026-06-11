@@ -87,7 +87,10 @@ public final class OrphanFilesCleanJob {
                 stats.transform(
                                 "StatsAggregate",
                                 TypeInformation.of(new TypeHint<CleanStats>() {}),
-                                new StatsAggregateOperator(config.dryRun(), config.extraConfigs()))
+                                new StatsAggregateOperator(
+                                        config.dryRun(),
+                                        config.extraConfigs(),
+                                        config.deleteRateLimitPerSecond()))
                         .setParallelism(1)
                         .setMaxParallelism(1);
 

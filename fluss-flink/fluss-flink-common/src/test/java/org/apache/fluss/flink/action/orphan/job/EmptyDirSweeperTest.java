@@ -19,6 +19,7 @@ package org.apache.fluss.flink.action.orphan.job;
 
 import org.apache.fluss.flink.action.orphan.audit.AuditLogger;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.shaded.guava32.com.google.common.util.concurrent.RateLimiter;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -31,13 +32,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class EmptyDirSweeperTest {
 
+    private static EmptyDirSweeper newSweeper(boolean dryRun) {
+        return new EmptyDirSweeper(dryRun, new AuditLogger(), RateLimiter.create(1000.0));
+    }
+
     @Test
     void deletesEmptyDirsBottomUp(@TempDir Path tmp) throws IOException {
         Path a = Files.createDirectories(tmp.resolve("a"));
         Path b = Files.createDirectories(a.resolve("b"));
         Path c = Files.createDirectories(b.resolve("c"));
 
-        EmptyDirSweeper sweeper = new EmptyDirSweeper(false, new AuditLogger());
+        EmptyDirSweeper sweeper = newSweeper(false);
         sweeper.registerTouched(new FsPath(a.toString()));
         long removed = sweeper.sweep();
 
@@ -53,7 +58,7 @@ class EmptyDirSweeperTest {
         Path b = Files.createDirectories(a.resolve("b"));
         Files.write(b.resolve("keep.txt"), new byte[] {0x42});
 
-        EmptyDirSweeper sweeper = new EmptyDirSweeper(false, new AuditLogger());
+        EmptyDirSweeper sweeper = newSweeper(false);
         sweeper.registerTouched(new FsPath(a.toString()));
         long removed = sweeper.sweep();
 
@@ -67,7 +72,7 @@ class EmptyDirSweeperTest {
         Path a = Files.createDirectories(tmp.resolve("a"));
         Path b = Files.createDirectories(a.resolve("b"));
 
-        EmptyDirSweeper sweeper = new EmptyDirSweeper(true /* dryRun */, new AuditLogger());
+        EmptyDirSweeper sweeper = newSweeper(true /* dryRun */);
         sweeper.registerTouched(new FsPath(a.toString()));
         long removed = sweeper.sweep();
 
@@ -79,7 +84,7 @@ class EmptyDirSweeperTest {
 
     @Test
     void nonExistentRootIsNoOp(@TempDir Path tmp) throws IOException {
-        EmptyDirSweeper sweeper = new EmptyDirSweeper(false, new AuditLogger());
+        EmptyDirSweeper sweeper = newSweeper(false);
         sweeper.registerTouched(new FsPath(tmp.resolve("does-not-exist").toString()));
         assertThat(sweeper.sweep()).isEqualTo(0L);
     }

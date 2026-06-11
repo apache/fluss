@@ -26,15 +26,11 @@ import javax.annotation.Nullable;
 import java.io.Serializable;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
+import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -57,14 +53,6 @@ public final class OrphanCleanConfig implements Serializable {
 
     private static final long DEFAULT_DELETE_RATE_LIMIT_PER_SECOND = 100L;
 
-    /**
-     * Wall-clock timestamp format accepted on the CLI ({@code yyyy-MM-dd HH:mm:ss}, interpreted in
-     * the server's local time zone). Matches Apache Paimon's {@code orphan_files_clean older_than}
-     * grammar to minimize operator context-switching between systems.
-     */
-    private static final DateTimeFormatter CUTOFF_FORMATTER =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-
     private final String bootstrapServer;
     private final boolean allDatabases;
     private final @Nullable String database;
@@ -73,7 +61,6 @@ public final class OrphanCleanConfig implements Serializable {
     private final boolean dryRun;
     private final long deleteRateLimitPerSecond;
     private final @Nullable Integer parallelism;
-    private final List<String> scanRoots;
     private final boolean allowDeleteManifest;
     private final boolean allowCleanOrphanTables;
     private final boolean allowCleanOrphanPartitions;
@@ -88,7 +75,6 @@ public final class OrphanCleanConfig implements Serializable {
             boolean dryRun,
             long deleteRateLimitPerSecond,
             @Nullable Integer parallelism,
-            List<String> scanRoots,
             boolean allowDeleteManifest,
             boolean allowCleanOrphanTables,
             boolean allowCleanOrphanPartitions,
@@ -101,7 +87,6 @@ public final class OrphanCleanConfig implements Serializable {
         this.dryRun = dryRun;
         this.deleteRateLimitPerSecond = deleteRateLimitPerSecond;
         this.parallelism = parallelism;
-        this.scanRoots = Collections.unmodifiableList(new ArrayList<String>(scanRoots));
         this.allowDeleteManifest = allowDeleteManifest;
         this.allowCleanOrphanTables = allowCleanOrphanTables;
         this.allowCleanOrphanPartitions = allowCleanOrphanPartitions;
@@ -149,7 +134,6 @@ public final class OrphanCleanConfig implements Serializable {
                 params.has("dry-run"),
                 deleteRateLimitPerSecond,
                 parallelism,
-                parseScanRoots(params.getMultiParameter("scan-root")),
                 allowDeleteManifest,
                 allowCleanOrphanTables,
                 allowCleanOrphanPartitions,
@@ -158,27 +142,28 @@ public final class OrphanCleanConfig implements Serializable {
 
     /**
      * Parses a CLI cutoff value into an absolute epoch-ms timestamp. Empty input falls back to
-     * {@code now - defaultGap}. Explicit input must parse as {@code yyyy-MM-dd HH:mm:ss} in the
-     * Flink action JVM's local time zone and must be at least {@link #HARD_LOWER_BOUND} earlier
-     * than {@code now} — closer-to-now cutoffs would race with active writes (see {@code
-     * HARD_LOWER_BOUND} javadoc).
+     * {@code now - defaultGap}. Explicit input must be ISO-8601 with an explicit offset (e.g.
+     * {@code 2024-01-01T00:00:00+08:00} or {@code 2024-01-01T00:00:00Z}) and must be at least
+     * {@link #HARD_LOWER_BOUND} earlier than {@code now} — closer-to-now cutoffs would race with
+     * active writes (see {@code HARD_LOWER_BOUND} javadoc).
      */
     private static long parseCutoff(
             String flag, @Nullable String value, long now, Duration defaultGap) {
         if (StringUtils.isNullOrWhitespaceOnly(value)) {
             return now - defaultGap.toMillis();
         }
-        LocalDateTime parsed;
+        OffsetDateTime parsed;
         try {
-            parsed = LocalDateTime.parse(value, CUTOFF_FORMATTER);
+            parsed = OffsetDateTime.parse(value);
         } catch (DateTimeParseException e) {
             throw new IllegalArgumentException(
                     flag
-                            + " must be a timestamp in 'yyyy-MM-dd HH:mm:ss' (server local TZ), got: "
+                            + " must be an ISO-8601 timestamp with an explicit offset (e.g."
+                            + " '2024-01-01T00:00:00+08:00' or '2024-01-01T00:00:00Z'); got: "
                             + value,
                     e);
         }
-        long parsedMillis = parsed.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+        long parsedMillis = parsed.toInstant().toEpochMilli();
         long maxAllowed = now - HARD_LOWER_BOUND.toMillis();
         if (parsedMillis > maxAllowed) {
             throw new IllegalArgumentException(
@@ -213,21 +198,6 @@ public final class OrphanCleanConfig implements Serializable {
             throw new IllegalArgumentException("--parallelism must be positive");
         }
         return p;
-    }
-
-    private static List<String> parseScanRoots(@Nullable Collection<String> values) {
-        if (values == null || values.isEmpty()) {
-            return Collections.emptyList();
-        }
-
-        List<String> scanRoots = new ArrayList<String>(values.size());
-        for (String value : values) {
-            if (StringUtils.isNullOrWhitespaceOnly(value)) {
-                throw new IllegalArgumentException("--scan-root must not be blank");
-            }
-            scanRoots.add(value);
-        }
-        return scanRoots;
     }
 
     private static Map<String, String> parseExtraConfigs(@Nullable Collection<String> values) {
@@ -289,11 +259,6 @@ public final class OrphanCleanConfig implements Serializable {
     /** Returns the optional parallelism for the ScanAndClean stage. */
     public Optional<Integer> parallelism() {
         return Optional.ofNullable(parallelism);
-    }
-
-    /** Returns additional remote.data.dir roots to scan. */
-    public List<String> scanRoots() {
-        return scanRoots;
     }
 
     /**

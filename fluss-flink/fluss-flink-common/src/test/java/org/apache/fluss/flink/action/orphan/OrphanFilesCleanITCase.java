@@ -55,7 +55,6 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
-import org.junit.jupiter.api.io.TempDir;
 
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
@@ -64,7 +63,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.attribute.FileTime;
 import java.time.Duration;
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -391,33 +391,6 @@ class OrphanFilesCleanITCase {
     }
 
     @Test
-    void scanRootIncludesAdditionalRemoteRootWhenOrphanTableCleanupEnabled(@TempDir Path extraRoot)
-            throws Exception {
-        String dbName = newDatabaseName("scanroot");
-        long tableId = allocateDroppedTableId(dbName, "seed_table");
-        createLogTable(dbName, "live_anchor");
-        OrphanTableLayout layout =
-                createOldOrphanTableLayout(
-                        extraRoot, dbName, tableId, "external_table", "99999999999999999999.log");
-
-        runCleanerForDatabase(
-                false,
-                dbName,
-                "--scan-root",
-                extraRoot.toUri().toString(),
-                "--allow-clean-orphan-tables");
-
-        assertThat(Files.exists(layout.orphanFile)).isFalse();
-        assertThat(Files.exists(layout.tableDir)).isFalse();
-        assertThat(auditMessages())
-                .anyMatch(
-                        m ->
-                                m.contains("action=deleted")
-                                        && m.contains("rule=log-segment")
-                                        && m.contains(layout.orphanFile.toString()));
-    }
-
-    @Test
     void livePrimaryKeyTableDoesNotCleanKvSharedFiles() throws Exception {
         String dbName = newDatabaseName("livepk");
         TablePath tablePath = createPrimaryKeyTable(dbName, "live_pk_table");
@@ -489,16 +462,32 @@ class OrphanFilesCleanITCase {
 
         seedKvSnapshots(tableBucket, remoteKvTabletDir, new long[] {1L, 2L, 3L, 4L});
 
+        // Drop a snapshot directory locally without registering it in ZK to model a
+        // crash-leftover. The active set is derived from ZK references, so this
+        // unreferenced snapshot must still be cleaned — guarding the assertions below
+        // from passing trivially when the cleaner fails to scan at all.
+        long unreferencedSnapshotId = 99L;
+        Path unreferencedSnapshotDir =
+                localPath(
+                        FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, unreferencedSnapshotId));
+        Files.createDirectories(unreferencedSnapshotDir);
+        Path unreferencedMeta = unreferencedSnapshotDir.resolve("_METADATA");
+        Files.write(unreferencedMeta, new byte[] {0x33});
+        makeOld(unreferencedMeta);
+        makeOld(unreferencedSnapshotDir);
+
         runCleanerForDatabase(false, dbName);
 
+        // Every snapshot still referenced in ZK is preserved, regardless of recency.
         assertThat(Files.exists(localPath(FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, 1L))))
-                .isFalse();
+                .isTrue();
         assertThat(Files.exists(localPath(FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, 2L))))
-                .isFalse();
+                .isTrue();
         assertThat(Files.exists(localPath(FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, 3L))))
                 .isTrue();
         assertThat(Files.exists(localPath(FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, 4L))))
                 .isTrue();
+        assertThat(Files.exists(unreferencedSnapshotDir)).isFalse();
     }
 
     @Test
@@ -851,6 +840,80 @@ class OrphanFilesCleanITCase {
                 .hasSizeGreaterThanOrEqualTo(2);
     }
 
+    @Test
+    void optInCleansOrphanPartitionDir() throws Exception {
+        String dbName = newDatabaseName("orphanpart");
+        // Create two partitioned tables so the tracker observes both partition IDs.
+        // The second table's partition ID is higher. We plant an orphan under the second
+        // table using the first table's (lower) ID so the guard passes:
+        // orphanId <= maxKnownPartitionId.
+        PartitionedTableLayout tableA = createPartitionedLogTable(dbName, "table_a", "pa");
+        PartitionedTableLayout tableB = createPartitionedLogTable(dbName, "table_b", "pb");
+
+        long orphanPartitionId =
+                Math.min(
+                        tableA.partitionInfo.getPartitionId(),
+                        tableB.partitionInfo.getPartitionId());
+        // Plant orphan under whichever table does NOT own the lower-ID partition.
+        PartitionedTableLayout targetTable =
+                (tableA.partitionInfo.getPartitionId() == orphanPartitionId) ? tableB : tableA;
+
+        OrphanPartitionLayout orphan =
+                createOldOrphanPartitionLayout(
+                        remoteDataRoot(),
+                        targetTable.tablePath,
+                        targetTable.tableId,
+                        "ghost",
+                        orphanPartitionId,
+                        "99999999999999999999.log");
+
+        runCleanerForDatabase(false, dbName, "--allow-clean-orphan-partitions");
+
+        assertThat(Files.exists(orphan.orphanFile))
+                .as("orphan partition file must be deleted")
+                .isFalse();
+        assertThat(Files.exists(orphan.partitionDir))
+                .as("orphan partition dir must be removed")
+                .isFalse();
+        assertThat(auditMessages())
+                .anyMatch(
+                        m ->
+                                m.contains("action=deleted")
+                                        && m.contains("rule=log-segment")
+                                        && m.contains(orphan.orphanFile.toString()));
+    }
+
+    @Test
+    void emptyDirsSweptAfterOrphanFileDeletion() throws Exception {
+        String dbName = newDatabaseName("emptydir");
+        TablePath tablePath = createLogTable(dbName, "emptydir_table");
+        Path activeSegment = seedActiveBucketManifest(tablePath);
+
+        // Create an orphan file as the sole content of its UUID directory.
+        Path orphan = createOldSegmentFile(tablePath, "99999999999999999999.log");
+        Path orphanSegmentDir = orphan.getParent();
+
+        // Pre-condition: the segment directory exists before cleanup.
+        assertThat(Files.exists(orphanSegmentDir)).isTrue();
+
+        runCleanerForDatabase(false, dbName);
+
+        // The orphan file must be deleted.
+        assertThat(Files.exists(orphan)).as("orphan file must be deleted").isFalse();
+        // The now-empty UUID directory must also be swept.
+        assertThat(Files.exists(orphanSegmentDir))
+                .as("empty segment dir must be swept after cleanup")
+                .isFalse();
+        // Active segment and its directory survive.
+        assertThat(Files.exists(activeSegment)).as("active segment must survive").isTrue();
+        assertThat(auditMessages())
+                .anyMatch(
+                        m ->
+                                m.contains("action=deleted")
+                                        && m.contains("rule=log-segment")
+                                        && m.contains(orphan.toString()));
+    }
+
     private TablePath createLogTable(String databaseName, String tableName) throws Exception {
         admin.createDatabase(databaseName, DatabaseDescriptor.EMPTY, true).get();
         TablePath tablePath = TablePath.of(databaseName, tableName);
@@ -1082,12 +1145,12 @@ class OrphanFilesCleanITCase {
     }
 
     private static final DateTimeFormatter CUTOFF_FORMATTER =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+            DateTimeFormatter.ISO_OFFSET_DATE_TIME;
 
     private static void appendCommonArgs(List<String> args, boolean dryRun, String... extraArgs) {
         // Tests back-date their orphan files to now - 2d via makeOld(); a cutoff at now - 1d
         // safely puts those files strictly before the cutoff (mtime < cutoff → DELETE-eligible).
-        String cutoff = LocalDateTime.now().minusDays(1).format(CUTOFF_FORMATTER);
+        String cutoff = OffsetDateTime.now(ZoneOffset.UTC).minusDays(1).format(CUTOFF_FORMATTER);
         args.add("--older-than");
         args.add(cutoff);
         for (String extraArg : extraArgs) {

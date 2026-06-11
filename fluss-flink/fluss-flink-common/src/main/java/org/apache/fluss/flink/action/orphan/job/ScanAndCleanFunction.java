@@ -39,6 +39,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
@@ -56,9 +57,10 @@ import java.util.Map;
  *       older than the cutoff.
  * </ul>
  *
- * <p>Each task emits its own {@link CleanStats} immediately upon completion. Delete rate is limited
- * per-subtask: {@code configuredRate / runtimeParallelism}. The serial processing within each
- * subtask guarantees no concurrent throttler access.
+ * <p>Each task emits a single {@link CleanStats} containing scalar counters and the short list of
+ * directories walked. Delete rate is limited per-subtask: {@code configuredRate /
+ * runtimeParallelism}. The serial processing within each subtask guarantees no concurrent throttler
+ * access.
  */
 @Internal
 public final class ScanAndCleanFunction extends ProcessFunction<CleanTask, CleanStats> {
@@ -70,6 +72,7 @@ public final class ScanAndCleanFunction extends ProcessFunction<CleanTask, Clean
     private final Map<String, String> extraConfigs;
 
     private transient AuditLogger audit;
+    private transient RateLimiter rateLimiter;
 
     public ScanAndCleanFunction(long deleteRateLimitPerSecond, Map<String, String> extraConfigs) {
         this.deleteRateLimitPerSecond = deleteRateLimitPerSecond;
@@ -84,6 +87,16 @@ public final class ScanAndCleanFunction extends ProcessFunction<CleanTask, Clean
             FileSystem.initialize(Configuration.fromMap(extraConfigs), null);
         }
         audit = new AuditLogger();
+        int parallelism = getRuntimeContext().getTaskInfo().getNumberOfParallelSubtasks();
+        int subtaskIndex = getRuntimeContext().getTaskInfo().getIndexOfThisSubtask();
+        // Distribute the configured rate as base + 1 extra for the first `remainder` subtasks so
+        // that the per-subtask rates sum back to the configured aggregate. Each subtask gets at
+        // least 1/s (hard floor) — when parallelism exceeds the configured rate, the aggregate
+        // may theoretically exceed it; in practice Batch scheduling limits actual concurrency.
+        long base = deleteRateLimitPerSecond / parallelism;
+        long remainder = deleteRateLimitPerSecond % parallelism;
+        long quota = base + (subtaskIndex < remainder ? 1L : 0L);
+        rateLimiter = RateLimiter.create(Math.max(1.0, (double) quota));
     }
 
     @Override
@@ -121,7 +134,7 @@ public final class ScanAndCleanFunction extends ProcessFunction<CleanTask, Clean
 
         BucketCleaner.BucketCleanStats bucketStats = cleaner.clean(activeRefs, logDir, kvDir);
 
-        List<String> touchedDirs = new ArrayList<String>();
+        List<String> touchedDirs = new ArrayList<String>(2);
         if (logDir != null) {
             touchedDirs.add(logDir.toString());
         }
@@ -208,9 +221,12 @@ public final class ScanAndCleanFunction extends ProcessFunction<CleanTask, Clean
             }
         }
 
-        List<String> touchedDirs = new ArrayList<String>();
-        touchedDirs.add(dirPath.toString());
-        return new CleanStats(scanned, deleted, deleteFailures, bytesReclaimed, touchedDirs);
+        return new CleanStats(
+                scanned,
+                deleted,
+                deleteFailures,
+                bytesReclaimed,
+                Arrays.asList(dirPath.toString()));
     }
 
     // -------------------------------------------------------------------------
@@ -218,8 +234,6 @@ public final class ScanAndCleanFunction extends ProcessFunction<CleanTask, Clean
     // -------------------------------------------------------------------------
 
     private SafeDeleter createSafeDeleter(FileSystem fs, boolean dryRun) {
-        int parallelism = getRuntimeContext().getTaskInfo().getNumberOfParallelSubtasks();
-        double perSubtaskRate = Math.max(1.0, (double) deleteRateLimitPerSecond / parallelism);
-        return new SafeDeleter(fs, dryRun, audit, RateLimiter.create(perSubtaskRate));
+        return new SafeDeleter(fs, dryRun, audit, rateLimiter);
     }
 }

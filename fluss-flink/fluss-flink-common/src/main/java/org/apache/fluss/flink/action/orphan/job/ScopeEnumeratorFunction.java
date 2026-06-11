@@ -60,11 +60,14 @@ import java.util.function.Consumer;
 import java.util.function.Predicate;
 
 import static org.apache.fluss.flink.action.orphan.OrphanCleanUtils.enumerateBuckets;
+import static org.apache.fluss.flink.action.orphan.OrphanCleanUtils.fetchClusterConfigMap;
 import static org.apache.fluss.flink.action.orphan.OrphanCleanUtils.getFileSystemIfExists;
 import static org.apache.fluss.flink.action.orphan.OrphanCleanUtils.listStatuses;
+import static org.apache.fluss.flink.action.orphan.OrphanCleanUtils.normalizeRoot;
 import static org.apache.fluss.flink.action.orphan.OrphanCleanUtils.physicalPath;
 import static org.apache.fluss.flink.action.orphan.OrphanCleanUtils.remoteSubDir;
 import static org.apache.fluss.flink.action.orphan.OrphanCleanUtils.resolveClusterRemoteDataDir;
+import static org.apache.fluss.flink.action.orphan.OrphanCleanUtils.resolveClusterRemoteDataDirs;
 import static org.apache.fluss.flink.action.orphan.OrphanCleanUtils.resolveRemoteDataDir;
 
 /**
@@ -107,19 +110,31 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
 
             ActiveRefsFetcher fetcher = new ActiveRefsFetcher(admin, 3);
             MaxKnownIdsTracker tracker = new MaxKnownIdsTracker();
-            String clusterRemoteDataDir = resolveClusterRemoteDataDir(admin);
+            Map<String, String> clusterConfigMap = fetchClusterConfigMap(admin);
+            String clusterRemoteDataDir = resolveClusterRemoteDataDir(clusterConfigMap);
+            List<String> clusterRoots =
+                    normalizeRoots(resolveClusterRemoteDataDirs(clusterConfigMap));
 
             Map<String, DbScanState> dbStates = enumerateActiveScope(admin, audit, tracker);
 
             for (DbScanState dbState : dbStates.values()) {
                 for (LiveTableScope liveTable : dbState.liveTables) {
-                    emitBucketTasks(liveTable, fetcher, audit, clusterRemoteDataDir, out);
-                    emitOrphanPartitionDirTasks(
-                            liveTable, tracker, clusterRemoteDataDir, audit, out);
+                    emitBucketTasks(
+                            liveTable, fetcher, audit, clusterRemoteDataDir, clusterRoots, out);
+                    emitOrphanPartitionDirTasks(liveTable, tracker, clusterRoots, audit, out);
                 }
-                emitOrphanTableDirTasks(dbState, tracker, clusterRemoteDataDir, audit, out);
+                emitOrphanTableDirTasks(dbState, tracker, clusterRoots, audit, out);
             }
         }
+    }
+
+    /** Normalizes each root in the list and returns a deduplicated ordered list. */
+    private static List<String> normalizeRoots(List<String> roots) {
+        LinkedHashSet<String> normalized = new LinkedHashSet<String>();
+        for (String root : roots) {
+            normalized.add(normalizeRoot(root));
+        }
+        return new ArrayList<String>(normalized);
     }
 
     // -------------------------------------------------------------------------
@@ -230,6 +245,7 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
             ActiveRefsFetcher fetcher,
             AuditLogger audit,
             @Nullable String clusterRemoteDataDir,
+            List<String> clusterRoots,
             Collector<CleanTask> out) {
         if (liveTable.partitioned && !liveTable.partitionInfosComplete) {
             return;
@@ -240,7 +256,13 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
                         : Collections.<PartitionInfo>singletonList(null);
         for (PartitionInfo partitionInfo : partitionTargets) {
             emitBucketTasksForTarget(
-                    liveTable, partitionInfo, fetcher, audit, clusterRemoteDataDir, out);
+                    liveTable,
+                    partitionInfo,
+                    fetcher,
+                    audit,
+                    clusterRemoteDataDir,
+                    clusterRoots,
+                    out);
         }
     }
 
@@ -250,8 +272,19 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
             ActiveRefsFetcher fetcher,
             AuditLogger audit,
             @Nullable String clusterRemoteDataDir,
+            List<String> clusterRoots,
             Collector<CleanTask> out) {
         Long partitionId = partitionInfo == null ? null : partitionInfo.getPartitionId();
+
+        String remoteDataDir =
+                resolveRemoteDataDir(liveTable.tableInfo, partitionInfo, clusterRemoteDataDir);
+
+        // Scope guard: skip this target if its metadata-resolved root is not part of the
+        // cluster's configured remote data directories.
+        if (!clusterRoots.contains(normalizeRoot(remoteDataDir))) {
+            audit.logSkipBucketOutOfScope(liveTable.tableId, partitionId, remoteDataDir);
+            return;
+        }
 
         LogActiveRefsFetchResult logResult =
                 fetcher.fetchLogActiveRefsByBucket(liveTable.tableId, partitionId);
@@ -271,9 +304,6 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
                 audit.logSkipKvTarget(liveTable.tableId, partitionId, kvResult.listFailureReason());
             }
         }
-
-        String remoteDataDir =
-                resolveRemoteDataDir(liveTable.tableInfo, partitionInfo, clusterRemoteDataDir);
 
         FsPath remoteLogDir = remoteSubDir(remoteDataDir, FlussPaths.REMOTE_LOG_DIR_NAME);
         FsPath remoteKvDir = remoteSubDir(remoteDataDir, FlussPaths.REMOTE_KV_DIR_NAME);
@@ -353,7 +383,7 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
     private void emitOrphanTableDirTasks(
             DbScanState dbState,
             MaxKnownIdsTracker tracker,
-            @Nullable String clusterRemoteDataDir,
+            List<String> clusterRoots,
             AuditLogger audit,
             Collector<CleanTask> out)
             throws IOException {
@@ -364,7 +394,7 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
         Set<Long> activeTableIds = dbState.activeTableIds;
         long maxKnownTableId = tracker.maxKnownTableId();
         boolean emit = config.allowCleanOrphanTables();
-        for (String root : rootsToScan(clusterRemoteDataDir)) {
+        for (String root : clusterRoots) {
             for (String topLevel : TOP_LEVEL_DIRS) {
                 FsPath dbDir = remoteSubDir(root, topLevel + "/" + dbState.dbName);
                 if (emit) {
@@ -395,7 +425,7 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
     private void emitOrphanPartitionDirTasks(
             LiveTableScope liveTable,
             MaxKnownIdsTracker tracker,
-            @Nullable String clusterRemoteDataDir,
+            List<String> clusterRoots,
             AuditLogger audit,
             Collector<CleanTask> out)
             throws IOException {
@@ -405,7 +435,7 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
         Set<Long> activePartitionIds = liveTable.activePartitionIds;
         long maxKnownPartitionId = tracker.maxKnownPartitionId();
         boolean emit = config.allowCleanOrphanPartitions();
-        for (String root : rootsForLiveTable(liveTable, clusterRemoteDataDir)) {
+        for (String root : clusterRoots) {
             for (String topLevel : TOP_LEVEL_DIRS) {
                 FsPath tableDir =
                         FlussPaths.remoteTableDir(
@@ -462,26 +492,6 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
-
-    private List<String> rootsToScan(@Nullable String clusterRemoteDataDir) {
-        LinkedHashSet<String> roots = new LinkedHashSet<String>();
-        if (clusterRemoteDataDir != null) {
-            roots.add(clusterRemoteDataDir);
-        }
-        roots.addAll(config.scanRoots());
-        return new ArrayList<String>(roots);
-    }
-
-    private List<String> rootsForLiveTable(
-            LiveTableScope liveTable, @Nullable String clusterRemoteDataDir) {
-        LinkedHashSet<String> roots = new LinkedHashSet<String>(rootsToScan(clusterRemoteDataDir));
-        roots.add(resolveRemoteDataDir(liveTable.tableInfo, null, clusterRemoteDataDir));
-        for (PartitionInfo partitionInfo : liveTable.partitions) {
-            roots.add(
-                    resolveRemoteDataDir(liveTable.tableInfo, partitionInfo, clusterRemoteDataDir));
-        }
-        return new ArrayList<String>(roots);
-    }
 
     private static String classifyName(Throwable e) {
         return RpcErrorClassifier.classify(e).name();

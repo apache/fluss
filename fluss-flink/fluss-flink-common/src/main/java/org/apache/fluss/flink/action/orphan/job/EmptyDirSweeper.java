@@ -54,10 +54,6 @@ public final class EmptyDirSweeper {
     private final RateLimiter rateLimiter;
     private final Set<FsPath> touchedRoots = new HashSet<FsPath>();
 
-    public EmptyDirSweeper(boolean dryRun, AuditLogger audit) {
-        this(dryRun, audit, RateLimiter.create(100.0));
-    }
-
     public EmptyDirSweeper(boolean dryRun, AuditLogger audit, RateLimiter rateLimiter) {
         this.dryRun = dryRun;
         this.audit = audit;

@@ -125,20 +125,20 @@ public class CompletedSnapshotStore {
     }
 
     /**
-     * Returns the union of retained and still-in-use snapshot IDs (pure in-memory). Only the most
-     * recent {@code maxNumberOfSnapshotsToRetain} snapshots from the deque are included; older
-     * entries that have not yet been subsumed (e.g. after a fresh restore from ZK) are excluded.
+     * Returns the union of every snapshot still held by this store and the snapshots recorded as
+     * still-in-use. Any snapshot whose ZK handle has not yet been pruned is potentially active
+     * (lease, in-flight RPC, recovery, etc.), so the orphan cleaner must keep its files. Orphan
+     * cleanup is conservative by design — a slightly broader active set is harmless, while
+     * excluding a still-referenced snapshot is not.
      */
     public Set<Long> getActiveSnapshotIds() {
         return inLock(
                 lock,
                 () -> {
-                    int retainCount =
-                            Math.min(completedSnapshots.size(), maxNumberOfSnapshotsToRetain);
-                    Set<Long> ids = new HashSet<>(retainCount + stillInUseSnapshots.size());
-                    Iterator<CompletedSnapshot> descIter = completedSnapshots.descendingIterator();
-                    for (int i = 0; i < retainCount && descIter.hasNext(); i++) {
-                        ids.add(descIter.next().getSnapshotID());
+                    Set<Long> ids =
+                            new HashSet<>(completedSnapshots.size() + stillInUseSnapshots.size());
+                    for (CompletedSnapshot snapshot : completedSnapshots) {
+                        ids.add(snapshot.getSnapshotID());
                     }
                     ids.addAll(stillInUseSnapshots.keySet());
                     return ids;
