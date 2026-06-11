@@ -799,7 +799,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // Skip if the table is not yet registered in coordinator context.
         // Should not happen in normal cases.
-        if (tableId == null) {
+        if (tableId == TableInfo.UNKNOWN_TABLE_ID) {
             LOG.warn(
                     "Table {} is not registered in coordinator context, "
                             + "skip processing table registration change.",
