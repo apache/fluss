@@ -24,6 +24,7 @@ import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
 import org.apache.fluss.lake.lakestorage.LakeStoragePluginSetUp;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
+import org.apache.fluss.metadata.LakeTableUtil;
 import org.apache.fluss.metadata.TablePath;
 
 import org.slf4j.Logger;
@@ -67,8 +68,9 @@ public class LakeSourceUtils {
                             dataLake, dataLake.toLowerCase()));
         }
         LakeStorage lakeStorage = checkNotNull(lakeStoragePlugin).createLakeStorage(lakeConfig);
+        TablePath lakeTablePath = LakeTableUtil.getLakeTablePath(tablePath, properties);
         try {
-            return (LakeSource<LakeSplit>) lakeStorage.createLakeSource(tablePath);
+            return (LakeSource<LakeSplit>) lakeStorage.createLakeSource(lakeTablePath);
         } catch (UnsupportedOperationException e) {
             throw new UnsupportedOperationException(
                     String.format(

@@ -253,6 +253,35 @@ class LakeTableHelperTest {
                 .containsExactly(4L, 5L, 6L);
     }
 
+    @Test
+    void testClearLakeTableProgress(@TempDir Path tempDir) throws Exception {
+        LakeTableHelper lakeTableHelper = new LakeTableHelper(zookeeperClient, tempDir.toString());
+        long tableId = 1L;
+        TablePath tablePath = TablePath.of("test_db", "clear_progress_test");
+        zookeeperClient.registerTable(tablePath, createTableReg(tableId));
+
+        FsPath path1 = storeOffsetFile(lakeTableHelper, tablePath, tableId, 100L);
+        FsPath path2 = storeOffsetFile(lakeTableHelper, tablePath, tableId, 200L);
+        lakeTableHelper.registerLakeTableSnapshotV2(
+                tableId,
+                new LakeTable.LakeSnapshotMetadata(1L, path1, path1),
+                LakeCommitResult.KEEP_ALL_PREVIOUS);
+        lakeTableHelper.registerLakeTableSnapshotV2(
+                tableId,
+                new LakeTable.LakeSnapshotMetadata(2L, path2, path2),
+                LakeCommitResult.KEEP_ALL_PREVIOUS);
+
+        assertThat(zookeeperClient.getLakeTable(tableId)).isPresent();
+        assertThat(LocalFileSystem.getSharedInstance().exists(path1)).isTrue();
+        assertThat(LocalFileSystem.getSharedInstance().exists(path2)).isTrue();
+
+        lakeTableHelper.clearLakeTableProgress(tableId);
+
+        assertThat(zookeeperClient.getLakeTable(tableId)).isNotPresent();
+        assertThat(LocalFileSystem.getSharedInstance().exists(path1)).isFalse();
+        assertThat(LocalFileSystem.getSharedInstance().exists(path2)).isFalse();
+    }
+
     /** Helper to store offset files and return the FsPath. */
     private FsPath storeOffsetFile(
             LakeTableHelper helper, TablePath path, long tableId, long offset) throws Exception {
