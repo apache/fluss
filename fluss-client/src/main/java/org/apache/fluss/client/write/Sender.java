@@ -210,6 +210,10 @@ public class Sender implements Runnable {
     private void sendWriteData() throws Exception {
         Cluster clusterSnapshot = metadataUpdater.getCluster();
 
+        // Refresh per-bucket throttle entries against the current cluster snapshot,
+        // dropping any whose bucket has disappeared from metadata.
+        accumulator.maybeEvictStaleThrottles(clusterSnapshot);
+
         // get the list of buckets with data ready to send.
         ReadyCheckResult readyCheckResult = accumulator.ready(clusterSnapshot);
 

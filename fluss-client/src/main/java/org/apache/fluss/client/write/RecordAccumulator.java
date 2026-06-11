@@ -59,6 +59,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -122,9 +123,17 @@ public final class RecordAccumulator {
     private final Clock clock;
     private final DynamicWriteBatchSizeEstimator batchSizeEstimator;
 
-    // Backpressure throttle state: per-bucket expiry timestamp for throttle
-    private final ConcurrentMap<TableBucket, Long> throttleExpiryMs = new CopyOnWriteMap<>();
+    // Per-bucket backpressure throttle expiry timestamp. Accessed strictly by key on
+    // hot paths (get / put / remove); writes happen on every backpressure signal and
+    // every eviction, so the container is sized for lock-striped O(1) updates without
+    // any whole-map snapshot cost.
+    private final ConcurrentMap<TableBucket, Long> throttleExpiryMs = new ConcurrentHashMap<>();
     private final long maxThrottleMs;
+
+    // Latest Cluster snapshot fed to the metadata-driven throttle sweep. Identity
+    // equality against this reference short-circuits the sweep when metadata hasn't
+    // changed.
+    private volatile Cluster lastClusterRef = Cluster.empty();
 
     // TODO add retryBackoffMs to retry the produce request upon receiving an error.
     // TODO add deliveryTimeoutMs to report success or failure on record delivery.
@@ -536,6 +545,9 @@ public final class RecordAccumulator {
                                 Math.min(nextReadyCheckDelayMs, throttleExpiry - now);
                         continue;
                     }
+                    // Expired — evict here to reclaim entries for buckets whose deque
+                    // has gone empty and won't reach the drain-time throttle check.
+                    throttleExpiryMs.remove(tableBucket);
                 }
 
                 Integer leader = cluster.leaderFor(tableBucket);
@@ -959,6 +971,25 @@ public final class RecordAccumulator {
      */
     void applyStorageBackpressureBackoff(TableBucket tableBucket) {
         throttleExpiryMs.put(tableBucket, clock.milliseconds() + maxThrottleMs);
+    }
+
+    /**
+     * Evict throttle entries whose buckets no longer exist in the given cluster (leader unknown,
+     * partition dropped, table dropped).
+     *
+     * <p>Invoked on every Sender loop with the current cluster snapshot. The identity short-circuit
+     * makes this an O(1) no-op when metadata hasn't changed, so the actual O(N) walk only runs once
+     * per real metadata refresh.
+     */
+    void maybeEvictStaleThrottles(Cluster cluster) {
+        if (cluster == lastClusterRef) {
+            return;
+        }
+        lastClusterRef = cluster;
+        if (throttleExpiryMs.isEmpty()) {
+            return;
+        }
+        throttleExpiryMs.keySet().removeIf(tb -> cluster.leaderFor(tb) == null);
     }
 
     private int getDrainIndex(int id) {
