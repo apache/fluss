@@ -164,6 +164,10 @@ public class WriterClient {
                             "Flush interrupted after %d ms. Writer may be in inconsistent state",
                             System.currentTimeMillis() - start),
                     e);
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    String.format("Flush failed after %d ms.", System.currentTimeMillis() - start),
+                    e);
         }
         LOG.trace(
                 "Flushed accumulated records in writer in {} ms.",

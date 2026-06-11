@@ -219,7 +219,7 @@ public abstract class WriteBatch {
                                 e);
                     }
                 });
-        requestFuture.done();
+        requestFuture.done(exception);
     }
 
     int attempts() {
@@ -306,15 +306,20 @@ public abstract class WriteBatch {
     /** The future for this batch. */
     public static class RequestFuture {
         private final CountDownLatch latch = new CountDownLatch(1);
+        @Nullable private Exception exception;
 
         /** Mark this request as complete and unblock any threads waiting on its completion. */
-        public void done() {
+        public void done(@Nullable Exception exception) {
+            this.exception = exception;
             latch.countDown();
         }
 
         /** Await the completion of this request. */
-        public void await() throws InterruptedException {
+        public void await() throws Exception {
             latch.await();
+            if (exception != null) {
+                throw exception;
+            }
         }
     }
 }
