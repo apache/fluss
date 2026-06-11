@@ -21,6 +21,7 @@ import org.apache.fluss.client.write.WriteFormat;
 import org.apache.fluss.client.write.WriteRecord;
 import org.apache.fluss.client.write.WriterClient;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryRow;
@@ -32,6 +33,7 @@ import org.apache.fluss.row.encode.RowEncoder;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.PartitionComputer;
 
 import javax.annotation.Nullable;
 
@@ -45,6 +47,10 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
     private final TableInfo tableInfo;
     private final KeyEncoder primaryKeyEncoder;
     private final @Nullable int[] targetColumns;
+    private final RowType primaryKeyRowType;
+    private final KeyEncoder primaryKeyDeleteEncoder;
+    private final KeyEncoder bucketKeyDeleteEncoder;
+    private final @Nullable PartitionComputer deletePartitionComputer;
 
     // same to primaryKeyEncoder if the bucket key is the same to the primary key
     private final KeyEncoder bucketKeyEncoder;
@@ -94,6 +100,24 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                         tableInfo.getTableConfig(),
                         tableInfo.isDefaultBucketKey(),
                         primaryKeyEncoder);
+        this.primaryKeyRowType = rowType.project(tableInfo.getPrimaryKeys());
+        this.primaryKeyDeleteEncoder =
+                KeyEncoder.ofPrimaryKeyEncoder(
+                        primaryKeyRowType,
+                        tableInfo.getPhysicalPrimaryKeys(),
+                        tableInfo.getTableConfig(),
+                        tableInfo.isDefaultBucketKey());
+        this.bucketKeyDeleteEncoder =
+                KeyEncoder.ofBucketKeyEncoder(
+                        primaryKeyRowType,
+                        tableInfo.getBucketKeys(),
+                        tableInfo.getTableConfig(),
+                        tableInfo.isDefaultBucketKey(),
+                        primaryKeyDeleteEncoder);
+        this.deletePartitionComputer =
+                tableInfo.isPartitioned()
+                        ? new PartitionComputer(tableInfo, primaryKeyRowType)
+                        : null;
 
         this.kvFormat = tableInfo.getTableConfig().getKvFormat();
         this.writeFormat = WriteFormat.fromKvFormat(this.kvFormat);
@@ -201,7 +225,25 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
      */
     @Override
     public CompletableFuture<DeleteResult> delete(InternalRow row) {
-        checkFieldCount(row);
+        // Prefer full-row interpretation when full table row and primary-key row have the same
+        // field count. This preserves table-schema ordering for all-column primary-key tables.
+        if (row.getFieldCount() == fieldCount) {
+            return deleteFullRow(row);
+        }
+        if (row.getFieldCount() == primaryKeyRowType.getFieldCount()) {
+            return deletePrimaryKeyRow(row);
+        }
+        throw new IllegalArgumentException(
+                "The field count of the row does not match the table schema or primary key schema. "
+                        + "Expected full table row: "
+                        + fieldCount
+                        + ", expected primary key row: "
+                        + primaryKeyRowType.getFieldCount()
+                        + ", Actual: "
+                        + row.getFieldCount());
+    }
+
+    private CompletableFuture<DeleteResult> deleteFullRow(InternalRow row) {
         byte[] key = primaryKeyEncoder.encodeKey(row);
         byte[] bucketKey =
                 bucketKeyEncoder == primaryKeyEncoder ? key : bucketKeyEncoder.encodeKey(row);
@@ -215,6 +257,31 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                         targetColumns,
                         mergeMode);
         return sendWithResult(record, DeleteResult::new);
+    }
+
+    private CompletableFuture<DeleteResult> deletePrimaryKeyRow(InternalRow row) {
+        byte[] key = primaryKeyDeleteEncoder.encodeKey(row);
+        byte[] bucketKey =
+                bucketKeyDeleteEncoder == primaryKeyDeleteEncoder
+                        ? key
+                        : bucketKeyDeleteEncoder.encodeKey(row);
+        WriteRecord record =
+                WriteRecord.forDelete(
+                        tableInfo,
+                        getDeletePhysicalPath(row),
+                        key,
+                        bucketKey,
+                        writeFormat,
+                        targetColumns,
+                        mergeMode);
+        return sendWithResult(record, DeleteResult::new);
+    }
+
+    private PhysicalTablePath getDeletePhysicalPath(InternalRow row) {
+        if (deletePartitionComputer == null) {
+            return PhysicalTablePath.of(tablePath);
+        }
+        return PhysicalTablePath.of(tablePath, deletePartitionComputer.getPartition(row));
     }
 
     private BinaryRow encodeRow(InternalRow row) {

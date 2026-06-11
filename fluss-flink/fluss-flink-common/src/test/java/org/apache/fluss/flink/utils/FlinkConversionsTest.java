@@ -17,9 +17,13 @@
 
 package org.apache.fluss.flink.utils;
 
+import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.flink.catalog.TestSchemaResolver;
+import org.apache.fluss.metadata.DateTruncPartitionTransform;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.PartitionExpression;
+import org.apache.fluss.metadata.PartitionKey;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -55,6 +59,7 @@ import static org.apache.flink.table.api.DataTypes.VARBINARY;
 import static org.apache.flink.table.api.DataTypes.VARCHAR;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
+import static org.apache.fluss.flink.FlinkConnectorOptions.INTERNAL_IMPLICIT_PARTITIONED_TABLE;
 import static org.apache.fluss.flink.utils.CatalogTableTestUtils.addOptions;
 import static org.apache.fluss.flink.utils.CatalogTableTestUtils.checkEqualsIgnoreSchema;
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
@@ -277,6 +282,68 @@ public class FlinkConversionsTest {
         bucketKeyOption.put(BUCKET_NUMBER.key(), "1");
         CatalogTable expectedTable = addOptions(flinkTable, bucketKeyOption);
         checkEqualsIgnoreSchema(convertedFlinkTable, expectedTable);
+    }
+
+    @Test
+    void testToFlinkTableHidesImplicitPartitionKey() {
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                org.apache.fluss.metadata.Schema.newBuilder()
+                                        .column("event_time", DataTypes.TIMESTAMP().copy(false))
+                                        .build())
+                        .partitionedByKeys(
+                                PartitionKey.expression(
+                                        PartitionExpression.of(
+                                                "event_day",
+                                                DateTruncPartitionTransform.of(
+                                                        "event_time", AutoPartitionTimeUnit.DAY))))
+                        .distributedBy(1)
+                        .build();
+        TableInfo tableInfo =
+                TableInfo.of(
+                        TablePath.of("db", "table"),
+                        1L,
+                        1,
+                        tableDescriptor,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        0,
+                        0);
+
+        CatalogTable flinkTable = (CatalogTable) FlinkConversions.toFlinkTable(tableInfo);
+
+        assertThat(flinkTable.getPartitionKeys()).isEmpty();
+        assertThat(flinkTable.getOptions())
+                .containsEntry(INTERNAL_IMPLICIT_PARTITIONED_TABLE.key(), "true");
+        assertThat(flinkTable.getUnresolvedSchema().getColumns())
+                .extracting(Schema.UnresolvedColumn::getName)
+                .containsExactly("event_time");
+    }
+
+    @Test
+    void testFlinkSqlDdlCannotDeclareImplicitPartitionKey() {
+        ResolvedSchema schema =
+                new ResolvedSchema(
+                        Collections.singletonList(
+                                Column.physical(
+                                        "event_time",
+                                        org.apache.flink.table.api.DataTypes.TIMESTAMP()
+                                                .notNull())),
+                        Collections.emptyList(),
+                        null);
+        CatalogTable flinkTable =
+                CatalogTable.of(
+                        Schema.newBuilder().fromResolvedSchema(schema).build(),
+                        "implicit partition ddl",
+                        Collections.singletonList("event_day"),
+                        Collections.emptyMap());
+
+        assertThatThrownBy(
+                        () ->
+                                FlinkConversions.toFlussTable(
+                                        new ResolvedCatalogTable(flinkTable, schema)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Partition key 'event_day' does not exist in the schema.");
     }
 
     @Test

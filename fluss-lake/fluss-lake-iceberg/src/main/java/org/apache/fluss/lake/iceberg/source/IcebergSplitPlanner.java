@@ -48,6 +48,7 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toFlussPartitionValue;
 import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 
@@ -181,8 +182,20 @@ public class IcebergSplitPlanner implements Planner<IcebergSplit> {
                             .collect(Collectors.toList());
             return task ->
                     partitionFieldIndices.stream()
-                            // since currently, only string partition is supported
-                            .map(index -> task.partition().get(index, String.class))
+                            .map(
+                                    index -> {
+                                        Class<?> javaClass =
+                                                partitionSpec
+                                                        .partitionType()
+                                                        .fields()
+                                                        .get(index)
+                                                        .type()
+                                                        .typeId()
+                                                        .javaClass();
+                                        Object value = task.partition().get(index, javaClass);
+                                        return toFlussPartitionValue(
+                                                partitionFields.get(index), value);
+                                    })
                             .collect(Collectors.toList());
         }
     }

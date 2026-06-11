@@ -22,6 +22,7 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.ServerTag;
+import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.AlterConfig;
@@ -48,8 +49,10 @@ import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.DateTruncPartitionTransform;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
+import org.apache.fluss.metadata.PartitionExpression;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
@@ -182,6 +185,7 @@ import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.producer.ProducerOffsets;
+import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 import org.apache.fluss.utils.json.TableBucketOffsets;
@@ -192,11 +196,13 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.io.UncheckedIOException;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -508,16 +514,13 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         // before create table in fluss, we may create in lake
         if (isDataLakeEnabled(tableDescriptor)) {
+            LakeCatalog lakeCatalog = checkNotNull(lakeCatalogContainer.getLakeCatalog());
+            DefaultLakeCatalogContext lakeCatalogContext =
+                    new DefaultLakeCatalogContext(
+                            true, currentSession().getPrincipal(), null, tableDescriptor);
+            lakeCatalog.validateTable(tableDescriptor, lakeCatalogContext);
             try {
-                checkNotNull(lakeCatalogContainer.getLakeCatalog())
-                        .createTable(
-                                tablePath,
-                                tableDescriptor,
-                                new DefaultLakeCatalogContext(
-                                        true,
-                                        currentSession().getPrincipal(),
-                                        null,
-                                        tableDescriptor));
+                lakeCatalog.createTable(tablePath, tableDescriptor, lakeCatalogContext);
             } catch (TableAlreadyExistException e) {
                 throw new LakeTableAlreadyExistException(e.getMessage(), e);
             }
@@ -708,7 +711,142 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             newDescriptor = newDescriptor.withProperties(newProperties);
         }
 
-        return newDescriptor;
+        return applyImplicitPartitionDefaults(newDescriptor);
+    }
+
+    @VisibleForTesting
+    static TableDescriptor applyImplicitPartitionDefaults(TableDescriptor tableDescriptor) {
+        if (!tableDescriptor.hasPartitionExpressions()) {
+            return tableDescriptor;
+        }
+
+        TableDescriptor resolvedDescriptor =
+                tableDescriptor.withResolvedPartitionExpressionTimeZone(ZoneId.of("UTC"));
+        Map<String, String> properties = new HashMap<>(resolvedDescriptor.getProperties());
+
+        String enabledKey = ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key();
+        if (properties.containsKey(enabledKey)
+                && !Boolean.parseBoolean(properties.get(enabledKey))) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "Implicit partition tables require '%s'=true so expired partitions and their state can be cleaned automatically.",
+                            enabledKey));
+        }
+        properties.put(enabledKey, "true");
+
+        String retentionKey = ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION.key();
+        int numRetention =
+                properties.containsKey(retentionKey)
+                        ? Integer.parseInt(properties.get(retentionKey))
+                        : ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION.defaultValue();
+        if (numRetention < 0) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "Implicit partition tables require non-negative '%s', but got %s.",
+                            retentionKey, numRetention));
+        }
+        properties.put(retentionKey, String.valueOf(numRetention));
+
+        Map<String, DateTruncPartitionTransform> transformsByKey = new LinkedHashMap<>();
+        for (PartitionExpression partitionExpression :
+                resolvedDescriptor.getPartitionExpressions()) {
+            if (!(partitionExpression.getTransform() instanceof DateTruncPartitionTransform)) {
+                throw new InvalidTableException(
+                        "v1 implicit partition lifecycle supports DATE_TRUNC transforms only.");
+            }
+            transformsByKey.put(
+                    partitionExpression.getVirtualPartitionSpecKey().get(),
+                    (DateTruncPartitionTransform) partitionExpression.getTransform());
+        }
+
+        String autoPartitionKeyOption = ConfigOptions.TABLE_AUTO_PARTITION_KEY.key();
+        String autoPartitionKey = properties.get(autoPartitionKeyOption);
+        if (autoPartitionKey == null || autoPartitionKey.trim().isEmpty()) {
+            if (transformsByKey.size() != 1) {
+                throw new InvalidConfigException(
+                        String.format(
+                                "Implicit partition tables with multiple temporal virtual keys must set '%s' explicitly.",
+                                autoPartitionKeyOption));
+            }
+            autoPartitionKey = transformsByKey.keySet().iterator().next();
+            properties.put(autoPartitionKeyOption, autoPartitionKey);
+        }
+
+        DateTruncPartitionTransform autoPartitionTransform = transformsByKey.get(autoPartitionKey);
+        if (autoPartitionTransform == null) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "The implicit auto-partition key '%s' must identify a virtual DATE_TRUNC partition key, but available virtual keys are %s.",
+                            autoPartitionKey, transformsByKey.keySet()));
+        }
+
+        String timeUnitKey = ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key();
+        AutoPartitionTimeUnit transformTimeUnit = autoPartitionTransform.getTimeUnit();
+        if (properties.containsKey(timeUnitKey)) {
+            AutoPartitionTimeUnit configuredTimeUnit =
+                    Configuration.fromMap(properties)
+                            .get(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT);
+            if (configuredTimeUnit != transformTimeUnit) {
+                throw new InvalidConfigException(
+                        String.format(
+                                "'%s' must match implicit partition transform unit %s, but got %s.",
+                                timeUnitKey, transformTimeUnit, configuredTimeUnit));
+            }
+        } else {
+            properties.put(timeUnitKey, transformTimeUnit.name());
+        }
+
+        int sourceColumnIndex =
+                resolvedDescriptor
+                        .getSchema()
+                        .getRowType()
+                        .getFieldIndex(autoPartitionTransform.getSourceColumn());
+        DataTypeRoot sourceType =
+                resolvedDescriptor
+                        .getSchema()
+                        .getRowType()
+                        .getTypeAt(sourceColumnIndex)
+                        .getTypeRoot();
+        String timeZoneKey = ConfigOptions.TABLE_AUTO_PARTITION_TIMEZONE.key();
+        if (sourceType == DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE) {
+            ZoneId transformTimeZone =
+                    autoPartitionTransform
+                            .getTimeZone()
+                            .orElseThrow(
+                                    () ->
+                                            new InvalidTableException(
+                                                    "Resolved TIMESTAMP_LTZ partition transform is missing a time zone."));
+            if (properties.containsKey(timeZoneKey)) {
+                ZoneId configuredTimeZone = ZoneId.of(properties.get(timeZoneKey));
+                if (!configuredTimeZone.getRules().equals(transformTimeZone.getRules())) {
+                    throw new InvalidConfigException(
+                            String.format(
+                                    "'%s' must match implicit partition transform time zone %s, but got %s.",
+                                    timeZoneKey, transformTimeZone, configuredTimeZone));
+                }
+            }
+            properties.put(timeZoneKey, transformTimeZone.getId());
+        } else if (properties.containsKey(timeZoneKey)) {
+            properties.put(timeZoneKey, ZoneId.of(properties.get(timeZoneKey)).getId());
+        } else {
+            properties.put(timeZoneKey, ZoneId.of("UTC").getId());
+        }
+
+        String numPreCreateKey = ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.key();
+        if (resolvedDescriptor.getPartitionKeys().size() > 1) {
+            if (properties.containsKey(numPreCreateKey)) {
+                int numPreCreate = Integer.parseInt(properties.get(numPreCreateKey));
+                if (numPreCreate > 0) {
+                    throw new InvalidConfigException(
+                            String.format(
+                                    "Implicit partition tables with multiple partition keys require '%s'=0 because pre-created auto partitions can only be generated for a single time partition key.",
+                                    numPreCreateKey));
+                }
+            } else {
+                properties.put(numPreCreateKey, "0");
+            }
+        }
+        return resolvedDescriptor.withProperties(properties);
     }
 
     private boolean isDataLakeEnabled(TableDescriptor tableDescriptor) {

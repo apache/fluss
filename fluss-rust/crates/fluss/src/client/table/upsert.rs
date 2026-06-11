@@ -25,6 +25,7 @@ use crate::row::field_getter::FieldGetter;
 use std::sync::{Arc, Mutex};
 
 use crate::client::table::partition_getter::{PartitionGetter, get_physical_path};
+use crate::client::table::unsupported_implicit_partition_operation;
 use bitvec::prelude::bitvec;
 use bytes::Bytes;
 
@@ -98,6 +99,9 @@ impl TableUpsert {
     }
 
     pub fn create_writer(&self) -> Result<UpsertWriter> {
+        if self.table_info.has_partition_expressions() {
+            return Err(unsupported_implicit_partition_operation("upsert"));
+        }
         UpsertWriterFactory::create(
             Arc::new(self.table_path.clone()),
             Arc::new(self.table_info.clone()),

@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.iceberg.tiering;
 
+import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidTableException;
@@ -25,6 +26,9 @@ import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
+import org.apache.fluss.metadata.DateTruncPartitionTransform;
+import org.apache.fluss.metadata.PartitionExpression;
+import org.apache.fluss.metadata.PartitionKey;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -35,6 +39,7 @@ import org.apache.fluss.record.GenericRecord;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -55,11 +60,13 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
 import java.io.File;
 import java.io.IOException;
+import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -261,6 +268,114 @@ class IcebergTieringTest {
         }
         return TableInfo.of(
                 tablePath, 0, 1, descriptorBuilder.build(), DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testTieringWriteImplicitPartitionTable(boolean isPrimaryKeyTable) throws Exception {
+        TablePath tablePath =
+                TablePath.of(
+                        "iceberg",
+                        isPrimaryKeyTable ? "implicit_partition_pk" : "implicit_partition_log");
+        Namespace namespace = Namespace.of(tablePath.getDatabaseName());
+        SupportsNamespaces namespaces = (SupportsNamespaces) icebergCatalog;
+        if (!namespaces.namespaceExists(namespace)) {
+            namespaces.createNamespace(namespace);
+        }
+
+        Set<Integer> identifierFieldIds = new HashSet<>();
+        if (isPrimaryKeyTable) {
+            identifierFieldIds.add(1);
+            identifierFieldIds.add(2);
+        }
+        org.apache.iceberg.Schema icebergSchema =
+                new org.apache.iceberg.Schema(
+                        Arrays.asList(
+                                Types.NestedField.required(1, "id", Types.IntegerType.get()),
+                                Types.NestedField.required(
+                                        2, "event_time", Types.TimestampType.withoutZone()),
+                                Types.NestedField.optional(3, "payload", Types.StringType.get()),
+                                Types.NestedField.required(
+                                        4, BUCKET_COLUMN_NAME, Types.IntegerType.get()),
+                                Types.NestedField.required(
+                                        5, OFFSET_COLUMN_NAME, Types.LongType.get()),
+                                Types.NestedField.required(
+                                        6, TIMESTAMP_COLUMN_NAME, Types.TimestampType.withZone())),
+                        identifierFieldIds);
+        PartitionSpec.Builder specBuilder =
+                PartitionSpec.builderFor(icebergSchema)
+                        .day("event_time", "__fluss_implicit_partition_0");
+        PartitionSpec partitionSpec =
+                isPrimaryKeyTable
+                        ? specBuilder.bucket("id", BUCKET_NUM).build()
+                        : specBuilder.identity(BUCKET_COLUMN_NAME).build();
+        icebergCatalog.createTable(toIceberg(tablePath), icebergSchema, partitionSpec);
+
+        org.apache.fluss.metadata.Schema.Builder flussSchemaBuilder =
+                org.apache.fluss.metadata.Schema.newBuilder()
+                        .column("id", DataTypes.INT().copy(false))
+                        .column("event_time", DataTypes.TIMESTAMP().copy(false))
+                        .column("payload", DataTypes.STRING());
+        if (isPrimaryKeyTable) {
+            flussSchemaBuilder.primaryKey("id", "event_time");
+        }
+        TableDescriptor.Builder descriptorBuilder =
+                TableDescriptor.builder()
+                        .schema(flussSchemaBuilder.build())
+                        .partitionedByKeys(
+                                PartitionKey.expression(
+                                        PartitionExpression.of(
+                                                "business_day",
+                                                DateTruncPartitionTransform.of(
+                                                        "event_time", AutoPartitionTimeUnit.DAY))))
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true);
+        if (isPrimaryKeyTable) {
+            descriptorBuilder.distributedBy(BUCKET_NUM, "id");
+        } else {
+            descriptorBuilder.distributedBy(BUCKET_NUM);
+        }
+        TableInfo tableInfo =
+                TableInfo.of(
+                        tablePath,
+                        0,
+                        1,
+                        descriptorBuilder.build(),
+                        DEFAULT_REMOTE_DATA_DIR,
+                        1L,
+                        1L);
+
+        LocalDateTime eventTime = LocalDateTime.of(2026, 6, 4, 15, 30);
+        GenericRow row = new GenericRow(3);
+        row.setField(0, 1);
+        row.setField(1, TimestampNtz.fromLocalDateTime(eventTime));
+        row.setField(2, BinaryString.fromString("payload"));
+        LogRecord record =
+                new GenericRecord(
+                        0L, 1_000_000L, isPrimaryKeyTable ? INSERT : ChangeType.APPEND_ONLY, row);
+
+        IcebergWriteResult writeResult;
+        try (LakeWriter<IcebergWriteResult> writer =
+                createLakeWriter(tablePath, 0, "20260604", 1L, tableInfo)) {
+            writer.write(record);
+            writeResult = writer.complete();
+        }
+        try (LakeCommitter<IcebergWriteResult, IcebergCommittable> committer =
+                createLakeCommitter(tablePath, tableInfo)) {
+            committer.commit(
+                    committer.toCommittable(Collections.singletonList(writeResult)),
+                    Collections.emptyMap());
+        }
+
+        Table table = icebergCatalog.loadTable(toIceberg(tablePath));
+        table.refresh();
+        try (CloseableIterator<Record> rows = IcebergGenerics.read(table).build().iterator()) {
+            assertThat(rows.hasNext()).isTrue();
+            Record actual = rows.next();
+            assertThat(actual.getField("id")).isEqualTo(1);
+            assertThat(actual.getField("event_time")).isEqualTo(eventTime);
+            assertThat(actual.getField("payload")).isEqualTo("payload");
+            assertThat(rows.hasNext()).isFalse();
+        }
     }
 
     private LakeWriter<IcebergWriteResult> createLakeWriter(

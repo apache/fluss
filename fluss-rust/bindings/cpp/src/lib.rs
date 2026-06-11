@@ -139,6 +139,7 @@ mod ffi {
         primary_keys: Vec<String>,
         bucket_keys: Vec<String>,
         partition_keys: Vec<String>,
+        has_partition_expressions: bool,
         num_buckets: i32,
         has_primary_key: bool,
         is_partitioned: bool,
@@ -3951,5 +3952,21 @@ fn structurally_compatible(a: &fcore::metadata::DataType, b: &fcore::metadata::D
             structurally_compatible(x.get_element_type(), y.get_element_type())
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preserves_implicit_partition_unsupported_operation_from_core() {
+        let message = "Rust client v1 does not support append for implicit partitioned Fluss tables. Full Rust PartitionComputer support is planned for v2.";
+        let ffi_error = err_from_core_error(&Error::UnsupportedOperation {
+            message: message.to_string(),
+        });
+
+        assert!(ffi_error.error_message.contains(message));
+        assert_eq!(ffi_error.error_code, CLIENT_ERROR_CODE);
     }
 }
