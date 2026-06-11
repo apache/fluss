@@ -64,6 +64,7 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
     private final Catalog paimonCatalog;
     private final FileStoreTable fileStoreTable;
     private final TablePath tablePath;
+    private final TablePath lakeTablePath;
     private final long tableId;
     private final Configuration flussClientConfig;
     private TableCommitImpl tableCommit;
@@ -75,11 +76,12 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
             throws IOException {
         this.paimonCatalog = paimonCatalogProvider.get();
         this.tablePath = committerInitContext.tablePath();
+        this.lakeTablePath = committerInitContext.tableInfo().getLakeTablePath();
         this.tableId = committerInitContext.tableInfo().getTableId();
         this.flussClientConfig = committerInitContext.flussClientConfig();
         this.fileStoreTable =
                 getTable(
-                        committerInitContext.tablePath(),
+                        lakeTablePath,
                         committerInitContext
                                         .tableInfo()
                                         .getTableConfig()
@@ -161,7 +163,7 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
     @Nullable
     private TieringStats computeTableStats() {
         Identifier identifier =
-                new Identifier(tablePath.getDatabaseName(), tablePath.getTableName());
+                new Identifier(lakeTablePath.getDatabaseName(), lakeTablePath.getTableName());
         try {
             Optional<TableSnapshot> snapshot = paimonCatalog.loadSnapshot(identifier);
             if (!snapshot.isPresent()) {

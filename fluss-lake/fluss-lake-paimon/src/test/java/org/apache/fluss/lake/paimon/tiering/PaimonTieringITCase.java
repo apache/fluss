@@ -188,6 +188,32 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
         }
     }
 
+    @Test
+    void testTieringWithCustomLakeTablePath() throws Exception {
+        TablePath flussTablePath = TablePath.of(DEFAULT_DB, "customLakePathPkTable");
+        TablePath lakeTablePath = TablePath.of("custom_db", "custom_lake_path_target");
+        Map<String, String> tableProperties = new HashMap<>();
+        tableProperties.put(
+                ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(), lakeTablePath.getDatabaseName());
+        tableProperties.put(
+                ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(), lakeTablePath.getTableName());
+        long tableId = createPkTable(flussTablePath, tableProperties, Collections.emptyMap());
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+
+        List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
+        writeRows(flussTablePath, rows, false);
+        triggerAndWaitSnapshot(tableId, 1);
+
+        JobClient jobClient = buildTieringJob(execEnv);
+        try {
+            assertReplicaStatus(tableBucket, 3);
+            checkDataInPaimonPrimaryKeyTable(lakeTablePath, rows);
+            checkFlussOffsetsInSnapshot(lakeTablePath, Collections.singletonMap(tableBucket, 3L));
+        } finally {
+            jobClient.cancel().get();
+        }
+    }
+
     private static Stream<Arguments> tieringAllTypesWriteArgs() {
         return Stream.of(Arguments.of(true), Arguments.of(false));
     }

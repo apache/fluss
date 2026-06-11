@@ -19,7 +19,7 @@ package org.apache.fluss.spark
 
 import org.apache.fluss.client.admin.Admin
 import org.apache.fluss.config.{Configuration => FlussConfiguration}
-import org.apache.fluss.metadata.{TableInfo, TablePath}
+import org.apache.fluss.metadata.{LakeTableUtil, TableInfo, TablePath}
 import org.apache.fluss.spark.catalog.{AbstractSparkTable, SupportsFlussPartitionManagement}
 import org.apache.fluss.spark.read.{FlussAppendScanBuilder, FlussUpsertScanBuilder}
 import org.apache.fluss.spark.write.{FlussAppendWriteBuilder, FlussUpsertWriteBuilder}
@@ -61,6 +61,11 @@ class SparkTable(
 
   override def newScanBuilder(options: CaseInsensitiveStringMap): ScanBuilder = {
     populateSparkConf(flussConfig)
+    val isDataLakeEnabled = tableInfo.getTableConfig.isDataLakeEnabled
+    if (isDataLakeEnabled && LakeTableUtil.hasCustomLakePath(tableInfo.getProperties)) {
+      throw new UnsupportedOperationException(
+        "Custom lake table path is not supported in Spark connector yet.")
+    }
     if (tableInfo.getPrimaryKeys.isEmpty) {
       new FlussAppendScanBuilder(tablePath, tableInfo, options, flussConfig)
     } else {

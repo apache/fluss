@@ -25,6 +25,7 @@ import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.flink.adapter.ResolvedCatalogMaterializedTableAdapter;
 import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.utils.FlinkConversionsTest;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.utils.ExceptionUtils;
 
@@ -74,8 +75,10 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.apache.fluss.config.ConfigOptions.BOOTSTRAP_SERVERS;
+import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_DATABASE_NAME;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
+import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_TABLE_NAME;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_MODE;
@@ -342,6 +345,43 @@ class FlinkCatalogTest {
         assertThat(catalog.tableExists(lakeTablePath)).isFalse();
         // create the table again should be ok, because the existing lake table is matched
         catalog.createTable(lakeTablePath, table, false);
+    }
+
+    @Test
+    void testGetLakeTableWithCustomLakePath() throws Exception {
+        String flussTableName = "fluss_table";
+        TablePath lakeTablePath = TablePath.of("custom_lake_db", "custom_lake_table");
+
+        Map<String, String> options = new HashMap<>();
+        options.put(TABLE_DATALAKE_ENABLED.key(), "true");
+        options.put(TABLE_DATALAKE_FORMAT.key(), PAIMON.name());
+        options.put(TABLE_DATALAKE_DATABASE_NAME.key(), lakeTablePath.getDatabaseName());
+        options.put(TABLE_DATALAKE_TABLE_NAME.key(), lakeTablePath.getTableName());
+
+        ObjectPath flussTablePath = new ObjectPath(DEFAULT_DB, flussTableName);
+        catalog.createTable(flussTablePath, newCatalogTable(options), false);
+
+        CatalogTable lakeTable = newCatalogTable(Collections.emptyMap());
+        mockLakeCatalog.catalog.createDatabase(
+                lakeTablePath.getDatabaseName(),
+                new CatalogDatabaseImpl(Collections.emptyMap(), null),
+                true);
+        mockLakeCatalog.registerLakeTable(
+                new ObjectPath(lakeTablePath.getDatabaseName(), lakeTablePath.getTableName()),
+                lakeTable);
+        CatalogBaseTable gottenLakeTable =
+                catalog.getTable(new ObjectPath(DEFAULT_DB, flussTableName + "$lake"));
+        assertThat(gottenLakeTable).isEqualTo(lakeTable);
+
+        CatalogTable snapshotsTable = newCatalogTable(Collections.emptyMap());
+        mockLakeCatalog.registerLakeTable(
+                new ObjectPath(
+                        lakeTablePath.getDatabaseName(),
+                        lakeTablePath.getTableName() + "$snapshots"),
+                snapshotsTable);
+        CatalogBaseTable gottenSnapshotsTable =
+                catalog.getTable(new ObjectPath(DEFAULT_DB, flussTableName + "$lake$snapshots"));
+        assertThat(gottenSnapshotsTable).isEqualTo(snapshotsTable);
     }
 
     @Test
