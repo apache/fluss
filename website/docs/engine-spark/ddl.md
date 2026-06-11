@@ -57,7 +57,7 @@ DROP DATABASE my_db;
 
 ### Log Table
 
-The following SQL statement creates a Log Table by not specifying `primary.key` property.
+The following SQL statement creates a Log Table by not specifying `primaryKey` property.
 
 ```sql title="Spark SQL"
 CREATE TABLE my_log_table (
@@ -70,7 +70,7 @@ CREATE TABLE my_log_table (
 
 ### Primary Key Table
 
-The following SQL statement creates a Primary Key Table by specifying `primary.key` in `TBLPROPERTIES`.
+The following SQL statement creates a Primary Key Table by specifying `primaryKey` in `TBLPROPERTIES`.
 
 ```sql title="Spark SQL"
 CREATE TABLE my_pk_table (
@@ -79,8 +79,8 @@ CREATE TABLE my_pk_table (
   num_orders INT,
   total_amount INT
 ) TBLPROPERTIES (
-  'primary.key' = 'shop_id,user_id',
-  'bucket.num' = '4'
+  'primaryKey' = 'shop_id,user_id',
+  'bucketNum' = '4'
 );
 ```
 
@@ -106,7 +106,7 @@ CREATE TABLE my_part_pk_table (
   name STRING,
   pt STRING
 ) PARTITIONED BY (pt) TBLPROPERTIES (
-  'primary.key' = 'id,pt'
+  'primaryKey' = 'id,pt'
 );
 ```
 
@@ -134,9 +134,9 @@ The following table properties can be specified when creating a table:
 
 | Property     | Required | Description                                                                                                                                                                                                                                                                                                                        |
 |--------------|----------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| primary.key  | optional | The primary keys of the Fluss table. Multiple columns are separated by commas (e.g., `'col1,col2'`).                                                                                                                                                                                                                              |
-| bucket.key   | optional | The distribution key of the Fluss table. Data will be distributed to each bucket according to the hash value of the bucket key. Must be a subset of the primary keys (excluding partition keys). If not specified, defaults to the primary key (excluding partition keys) for PK tables, or random distribution for Log tables.     |
-| bucket.num   | optional | The number of buckets of the Fluss table.                                                                                                                                                                                                                                                                                          |
+| primaryKey  | optional | The primary keys of the Fluss table. Multiple columns are separated by commas (e.g., `'col1,col2'`).                                                                                                                                                                                                                              |
+| bucketKey   | optional | The distribution key of the Fluss table. Data will be distributed to each bucket according to the hash value of the bucket key. Must be a subset of the primary keys (excluding partition keys). If not specified, defaults to the primary key (excluding partition keys) for PK tables, or random distribution for Log tables.     |
+| bucketNum   | optional | The number of buckets of the Fluss table.                                                                                                                                                                                                                                                                                          |
 
 You can also pass additional custom properties and Fluss storage options through `TBLPROPERTIES`:
 
@@ -145,8 +145,8 @@ CREATE TABLE my_table (
   id INT,
   name STRING
 ) TBLPROPERTIES (
-  'primary.key' = 'id',
-  'bucket.num' = '4',
+  'primaryKey' = 'id',
+  'bucketNum' = '4',
   'key1' = 'value1'
 );
 ```

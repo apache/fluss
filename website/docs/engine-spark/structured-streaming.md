@@ -58,7 +58,7 @@ Fluss supports reading data from Fluss tables using Spark Structured Streaming. 
 
 ```scala title="Spark Application"
 val df = spark.readStream
-  .option("scan.startup.mode", "latest")
+  .option("scanStartupMode", "latest")
   .table("fluss_catalog.fluss.log_table")
 
 val query = df.writeStream
@@ -72,7 +72,7 @@ query.awaitTermination()
 
 ```scala title="Spark Application"
 val df = spark.readStream
-  .option("scan.startup.mode", "latest")
+  .option("scanStartupMode", "latest")
   .table("fluss_catalog.fluss.pk_table")
 
 val query = df.writeStream
@@ -97,7 +97,7 @@ Fluss Spark streaming source supports the following Spark trigger modes:
 import org.apache.spark.sql.streaming.Trigger
 
 val df = spark.readStream
-  .option("scan.startup.mode", "latest")
+  .option("scanStartupMode", "latest")
   .table("fluss_catalog.fluss.my_table")
 
 // Processing time trigger (every 5 seconds)
@@ -127,12 +127,12 @@ val spark = SparkSession.builder()
 spark.sql("CREATE TABLE IF NOT EXISTS source_table (id INT, data STRING)")
 spark.sql("""
   CREATE TABLE IF NOT EXISTS sink_table (id INT, data STRING)
-  TBLPROPERTIES ('primary.key' = 'id')
+  TBLPROPERTIES ('primaryKey' = 'id')
 """)
 
 // Read from source table
 val sourceDF = spark.readStream
-  .option("scan.startup.mode", "latest")
+  .option("scanStartupMode", "latest")
   .table("fluss_catalog.fluss.source_table")
 
 // Write to sink table
