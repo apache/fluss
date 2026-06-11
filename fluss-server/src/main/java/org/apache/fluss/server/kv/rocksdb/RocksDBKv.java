@@ -303,8 +303,20 @@ public class RocksDBKv implements AutoCloseable {
      * GetIntProperty}) returns NotFound for it. We therefore use the string accessor and parse the
      * result. Returns {@code 0} when the property is unavailable so the caller treats it as "no
      * pressure".
+     *
+     * <p>The native call is fenced by {@link #rocksDBResourceGuard} so that {@link #close()} blocks
+     * until any in-flight pressure sampling completes; touching the RocksDB native handle after
+     * disposal would otherwise SIGABRT the JVM. When the guard is already closed, returns {@code 0}
+     * so callers degrade to "no pressure" instead of failing the request.
      */
     private long currentL0FileCount() {
+        final ResourceGuard.Lease lease;
+        try {
+            lease = rocksDBResourceGuard.acquireResource();
+        } catch (IOException acquireFailed) {
+            // RocksDB is already closed (or being closed); treat as no pressure.
+            return 0L;
+        }
         try {
             String value = db.getProperty(defaultColumnFamilyHandle, NUM_FILES_AT_LEVEL0);
             if (value == null || value.isEmpty()) {
@@ -314,6 +326,8 @@ public class RocksDBKv implements AutoCloseable {
         } catch (RocksDBException e) {
             LOG.warn("Failed to query L0 file count for backpressure", e);
             return 0L;
+        } finally {
+            lease.close();
         }
     }
 }

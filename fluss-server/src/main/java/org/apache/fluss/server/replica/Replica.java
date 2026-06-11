@@ -747,56 +747,6 @@ public final class Replica {
     }
 
     /**
-     * Re-attempts a KV flush that was previously rejected by the predictive L0 gate and is
-     * currently stalled in the backpressured state. Invoked periodically by the tablet-server-wide
-     * scheduler scan in {@code ReplicaManager#scanAndResumeBackpressuredReplicas} once RocksDB
-     * Compaction has reduced the L0 file count, so {@link
-     * org.apache.fluss.server.kv.rocksdb.RocksDBKv#wouldExceedSlowdownTriggerOnFlush} should now
-     * return {@code false}.
-     *
-     * <p>While {@code flushBackpressured == true} the high-watermark is frozen at the last
-     * successfully-flushed offset (see {@link #maybeIncrementLeaderHW}), and the pre-write buffer
-     * holds {@code [HW, leaderLogEndOffset)}. Calling {@code mayFlushKv(currentHW)} would be a
-     * no-op against the already-flushed prefix and would incorrectly clear {@code
-     * flushBackpressured}. Instead we replay the same code path an ISR ack would take — {@link
-     * #maybeIncrementLeaderHW} recomputes the candidate watermark from follower LEOs, calls {@code
-     * mayFlushKv(newHW)} (which now succeeds because L0 has dropped), advances the persisted
-     * watermark on success, and we then nudge any delayed write/fetch operations.
-     *
-     * <p>Lock posture matches {@link #updateFollowerFetchState}: {@code leaderIsrUpdateLock} read
-     * lock guards against leadership flips while {@link #maybeIncrementLeaderHW} runs; {@code
-     * mayFlushKv} acquires {@code KvTablet#kvLock} internally. No-ops when this replica is not the
-     * leader, has no kv tablet, or is no longer backpressured (a concurrent ack-driven flush may
-     * have already cleared the state).
-     */
-    public void tryResumeBackpressuredKvFlush() {
-        boolean hwIncremented =
-                inReadLock(
-                        leaderIsrUpdateLock,
-                        () -> {
-                            if (!isLeader()) {
-                                return false;
-                            }
-                            KvTablet kv = this.kvTablet;
-                            if (kv == null || !kv.isFlushBackpressured()) {
-                                return false;
-                            }
-                            try {
-                                return maybeIncrementLeaderHW(logTablet, clock.milliseconds());
-                            } catch (IOException e) {
-                                LOG.warn(
-                                        "Failed to advance high watermark while resuming kv flush for {}.",
-                                        tableBucket,
-                                        e);
-                                return false;
-                            }
-                        });
-        if (hwIncremented) {
-            tryCompleteDelayedOperations();
-        }
-    }
-
-    /**
      * Init kv tablet from snapshot if any or just from log.
      *
      * @return the snapshot used to init kv tablet, empty if no any snapshot.

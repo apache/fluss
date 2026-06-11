@@ -170,4 +170,37 @@ class RocksDBKvTest {
             }
         }
     }
+
+    /**
+     * Regression test for the JVM crash (exit 134 / SIGABRT) observed in CI for {@code
+     * KvReplicaRestoreITCase}: after {@link RocksDBKv#close()} releases the native handle, late
+     * callers from {@code DelayedWrite#onComplete} → {@code Replica#samplePressureForCompletion}
+     * could still reach {@link RocksDBKv#currentPressure()} → {@code db.getProperty(...)} and touch
+     * the disposed native handle. The fence inside {@code currentL0FileCount} must turn those late
+     * calls into a benign "no pressure" reading instead of a native crash.
+     */
+    @Test
+    void testPressureQueriesAfterCloseAreSafe(@TempDir Path tempDir) throws Exception {
+        File instanceBasePath = tempDir.toFile();
+        RocksDBResourceContainer container =
+                new RocksDBResourceContainer(new Configuration(), instanceBasePath);
+        ColumnFamilyOptions cfOpts = container.getColumnOptions();
+        cfOpts.setLevel0SlowdownWritesTrigger(5);
+        cfOpts.setLevel0FileNumCompactionTrigger(100);
+        cfOpts.setLevel0StopWritesTrigger(100);
+
+        RocksDBKvBuilder builder =
+                new RocksDBKvBuilder(instanceBasePath, container, cfOpts)
+                        .setFlussL0SlowdownTrigger(2);
+
+        RocksDBKv kv = builder.build();
+        // Produce a couple of L0 SSTs so a non-fenced query would otherwise observe non-zero L0.
+        flushNTimes(kv, 2);
+
+        kv.close();
+
+        // Both pressure paths must degrade gracefully once the native handle is gone.
+        assertThat(kv.currentPressure()).isEqualTo(0f);
+        assertThat(kv.wouldExceedSlowdownTriggerOnFlush()).isFalse();
+    }
 }

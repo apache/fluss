@@ -159,15 +159,6 @@ public class ReplicaManager implements ServerReconfigurable {
 
     public static final String HIGH_WATERMARK_CHECKPOINT_FILE_NAME = "high-watermark-checkpoint";
 
-    /**
-     * Period in milliseconds at which {@link #scanAndResumeBackpressuredReplicas} sweeps online
-     * replicas to retry KV flushes that the predictive L0 gate previously rejected. The scan is
-     * cheap (one volatile read + leader check per replica) and the upper bound on resume latency is
-     * dominated by RocksDB Compaction time itself, so a sub-second period gives effectively
-     * "immediate" recovery without measurable overhead.
-     */
-    private static final long KV_BACKPRESSURE_RESUME_SCAN_PERIOD_MS = 500L;
-
     private final Configuration conf;
     private final Scheduler scheduler;
     private final LogManager logManager;
@@ -359,43 +350,8 @@ public class ReplicaManager implements ServerReconfigurable {
                 0L,
                 conf.get(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME).toMillis() / 2);
 
-        // Periodically scan online replicas and resume KV flush on any bucket whose previous flush
-        // was rejected by the predictive L0 gate. Runs on every replica so the scan itself is
-        // cheap (volatile reads + leader check); replicas that are not backpressured short-circuit
-        // inside Replica#tryResumeBackpressuredKvFlush.
-        scheduler.schedule(
-                "kv-backpressure-resume-scan",
-                this::scanAndResumeBackpressuredReplicas,
-                KV_BACKPRESSURE_RESUME_SCAN_PERIOD_MS,
-                KV_BACKPRESSURE_RESUME_SCAN_PERIOD_MS);
-
         // Start periodic disk usage monitoring (initial + periodic sampling)
         localDiskManager.startDiskUsageMonitor(scheduler);
-    }
-
-    /**
-     * Scheduler-driven scan that nudges every online replica to retry a KV flush previously
-     * rejected by the predictive L0 gate. Replicas that are not the leader, hold no kv tablet, or
-     * are no longer backpressured short-circuit inside {@link
-     * Replica#tryResumeBackpressuredKvFlush}; only truly stuck buckets perform real work
-     * (re-running the ack-equivalent path that recomputes the candidate watermark, flushes, and
-     * advances HW).
-     */
-    private void scanAndResumeBackpressuredReplicas() {
-        for (HostedReplica hosted : allReplicas.values()) {
-            if (!(hosted instanceof OnlineReplica)) {
-                continue;
-            }
-            Replica replica = ((OnlineReplica) hosted).getReplica();
-            try {
-                replica.tryResumeBackpressuredKvFlush();
-            } catch (Throwable t) {
-                LOG.warn(
-                        "Failed to resume kv flush during backpressure scan for {}.",
-                        replica.getTableBucket(),
-                        t);
-            }
-        }
     }
 
     public RemoteLogManager getRemoteLogManager() {
