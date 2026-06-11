@@ -25,6 +25,7 @@ import org.apache.fluss.exception.DeletionDisabledException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.SchemaNotExistException;
+import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.memory.MemorySegmentPool;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DeleteBehavior;
@@ -146,6 +147,16 @@ public final class KvTablet {
      * flushed into kv.
      */
     private volatile long flushedLogOffset = 0;
+
+    /**
+     * Set to {@code true} when the most recent {@link #flush(long, FatalErrorHandler)} call was
+     * skipped by the predictive L0 gate, meaning the pre-write buffer still holds unflushed data.
+     * Cleared on the next flush that proceeds. Read by {@code Replica} to (a) skip high-watermark
+     * advancement so the replication ack stays pending, and (b) propagate {@link
+     * org.apache.fluss.rpc.protocol.Errors#STORAGE_BACKPRESSURE_EXCEPTION} through {@code
+     * checkEnoughReplicasReachOffset} so DelayedWrite operations fail fast back to the client.
+     */
+    private volatile boolean flushBackpressured = false;
 
     private volatile long rowCount;
 
@@ -378,6 +389,19 @@ public final class KvTablet {
                 kvLock,
                 () -> {
                     rocksDBKv.checkIfRocksDBClosed();
+
+                    // Write-path admission gate: reject the request if executing one more flush
+                    // would push L0 to or beyond the storage engine's slowdown trigger. This
+                    // bounds the pre-write buffer in concert with the flush-path gate, since
+                    // both share the identical L0 + 1 predicate.
+                    if (rocksDBKv.wouldExceedSlowdownTriggerOnFlush()) {
+                        throw new StorageBackpressureException(
+                                String.format(
+                                        "Write rejected for %s: projected L0 file count would "
+                                                + "reach the storage engine's slowdown trigger. "
+                                                + "Retry after backoff.",
+                                        tableBucket));
+                    }
 
                     SchemaInfo schemaInfo = schemaGetter.getLatestSchemaInfo();
                     Schema latestSchema = schemaInfo.getSchema();
@@ -671,8 +695,6 @@ public final class KvTablet {
     }
 
     public void flush(long exclusiveUpToLogOffset, FatalErrorHandler fatalErrorHandler) {
-        // todo: need to introduce a backpressure mechanism
-        // to avoid too much records in kvPreWriteBuffer
         inWriteLock(
                 kvLock,
                 () -> {
@@ -687,21 +709,31 @@ public final class KvTablet {
                         LOG.warn(
                                 "The kv tablet for {} is already closed, ignore flushing kv pre-write buffer.",
                                 tableBucket);
-                    } else {
-                        try {
-                            int rowCountDiff = kvPreWriteBuffer.flush(exclusiveUpToLogOffset);
-                            if (exclusiveUpToLogOffset > flushedLogOffset) {
-                                flushedLogOffset = exclusiveUpToLogOffset;
-                            }
-                            if (rowCount != ROW_COUNT_DISABLED) {
-                                // row count is enabled, we update the row count after flush.
-                                long currentRowCount = rowCount;
-                                rowCount = currentRowCount + rowCountDiff;
-                            }
-                        } catch (Throwable t) {
-                            fatalErrorHandler.onFatalError(
-                                    new KvStorageException("Failed to flush kv pre-write buffer."));
+                        return;
+                    }
+
+                    // Flush-path predictive gate: skip the flush if it would push L0 to or beyond
+                    // the storage engine's slowdown trigger. The pre-write buffer is left intact;
+                    // the next flush attempt after L0 drops will succeed and HW will resume.
+                    if (rocksDBKv.wouldExceedSlowdownTriggerOnFlush()) {
+                        flushBackpressured = true;
+                        return;
+                    }
+
+                    try {
+                        int rowCountDiff = kvPreWriteBuffer.flush(exclusiveUpToLogOffset);
+                        if (exclusiveUpToLogOffset > flushedLogOffset) {
+                            flushedLogOffset = exclusiveUpToLogOffset;
                         }
+                        if (rowCount != ROW_COUNT_DISABLED) {
+                            // row count is enabled, we update the row count after flush.
+                            long currentRowCount = rowCount;
+                            rowCount = currentRowCount + rowCountDiff;
+                        }
+                        flushBackpressured = false;
+                    } catch (Throwable t) {
+                        fatalErrorHandler.onFatalError(
+                                new KvStorageException("Failed to flush kv pre-write buffer."));
                     }
                 });
     }
@@ -899,13 +931,20 @@ public final class KvTablet {
     }
 
     /**
-     * Pre-write backpressure gate. Delegates to {@link RocksDBKv#checkBackpressure()} so that the
-     * proactive throttle signal and the hard rejection share a single L0 snapshot from the storage
-     * engine. See {@link RocksDBKv#checkBackpressure()} for the full contract.
-     *
-     * <p>Caller is expected to invoke this once per write request, before {@link #putAsLeader}.
+     * Returns the current normalized backpressure pressure in {@code [0, 1)}. Sampled by {@code
+     * DelayedWrite#onComplete} so the value reflects the post-flush L0 state when the response is
+     * about to be sent back to the client.
      */
-    public float checkBackpressure() {
-        return rocksDBKv.checkBackpressure();
+    public float currentPressure() {
+        return rocksDBKv.currentPressure();
+    }
+
+    /**
+     * Returns whether the most recent flush attempt was skipped by the predictive L0 gate. While
+     * {@code true}, the pre-write buffer holds unflushed data and the high watermark must not
+     * advance.
+     */
+    public boolean isFlushBackpressured() {
+        return flushBackpressured;
     }
 }

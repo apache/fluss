@@ -18,7 +18,6 @@
 package org.apache.fluss.server.kv.rocksdb;
 
 import org.apache.fluss.exception.FlussRuntimeException;
-import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.rocksdb.RocksDBOperationUtils;
@@ -255,48 +254,43 @@ public class RocksDBKv implements AutoCloseable {
     }
 
     /**
-     * Pre-write backpressure gate. Reads the current L0 file count once via RocksDB JNI (returning
-     * {@code long} directly, no string allocation) and uses the snapshot for both branches of the
-     * backpressure model.
+     * Returns whether executing one more flush would push L0 file count to or beyond the storage
+     * engine's slowdown trigger. Used by both the write-path admission gate (in {@code
+     * KvTablet#putAsLeader}) and the flush-path predictive gate (in {@code KvTablet#flush}). Both
+     * gates share the identical predicate {@code L0 + 1 >= level0SlowdownWritesTrigger}, so a
+     * pre-write buffer that survives the write gate cannot grow past the budget that the flush gate
+     * will let through.
+     */
+    public boolean wouldExceedSlowdownTriggerOnFlush() {
+        if (level0SlowdownWritesTrigger <= 0) {
+            return false;
+        }
+        return currentL0FileCount() + 1 >= level0SlowdownWritesTrigger;
+    }
+
+    /**
+     * Returns the current normalized backpressure pressure in {@code [0, 1)} for piggyback on write
+     * responses. Mapping:
      *
      * <ul>
-     *   <li><b>Hard rejection</b>: when {@code l0 >= level0SlowdownWritesTrigger}, throws {@link
-     *       StorageBackpressureException} so the RPC handler is not blocked by the storage engine's
-     *       internal sleep.
-     *   <li><b>Proactive throttle signal</b>: otherwise returns a normalized pressure in {@code [0,
-     *       1)} that the server piggybacks on PutKv responses for clients to compute a proactive
-     *       throttle delay. Mapping:
-     *       <ul>
-     *         <li>{@code l0 < flussL0SlowdownTrigger}: returns {@code 0} (no throttle).
-     *         <li>{@code flussL0SlowdownTrigger <= l0 < level0SlowdownWritesTrigger}: returns
-     *             {@code (l0 - flussL0SlowdownTrigger) / (level0SlowdownWritesTrigger -
-     *             flussL0SlowdownTrigger)}.
-     *       </ul>
+     *   <li>{@code l0 < flussL0SlowdownTrigger}: returns {@code 0}.
+     *   <li>{@code flussL0SlowdownTrigger <= l0 < level0SlowdownWritesTrigger}: returns {@code (l0
+     *       - flussL0SlowdownTrigger) / (level0SlowdownWritesTrigger - flussL0SlowdownTrigger)}.
+     *   <li>{@code l0 >= level0SlowdownWritesTrigger}: clamped to a value strictly below 1.
      * </ul>
      *
-     * <p>Caller is expected to invoke this once per write request, before any {@code put}, so the
-     * same L0 snapshot drives both the rejection decision and the piggyback signal.
+     * <p>Never throws; hard rejection is the responsibility of {@link
+     * #wouldExceedSlowdownTriggerOnFlush()} at the write/flush gates.
      */
-    public float checkBackpressure() {
+    public float currentPressure() {
         if (level0SlowdownWritesTrigger <= flussL0SlowdownTrigger) {
-            // Misconfiguration or proactive backpressure disabled.
             return 0f;
         }
         long l0Files = currentL0FileCount();
-        if (l0Files >= level0SlowdownWritesTrigger) {
-            throw new StorageBackpressureException(
-                    String.format(
-                            "Write rejected for kv at %s: L0 file count %d has reached the "
-                                    + "storage engine's slowdown trigger %d. Retry after backoff.",
-                            optionsContainer.getInstanceRocksDBPath(),
-                            l0Files,
-                            level0SlowdownWritesTrigger));
-        }
         if (l0Files < flussL0SlowdownTrigger) {
             return 0f;
         }
         int window = level0SlowdownWritesTrigger - flussL0SlowdownTrigger;
-        // Clamp to (0, window-1]/window so p stays strictly below 1.
         long offset = Math.min(l0Files - flussL0SlowdownTrigger, (long) window - 1);
         return (float) offset / window;
     }

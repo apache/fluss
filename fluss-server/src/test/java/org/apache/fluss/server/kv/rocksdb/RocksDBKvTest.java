@@ -18,7 +18,6 @@
 package org.apache.fluss.server.kv.rocksdb;
 
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.StorageBackpressureException;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -30,7 +29,6 @@ import java.nio.file.Path;
 import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link org.apache.fluss.server.kv.rocksdb.RocksDBKv}. */
 class RocksDBKvTest {
@@ -81,7 +79,7 @@ class RocksDBKvTest {
      * int-type property. The fix uses {@code getProperty} + {@code Long.parseLong} instead.
      */
     @Test
-    void testCheckBackpressure_l0PropertyReadable(@TempDir Path tempDir) throws Exception {
+    void testCurrentPressure_l0PropertyReadable(@TempDir Path tempDir) throws Exception {
         File instanceBasePath = tempDir.toFile();
         RocksDBResourceContainer container =
                 new RocksDBResourceContainer(new Configuration(), instanceBasePath);
@@ -92,9 +90,8 @@ class RocksDBKvTest {
                         .setFlussL0SlowdownTrigger(2);
 
         try (RocksDBKv kv = builder.build()) {
-            // Initially 0 L0 files, should return 0 pressure and NOT throw.
-            float pressure = kv.checkBackpressure();
-            assertThat(pressure).isEqualTo(0f);
+            // Initially 0 L0 files, should return 0 pressure.
+            assertThat(kv.currentPressure()).isEqualTo(0f);
 
             // Write + flush to produce exactly 1 L0 SST.
             kv.put(new byte[] {1}, new byte[] {1});
@@ -104,20 +101,16 @@ class RocksDBKvTest {
             }
 
             // L0 = 1, still below flussL0SlowdownTrigger (2), should still be 0.
-            pressure = kv.checkBackpressure();
-            assertThat(pressure).isEqualTo(0f);
+            assertThat(kv.currentPressure()).isEqualTo(0f);
         }
     }
 
     /**
-     * Verifies the full backpressure logic (proactive throttle signal plus hard rejection) using
-     * low thresholds.
-     *
-     * <p>Configuration: flussTrigger=2, rocksdbSlowdownTrigger=5. We generate L0 files by
-     * repeatedly flushing and verify the pressure transitions.
+     * Verifies the full backpressure logic across the proactive throttle signal and the predictive
+     * flush gate. Configuration: flussTrigger=2, rocksdbSlowdownTrigger=5.
      */
     @Test
-    void testCheckBackpressure_throttleAndHardRejection(@TempDir Path tempDir) throws Exception {
+    void testPressureCurveAndFlushGate(@TempDir Path tempDir) throws Exception {
         File instanceBasePath = tempDir.toFile();
         RocksDBResourceContainer container =
                 new RocksDBResourceContainer(new Configuration(), instanceBasePath);
@@ -133,33 +126,35 @@ class RocksDBKvTest {
                         .setFlussL0SlowdownTrigger(2);
 
         try (RocksDBKv kv = builder.build()) {
-            // --- L0 = 0: no pressure ---
-            assertThat(kv.checkBackpressure()).isEqualTo(0f);
+            // --- L0 = 0: no pressure, flush gate open ---
+            assertThat(kv.currentPressure()).isEqualTo(0f);
+            assertThat(kv.wouldExceedSlowdownTriggerOnFlush()).isFalse();
 
-            // Flush to L0 = 2 (reaches flussTrigger)
+            // Flush to L0 = 2 (reaches flussTrigger). p = (2-2)/(5-2) = 0.
             flushNTimes(kv, 2);
-            float p = kv.checkBackpressure();
-            // p = (2-2)/(5-2) = 0. Still boundary, equals trigger.
-            assertThat(p).isEqualTo(0f);
+            assertThat(kv.currentPressure()).isEqualTo(0f);
+            assertThat(kv.wouldExceedSlowdownTriggerOnFlush()).isFalse();
 
-            // Flush to L0 = 3: proactive throttle signal kicks in
+            // Flush to L0 = 3: proactive throttle signal kicks in. p = (3-2)/(5-2) = 1/3.
             flushNTimes(kv, 1);
-            p = kv.checkBackpressure();
-            // p = (3-2)/(5-2) = 1/3
-            assertThat(p).isGreaterThan(0f).isLessThan(1f);
+            float p = kv.currentPressure();
             assertThat(p).isCloseTo(1f / 3f, org.assertj.core.data.Offset.offset(0.01f));
+            assertThat(kv.wouldExceedSlowdownTriggerOnFlush()).isFalse();
 
-            // Flush to L0 = 4: stronger throttle signal
+            // Flush to L0 = 4: predictive flush gate now closes (4 + 1 == 5 == slowdownTrigger).
+            // p = min(L0 - flussTrigger, window-1) / window = min(2, 2) / 3 = 2/3.
             flushNTimes(kv, 1);
-            p = kv.checkBackpressure();
-            // p = (4-2)/(5-2) = 2/3, but clamped to (window-1)/window = 2/3 (same here)
+            p = kv.currentPressure();
             assertThat(p).isCloseTo(2f / 3f, org.assertj.core.data.Offset.offset(0.01f));
+            assertThat(kv.wouldExceedSlowdownTriggerOnFlush()).isTrue();
 
-            // Flush to L0 = 5: storage engine reaches its slowdown trigger -> hard rejection
+            // Flush to L0 = 5: storage engine has reached its slowdown trigger. Pressure stays
+            // clamped strictly below 1 and the flush gate remains closed.
             flushNTimes(kv, 1);
-            assertThatThrownBy(kv::checkBackpressure)
-                    .isInstanceOf(StorageBackpressureException.class)
-                    .hasMessageContaining("slowdown trigger");
+            p = kv.currentPressure();
+            assertThat(p).isLessThan(1f);
+            assertThat(p).isCloseTo(2f / 3f, org.assertj.core.data.Offset.offset(0.01f));
+            assertThat(kv.wouldExceedSlowdownTriggerOnFlush()).isTrue();
         }
     }
 

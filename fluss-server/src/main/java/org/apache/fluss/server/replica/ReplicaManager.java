@@ -158,6 +158,16 @@ public class ReplicaManager implements ServerReconfigurable {
     private static final Logger LOG = LoggerFactory.getLogger(ReplicaManager.class);
 
     public static final String HIGH_WATERMARK_CHECKPOINT_FILE_NAME = "high-watermark-checkpoint";
+
+    /**
+     * Period in milliseconds at which {@link #scanAndResumeBackpressuredReplicas} sweeps online
+     * replicas to retry KV flushes that the predictive L0 gate previously rejected. The scan is
+     * cheap (one volatile read + leader check per replica) and the upper bound on resume latency is
+     * dominated by RocksDB Compaction time itself, so a sub-second period gives effectively
+     * "immediate" recovery without measurable overhead.
+     */
+    private static final long KV_BACKPRESSURE_RESUME_SCAN_PERIOD_MS = 500L;
+
     private final Configuration conf;
     private final Scheduler scheduler;
     private final LogManager logManager;
@@ -349,8 +359,43 @@ public class ReplicaManager implements ServerReconfigurable {
                 0L,
                 conf.get(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME).toMillis() / 2);
 
+        // Periodically scan online replicas and resume KV flush on any bucket whose previous flush
+        // was rejected by the predictive L0 gate. Runs on every replica so the scan itself is
+        // cheap (volatile reads + leader check); replicas that are not backpressured short-circuit
+        // inside Replica#tryResumeBackpressuredKvFlush.
+        scheduler.schedule(
+                "kv-backpressure-resume-scan",
+                this::scanAndResumeBackpressuredReplicas,
+                KV_BACKPRESSURE_RESUME_SCAN_PERIOD_MS,
+                KV_BACKPRESSURE_RESUME_SCAN_PERIOD_MS);
+
         // Start periodic disk usage monitoring (initial + periodic sampling)
         localDiskManager.startDiskUsageMonitor(scheduler);
+    }
+
+    /**
+     * Scheduler-driven scan that nudges every online replica to retry a KV flush previously
+     * rejected by the predictive L0 gate. Replicas that are not the leader, hold no kv tablet, or
+     * are no longer backpressured short-circuit inside {@link
+     * Replica#tryResumeBackpressuredKvFlush}; only truly stuck buckets perform real work
+     * (re-running the ack-equivalent path that recomputes the candidate watermark, flushes, and
+     * advances HW).
+     */
+    private void scanAndResumeBackpressuredReplicas() {
+        for (HostedReplica hosted : allReplicas.values()) {
+            if (!(hosted instanceof OnlineReplica)) {
+                continue;
+            }
+            Replica replica = ((OnlineReplica) hosted).getReplica();
+            try {
+                replica.tryResumeBackpressuredKvFlush();
+            } catch (Throwable t) {
+                LOG.warn(
+                        "Failed to resume kv flush during backpressure scan for {}.",
+                        replica.getTableBucket(),
+                        t);
+            }
+        }
     }
 
     public RemoteLogManager getRemoteLogManager() {
@@ -1347,10 +1392,6 @@ public class ReplicaManager implements ServerReconfigurable {
                 validateClientVersionForPkTable(apiVersion, replica.getTableInfo());
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPutKvRequests().inc();
-                // Pre-write backpressure gate: a single L0 read drives both the hard rejection
-                // (throws StorageBackpressureException) and the proactive throttle pressure
-                // signal piggybacked on the response.
-                float pressure = replica.checkBackpressure();
                 LogAppendInfo appendInfo =
                         replica.putRecordsToLeader(
                                 entry.getValue(), targetColumns, mergeMode, requiredAcks);
@@ -1359,10 +1400,11 @@ public class ReplicaManager implements ServerReconfigurable {
                         tb,
                         appendInfo.firstOffset(),
                         appendInfo.lastOffset());
+                // The pressure field is left at its default (0f) here and refreshed once,
+                // right before the response goes out, by either maybeAddDelayedWrite (acks != -1)
+                // or DelayedWrite#onComplete (acks == -1) so the client sees the freshest L0 state.
                 putResultForBucketMap.put(
-                        tb,
-                        new PutKvResultForBucket(tb, appendInfo.lastOffset() + 1)
-                                .setPressure(pressure));
+                        tb, new PutKvResultForBucket(tb, appendInfo.lastOffset() + 1));
 
                 // metric for kv
                 tableMetrics.incKvMessageIn(entry.getValue().getRecordCount());
@@ -1702,6 +1744,21 @@ public class ReplicaManager implements ServerReconfigurable {
                             .map(DelayedTableBucketKey::new)
                             .collect(Collectors.toList()));
         } else {
+            // Immediate-response path (acks != -1): refresh KV pressure right before the
+            // response goes out, mirroring DelayedWrite#onComplete on the acks == -1 path.
+            writeResults.forEach(
+                    (tb, r) -> {
+                        if (r instanceof PutKvResultForBucket && !r.failed()) {
+                            try {
+                                ((PutKvResultForBucket) r)
+                                        .setPressure(
+                                                getReplicaOrException(tb)
+                                                        .samplePressureForCompletion());
+                            } catch (Exception ignore) {
+                                // leader moved or replica gone, leave default 0f
+                            }
+                        }
+                    });
             responseCallback.accept(new ArrayList<>(writeResults.values()));
         }
     }

@@ -31,7 +31,6 @@ import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.NotEnoughReplicasException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
-import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.exception.TooManyScannersException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.ChangelogImage;
@@ -737,6 +736,63 @@ public final class Replica {
         KvTablet kvTablet = this.kvTablet;
         if (kvTablet != null) {
             kvTablet.flush(newHighWatermark, fatalErrorHandler);
+            // If the predictive flush gate rejected this flush, eagerly wake DelayedWrite
+            // operations waiting on this bucket so they observe the backpressured state and
+            // surface STORAGE_BACKPRESSURE_EXCEPTION to clients without waiting for the next
+            // ack-driven tryComplete.
+            if (kvTablet.isFlushBackpressured()) {
+                delayedWriteManager.checkAndComplete(new DelayedTableBucketKey(tableBucket));
+            }
+        }
+    }
+
+    /**
+     * Re-attempts a KV flush that was previously rejected by the predictive L0 gate and is
+     * currently stalled in the backpressured state. Invoked periodically by the tablet-server-wide
+     * scheduler scan in {@code ReplicaManager#scanAndResumeBackpressuredReplicas} once RocksDB
+     * Compaction has reduced the L0 file count, so {@link
+     * org.apache.fluss.server.kv.rocksdb.RocksDBKv#wouldExceedSlowdownTriggerOnFlush} should now
+     * return {@code false}.
+     *
+     * <p>While {@code flushBackpressured == true} the high-watermark is frozen at the last
+     * successfully-flushed offset (see {@link #maybeIncrementLeaderHW}), and the pre-write buffer
+     * holds {@code [HW, leaderLogEndOffset)}. Calling {@code mayFlushKv(currentHW)} would be a
+     * no-op against the already-flushed prefix and would incorrectly clear {@code
+     * flushBackpressured}. Instead we replay the same code path an ISR ack would take — {@link
+     * #maybeIncrementLeaderHW} recomputes the candidate watermark from follower LEOs, calls {@code
+     * mayFlushKv(newHW)} (which now succeeds because L0 has dropped), advances the persisted
+     * watermark on success, and we then nudge any delayed write/fetch operations.
+     *
+     * <p>Lock posture matches {@link #updateFollowerFetchState}: {@code leaderIsrUpdateLock} read
+     * lock guards against leadership flips while {@link #maybeIncrementLeaderHW} runs; {@code
+     * mayFlushKv} acquires {@code KvTablet#kvLock} internally. No-ops when this replica is not the
+     * leader, has no kv tablet, or is no longer backpressured (a concurrent ack-driven flush may
+     * have already cleared the state).
+     */
+    public void tryResumeBackpressuredKvFlush() {
+        boolean hwIncremented =
+                inReadLock(
+                        leaderIsrUpdateLock,
+                        () -> {
+                            if (!isLeader()) {
+                                return false;
+                            }
+                            KvTablet kv = this.kvTablet;
+                            if (kv == null || !kv.isFlushBackpressured()) {
+                                return false;
+                            }
+                            try {
+                                return maybeIncrementLeaderHW(logTablet, clock.milliseconds());
+                            } catch (IOException e) {
+                                LOG.warn(
+                                        "Failed to advance high watermark while resuming kv flush for {}.",
+                                        tableBucket,
+                                        e);
+                                return false;
+                            }
+                        });
+        if (hwIncremented) {
+            tryCompleteDelayedOperations();
         }
     }
 
@@ -836,7 +892,7 @@ public final class Replica {
                 tableBucket,
                 endTime - startTime);
 
-        // Register RocksDB statistics to BucketMetricGroup
+        // Register RocksDB statistics now that the kv tablet is fully initialized.
         if (kvTablet != null && kvTablet.getRocksDBStatistics() != null) {
             bucketMetricGroup.registerRocksDBStatistics(kvTablet.getRocksDBStatistics());
         }
@@ -1073,45 +1129,26 @@ public final class Replica {
     }
 
     /**
-     * Pre-write backpressure gate executed before {@link #putRecordsToLeader}. Performs the
-     * leader/ISR validation in the same lock as the actual write so that the rejection decision and
-     * the piggyback pressure measurement come from a coherent leader snapshot, then delegates to
-     * {@link KvTablet#checkBackpressure()} for the single L0 read.
-     *
-     * <p>The observed pressure (or {@code 1.0} when the storage engine hard-rejects with {@link
-     * StorageBackpressureException}) is recorded on this bucket's {@link BucketMetricGroup} so the
-     * table-level aggregating gauges can read it without going through RocksDB again. Hard
-     * rejections additionally bump the table-level rejected-requests counter.
-     *
-     * @return pressure in {@code [0, 1)} for piggyback throttle; throws {@link
-     *     StorageBackpressureException} if the storage engine is in the hard-rejection zone.
+     * Samples the current backpressure pressure for piggyback on a completed write response.
+     * Invoked from {@code DelayedWrite#onComplete()} once the bucket's required acks are satisfied;
+     * the value reflects the post-flush L0 state and is the most accurate snapshot the client can
+     * act on. Also records the value on this bucket's {@link BucketMetricGroup} for table-level
+     * aggregation.
      */
-    public float checkBackpressure() {
+    public float samplePressureForCompletion() {
         return inReadLock(
                 leaderIsrUpdateLock,
                 () -> {
                     if (!isLeader()) {
-                        throw new NotLeaderOrFollowerException(
-                                String.format(
-                                        "Leader not local for bucket %s on tabletServer %d",
-                                        tableBucket, localTabletServerId));
+                        return 0f;
                     }
                     KvTablet kv = this.kvTablet;
                     if (kv == null) {
                         return 0f;
                     }
-                    try {
-                        float pressure = kv.checkBackpressure();
-                        bucketMetricGroup.recordKvBackpressureLevel(pressure);
-                        return pressure;
-                    } catch (StorageBackpressureException e) {
-                        // Hard rejection: pin this bucket's KV pressure level at the ceiling and
-                        // bump the table-level rejected-requests counter before propagating the
-                        // exception.
-                        bucketMetricGroup.recordKvBackpressureLevel(1f);
-                        bucketMetricGroup.getTableMetricGroup().incKvBackpressureRejectedRequests();
-                        throw e;
-                    }
+                    float pressure = kv.currentPressure();
+                    bucketMetricGroup.recordKvBackpressureLevel(pressure);
+                    return pressure;
                 });
     }
 
@@ -1236,6 +1273,14 @@ public final class Replica {
         // TODO The flushKV and updateHighWatermark need to be atomic operation. See
         // https://github.com/apache/fluss/issues/513
         mayFlushKv(newHighWatermark.getMessageOffset());
+
+        // Skip high-watermark propagation when the most recent flush was rejected by the
+        // predictive L0 gate. The pre-write buffer keeps the data; once L0 drops below the
+        // trigger the next flush will succeed and HW will resume advancing naturally.
+        KvTablet currentKv = this.kvTablet;
+        if (currentKv != null && currentKv.isFlushBackpressured()) {
+            return false;
+        }
 
         Optional<LogOffsetMetadata> oldWatermark =
                 leaderLog.maybeIncrementHighWatermark(newHighWatermark);
@@ -1537,6 +1582,16 @@ public final class Replica {
      */
     public Tuple2<Boolean, Errors> checkEnoughReplicasReachOffset(long requiredOffset) {
         if (isLeader()) {
+            // If the predictive flush gate has rejected the most recent flush, fail fast with a
+            // backpressure error so the client can throttle before the storage engine stalls.
+            // Pending data stays in the pre-write buffer; the client retries after backoff.
+            KvTablet kv = this.kvTablet;
+            if (kv != null && kv.isFlushBackpressured()) {
+                bucketMetricGroup.recordKvBackpressureLevel(1f);
+                bucketMetricGroup.getTableMetricGroup().incKvBackpressureRejectedRequests();
+                return Tuple2.of(false, Errors.STORAGE_BACKPRESSURE_EXCEPTION);
+            }
+
             // Keep the current immutable replica list reference.
             List<Integer> curMaximalIsr = isrState.maximalIsr();
             if (LOG.isTraceEnabled()) {
