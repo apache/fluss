@@ -1365,6 +1365,16 @@ public class ZooKeeperClient implements AutoCloseable {
         return getOrEmpty(zkPath).map(LakeTableZNode::decode);
     }
 
+    /** Deletes the {@link LakeTable} for the given table ID if it exists. */
+    public void deleteLakeTable(long tableId) throws Exception {
+        String zkPath = LakeTableZNode.path(tableId);
+        try {
+            zkClient.delete().forPath(zkPath);
+        } catch (KeeperException.NoNodeException ignored) {
+            // Ignore if the lake table progress has not been committed yet.
+        }
+    }
+
     /**
      * Gets the {@link LakeTableSnapshot} for the given table ID.
      *

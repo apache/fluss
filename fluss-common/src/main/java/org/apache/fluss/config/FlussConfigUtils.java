@@ -47,6 +47,8 @@ public class FlussConfigUtils {
         ALTERABLE_TABLE_OPTIONS =
                 Arrays.asList(
                         ConfigOptions.TABLE_DATALAKE_ENABLED.key(),
+                        ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(),
+                        ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(),
                         ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(),
                         ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(),
                         ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.key(),

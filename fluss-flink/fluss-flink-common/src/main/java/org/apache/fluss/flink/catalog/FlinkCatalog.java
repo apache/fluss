@@ -34,6 +34,7 @@ import org.apache.fluss.flink.utils.CatalogExceptionUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.LakeTableUtil;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.TableChange;
@@ -404,9 +405,10 @@ public class FlinkCatalog extends AbstractCatalog {
                                             objectPath.getDatabaseName(),
                                             tableName.split("\\" + LAKE_TABLE_SPLITTER)[0])));
                 }
+                TablePath lakeTablePath = tableInfo.getLakeTablePath();
 
                 return getLakeTable(
-                        objectPath.getDatabaseName(),
+                        lakeTablePath,
                         tableName,
                         tableInfo.getProperties(),
                         getLakeCatalogProperties());
@@ -455,23 +457,19 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     protected CatalogBaseTable getLakeTable(
-            String databaseName,
-            String tableName,
+            TablePath lakeTablePath,
+            String requestedTableName,
             Configuration properties,
             Map<String, String> lakeCatalogProperties)
             throws TableNotExistException, CatalogException {
-        String[] tableComponents = tableName.split("\\" + LAKE_TABLE_SPLITTER);
-        if (tableComponents.length == 1) {
-            // should be pattern like table_name$lake
-            tableName = tableComponents[0];
-        } else {
-            // pattern is table_name$lake$snapshots
-            // Need to reconstruct: table_name + $snapshots
-            tableName = String.join("", tableComponents);
-        }
-        return lakeFlinkCatalog
-                .getLakeCatalog(properties, lakeCatalogProperties)
-                .getTable(new ObjectPath(databaseName, tableName));
+        String lakeObjectName =
+                LakeTableUtil.getLakeTableName(
+                        lakeTablePath.getTableName(), requestedTableName, LAKE_TABLE_SPLITTER);
+        CatalogBaseTable lakeTable =
+                lakeFlinkCatalog
+                        .getLakeCatalog(properties, lakeCatalogProperties)
+                        .getTable(new ObjectPath(lakeTablePath.getDatabaseName(), lakeObjectName));
+        return lakeTable;
     }
 
     @Override
