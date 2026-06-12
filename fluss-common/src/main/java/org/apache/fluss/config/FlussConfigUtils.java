@@ -43,6 +43,8 @@ public class FlussConfigUtils {
 
     static {
         TABLE_OPTIONS = extractConfigOptions("table.");
+        TABLE_OPTIONS.put(
+                ConfigOptions.LOG_SEGMENT_FILE_SIZE.key(), ConfigOptions.LOG_SEGMENT_FILE_SIZE);
         CLIENT_OPTIONS = extractConfigOptions("client.");
         ALTERABLE_TABLE_OPTIONS =
                 Arrays.asList(
@@ -58,7 +60,7 @@ public class FlussConfigUtils {
     }
 
     public static boolean isTableStorageConfig(String key) {
-        return key.startsWith(TABLE_PREFIX);
+        return TABLE_OPTIONS.containsKey(key);
     }
 
     public static boolean isAlterableTableOption(String key) {

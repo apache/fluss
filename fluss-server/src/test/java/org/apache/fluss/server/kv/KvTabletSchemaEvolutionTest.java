@@ -113,11 +113,10 @@ class KvTabletSchemaEvolutionTest {
                         physicalTablePath,
                         logTabletDir,
                         conf,
+                        new TableConfig(conf),
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         0,
                         new FlussScheduler(1),
-                        LogFormat.ARROW,
-                        1,
                         true,
                         SystemClock.getInstance(),
                         true);
