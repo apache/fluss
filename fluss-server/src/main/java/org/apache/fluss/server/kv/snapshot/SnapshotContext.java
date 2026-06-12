@@ -65,6 +65,10 @@ public interface SnapshotContext {
     FunctionWithException<TableBucket, CompletedSnapshot, Exception>
             getLatestCompletedSnapshotProvider();
 
+    /** Get the provider of a completed snapshot for a table bucket. */
+    CompletedSnapshot getCompletedSnapshotProvider(TableBucket tableBucket, long snapshotId)
+            throws Exception;
+
     /**
      * Handles broken snapshots.
      *

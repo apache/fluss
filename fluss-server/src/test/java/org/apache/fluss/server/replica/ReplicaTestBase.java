@@ -627,6 +627,11 @@ public class ReplicaTestBase {
         protected ManuallyTriggeredScheduledExecutorService scheduledExecutorService;
         protected final TestingCompletedKvSnapshotCommitter testKvSnapshotStore;
         private final ExecutorService executorService;
+        // Shared async-ops pool. Previously we created a brand new single-thread pool on every
+        // call to getAsyncOperationsThreadPool(), which (a) leaked executors across role
+        // transitions and (b) produced starvation on CI runners. A shared 2-thread pool is
+        // enough (uploader + downloader can run in parallel) and avoids the leak entirely.
+        private final ExecutorService asyncOperationsThreadPool;
 
         public TestSnapshotContext(
                 String remoteKvTabletDir, TestingCompletedKvSnapshotCommitter testKvSnapshotStore)
@@ -659,7 +664,10 @@ public class ReplicaTestBase {
             this.remoteKvTabletDir = new FsPath(remoteKvTabletDir);
             this.testKvSnapshotStore = testKvSnapshotStore;
             this.executorService = Executors.newFixedThreadPool(1);
+            this.asyncOperationsThreadPool = Executors.newFixedThreadPool(2);
             this.scheduledExecutorService = manuallyTriggeredScheduledExecutorService;
+            closeableRegistry.registerCloseable(executorService::shutdownNow);
+            closeableRegistry.registerCloseable(asyncOperationsThreadPool::shutdownNow);
             closeableRegistry.registerCloseable(
                     manuallyTriggeredScheduledExecutorService::shutdownNow);
         }
@@ -671,10 +679,7 @@ public class ReplicaTestBase {
 
         @Override
         public ExecutorService getAsyncOperationsThreadPool() {
-            ExecutorService executorService = Executors.newFixedThreadPool(1);
-
-            unchecked(() -> closeableRegistry.registerCloseable(executorService::shutdownNow));
-            return executorService;
+            return asyncOperationsThreadPool;
         }
 
         @Override
@@ -716,6 +721,12 @@ public class ReplicaTestBase {
         public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
                 getLatestCompletedSnapshotProvider() {
             return testKvSnapshotStore::getLatestCompletedSnapshot;
+        }
+
+        @Override
+        public CompletedSnapshot getCompletedSnapshotProvider(
+                TableBucket tableBucket, long snapshotId) throws Exception {
+            return testKvSnapshotStore.getLatestCompletedSnapshot(tableBucket);
         }
 
         @Override

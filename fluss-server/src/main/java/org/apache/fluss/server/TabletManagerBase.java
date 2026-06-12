@@ -161,7 +161,7 @@ public abstract class TabletManagerBase {
      * @param tableBucket the table bucket
      * @return the tablet directory
      */
-    protected File getOrCreateTabletDir(
+    public File getOrCreateTabletDir(
             File dataDir, PhysicalTablePath tablePath, TableBucket tableBucket) {
         File tabletDir = getTabletDir(dataDir, tablePath, tableBucket);
         if (tabletDir.exists()) {
