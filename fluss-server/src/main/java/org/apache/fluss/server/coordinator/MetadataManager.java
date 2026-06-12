@@ -76,6 +76,7 @@ import java.util.Set;
 import java.util.concurrent.Callable;
 
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableProperties;
+import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableSchema;
 
 /** A manager for metadata. */
 public class MetadataManager {
@@ -440,6 +441,7 @@ public class MetadataManager {
             if (!schemaChanges.isEmpty()) {
                 Schema newSchema =
                         SchemaUpdate.applySchemaChanges(table.getSchema(), schemaChanges);
+                validateAlterTableSchema(table, newSchema);
                 LakeCatalog.Context lakeCatalogContext =
                         new CoordinatorService.DefaultLakeCatalogContext(
                                 false,

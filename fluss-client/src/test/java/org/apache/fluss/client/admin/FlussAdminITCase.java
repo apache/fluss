@@ -569,6 +569,62 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testAlterAggregationTableColumnWithAggFunction() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "alter_aggregation_table_column");
+        Map<String, String> properties = new HashMap<>();
+        properties.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "aggregation");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("value", DataTypes.BIGINT(), AggFunctions.SUM())
+                                        .primaryKey("id")
+                                        .build())
+                        .distributedBy(3, "id")
+                        .properties(properties)
+                        .build();
+        admin.createTable(tablePath, tableDescriptor, false).get();
+
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "new_value",
+                                        DataTypes.BIGINT(),
+                                        "new aggregate column",
+                                        TableChange.ColumnPosition.last(),
+                                        AggFunctions.SUM())),
+                        false)
+                .get();
+
+        SchemaInfo schemaInfo = admin.getTableSchema(tablePath).get();
+        assertThat(schemaInfo.getSchema().getAggFunction("new_value")).hasValue(AggFunctions.SUM());
+    }
+
+    @Test
+    void testAlterNonAggregationTableColumnWithAggFunction() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "alter_non_aggregation_table_column");
+        admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.addColumn(
+                                                                "new_value",
+                                                                DataTypes.BIGINT(),
+                                                                "new aggregate column",
+                                                                TableChange.ColumnPosition.last(),
+                                                                AggFunctions.SUM())),
+                                                false)
+                                        .get())
+                .hasMessageContaining(
+                        "Aggregation function is only supported for aggregation merge engine table");
+    }
+
+    @Test
     void testCreateInvalidDatabaseAndTable() throws Exception {
         assertThatThrownBy(
                         () ->

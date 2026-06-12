@@ -27,9 +27,13 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ColumnPositionType;
 import org.apache.fluss.config.cluster.ConfigEntry;
+import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.lake.committer.LakeCommitResult;
+import org.apache.fluss.metadata.AggFunction;
+import org.apache.fluss.metadata.AggFunctionType;
+import org.apache.fluss.metadata.AggFunctions;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PartitionSpec;
@@ -355,15 +359,38 @@ public class ServerRpcMessageUtils {
         return addColumns.stream()
                 .filter(Objects::nonNull)
                 .map(
-                        pbAddColumn ->
-                                TableChange.addColumn(
-                                        pbAddColumn.getColumnName(),
-                                        JsonSerdeUtils.readValue(
-                                                pbAddColumn.getDataTypeJson(),
-                                                DataTypeJsonSerde.INSTANCE),
-                                        pbAddColumn.hasComment() ? pbAddColumn.getComment() : null,
-                                        toColumnPosition(pbAddColumn.getColumnPositionType())))
+                        pbAddColumn -> {
+                            AggFunction aggFunction = toAggFunction(pbAddColumn);
+                            return TableChange.addColumn(
+                                    pbAddColumn.getColumnName(),
+                                    JsonSerdeUtils.readValue(
+                                            pbAddColumn.getDataTypeJson(),
+                                            DataTypeJsonSerde.INSTANCE),
+                                    pbAddColumn.hasComment() ? pbAddColumn.getComment() : null,
+                                    toColumnPosition(pbAddColumn.getColumnPositionType()),
+                                    aggFunction);
+                        })
                 .collect(Collectors.toList());
+    }
+
+    private static AggFunction toAggFunction(PbAddColumn pbAddColumn) {
+        if (!pbAddColumn.hasAggFunctionType()) {
+            return null;
+        }
+
+        AggFunctionType type = AggFunctionType.fromString(pbAddColumn.getAggFunctionType());
+        if (type == null) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "Unknown aggregation function type: %s",
+                            pbAddColumn.getAggFunctionType()));
+        }
+
+        Map<String, String> parameters = new HashMap<>();
+        for (PbKeyValue parameter : pbAddColumn.getAggFunctionParamsList()) {
+            parameters.put(parameter.getKey(), parameter.getValue());
+        }
+        return AggFunctions.of(type, parameters);
     }
 
     public static List<TableChange.SchemaChange> toDropColumns(List<PbDropColumn> dropColumns) {

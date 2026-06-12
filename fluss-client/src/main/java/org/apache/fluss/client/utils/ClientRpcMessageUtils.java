@@ -39,6 +39,7 @@ import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
+import org.apache.fluss.metadata.AggFunction;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PartitionInfo;
@@ -655,6 +656,15 @@ public class ClientRpcMessageUtils {
                         .setColumnPositionType(columnPositionType.value());
         if (addColumn.getComment() != null) {
             pbAddColumn.setComment(addColumn.getComment());
+        }
+        if (addColumn.getAggFunction().isPresent()) {
+            AggFunction aggFunction = addColumn.getAggFunction().get();
+            pbAddColumn.setAggFunctionType(aggFunction.getType().toString());
+            aggFunction
+                    .getParameters()
+                    .forEach(
+                            (key, value) ->
+                                    pbAddColumn.addAggFunctionParam().setKey(key).setValue(value));
         }
 
         return pbAddColumn;
