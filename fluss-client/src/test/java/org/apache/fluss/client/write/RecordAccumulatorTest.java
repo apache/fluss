@@ -671,6 +671,8 @@ class RecordAccumulatorTest {
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, new MemorySize(totalSize));
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, new MemorySize(pageSize));
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, new MemorySize(batchSize));
+        // Use a small max throttle to keep test latencies tight; cubic curve still applies.
+        conf.set(ConfigOptions.CLIENT_WRITER_KV_BACKPRESSURE_MAX_THROTTLE_MS, 1000L);
         return new RecordAccumulator(
                 conf,
                 new IdempotenceManager(
@@ -700,5 +702,97 @@ class RecordAccumulatorTest {
         return (bucketBatches1 == null ? 0 : bucketBatches1.size())
                 + (bucketBatches2 == null ? 0 : bucketBatches2.size())
                 + (bucketBatches3 == null ? 0 : bucketBatches3.size());
+    }
+
+    // ---- Backpressure throttle tests ----
+
+    @Test
+    void testIsThrottledReturnsFalseWhenNoThrottle() {
+        RecordAccumulator accum = createTestRecordAccumulator(1024, Integer.MAX_VALUE);
+        assertThat(accum.isThrottled(tb1)).isFalse();
+    }
+
+    @Test
+    void testUpdateThrottleWithPositivePressure() {
+        RecordAccumulator accum = createTestRecordAccumulator(1024, Integer.MAX_VALUE);
+        // pressure = 0.5 -> delay = 1000 * 0.5^3 = 125ms
+        accum.updateThrottle(tb1, 0.5f);
+        assertThat(accum.isThrottled(tb1)).isTrue();
+
+        // Advance time past the throttle
+        clock.advanceTime(Duration.ofMillis(126));
+        assertThat(accum.isThrottled(tb1)).isFalse();
+    }
+
+    @Test
+    void testUpdateThrottleWithHighPressure() {
+        RecordAccumulator accum = createTestRecordAccumulator(1024, Integer.MAX_VALUE);
+        // pressure = 0.9 -> delay = 1000 * 0.9^3 = 729ms
+        accum.updateThrottle(tb1, 0.9f);
+        assertThat(accum.isThrottled(tb1)).isTrue();
+
+        clock.advanceTime(Duration.ofMillis(500));
+        assertThat(accum.isThrottled(tb1)).isTrue();
+
+        clock.advanceTime(Duration.ofMillis(230));
+        assertThat(accum.isThrottled(tb1)).isFalse();
+    }
+
+    @Test
+    void testApplyStorageBackpressureBackoff() {
+        RecordAccumulator accum = createTestRecordAccumulator(1024, Integer.MAX_VALUE);
+        // StorageBackpressureException back-off: stalls the bucket for the full max throttle
+        // window.
+        accum.applyStorageBackpressureBackoff(tb1);
+        assertThat(accum.isThrottled(tb1)).isTrue();
+
+        // Still throttled within the configured max throttle window.
+        clock.advanceTime(Duration.ofMillis(999));
+        assertThat(accum.isThrottled(tb1)).isTrue();
+
+        // Released exactly when the window elapses.
+        clock.advanceTime(Duration.ofMillis(2));
+        assertThat(accum.isThrottled(tb1)).isFalse();
+    }
+
+    @Test
+    void testUpdateThrottleRecovery() {
+        RecordAccumulator accum = createTestRecordAccumulator(1024, Integer.MAX_VALUE);
+        // First apply pressure
+        accum.updateThrottle(tb1, 0.5f);
+        assertThat(accum.isThrottled(tb1)).isTrue();
+
+        // Then recover with pressure=0
+        accum.updateThrottle(tb1, 0f);
+        assertThat(accum.isThrottled(tb1)).isFalse();
+    }
+
+    @Test
+    void testThrottledBucketSkippedInDrain() throws Exception {
+        IndexedRow row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        long batchSize = getTestBatchSize(row);
+        RecordAccumulator accum = createTestRecordAccumulator((int) batchSize, Integer.MAX_VALUE);
+        cluster = updateCluster(Arrays.asList(bucket1, bucket2, bucket3));
+
+        // Append records to tb1 and tb2
+        accum.append(createRecord(row), writeCallback, cluster, 0, false);
+        accum.append(createRecord(row), writeCallback, cluster, 1, false);
+
+        // Throttle tb1
+        accum.updateThrottle(tb1, 0.5f);
+
+        // Drain should only produce batches for tb2 (tb1 is throttled)
+        Map<Integer, List<ReadyWriteBatch>> batches =
+                accum.drain(
+                        cluster,
+                        new HashSet<>(Collections.singletonList(node1.id())),
+                        Integer.MAX_VALUE);
+        // tb2 should be in the batch, tb1 should not
+        List<ReadyWriteBatch> node1Batches = batches.get(node1.id());
+        if (node1Batches != null) {
+            for (ReadyWriteBatch b : node1Batches) {
+                assertThat(b.tableBucket()).isNotEqualTo(tb1);
+            }
+        }
     }
 }

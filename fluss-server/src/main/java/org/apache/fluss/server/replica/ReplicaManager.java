@@ -158,6 +158,7 @@ public class ReplicaManager implements ServerReconfigurable {
     private static final Logger LOG = LoggerFactory.getLogger(ReplicaManager.class);
 
     public static final String HIGH_WATERMARK_CHECKPOINT_FILE_NAME = "high-watermark-checkpoint";
+
     private final Configuration conf;
     private final Scheduler scheduler;
     private final LogManager logManager;
@@ -1355,6 +1356,9 @@ public class ReplicaManager implements ServerReconfigurable {
                         tb,
                         appendInfo.firstOffset(),
                         appendInfo.lastOffset());
+                // The pressure field is left at its default (0f) here and refreshed once,
+                // right before the response goes out, by either maybeAddDelayedWrite (acks != -1)
+                // or DelayedWrite#onComplete (acks == -1) so the client sees the freshest L0 state.
                 putResultForBucketMap.put(
                         tb, new PutKvResultForBucket(tb, appendInfo.lastOffset() + 1));
 
@@ -1696,6 +1700,21 @@ public class ReplicaManager implements ServerReconfigurable {
                             .map(DelayedTableBucketKey::new)
                             .collect(Collectors.toList()));
         } else {
+            // Immediate-response path (acks != -1): refresh KV pressure right before the
+            // response goes out, mirroring DelayedWrite#onComplete on the acks == -1 path.
+            writeResults.forEach(
+                    (tb, r) -> {
+                        if (r instanceof PutKvResultForBucket && !r.failed()) {
+                            try {
+                                ((PutKvResultForBucket) r)
+                                        .setPressure(
+                                                getReplicaOrException(tb)
+                                                        .samplePressureForCompletion());
+                            } catch (Exception ignore) {
+                                // leader moved or replica gone, leave default 0f
+                            }
+                        }
+                    });
             responseCallback.accept(new ArrayList<>(writeResults.values()));
         }
     }

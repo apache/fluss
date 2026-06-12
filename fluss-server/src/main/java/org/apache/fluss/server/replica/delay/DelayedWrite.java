@@ -18,6 +18,7 @@
 package org.apache.fluss.server.replica.delay;
 
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.rpc.entity.PutKvResultForBucket;
 import org.apache.fluss.rpc.entity.WriteResultForBucket;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.PutKvRequest;
@@ -166,19 +167,48 @@ public class DelayedWrite<T extends WriteResultForBucket> extends DelayedOperati
     @Override
     public void onComplete() {
         List<T> result =
-                delayedWriteMetadata.getBucketStatusMap().values().stream()
-                        // overwrite the write result with the delayed error if there is one.
+                delayedWriteMetadata.getBucketStatusMap().entrySet().stream()
+                        // overwrite the write result with the delayed error if there is one,
+                        // and refresh the piggyback pressure sample for successful PutKv buckets.
                         .map(
-                                s -> {
+                                entry -> {
+                                    TableBucket tableBucket = entry.getKey();
+                                    DelayedBucketStatus<T> s = entry.getValue();
                                     Errors error = s.getDelayedError();
-                                    if (error != null && error != Errors.NONE) {
-                                        return s.getWriteResultForBucket().copy(error);
-                                    } else {
-                                        return s.getWriteResultForBucket();
-                                    }
+                                    T writeResult =
+                                            (error != null && error != Errors.NONE)
+                                                    ? s.getWriteResultForBucket().copy(error)
+                                                    : s.getWriteResultForBucket();
+                                    refreshPressureIfPutKv(tableBucket, error, writeResult);
+                                    return writeResult;
                                 })
                         .collect(Collectors.toList());
         callback.accept(result);
+    }
+
+    /**
+     * For successful PutKv responses, re-sample the per-bucket pressure right before the response
+     * is delivered so the client sees the most up-to-date post-flush L0 state. Failures and
+     * non-PutKv response types are left untouched.
+     */
+    private void refreshPressureIfPutKv(TableBucket tableBucket, Errors error, T writeResult) {
+        if (!(writeResult instanceof PutKvResultForBucket)) {
+            return;
+        }
+        if (error != null && error != Errors.NONE) {
+            return;
+        }
+        if (writeResult.failed()) {
+            return;
+        }
+        try {
+            Replica replica = replicaManager.getReplicaOrException(tableBucket);
+            ((PutKvResultForBucket) writeResult).setPressure(replica.samplePressureForCompletion());
+        } catch (Exception e) {
+            // Replica may have moved or been deleted between the write and the completion. The
+            // response still succeeds with pressure left at its initial value (0).
+            LOG.debug("Skip pressure refresh for {} on completion: {}", tableBucket, e.toString());
+        }
     }
 
     /** DelayedWriteMetadata. */

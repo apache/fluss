@@ -736,6 +736,13 @@ public final class Replica {
         KvTablet kvTablet = this.kvTablet;
         if (kvTablet != null) {
             kvTablet.flush(newHighWatermark, fatalErrorHandler);
+            // If the predictive flush gate rejected this flush, eagerly wake DelayedWrite
+            // operations waiting on this bucket so they observe the backpressured state and
+            // surface STORAGE_BACKPRESSURE_EXCEPTION to clients without waiting for the next
+            // ack-driven tryComplete.
+            if (kvTablet.isFlushBackpressured()) {
+                delayedWriteManager.checkAndComplete(new DelayedTableBucketKey(tableBucket));
+            }
         }
     }
 
@@ -835,7 +842,7 @@ public final class Replica {
                 tableBucket,
                 endTime - startTime);
 
-        // Register RocksDB statistics to BucketMetricGroup
+        // Register RocksDB statistics now that the kv tablet is fully initialized.
         if (kvTablet != null && kvTablet.getRocksDBStatistics() != null) {
             bucketMetricGroup.registerRocksDBStatistics(kvTablet.getRocksDBStatistics());
         }
@@ -1071,6 +1078,30 @@ public final class Replica {
         return logTablet.appendAsFollower(memoryLogRecords);
     }
 
+    /**
+     * Samples the current backpressure pressure for piggyback on a completed write response.
+     * Invoked from {@code DelayedWrite#onComplete()} once the bucket's required acks are satisfied;
+     * the value reflects the post-flush L0 state and is the most accurate snapshot the client can
+     * act on. Also records the value on this bucket's {@link BucketMetricGroup} for table-level
+     * aggregation.
+     */
+    public float samplePressureForCompletion() {
+        return inReadLock(
+                leaderIsrUpdateLock,
+                () -> {
+                    if (!isLeader()) {
+                        return 0f;
+                    }
+                    KvTablet kv = this.kvTablet;
+                    if (kv == null) {
+                        return 0f;
+                    }
+                    float pressure = kv.currentPressure();
+                    bucketMetricGroup.recordKvBackpressureLevel(pressure);
+                    return pressure;
+                });
+    }
+
     public LogAppendInfo putRecordsToLeader(
             KvRecordBatch kvRecords,
             @Nullable int[] targetColumns,
@@ -1192,6 +1223,14 @@ public final class Replica {
         // TODO The flushKV and updateHighWatermark need to be atomic operation. See
         // https://github.com/apache/fluss/issues/513
         mayFlushKv(newHighWatermark.getMessageOffset());
+
+        // Skip high-watermark propagation when the most recent flush was rejected by the
+        // predictive L0 gate. The pre-write buffer keeps the data; once L0 drops below the
+        // trigger the next flush will succeed and HW will resume advancing naturally.
+        KvTablet currentKv = this.kvTablet;
+        if (currentKv != null && currentKv.isFlushBackpressured()) {
+            return false;
+        }
 
         Optional<LogOffsetMetadata> oldWatermark =
                 leaderLog.maybeIncrementHighWatermark(newHighWatermark);
@@ -1493,6 +1532,16 @@ public final class Replica {
      */
     public Tuple2<Boolean, Errors> checkEnoughReplicasReachOffset(long requiredOffset) {
         if (isLeader()) {
+            // If the predictive flush gate has rejected the most recent flush, fail fast with a
+            // backpressure error so the client can throttle before the storage engine stalls.
+            // Pending data stays in the pre-write buffer; the client retries after backoff.
+            KvTablet kv = this.kvTablet;
+            if (kv != null && kv.isFlushBackpressured()) {
+                bucketMetricGroup.recordKvBackpressureLevel(1f);
+                bucketMetricGroup.getTableMetricGroup().incKvBackpressureRejectedRequests();
+                return Tuple2.of(false, Errors.STORAGE_BACKPRESSURE_EXCEPTION);
+            }
+
             // Keep the current immutable replica list reference.
             List<Integer> curMaximalIsr = isrState.maximalIsr();
             if (LOG.isTraceEnabled()) {
