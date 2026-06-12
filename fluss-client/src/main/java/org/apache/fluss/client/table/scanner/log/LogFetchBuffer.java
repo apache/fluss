@@ -18,8 +18,10 @@
 package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.exception.WakeupException;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.utils.ExceptionUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -73,17 +75,19 @@ public class LogFetchBuffer implements AutoCloseable {
     @GuardedBy("lock")
     private @Nullable CompletedFetch nextInLineFetch;
 
+    @GuardedBy("lock")
+    private @Nullable Throwable throwable;
+
     public LogFetchBuffer() {
         this.completedFetches = new LinkedList<>();
     }
 
     /**
-     * Returns {@code true} if there are no completed fetches pending to return to the user.
-     *
-     * @return {@code true} if the buffer is empty, {@code false} otherwise
+     * @return {@code true} if there are no completed fetches pending to return to the user and no
+     *     error has been recorded, {@code false} otherwise
      */
     boolean isEmpty() {
-        return inLock(lock, completedFetches::isEmpty);
+        return inLock(lock, () -> completedFetches.isEmpty() && throwable == null);
     }
 
     void pend(PendingFetch pendingFetch) {
@@ -100,10 +104,14 @@ public class LogFetchBuffer implements AutoCloseable {
      * Tries to complete the pending fetches in order, convert them into completed fetches in the
      * buffer.
      */
-    void tryComplete(TableBucket tableBucket) {
+    void tryComplete(TableBucket tableBucket, Throwable t) {
         inLock(
                 lock,
                 () -> {
+                    if (t != null) {
+                        this.throwable = t;
+                    }
+
                     boolean hasCompleted = false;
                     LinkedList<PendingFetch> pendings = this.pendingFetches.get(tableBucket);
                     while (pendings != null && !pendings.isEmpty()) {
@@ -157,12 +165,22 @@ public class LogFetchBuffer implements AutoCloseable {
         inLock(lock, () -> this.nextInLineFetch = nextInLineFetch);
     }
 
-    CompletedFetch peek() {
-        return inLock(lock, completedFetches::peek);
+    CompletedFetch peek() throws FetchException {
+        return inLock(
+                lock,
+                () -> {
+                    checkException();
+                    return completedFetches.peek();
+                });
     }
 
-    CompletedFetch poll() {
-        return inLock(lock, completedFetches::poll);
+    CompletedFetch poll() throws FetchException {
+        return inLock(
+                lock,
+                () -> {
+                    checkException();
+                    return completedFetches.poll();
+                });
     }
 
     /**
@@ -271,6 +289,12 @@ public class LogFetchBuffer implements AutoCloseable {
     /** Return the set of {@link TableBucket buckets} for which we have pending fetches. */
     Set<TableBucket> pendedBuckets() {
         return inLock(lock, pendingFetches::keySet);
+    }
+
+    void checkException() throws FetchException {
+        if (throwable != null) {
+            throw new FetchException(ExceptionUtils.stripCompletionException(throwable));
+        }
     }
 
     @Override
