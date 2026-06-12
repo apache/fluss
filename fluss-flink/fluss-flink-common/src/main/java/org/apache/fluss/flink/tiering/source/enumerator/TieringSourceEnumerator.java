@@ -27,6 +27,7 @@ import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
+import org.apache.fluss.flink.tiering.event.TieringTableDroppedEvent;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
@@ -39,9 +40,12 @@ import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
+import org.apache.fluss.rpc.messages.PbHeartbeatRespForTable;
 import org.apache.fluss.rpc.messages.PbLakeTieringStats;
 import org.apache.fluss.rpc.messages.PbLakeTieringTableInfo;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
+import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.utils.ExceptionUtils;
 
 import org.apache.flink.api.connector.source.ReaderInfo;
@@ -285,18 +289,19 @@ public class TieringSourceEnumerator
         if (sourceEvent instanceof FailedTieringEvent) {
             FailedTieringEvent failedEvent = (FailedTieringEvent) sourceEvent;
             long failedTableId = failedEvent.getTableId();
-            Long tieringEpoch = tieringTableEpochs.remove(failedTableId);
             LOG.info(
                     "Tiering table {} is failed, fail reason is {}.",
                     failedTableId,
-                    failedEvent.failReason());
-            if (tieringEpoch == null) {
-                // shouldn't happen, warn it
-                LOG.warn(
-                        "The failed table {} is not in tiering table, won't report it to Fluss to mark as failed.",
-                        failedTableId);
-            } else {
+                    failedEvent.getFailureMessage());
+            Long tieringEpoch = tieringTableEpochs.remove(failedTableId);
+            if (tieringEpoch != null) {
                 failedTableEpochs.put(failedTableId, tieringEpoch);
+            }
+
+            if (tieringEpoch == null) {
+                LOG.warn(
+                        "Table {} is not in tiering state, skipping failure report.",
+                        failedTableId);
             }
         }
 
@@ -359,6 +364,7 @@ public class TieringSourceEnumerator
         if (throwable != null) {
             ExceptionUtils.rethrow(throwable);
         }
+
         if (tieringTable != null) {
             generateTieringSplits(tieringTable);
         }
@@ -409,8 +415,9 @@ public class TieringSourceEnumerator
                 currentFailedTableEpochs,
                 tieringTableEpochs);
 
+        LakeTieringHeartbeatResponse heartbeatResponse;
         if (pendingSplits.isEmpty() && !readersAwaitingSplit.isEmpty()) {
-            LakeTieringHeartbeatResponse heartbeatResponse =
+            heartbeatResponse =
                     waitHeartbeatResponse(
                             coordinatorGateway.lakeTieringHeartbeat(
                                     heartBeatWithRequestNewTieringTable(tieringHeartbeatRequest)));
@@ -429,14 +436,67 @@ public class TieringSourceEnumerator
             }
         } else {
             // report heartbeat to fluss coordinator
-            waitHeartbeatResponse(coordinatorGateway.lakeTieringHeartbeat(tieringHeartbeatRequest));
+            heartbeatResponse =
+                    waitHeartbeatResponse(
+                            coordinatorGateway.lakeTieringHeartbeat(tieringHeartbeatRequest));
         }
+
+        // Collect dropped table IDs from heartbeat response for deferred processing.
+        collectDroppedTablesFromHeartbeat(heartbeatResponse);
 
         // if come to here, we can remove currentFinishedTables/failedTableEpochs to avoid send
         // in next round
         currentFinishedTables.forEach(finishedTables::remove);
         currentFailedTableEpochs.forEach(failedTableEpochs::remove);
         return lakeTieringInfo;
+    }
+
+    /** Detect table deletion errors in tiering_table_resp from heartbeat response. */
+    private void collectDroppedTablesFromHeartbeat(LakeTieringHeartbeatResponse heartbeatResponse) {
+        for (PbHeartbeatRespForTable resp : heartbeatResponse.getTieringTableRespsList()) {
+            if (resp.hasError()) {
+                ApiError error = ApiError.fromErrorMessage(resp.getError());
+                Errors errors = error.error();
+                if (errors == Errors.TABLE_NOT_EXIST) {
+                    long tableId = resp.getTableId();
+                    LOG.warn(
+                            "Table {} does not exist (error: {}), will cancel tiering.",
+                            tableId,
+                            errors);
+                    context.runInCoordinatorThread(() -> handleTableDropped(tableId));
+                }
+            }
+        }
+    }
+
+    /**
+     * Handle a dropped table by treating it as a tiering cancellation, marking all related pending
+     * splits to skip, and notifying readers to stop processing.
+     */
+    @VisibleForTesting
+    protected void handleTableDropped(long tableId) {
+        Long epoch = tieringTableEpochs.remove(tableId);
+        if (epoch != null) {
+            failedTableEpochs.put(tableId, epoch);
+        }
+        if (epoch != null) {
+            LOG.info("Table {} is dropped, moved epoch {} from tiering to failed.", tableId, epoch);
+        }
+
+        // Mark all pending splits for this table to skip current round
+        for (TieringSplit tieringSplit : pendingSplits) {
+            if (tieringSplit.getTableBucket().getTableId() == tableId) {
+                tieringSplit.skipCurrentRound();
+            }
+        }
+
+        // Broadcast the event to all readers to stop processing this table
+        Set<Integer> readers = new HashSet<>(context.registeredReaders().keySet());
+        for (int reader : readers) {
+            TieringTableDroppedEvent event = new TieringTableDroppedEvent(tableId);
+            LOG.info("Send {} to reader {} for dropped table", event, reader);
+            context.sendEventToSourceReader(reader, event);
+        }
     }
 
     private void generateTieringSplits(Tuple3<Long, Long, TablePath> tieringTable)

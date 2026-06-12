@@ -23,6 +23,7 @@ import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
+import org.apache.fluss.flink.tiering.event.TieringTableDroppedEvent;
 import org.apache.fluss.flink.tiering.source.TieringTestBase;
 import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSnapshotSplit;
@@ -853,6 +854,80 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
                             split ->
                                     split.getTableBucket().getTableId() == tableId
                                             && !split.shouldSkipCurrentRound());
+        }
+    }
+
+    @Test
+    void testHandleTableDropped() throws Throwable {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "tiering-dropped-table-test");
+        long tableId = createTable(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
+        int numSubtasks = 2;
+
+        appendRow(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR, 0, 10);
+
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                        new FlussMockSplitEnumeratorContext<>(numSubtasks);
+                TieringSourceEnumerator enumerator =
+                        createTieringSourceEnumerator(flussConf, context)) {
+            enumerator.start();
+
+            // Register all readers
+            for (int subtaskId = 0; subtaskId < numSubtasks; subtaskId++) {
+                context.registerSourceReader(subtaskId, subtaskId, "localhost-" + subtaskId);
+            }
+
+            for (int subTask = 0; subTask < numSubtasks; subTask++) {
+                enumerator.handleSplitRequest(subTask, "localhost-" + subTask);
+            }
+
+            // Wait for initial assignment - this registers the table in tieringTableEpochs
+            // Use numSubtasks (not DEFAULT_BUCKET_NUM) since only numSubtasks readers
+            // request splits, so at most numSubtasks assignments can be made
+            waitUntilTieringTableSplitAssignmentReady(context, numSubtasks, 200L);
+
+            // Drop the table while tiering is in progress
+            conn.getAdmin().dropTable(tablePath, true).get();
+
+            // Directly call handleTableDropped to simulate detection of table drop
+            // This is similar to how testTableReachMaxTieringDuration directly triggers
+            // handleTableTieringReachMaxDuration via timer
+            enumerator.handleTableDropped(tableId);
+
+            // Verify that TieringTableDroppedEvent was sent to all readers
+            // The containsExactly assertion naturally triggers equals/hashCode coverage
+            Map<Integer, List<SourceEvent>> eventsToReaders = context.getSentSourceEvent();
+            assertThat(eventsToReaders).hasSize(numSubtasks);
+            for (Map.Entry<Integer, List<SourceEvent>> entry : eventsToReaders.entrySet()) {
+                assertThat(entry.getValue()).contains(new TieringTableDroppedEvent(tableId));
+            }
+
+            // Verify that the dropped table's epoch is immediately moved to failed:
+            // after handleTableDropped, the next heartbeat should report the table as failed,
+            // allowing the coordinator to clean up and assign new tables.
+            // Create a new table to verify the enumerator can move on.
+            context.getSplitsAssignmentSequence().clear();
+            TablePath newTablePath = TablePath.of(DEFAULT_DB, "tiering-dropped-table-test-new");
+            createTable(newTablePath, DEFAULT_LOG_TABLE_DESCRIPTOR);
+            appendRow(newTablePath, DEFAULT_LOG_TABLE_DESCRIPTOR, 0, 10);
+
+            // Request splits again - should get the new table after the heartbeat reports
+            // the dropped table as failed
+            for (int subTask = 0; subTask < numSubtasks; subTask++) {
+                enumerator.handleSplitRequest(subTask, "localhost-" + subTask);
+            }
+            waitUntilTieringTableSplitAssignmentReady(context, numSubtasks, 500L);
+
+            List<TieringSplit> newAssignment = new ArrayList<>();
+            context.getSplitsAssignmentSequence()
+                    .forEach(a -> a.assignment().values().forEach(newAssignment::addAll));
+            assertThat(newAssignment).isNotEmpty();
+            // Remaining pending splits from the dropped table are assigned with
+            // skipCurrentRound=true (readers will skip them). Non-skipped splits
+            // should all belong to the new table.
+            assertThat(newAssignment)
+                    .filteredOn(split -> !split.shouldSkipCurrentRound())
+                    .isNotEmpty()
+                    .allMatch(split -> split.getTablePath().equals(newTablePath));
         }
     }
 }
