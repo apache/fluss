@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.source.metrics;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.flink.source.reader.FlinkSourceReader;
 import org.apache.fluss.metadata.TableBucket;
 
@@ -26,8 +27,12 @@ import org.apache.flink.runtime.metrics.MetricNames;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.HashMap;
+import javax.annotation.Nullable;
+
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * A collection class for handling metrics in {@link FlinkSourceReader} of Fluss.
@@ -52,6 +57,11 @@ public class FlinkSourceReaderMetrics {
     public static final String PARTITION_GROUP = "partition";
     public static final String BUCKET_GROUP = "bucket";
     public static final String CURRENT_OFFSET_METRIC_GAUGE = "currentOffset";
+    public static final String LOG_END_OFFSET_METRIC_GAUGE = "logEndOffset";
+    public static final String RECORDS_LAG_METRIC_GAUGE = "recordsLag";
+    public static final String RECORDS_LAG_MAX_METRIC_GAUGE = "recordsLagMax";
+    public static final String RECORDS_LAG_SUM_METRIC_GAUGE = "recordsLagSum";
+    public static final String LAGGING_BUCKETS_METRIC_GAUGE = "laggingBuckets";
 
     public static final long INITIAL_OFFSET = -1;
     public static final long UNINITIALIZED = -1;
@@ -62,8 +72,8 @@ public class FlinkSourceReaderMetrics {
     // Metric group for registering Fluss specific reader metrics
     private final MetricGroup flussSourceReaderMetricGroup;
 
-    // Map for tracking current consuming offsets
-    private final Map<TableBucket, Long> offsets = new HashMap<>();
+    // Map for tracking current consuming offsets and lag state.
+    private final Map<TableBucket, BucketMetrics> bucketMetrics = new ConcurrentHashMap<>();
 
     // For currentFetchEventTimeLag metric
     private volatile long currentFetchEventTimeLag = UNINITIALIZED;
@@ -72,6 +82,7 @@ public class FlinkSourceReaderMetrics {
         this.sourceReaderMetricGroup = sourceReaderMetricGroup;
         this.flussSourceReaderMetricGroup =
                 sourceReaderMetricGroup.addGroup(FLUSS_METRIC_GROUP).addGroup(READER_METRIC_GROUP);
+        registerRecordsLagMetrics();
     }
 
     public void reportRecordEventTime(long lag) {
@@ -87,9 +98,29 @@ public class FlinkSourceReaderMetrics {
         currentFetchEventTimeLag = lag;
     }
 
-    public void registerTableBucket(TableBucket tableBucket) {
-        offsets.put(tableBucket, INITIAL_OFFSET);
-        registerOffsetMetricsForTableBucket(tableBucket);
+    @VisibleForTesting
+    protected void registerTableBucket(TableBucket tableBucket) {
+        registerTableBucket(tableBucket, null, INITIAL_OFFSET, null, true);
+    }
+
+    public void registerTableBucket(
+            TableBucket tableBucket,
+            @Nullable String partitionName,
+            long startingOffset,
+            @Nullable Long stoppingOffset,
+            boolean refreshLogEndOffset) {
+        bucketMetrics.computeIfAbsent(
+                tableBucket,
+                key -> {
+                    BucketMetrics newMetrics =
+                            new BucketMetrics(
+                                    partitionName,
+                                    startingOffset,
+                                    stoppingOffset,
+                                    refreshLogEndOffset);
+                    registerOffsetMetricsForTableBucket(key, newMetrics);
+                    return newMetrics;
+                });
     }
 
     /**
@@ -99,12 +130,46 @@ public class FlinkSourceReaderMetrics {
      * @param offset Current consuming offset
      */
     public void recordCurrentOffset(TableBucket tb, long offset) {
-        checkTableBucketTracked(tb);
-        offsets.put(tb, offset);
+        BucketMetrics metrics = bucketMetrics.get(tb);
+        if (metrics != null) {
+            metrics.recordCurrentOffset(offset);
+        }
+    }
+
+    public void recordLogEndOffset(TableBucket tb, long logEndOffset) {
+        BucketMetrics metrics = bucketMetrics.get(tb);
+        if (metrics != null) {
+            metrics.updateLogEndOffsetIfAdvanced(logEndOffset);
+        }
+    }
+
+    public void unregisterTableBucket(TableBucket tb) {
+        BucketMetrics metrics = bucketMetrics.get(tb);
+        if (metrics != null) {
+            metrics.deactivate();
+        }
+    }
+
+    public List<SubscribedBucket> subscribedBucketsForLogEndOffsetRefresh() {
+        List<SubscribedBucket> subscribedBuckets = new ArrayList<>();
+        for (Map.Entry<TableBucket, BucketMetrics> entry : bucketMetrics.entrySet()) {
+            BucketMetrics metrics = entry.getValue();
+            if (metrics.needsLogEndOffsetRefresh()) {
+                subscribedBuckets.add(metrics.toSubscribedBucket(entry.getKey()));
+            }
+        }
+        return subscribedBuckets;
     }
 
     // -------- Helper functions --------
-    private void registerOffsetMetricsForTableBucket(TableBucket tableBucket) {
+    private void registerRecordsLagMetrics() {
+        flussSourceReaderMetricGroup.gauge(RECORDS_LAG_MAX_METRIC_GAUGE, this::recordsLagMax);
+        flussSourceReaderMetricGroup.gauge(RECORDS_LAG_SUM_METRIC_GAUGE, this::recordsLagSum);
+        flussSourceReaderMetricGroup.gauge(LAGGING_BUCKETS_METRIC_GAUGE, this::laggingBuckets);
+    }
+
+    private void registerOffsetMetricsForTableBucket(
+            TableBucket tableBucket, BucketMetrics bucketMetrics) {
         final MetricGroup metricGroup =
                 tableBucket.getPartitionId() == null
                         ? this.flussSourceReaderMetricGroup
@@ -112,18 +177,118 @@ public class FlinkSourceReaderMetrics {
                                 PARTITION_GROUP, String.valueOf(tableBucket.getPartitionId()));
         final MetricGroup bucketGroup =
                 metricGroup.addGroup(BUCKET_GROUP, String.valueOf(tableBucket.getBucket()));
-        bucketGroup.gauge(
-                CURRENT_OFFSET_METRIC_GAUGE,
-                () -> offsets.getOrDefault(tableBucket, INITIAL_OFFSET));
+        bucketGroup.gauge(CURRENT_OFFSET_METRIC_GAUGE, () -> bucketMetrics.currentOffset());
+        bucketGroup.gauge(LOG_END_OFFSET_METRIC_GAUGE, () -> bucketMetrics.logEndOffset());
+        bucketGroup.gauge(RECORDS_LAG_METRIC_GAUGE, () -> bucketMetrics.recordsLag());
     }
 
-    private void checkTableBucketTracked(TableBucket tableBucket) {
-        if (!offsets.containsKey(tableBucket)) {
-            LOG.warn("Offset metrics of TableBucket {} is not tracked", tableBucket);
+    private long recordsLagMax() {
+        long maxLag = 0L;
+        for (BucketMetrics metrics : bucketMetrics.values()) {
+            maxLag = Math.max(maxLag, metrics.recordsLag());
         }
+        return maxLag;
+    }
+
+    private long recordsLagSum() {
+        long lagSum = 0L;
+        for (BucketMetrics metrics : bucketMetrics.values()) {
+            lagSum += metrics.recordsLag();
+        }
+        return lagSum;
+    }
+
+    private int laggingBuckets() {
+        int laggingBuckets = 0;
+        for (BucketMetrics metrics : bucketMetrics.values()) {
+            if (metrics.recordsLag() > 0) {
+                laggingBuckets++;
+            }
+        }
+        return laggingBuckets;
     }
 
     public SourceReaderMetricGroup getSourceReaderMetricGroup() {
         return sourceReaderMetricGroup;
+    }
+
+    private static class BucketMetrics {
+        @Nullable private volatile String partitionName;
+        private volatile boolean active;
+        private volatile long currentOffset;
+        private volatile long nextConsumedOffset;
+        private volatile long logEndOffset;
+        private volatile boolean refreshLogEndOffset;
+
+        private BucketMetrics(
+                @Nullable String partitionName,
+                long startingOffset,
+                @Nullable Long stoppingOffset,
+                boolean refreshLogEndOffset) {
+            this.partitionName = partitionName;
+            this.currentOffset = INITIAL_OFFSET;
+            this.nextConsumedOffset = startingOffset;
+            this.logEndOffset = stoppingOffset == null ? UNINITIALIZED : stoppingOffset;
+            this.refreshLogEndOffset = refreshLogEndOffset && stoppingOffset == null;
+            this.active = true;
+        }
+
+        private void recordCurrentOffset(long offset) {
+            currentOffset = offset;
+            nextConsumedOffset = offset + 1;
+        }
+
+        private void updateLogEndOffsetIfAdvanced(long logEndOffset) {
+            if (active && refreshLogEndOffset && logEndOffset > this.logEndOffset) {
+                this.logEndOffset = logEndOffset;
+            }
+        }
+
+        private void deactivate() {
+            active = false;
+        }
+
+        private boolean needsLogEndOffsetRefresh() {
+            return active && refreshLogEndOffset;
+        }
+
+        private SubscribedBucket toSubscribedBucket(TableBucket tableBucket) {
+            return new SubscribedBucket(tableBucket, partitionName);
+        }
+
+        private long currentOffset() {
+            return currentOffset;
+        }
+
+        private long logEndOffset() {
+            return logEndOffset;
+        }
+
+        private long recordsLag() {
+            if (!active || logEndOffset < 0 || nextConsumedOffset < 0) {
+                return 0L;
+            }
+            return Math.max(0L, logEndOffset - nextConsumedOffset);
+        }
+    }
+
+    /** The subscribed bucket whose latest log end offset needs to be refreshed. */
+    public static class SubscribedBucket {
+        private final TableBucket tableBucket;
+        @Nullable private final String partitionName;
+
+        private SubscribedBucket(TableBucket tableBucket, @Nullable String partitionName) {
+            this.tableBucket = tableBucket;
+            this.partitionName = partitionName;
+        }
+
+        public TableBucket tableBucket() {
+            return tableBucket;
+        }
+
+        @Nullable
+        public String partitionName() {
+            return partitionName;
+        }
     }
 }

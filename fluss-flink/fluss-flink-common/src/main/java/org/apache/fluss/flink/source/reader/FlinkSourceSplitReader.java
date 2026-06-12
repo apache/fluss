@@ -70,6 +70,7 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
 
+import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_LOG_END_OFFSET_REFRESH_INTERVAL;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -99,6 +100,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     @Nullable private SourceSplitBase currentBoundedSplit;
 
     private final LogScanner logScanner;
+    @Nullable private LogEndOffsetRefresher logEndOffsetRefresher;
 
     private final Connection connection;
     private final Table table;
@@ -106,6 +108,8 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
 
     @Nullable private final LakeSource<LakeSplit> lakeSource;
 
+    private final Configuration flussConf;
+    private final TablePath tablePath;
     private final Long tableId;
 
     private final Map<TableBucket, Long> stoppingOffsets;
@@ -127,6 +131,8 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             FlinkSourceReaderMetrics flinkSourceReaderMetrics) {
         this.flinkMetricRegistry =
                 new FlinkMetricRegistry(flinkSourceReaderMetrics.getSourceReaderMetricGroup());
+        this.flussConf = flussConf;
+        this.tablePath = tablePath;
         this.connection = ConnectionFactory.createConnection(flussConf, flinkMetricRegistry);
         this.table = connection.getTable(tablePath);
         this.tableId = table.getTableInfo().getTableId();
@@ -313,9 +319,37 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                     split.splitId(),
                     startingOffset);
             // Track the new bucket in metrics and internal state.
-            flinkSourceReaderMetrics.registerTableBucket(tableBucket);
+            Optional<Long> stoppingOffset = getStoppingOffsetForMetrics(split);
+            flinkSourceReaderMetrics.registerTableBucket(
+                    tableBucket,
+                    split.getPartitionName(),
+                    startingOffset,
+                    stoppingOffset.orElse(null),
+                    !stoppingOffset.isPresent());
+            if (!stoppingOffset.isPresent()) {
+                ensureLogEndOffsetRefresherStarted();
+            }
             subscribedBuckets.put(tableBucket, split.splitId());
         }
+    }
+
+    private void ensureLogEndOffsetRefresherStarted() {
+        if (logEndOffsetRefresher == null) {
+            logEndOffsetRefresher =
+                    new LogEndOffsetRefresher(
+                            connection.getAdmin(),
+                            tablePath,
+                            flinkSourceReaderMetrics,
+                            flussConf.get(CLIENT_SCANNER_LOG_END_OFFSET_REFRESH_INTERVAL));
+            logEndOffsetRefresher.start();
+        }
+    }
+
+    private Optional<Long> getStoppingOffsetForMetrics(SourceSplitBase split) {
+        if (split instanceof LogSplit) {
+            return ((LogSplit) split).getStoppingOffset();
+        }
+        return Optional.empty();
     }
 
     public Set<TableBucket> removePartitions(Map<Long, String> removedPartitions) {
@@ -378,6 +412,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                         tableBucket.getBucket());
                 removedSplits.add(tableBucketAndSplit.getValue());
                 subscribeTableBucketIterator.remove();
+                flinkSourceReaderMetrics.unregisterTableBucket(tableBucket);
                 unsubscribedTableBuckets.add(tableBucket);
                 LOG.info(
                         "Unsubscribe to read log of split {} for non-existed partition {}.",
@@ -445,6 +480,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             List<ScanRecord> bucketScanRecords = scanRecords.records(scanBucket);
             if (!bucketScanRecords.isEmpty()) {
                 final ScanRecord lastRecord = bucketScanRecords.get(bucketScanRecords.size() - 1);
+                flinkSourceReaderMetrics.recordLogEndOffset(scanBucket, lastRecord.logOffset() + 1);
                 // We keep the maximum message timestamp in the fetch for calculating lags
                 maxConsumerRecordTimestampInFetch =
                         Math.max(maxConsumerRecordTimestampInFetch, lastRecord.timestamp());
@@ -567,6 +603,9 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     public void close() throws Exception {
         if (currentBoundedSplitReader != null) {
             currentBoundedSplitReader.close();
+        }
+        if (logEndOffsetRefresher != null) {
+            logEndOffsetRefresher.close();
         }
         if (logScanner != null) {
             logScanner.close();
