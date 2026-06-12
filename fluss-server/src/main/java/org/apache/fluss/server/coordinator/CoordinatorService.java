@@ -47,6 +47,7 @@ import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DeleteBehavior;
+import org.apache.fluss.metadata.LakeTableUtil;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -485,10 +486,12 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         // before create table in fluss, we may create in lake
         if (isDataLakeEnabled(tableDescriptor)) {
+            TablePath lakeTablePath =
+                    LakeTableUtil.getLakeTablePath(tablePath, tableDescriptor.getProperties());
             try {
                 checkNotNull(lakeCatalogContainer.getLakeCatalog())
                         .createTable(
-                                tablePath,
+                                lakeTablePath,
                                 tableDescriptor,
                                 new DefaultLakeCatalogContext(
                                         true,

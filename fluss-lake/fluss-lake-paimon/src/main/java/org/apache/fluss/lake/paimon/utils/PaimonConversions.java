@@ -69,7 +69,6 @@ public class PaimonConversions {
     static {
         PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.BUCKET.key());
         PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.BUCKET_KEY.key());
-        PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.PATH.key());
         PAIMON_UNSETTABLE_OPTIONS.add(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY);
     }
 
