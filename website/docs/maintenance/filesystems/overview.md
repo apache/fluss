@@ -42,4 +42,6 @@ The Fluss project supports the following file systems:
 
 - **[Tencent Cloud COS](cos.md)** is supported by `fluss-fs-cos` and registered under the `cosn://` URI scheme. Please make sure to [manually install the COS plugin](cos.md#install-cos-plugin-manually).
 
+- **[Google Cloud Storage](gcs.md)** is supported by `fluss-fs-gcs` and registered under the `gs://` URI scheme.
+
 The implementation is based on [Hadoop Project](https://hadoop.apache.org/) but is self-contained with no dependency footprint.
