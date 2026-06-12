@@ -332,7 +332,8 @@ public class FlinkTableSource
     @Override
     public ScanRuntimeProvider getScanRuntimeProvider(ScanContext scanContext) {
         // handle single row filter scan
-        if (singleRowFilter != null || limit > 0 || selectRowCount) {
+        boolean useFlussOnlyLimitScan = limit > 0 && !shouldReadLakeInFullMode();
+        if (singleRowFilter != null || useFlussOnlyLimitScan || selectRowCount) {
             Collection<RowData> results;
             if (singleRowFilter != null) {
                 results =
@@ -343,7 +344,7 @@ public class FlinkTableSource
                                 tableOutputType,
                                 primaryKeyIndexes,
                                 projectedFields);
-            } else if (limit > 0) {
+            } else if (useFlussOnlyLimitScan) {
                 results =
                         PushdownUtils.limitScan(
                                 tablePath, flussConfig, tableOutputType, projectedFields, limit);
@@ -459,6 +460,11 @@ public class FlinkTableSource
                 }
             };
         }
+    }
+
+    private boolean shouldReadLakeInFullMode() {
+        return lakeSource != null
+                && startupOptions.startupMode == FlinkConnectorOptions.ScanStartupMode.FULL;
     }
 
     @Override
