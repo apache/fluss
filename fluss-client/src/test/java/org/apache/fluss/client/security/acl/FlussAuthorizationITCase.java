@@ -51,11 +51,14 @@ import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.CommitRemoteLogManifestRequest;
 import org.apache.fluss.rpc.messages.ControlledShutdownRequest;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
+import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import org.apache.fluss.rpc.messages.MetadataRequest;
+import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.security.acl.AccessControlEntry;
@@ -1368,6 +1371,110 @@ public class FlussAuthorizationITCase {
 
         // Cleanup
         rootAdmin.dropTable(testTablePath, true).get();
+    }
+
+    @Test
+    void testRemoteLogAndTieringAuthorization() throws Exception {
+        // These RPCs are internal-only and should reject all external sessions,
+        // regardless of permissions
+        try (RpcClient rpcClient =
+                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance())) {
+
+            TabletServerGateway guestTabletGateway =
+                    GatewayClientProxy.createGatewayProxy(
+                            () -> FLUSS_CLUSTER_EXTENSION.getTabletServerNodes("CLIENT").get(0),
+                            rpcClient,
+                            TabletServerGateway.class);
+
+            CoordinatorGateway guestCoordinatorGateway =
+                    GatewayClientProxy.createGatewayProxy(
+                            () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("CLIENT"),
+                            rpcClient,
+                            CoordinatorGateway.class);
+
+            // Test 1: notifyRemoteLogOffsets should reject external sessions
+            NotifyRemoteLogOffsetsRequest notifyRemoteRequest = new NotifyRemoteLogOffsetsRequest();
+            notifyRemoteRequest.setTableId(1L);
+            notifyRemoteRequest.setBucketId(0);
+            notifyRemoteRequest.setCoordinatorEpoch(1);
+            notifyRemoteRequest.setRemoteStartOffset(0L);
+            notifyRemoteRequest.setRemoteEndOffset(100L);
+            assertThatThrownBy(
+                            () ->
+                                    guestTabletGateway
+                                            .notifyRemoteLogOffsets(notifyRemoteRequest)
+                                            .get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            "NotifyRemoteLogOffsets is an internal RPC and cannot be called by external clients");
+
+            // Test 2: commitRemoteLogManifest should reject external sessions
+            CommitRemoteLogManifestRequest commitManifestRequest =
+                    new CommitRemoteLogManifestRequest();
+            commitManifestRequest.setTableId(1L);
+            commitManifestRequest.setBucketId(0);
+            commitManifestRequest.setRemoteLogManifestPath("/path/to/manifest");
+            commitManifestRequest.setRemoteLogStartOffset(0L);
+            commitManifestRequest.setRemoteLogEndOffset(100L);
+            commitManifestRequest.setCoordinatorEpoch(1);
+            commitManifestRequest.setBucketLeaderEpoch(1);
+            assertThatThrownBy(
+                            () ->
+                                    guestCoordinatorGateway
+                                            .commitRemoteLogManifest(commitManifestRequest)
+                                            .get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            "CommitRemoteLogManifest is an internal RPC and cannot be called by external clients");
+
+            // Test 3: lakeTieringHeartbeat should reject external sessions
+            LakeTieringHeartbeatRequest heartbeatRequest = new LakeTieringHeartbeatRequest();
+            assertThatThrownBy(
+                            () ->
+                                    guestCoordinatorGateway
+                                            .lakeTieringHeartbeat(heartbeatRequest)
+                                            .get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            "LakeTieringHeartbeat is an internal RPC and cannot be called by external clients");
+        }
+
+        // Test 4: Even root user (super user) cannot call these RPCs from external sessions
+        Configuration rootClientConf =
+                new Configuration(FLUSS_CLUSTER_EXTENSION.getClientConfig("CLIENT"));
+        rootClientConf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "sasl");
+        rootClientConf.set(ConfigOptions.CLIENT_SASL_MECHANISM, "plain");
+        rootClientConf.setString("client.security.sasl.username", "root");
+        rootClientConf.setString("client.security.sasl.password", "password");
+
+        try (RpcClient rootRpcClient =
+                RpcClient.create(rootClientConf, TestingClientMetricGroup.newInstance())) {
+
+            TabletServerGateway rootTabletGateway =
+                    GatewayClientProxy.createGatewayProxy(
+                            () -> FLUSS_CLUSTER_EXTENSION.getTabletServerNodes("CLIENT").get(0),
+                            rootRpcClient,
+                            TabletServerGateway.class);
+
+            NotifyRemoteLogOffsetsRequest notifyRemoteRequest = new NotifyRemoteLogOffsetsRequest();
+            notifyRemoteRequest.setTableId(1L);
+            notifyRemoteRequest.setBucketId(0);
+            notifyRemoteRequest.setCoordinatorEpoch(1);
+            notifyRemoteRequest.setRemoteStartOffset(0L);
+            notifyRemoteRequest.setRemoteEndOffset(100L);
+            assertThatThrownBy(
+                            () ->
+                                    rootTabletGateway
+                                            .notifyRemoteLogOffsets(notifyRemoteRequest)
+                                            .get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            "NotifyRemoteLogOffsets is an internal RPC and cannot be called by external clients");
+        }
     }
 
     private static Configuration initConfig() {
