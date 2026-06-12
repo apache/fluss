@@ -32,6 +32,7 @@ import org.apache.fluss.utils.concurrent.ShutdownableThread;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Set;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
@@ -119,7 +120,19 @@ public final class CoordinatorEventManager implements EventManager {
                         context -> {
                             int coordinatorServerCount = context.getLiveCoordinatorServers().size();
                             int tabletServerCount = context.getLiveTabletServers().size();
-                            int tableCount = context.allTables().size();
+                            // Exclude tables that have been queued for deletion (DropTable RPC
+                            // already acked, but completeDeleteTable has not yet removed them
+                            // from tablePathById). We dedup by tableId rather than subtracting
+                            // sizes so the result is robust even if tablesToBeDeleted ever
+                            // drifts out of sync with tablePathById -- it can never go negative
+                            // and only counts ids that are truly still in tablePathById.
+                            Set<Long> tablesToBeDeleted = context.getTablesToBeDeleted();
+                            int tableCount = 0;
+                            for (Long tableId : context.allTables().keySet()) {
+                                if (!tablesToBeDeleted.contains(tableId)) {
+                                    tableCount++;
+                                }
+                            }
                             int lakeTableCount = context.getLakeTableCount();
                             int bucketCount = context.bucketLeaderAndIsr().size();
                             int partitionCount = context.getTotalPartitionCount();

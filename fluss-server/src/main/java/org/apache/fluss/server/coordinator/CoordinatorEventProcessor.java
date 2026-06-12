@@ -959,6 +959,17 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // remove table metrics.
         coordinatorMetricGroup.removeTableMetricGroup(dropTableInfo.getTablePath(), tableId);
+
+        // For partitioned tables, the dropped table has no table-level replicas
+        // (all buckets live under partitionAssignments), so getAllReplicasForTable
+        // returns empty and areAllReplicasInState(.., ReplicaDeletionSuccessful)
+        // is vacuously true. Without this explicit trigger, the table would linger
+        // in tablesToBeDeleted (and the tableCount metric) until some unrelated
+        // replica-deletion response happens to invoke resumeDeletions(), which
+        // can be never if no other table is being dropped.
+        if (dropTableInfo.isPartitioned()) {
+            tableManager.resumeDeletions();
+        }
     }
 
     private void processDropPartition(DropPartitionEvent dropPartitionEvent) {

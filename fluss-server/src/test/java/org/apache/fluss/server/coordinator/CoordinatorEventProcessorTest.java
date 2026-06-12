@@ -892,6 +892,31 @@ class CoordinatorEventProcessorTest {
     }
 
     @Test
+    void testDropPartitionedTableWithNoPartitionsClearsTableState() throws Exception {
+        TablePath tablePath =
+                TablePath.of(defaultDatabase, "test_drop_partitioned_table_no_partitions");
+        initCoordinatorChannel();
+
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, getPartitionedTable(), null, false);
+        retryVerifyContext(ctx -> assertThat(ctx.getTablePathById(tableId)).isNotNull());
+
+        metadataManager.dropTable(tablePath, false);
+
+        // The fix at the tail of processDropTable explicitly calls resumeDeletions(), which
+        // sees vacuous-true (getAllReplicasForTable returns empty) and runs
+        // completeDeleteTable -> removeTable, evicting the table from both tablesToBeDeleted
+        // and tablePathById.
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getTablePathById(tableId)).isNull();
+                    assertThat(ctx.getTablesToBeDeleted()).doesNotContain(tableId);
+                    assertThat(ctx.allTables()).doesNotContainKey(tableId);
+                });
+    }
+
+    @Test
     void testStartupResumesDropPartitionThroughCleanupManager() throws Exception {
         TablePath tablePath = TablePath.of(defaultDatabase, "test_startup_resume_via_cleanup");
         initCoordinatorChannel();
