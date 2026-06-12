@@ -68,18 +68,23 @@ class SparkTable(
         flussConfig.get(SparkFlussConf.SCAN_START_UP_MODE))
       .toUpperCase
     val isFullMode = startupMode == SparkFlussConf.StartUpMode.FULL.toString
-    if (isDataLakeEnabled && LakeTableUtil.hasCustomLakePath(tableInfo.getProperties)) {
-      throw new UnsupportedOperationException(
-        "Custom lake table path is not supported in Spark connector yet.")
-    }
+    val hasCustomLakePath = LakeTableUtil.hasCustomLakePath(tableInfo.getProperties)
     if (tableInfo.getPrimaryKeys.isEmpty) {
       if (isDataLakeEnabled && isFullMode) {
+        if (hasCustomLakePath) {
+          throw new UnsupportedOperationException(
+            "Custom lake table path is not supported for Spark lake reads yet.")
+        }
         new FlussLakeAppendScanBuilder(tablePath, tableInfo, options, flussConfig)
       } else {
         new FlussAppendScanBuilder(tablePath, tableInfo, options, flussConfig)
       }
     } else {
       if (isDataLakeEnabled) {
+        if (hasCustomLakePath) {
+          throw new UnsupportedOperationException(
+            "Custom lake table path is not supported for Spark lake reads yet.")
+        }
         new FlussLakeUpsertScanBuilder(tablePath, tableInfo, options, flussConfig)
       } else {
         new FlussUpsertScanBuilder(tablePath, tableInfo, options, flussConfig)

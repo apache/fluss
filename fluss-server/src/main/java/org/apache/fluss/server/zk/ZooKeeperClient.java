@@ -1369,7 +1369,7 @@ public class ZooKeeperClient implements AutoCloseable {
     public void deleteLakeTable(long tableId) throws Exception {
         String zkPath = LakeTableZNode.path(tableId);
         try {
-            zkClient.delete().forPath(zkPath);
+            zkClient.delete().deletingChildrenIfNeeded().forPath(zkPath);
         } catch (KeeperException.NoNodeException ignored) {
             // Ignore if the lake table progress has not been committed yet.
         }
