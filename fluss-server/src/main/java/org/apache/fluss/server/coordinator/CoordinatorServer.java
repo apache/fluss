@@ -27,6 +27,7 @@ import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.RpcServer;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
+import org.apache.fluss.rpc.netty.server.NettyServer;
 import org.apache.fluss.rpc.netty.server.RequestsMetrics;
 import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.ServerBase;
@@ -295,6 +296,8 @@ public class CoordinatorServer extends ServerBase {
                             serverMetricGroup,
                             RequestsMetrics.createCoordinatorServerRequestMetrics(
                                     serverMetricGroup));
+            // Register FlussProtocolPlugin for dynamic SASL config updates
+            dynamicConfigManager.register(((NettyServer) rpcServer).getFlussProtocolPlugin());
             rpcServer.start();
 
             registerCoordinatorServer();

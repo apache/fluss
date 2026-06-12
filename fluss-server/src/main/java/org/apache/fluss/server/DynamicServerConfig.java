@@ -49,6 +49,7 @@ import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS;
 import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS_STRATEGY;
 import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS;
 import static org.apache.fluss.config.ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO;
+import static org.apache.fluss.config.ConfigOptions.SERVER_SASL_USERS;
 import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
 import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 
@@ -73,7 +74,8 @@ class DynamicServerConfig {
                             // Config options for remote.data.dirs
                             REMOTE_DATA_DIRS.key(),
                             REMOTE_DATA_DIRS_STRATEGY.key(),
-                            REMOTE_DATA_DIRS_WEIGHTS.key()));
+                            REMOTE_DATA_DIRS_WEIGHTS.key(),
+                            SERVER_SASL_USERS.key()));
     private static final Set<String> ALLOWED_CONFIG_PREFIXES = Collections.singleton("datalake.");
 
     private final ReadWriteLock lock = new ReentrantReadWriteLock();

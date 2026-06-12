@@ -139,6 +139,8 @@ public abstract class FlinkProcedureITCase {
                             "+I[sys.list_acl]",
                             "+I[sys.set_cluster_configs]",
                             "+I[sys.reset_cluster_configs]",
+                            "+I[sys.append_cluster_configs]",
+                            "+I[sys.subtract_cluster_configs]",
                             "+I[sys.add_server_tag]",
                             "+I[sys.remove_server_tag]",
                             "+I[sys.rebalance]",
@@ -784,6 +786,115 @@ public abstract class FlinkProcedureITCase {
     }
 
     @Test
+    void testAddAndDeleteUser() throws Exception {
+        String bobBootstrapServers =
+                String.join(
+                        ",",
+                        FLUSS_CLUSTER_EXTENSION
+                                .getClientConfig("CLIENT")
+                                .get(ConfigOptions.BOOTSTRAP_SERVERS));
+        String bobCatalog = "bob_catalog";
+        String createCatalogDDL =
+                String.format(
+                        "create catalog %s with ("
+                                + "'type' = 'fluss', "
+                                + "'bootstrap.servers' = '%s', "
+                                + "'client.security.protocol' = 'sasl', "
+                                + "'client.security.sasl.mechanism' = 'PLAIN', "
+                                + "'client.security.sasl.username' = 'bob', "
+                                + "'client.security.sasl.password' = 'bob_pass'"
+                                + ")",
+                        bobCatalog, bobBootstrapServers);
+
+        assertThatThrownBy(() -> tEnv.executeSql(createCatalogDDL).await())
+                .hasMessageContaining("Invalid username or password");
+
+        // Step 1: Add user "bob" via append_cluster_configs
+        try (CloseableIterator<Row> resultIterator =
+                tEnv.executeSql(
+                                String.format(
+                                        "Call %s.sys.append_cluster_configs('%s', 'bob:bob_pass')",
+                                        CATALOG_NAME, ConfigOptions.SERVER_SASL_USERS.key()))
+                        .collect()) {
+            List<Row> results = CollectionUtil.iteratorToList(resultIterator);
+            assertThat(results).hasSize(1);
+            assertThat(results.get(0).getField(0))
+                    .asString()
+                    .contains("Successfully appended")
+                    .contains(ConfigOptions.SERVER_SASL_USERS.key());
+        }
+
+        // Verify user "bob" was added
+        try (CloseableIterator<Row> resultIterator =
+                tEnv.executeSql(
+                                String.format(
+                                        "Call %s.sys.get_cluster_configs('%s')",
+                                        CATALOG_NAME, ConfigOptions.SERVER_SASL_USERS.key()))
+                        .collect()) {
+            List<Row> results = CollectionUtil.iteratorToList(resultIterator);
+            assertThat(results).hasSize(1);
+            assertThat(results.stream().map(Row::toString).collect(Collectors.toList()))
+                    .containsExactly(
+                            "+I[security.sasl.plain.users, root:password,guest:passwords,bob:bob_pass, DYNAMIC_SERVER_CONFIG]");
+        }
+
+        // Verify "bob" can authenticate by creating a catalog with bob's credentials
+        tEnv.executeSql(createCatalogDDL).await();
+
+        // Grant bob DESCRIBE permission on cluster so bob can query configs
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.add_acl('CLUSTER', 'ALLOW', 'User:bob', 'DESCRIBE', '*')",
+                                CATALOG_NAME))
+                .await();
+
+        // Bob should be able to get cluster configs
+        try (CloseableIterator<Row> resultIterator =
+                tEnv.executeSql(
+                                String.format(
+                                        "Call %s.sys.get_cluster_configs('%s')",
+                                        bobCatalog, ConfigOptions.SERVER_SASL_USERS.key()))
+                        .collect()) {
+            List<Row> results = CollectionUtil.iteratorToList(resultIterator);
+            assertThat(results.stream().map(Row::toString).collect(Collectors.toList()))
+                    .containsExactly(
+                            "+I[security.sasl.plain.users, root:password,guest:passwords,bob:bob_pass, DYNAMIC_SERVER_CONFIG]");
+        }
+        tEnv.executeSql("drop catalog " + bobCatalog);
+
+        // Step 2: Delete user "bob" via subtract_cluster_configs
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.subtract_cluster_configs('%s', 'bob:bob_pass')",
+                                CATALOG_NAME, ConfigOptions.SERVER_SASL_USERS.key()))
+                .await();
+
+        // Verify "bob" was deleted from config
+        try (CloseableIterator<Row> resultIterator =
+                tEnv.executeSql(
+                                String.format(
+                                        "Call %s.sys.get_cluster_configs('%s')",
+                                        CATALOG_NAME, ConfigOptions.SERVER_SASL_USERS.key()))
+                        .collect()) {
+            List<Row> results = CollectionUtil.iteratorToList(resultIterator);
+            // After subtracting the only dynamically-added entry, the config may be empty
+            assertThat(results.stream().map(Row::toString).collect(Collectors.toList()))
+                    .containsExactly(
+                            "+I[security.sasl.plain.users, root:password,guest:passwords, DYNAMIC_SERVER_CONFIG]");
+        }
+
+        // Verify "bob" can no longer authenticate
+        assertThatThrownBy(() -> tEnv.executeSql(createCatalogDDL).await())
+                .hasMessageContaining("Invalid username or password");
+        // Cleanup: remove bob's ACL
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.drop_acl('CLUSTER', 'ALLOW', 'User:bob', 'DESCRIBE', '*')",
+                                CATALOG_NAME))
+                .await();
+    }
+
+    @Test
     void testDropKvSnapshotLeaseProcedure() throws Exception {
         tEnv.executeSql(
                 "create table testcatalog.fluss.pk_table_test_kv_snapshot_lease ("
@@ -837,11 +948,7 @@ public abstract class FlinkProcedureITCase {
         // set security information.
         conf.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
         conf.setString("security.sasl.enabled.mechanisms", "plain");
-        conf.setString(
-                "security.sasl.plain.jaas.config",
-                "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required "
-                        + "    user_root=\"password\" "
-                        + "    user_guest=\"password2\";");
+        conf.setString(ConfigOptions.SERVER_SASL_USERS.key(), "root:password,guest:passwords");
         conf.set(ConfigOptions.SUPER_USERS, "User:root");
         conf.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         return conf;
