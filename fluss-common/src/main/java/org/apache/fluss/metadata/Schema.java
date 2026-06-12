@@ -475,6 +475,27 @@ public final class Schema implements Serializable {
             return this;
         }
 
+        /**
+         * Declares a column that is dropped to this schema.
+         *
+         * @param columnName the name of the column
+         * @return the builder instance
+         */
+        public Builder dropColumn(String columnName) {
+            checkNotNull(columnName, "Column name must not be null.");
+
+            Column existingColumn =
+                    columns.stream()
+                            .filter(column -> column.getName().equals(columnName))
+                            .findFirst()
+                            .orElseThrow(
+                                    () ->
+                                            new IllegalArgumentException(
+                                                    "Column " + columnName + " does not exist."));
+            columns.remove(existingColumn);
+            return this;
+        }
+
         /** Apply comment to the previous column. */
         public Builder withComment(@Nullable String comment) {
             if (!columns.isEmpty()) {
@@ -563,6 +584,16 @@ public final class Schema implements Serializable {
             return columns.stream()
                     .filter(column -> column.getName().equals(columnName))
                     .findFirst();
+        }
+
+        /** Returns the primary key, if set. */
+        public Optional<PrimaryKey> getPrimaryKey() {
+            return Optional.ofNullable(primaryKey);
+        }
+
+        /** Returns the auto-increment column names. */
+        public List<String> getAutoIncrementColumnNames() {
+            return Collections.unmodifiableList(autoIncrementColumnNames);
         }
 
         /** Returns an instance of an {@link Schema}. */
