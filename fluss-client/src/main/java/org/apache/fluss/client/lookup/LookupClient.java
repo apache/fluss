@@ -122,7 +122,7 @@ public class LookupClient {
         if (lookupSenderThreadPool != null) {
             lookupSenderThreadPool.shutdown();
             try {
-                if (lookupSenderThreadPool.awaitTermination(
+                if (!lookupSenderThreadPool.awaitTermination(
                         timeout.toMillis(), TimeUnit.MILLISECONDS)) {
                     lookupSenderThreadPool.shutdownNow();
 
