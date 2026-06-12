@@ -19,6 +19,7 @@ package org.apache.fluss.lake.iceberg.tiering;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
@@ -34,11 +35,13 @@ import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.Table;
+import org.apache.iceberg.TableProperties;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.SupportsNamespaces;
@@ -48,6 +51,7 @@ import org.apache.iceberg.data.Record;
 import org.apache.iceberg.io.CloseableIterator;
 import org.apache.iceberg.types.Types;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -87,24 +91,35 @@ class IcebergTieringTest {
     private static final int BUCKET_NUM = 3;
 
     private @TempDir File tempWarehouseDir;
+    private Configuration icebergConfiguration;
+    private IcebergCatalogProvider icebergCatalogProvider;
     private IcebergLakeTieringFactory icebergLakeTieringFactory;
     private Catalog icebergCatalog;
 
     @BeforeEach
     void beforeEach() {
-        Configuration configuration = new Configuration();
-        configuration.setString("warehouse", "file://" + tempWarehouseDir);
-        configuration.setString("type", "hadoop");
-        configuration.setString("name", "test");
-        IcebergCatalogProvider provider = new IcebergCatalogProvider(configuration);
-        icebergCatalog = provider.get();
+        icebergConfiguration = new Configuration();
+        icebergConfiguration.setString("warehouse", "file://" + tempWarehouseDir);
+        icebergConfiguration.setString("type", "hadoop");
+        icebergConfiguration.setString("name", "test");
+        icebergCatalogProvider = new IcebergCatalogProvider(icebergConfiguration);
+        icebergCatalog = icebergCatalogProvider.get();
 
-        icebergLakeTieringFactory = new IcebergLakeTieringFactory(configuration);
+        icebergLakeTieringFactory = new IcebergLakeTieringFactory(icebergConfiguration);
     }
 
     private static Stream<Arguments> tieringWriteArgs() {
         return Stream.of(
                 // isPrimaryKeyTable, isPartitionedTable
+                Arguments.of(true, true),
+                Arguments.of(true, false),
+                Arguments.of(false, true),
+                Arguments.of(false, false));
+    }
+
+    private static Stream<Arguments> snapshotExpireArgs() {
+        return Stream.of(
+                // isTableAutoExpireSnapshot, isLakeTieringExpireSnapshot
                 Arguments.of(true, true),
                 Arguments.of(true, false),
                 Arguments.of(false, true),
@@ -188,7 +203,7 @@ class IcebergTieringTest {
 
         // second, commit data
         try (LakeCommitter<IcebergWriteResult, IcebergCommittable> lakeCommitter =
-                createLakeCommitter(tablePath, tableInfo)) {
+                createLakeCommitter(tablePath, tableInfo, new Configuration())) {
             // serialize/deserialize committable
             IcebergCommittable icebergCommittable =
                     lakeCommitter.toCommittable(icebergWriteResults);
@@ -251,7 +266,8 @@ class IcebergTieringTest {
     }
 
     private LakeCommitter<IcebergWriteResult, IcebergCommittable> createLakeCommitter(
-            TablePath tablePath, TableInfo tableInfo) throws IOException {
+            TablePath tablePath, TableInfo tableInfo, Configuration lakeTieringConfig)
+            throws IOException {
         return icebergLakeTieringFactory.createLakeCommitter(
                 new CommitterInitContext() {
                     @Override
@@ -266,7 +282,7 @@ class IcebergTieringTest {
 
                     @Override
                     public Configuration lakeTieringConfig() {
-                        return new Configuration();
+                        return lakeTieringConfig;
                     }
 
                     @Override
@@ -274,6 +290,414 @@ class IcebergTieringTest {
                         return new Configuration();
                     }
                 });
+    }
+
+    @ParameterizedTest
+    @MethodSource("snapshotExpireArgs")
+    void testSnapshotExpiration(
+            boolean isTableAutoExpireSnapshot, boolean isLakeTieringExpireSnapshot)
+            throws Exception {
+        int bucketNum = 3;
+        TablePath tablePath =
+                TablePath.of(
+                        "iceberg",
+                        String.format(
+                                "test_snapshot_expire_%s_%s",
+                                isTableAutoExpireSnapshot, isLakeTieringExpireSnapshot));
+
+        // Create Iceberg table with snapshot retention properties
+        Map<String, String> tableProperties = new HashMap<>();
+        tableProperties.put(TableProperties.MIN_SNAPSHOTS_TO_KEEP, "1");
+        tableProperties.put(TableProperties.MAX_SNAPSHOT_AGE_MS, "1");
+        createTable(tablePath, false, false, tableProperties);
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                org.apache.fluss.metadata.Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .column("c3", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(bucketNum)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT,
+                                isTableAutoExpireSnapshot)
+                        .build();
+        TableInfo tableInfo =
+                TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
+
+        Configuration lakeTieringConfig = new Configuration();
+        lakeTieringConfig.set(
+                ConfigOptions.LAKE_TIERING_AUTO_EXPIRE_SNAPSHOT, isLakeTieringExpireSnapshot);
+        // Disable throttle gates so expiration fires on every commit (testing enable/disable, not
+        // throttle behavior)
+        lakeTieringConfig.setLong(
+                ConfigOptions.LAKE_ICEBERG_EXPIRE_SNAPSHOT_MIN_INTERVAL_COMMITS.key(), 1L);
+        lakeTieringConfig.setString(
+                ConfigOptions.LAKE_ICEBERG_EXPIRE_SNAPSHOT_MIN_INTERVAL_MS.key(), "0ms");
+
+        // Write data multiple times to generate snapshots
+        for (int round = 0; round < 5; round++) {
+            writeData(tablePath, tableInfo, lakeTieringConfig, bucketNum);
+            // Small delay to ensure snapshots are older than MAX_SNAPSHOT_AGE_MS=1ms
+            Thread.sleep(10);
+        }
+
+        // Verify snapshot count
+        Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
+        int snapshotCount = 0;
+        for (Snapshot ignored : icebergTable.snapshots()) {
+            snapshotCount++;
+        }
+
+        if (isTableAutoExpireSnapshot || isLakeTieringExpireSnapshot) {
+            // if auto snapshot expiration is enabled, old snapshots should be expired
+            // With MIN_SNAPSHOTS_TO_KEEP=1, only 1 snapshot should be retained
+            assertThat(snapshotCount).isEqualTo(1);
+        } else {
+            // if auto snapshot expiration is disabled, all snapshots should be retained
+            assertThat(snapshotCount).isEqualTo(5);
+        }
+    }
+
+    /**
+     * Validates that snapshot expiration can cause recovery failure.
+     *
+     * <p>Scenario: The tiering service commits multiple snapshots with auto-expire enabled. With
+     * aggressive settings (MIN_SNAPSHOTS_TO_KEEP=1), only the latest snapshot is retained. If the
+     * Flink checkpoint references an earlier (now-expired) snapshot ID, then on recovery
+     * getMissingLakeSnapshot will fail because it calls icebergTable.snapshot(expiredSnapshotId)
+     * which returns null, throwing an IllegalStateException.
+     */
+    @Test
+    void testSnapshotExpirationDoesNotBreakRecovery() throws Exception {
+        int bucketNum = 1;
+        TablePath tablePath = TablePath.of("iceberg", "test_expire_recovery");
+
+        // Aggressive expiration: keep only 1 snapshot, expire after 1ms
+        Map<String, String> tableProperties = new HashMap<>();
+        tableProperties.put(TableProperties.MIN_SNAPSHOTS_TO_KEEP, "1");
+        tableProperties.put(TableProperties.MAX_SNAPSHOT_AGE_MS, "1");
+        createTable(tablePath, false, false, tableProperties);
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                org.apache.fluss.metadata.Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .column("c3", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(bucketNum)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT, true)
+                        .build();
+        TableInfo tableInfo =
+                TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
+
+        Configuration lakeTieringConfig = new Configuration();
+        lakeTieringConfig.set(ConfigOptions.LAKE_TIERING_AUTO_EXPIRE_SNAPSHOT, false);
+        // Disable throttle gates so expiration fires on every commit
+        lakeTieringConfig.setLong(
+                ConfigOptions.LAKE_ICEBERG_EXPIRE_SNAPSHOT_MIN_INTERVAL_COMMITS.key(), 1L);
+        lakeTieringConfig.setString(
+                ConfigOptions.LAKE_ICEBERG_EXPIRE_SNAPSHOT_MIN_INTERVAL_MS.key(), "0ms");
+
+        // Round 1: Write and commit, capture snapshot ID (simulating Flink checkpoint saving it)
+        long firstSnapshotId;
+        Map<String, String> snapshotProperties =
+                Collections.singletonMap(
+                        LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "/path/to/offsets-1");
+        {
+            List<IcebergWriteResult> writeResults = new ArrayList<>();
+            for (int bucket = 0; bucket < bucketNum; bucket++) {
+                try (LakeWriter<IcebergWriteResult> writer =
+                        createLakeWriter(tablePath, bucket, null, null, tableInfo)) {
+                    for (LogRecord record : genLogTableRecords(null, bucket, 3).f0) {
+                        writer.write(record);
+                    }
+                    writeResults.add(writer.complete());
+                }
+            }
+            try (LakeCommitter<IcebergWriteResult, IcebergCommittable> lakeCommitter =
+                    createLakeCommitter(tablePath, tableInfo, lakeTieringConfig)) {
+                IcebergCommittable committable = lakeCommitter.toCommittable(writeResults);
+                firstSnapshotId =
+                        lakeCommitter
+                                .commit(committable, snapshotProperties)
+                                .getCommittedSnapshotId();
+            }
+        }
+
+        // Verify first snapshot exists
+        Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
+        assertThat(icebergTable.snapshot(firstSnapshotId)).isNotNull();
+
+        // Small delay to ensure snapshot age exceeds MAX_SNAPSHOT_AGE_MS=1ms
+        Thread.sleep(50);
+
+        // Round 2 & 3: Write more data with auto-expire enabled to trigger expiration
+        for (int round = 0; round < 2; round++) {
+            writeData(tablePath, tableInfo, lakeTieringConfig, bucketNum);
+            Thread.sleep(50);
+        }
+
+        // Verify the first snapshot has been expired
+        icebergTable.refresh();
+        assertThat(icebergTable.snapshot(firstSnapshotId))
+                .as("First snapshot should have been expired by aggressive expiration settings")
+                .isNull();
+
+        // Simulate recovery: Flink restarts from checkpoint which has firstSnapshotId
+        // This is what TieringCommitOperator.checkFlussNotMissingLakeSnapshot does.
+        // Even though firstSnapshotId was expired, getMissingLakeSnapshot should
+        // gracefully return the latest Fluss-committed snapshot (like Paimon's pickOrLatest).
+        try (LakeCommitter<IcebergWriteResult, IcebergCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo, lakeTieringConfig)) {
+            CommittedLakeSnapshot missingSnapshot =
+                    lakeCommitter.getMissingLakeSnapshot(firstSnapshotId);
+            assertThat(missingSnapshot)
+                    .as(
+                            "Recovery should succeed even when referenced snapshot is expired, "
+                                    + "returning the latest Fluss-committed snapshot")
+                    .isNotNull();
+            // The returned snapshot should be the latest one (from round 2 or 3), not the expired
+            // one
+            assertThat(missingSnapshot.getLakeSnapshotId()).isNotEqualTo(firstSnapshotId);
+        }
+    }
+
+    /**
+     * Verifies that the count-based throttle gate prevents expiration from running on every commit.
+     * With {@code MIN_INTERVAL_COMMITS=3} and the time gate effectively disabled ({@code
+     * MIN_INTERVAL_MS=0}), expiration should fire every 3 commits instead of every commit.
+     */
+    @Test
+    void testSnapshotExpirationThrottlingCountGate() throws Exception {
+        int bucketNum = 1;
+        TablePath tablePath = TablePath.of("iceberg", "test_expire_throttle_count");
+
+        Map<String, String> tableProperties = new HashMap<>();
+        tableProperties.put(TableProperties.MIN_SNAPSHOTS_TO_KEEP, "1");
+        tableProperties.put(TableProperties.MAX_SNAPSHOT_AGE_MS, "1");
+        createTable(tablePath, false, false, tableProperties);
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                org.apache.fluss.metadata.Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .column("c3", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(bucketNum)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT, true)
+                        .build();
+        TableInfo tableInfo =
+                TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
+
+        Configuration lakeTieringConfig = new Configuration();
+        // Require 3 commits before expiration is eligible (time gate disabled by setting to 0ms)
+        lakeTieringConfig.setLong(
+                ConfigOptions.LAKE_ICEBERG_EXPIRE_SNAPSHOT_MIN_INTERVAL_COMMITS.key(), 3L);
+        lakeTieringConfig.setString(
+                ConfigOptions.LAKE_ICEBERG_EXPIRE_SNAPSHOT_MIN_INTERVAL_MS.key(), "0ms");
+
+        ManualClock manualClock = new ManualClock(System.currentTimeMillis());
+        CommitterInitContext initContext =
+                buildCommitterInitContext(tablePath, tableInfo, lakeTieringConfig);
+        try (IcebergLakeCommitter committer =
+                new IcebergLakeCommitter(icebergCatalogProvider, initContext, manualClock)) {
+            for (int round = 0; round < 9; round++) {
+                List<IcebergWriteResult> writeResults = new ArrayList<>();
+                for (int bucket = 0; bucket < bucketNum; bucket++) {
+                    try (LakeWriter<IcebergWriteResult> writer =
+                            createLakeWriter(tablePath, bucket, null, null, tableInfo)) {
+                        for (LogRecord record : genLogTableRecords(null, bucket, 1).f0) {
+                            writer.write(record);
+                        }
+                        writeResults.add(writer.complete());
+                    }
+                }
+                IcebergCommittable committable = committer.toCommittable(writeResults);
+                committer.commit(committable, Collections.emptyMap());
+            }
+        }
+
+        // With MIN_SNAPSHOTS_TO_KEEP=1 and expiration every 3 commits,
+        // the last expiration should have happened on commit 9 (3rd multiple of 3).
+        // Only 1 snapshot should remain.
+        Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
+        icebergTable.refresh();
+        int snapshotCount = 0;
+        for (Snapshot ignored : icebergTable.snapshots()) {
+            snapshotCount++;
+        }
+        assertThat(snapshotCount)
+                .as("With count-throttle of 3 and 9 commits, expiration should have fired 3 times")
+                .isEqualTo(1);
+    }
+
+    /**
+     * Verifies that the time-based throttle gate blocks expiration until enough time has elapsed,
+     * and that expiration eventually fires once the time gate is satisfied.
+     */
+    @Test
+    void testSnapshotExpirationThrottlingTimeGate() throws Exception {
+        int bucketNum = 1;
+        TablePath tablePath = TablePath.of("iceberg", "test_expire_throttle_time");
+
+        Map<String, String> tableProperties = new HashMap<>();
+        tableProperties.put(TableProperties.MIN_SNAPSHOTS_TO_KEEP, "1");
+        tableProperties.put(TableProperties.MAX_SNAPSHOT_AGE_MS, "1");
+        createTable(tablePath, false, false, tableProperties);
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                org.apache.fluss.metadata.Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .column("c3", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(bucketNum)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT, true)
+                        .build();
+        TableInfo tableInfo =
+                TableInfo.of(tablePath, 0, 1, descriptor, DEFAULT_REMOTE_DATA_DIR, 1L, 1L);
+
+        Configuration lakeTieringConfig = new Configuration();
+        // Count gate: 1 commit (always satisfied after first commit).
+        // Time gate: 10 minutes — must elapse before expiration fires.
+        lakeTieringConfig.setLong(
+                ConfigOptions.LAKE_ICEBERG_EXPIRE_SNAPSHOT_MIN_INTERVAL_COMMITS.key(), 1L);
+        lakeTieringConfig.setString(
+                ConfigOptions.LAKE_ICEBERG_EXPIRE_SNAPSHOT_MIN_INTERVAL_MS.key(), "10min");
+
+        ManualClock manualClock = new ManualClock(0);
+
+        CommitterInitContext initContext =
+                buildCommitterInitContext(tablePath, tableInfo, lakeTieringConfig);
+        try (IcebergLakeCommitter committer =
+                new IcebergLakeCommitter(icebergCatalogProvider, initContext, manualClock)) {
+
+            // Phase 1: write 3 commits at t=0 — time gate not satisfied, expiration blocked
+            for (int round = 0; round < 3; round++) {
+                writeRound(committer, tablePath, bucketNum, tableInfo);
+            }
+
+            Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
+            icebergTable.refresh();
+            int snapshotCountBefore = 0;
+            for (Snapshot ignored : icebergTable.snapshots()) {
+                snapshotCountBefore++;
+            }
+            assertThat(snapshotCountBefore)
+                    .as(
+                            "Time gate not yet elapsed: expiration should be blocked, all 3 snapshots kept")
+                    .isEqualTo(3);
+
+            // Phase 2: advance clock past the 10-minute time gate
+            manualClock.advanceTime(java.time.Duration.ofMinutes(11));
+
+            // Phase 3: one more commit — both gates now satisfied, expiration fires
+            writeRound(committer, tablePath, bucketNum, tableInfo);
+
+            icebergTable.refresh();
+            int snapshotCountAfter = 0;
+            for (Snapshot ignored : icebergTable.snapshots()) {
+                snapshotCountAfter++;
+            }
+            assertThat(snapshotCountAfter)
+                    .as(
+                            "After time gate elapses, expiration should fire and retain only 1 snapshot")
+                    .isEqualTo(1);
+        }
+    }
+
+    private void writeData(
+            TablePath tablePath,
+            TableInfo tableInfo,
+            Configuration lakeTieringConfig,
+            int bucketNum)
+            throws Exception {
+        List<IcebergWriteResult> icebergWriteResults = new ArrayList<>();
+        SimpleVersionedSerializer<IcebergWriteResult> writeResultSerializer =
+                icebergLakeTieringFactory.getWriteResultSerializer();
+        SimpleVersionedSerializer<IcebergCommittable> committableSerializer =
+                icebergLakeTieringFactory.getCommittableSerializer();
+
+        for (int bucket = 0; bucket < bucketNum; bucket++) {
+            try (LakeWriter<IcebergWriteResult> writer =
+                    createLakeWriter(tablePath, bucket, null, null, tableInfo)) {
+                Tuple2<List<LogRecord>, List<LogRecord>> writeAndExpectRecords =
+                        genLogTableRecords(null, bucket, 3);
+                for (LogRecord record : writeAndExpectRecords.f0) {
+                    writer.write(record);
+                }
+                IcebergWriteResult result = writer.complete();
+                byte[] serialized = writeResultSerializer.serialize(result);
+                icebergWriteResults.add(
+                        writeResultSerializer.deserialize(
+                                writeResultSerializer.getVersion(), serialized));
+            }
+        }
+
+        try (LakeCommitter<IcebergWriteResult, IcebergCommittable> lakeCommitter =
+                createLakeCommitter(tablePath, tableInfo, lakeTieringConfig)) {
+            IcebergCommittable committable = lakeCommitter.toCommittable(icebergWriteResults);
+            byte[] serialized = committableSerializer.serialize(committable);
+            committable =
+                    committableSerializer.deserialize(
+                            committableSerializer.getVersion(), serialized);
+            lakeCommitter.commit(committable, Collections.emptyMap());
+        }
+    }
+
+    private CommitterInitContext buildCommitterInitContext(
+            TablePath tablePath, TableInfo tableInfo, Configuration lakeTieringConfig) {
+        return new CommitterInitContext() {
+            @Override
+            public TablePath tablePath() {
+                return tablePath;
+            }
+
+            @Override
+            public TableInfo tableInfo() {
+                return tableInfo;
+            }
+
+            @Override
+            public Configuration lakeTieringConfig() {
+                return lakeTieringConfig;
+            }
+
+            @Override
+            public Configuration flussClientConfig() {
+                return new Configuration();
+            }
+        };
+    }
+
+    private void writeRound(
+            IcebergLakeCommitter committer, TablePath tablePath, int bucketNum, TableInfo tableInfo)
+            throws Exception {
+        List<IcebergWriteResult> writeResults = new ArrayList<>();
+        for (int bucket = 0; bucket < bucketNum; bucket++) {
+            try (LakeWriter<IcebergWriteResult> writer =
+                    createLakeWriter(tablePath, bucket, null, null, tableInfo)) {
+                for (LogRecord record : genLogTableRecords(null, bucket, 1).f0) {
+                    writer.write(record);
+                }
+                writeResults.add(writer.complete());
+            }
+        }
+        IcebergCommittable committable = committer.toCommittable(writeResults);
+        committer.commit(committable, Collections.emptyMap());
     }
 
     private Tuple2<List<LogRecord>, List<LogRecord>> genLogTableRecords(
@@ -361,6 +785,14 @@ class IcebergTieringTest {
 
     private void createTable(
             TablePath tablePath, boolean isPrimaryTable, boolean isPartitionedTable) {
+        createTable(tablePath, isPrimaryTable, isPartitionedTable, Collections.emptyMap());
+    }
+
+    private void createTable(
+            TablePath tablePath,
+            boolean isPrimaryTable,
+            boolean isPartitionedTable,
+            Map<String, String> tableProperties) {
         Namespace namespace = Namespace.of(tablePath.getDatabaseName());
         if (icebergCatalog instanceof SupportsNamespaces) {
             SupportsNamespaces ns = (SupportsNamespaces) icebergCatalog;
@@ -406,7 +838,7 @@ class IcebergTieringTest {
 
         TableIdentifier tableId =
                 TableIdentifier.of(tablePath.getDatabaseName(), tablePath.getTableName());
-        icebergCatalog.createTable(tableId, schema, partitionSpec);
+        icebergCatalog.createTable(tableId, schema, partitionSpec, tableProperties);
     }
 
     private CloseableIterator<Record> getIcebergRows(

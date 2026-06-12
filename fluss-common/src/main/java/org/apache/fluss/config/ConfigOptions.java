@@ -2267,6 +2267,34 @@ public class ConfigOptions {
                                     + ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT
                                     + " is false.");
 
+    public static final ConfigOption<Long> LAKE_ICEBERG_EXPIRE_SNAPSHOT_MIN_INTERVAL_COMMITS =
+            key("lake.iceberg.expire-snapshot.min-interval-commits")
+                    .longType()
+                    .defaultValue(10L)
+                    .withDescription(
+                            "Minimum number of commits that must occur since the last snapshot expiration "
+                                    + "before expiration is eligible to run again for Iceberg tables. "
+                                    + "Works in conjunction with lake.iceberg.expire-snapshot.min-interval-ms: "
+                                    + "both thresholds must be satisfied (AND logic) before expiration is triggered. "
+                                    + "This prevents metadata and file-deletion storms on object stores in "
+                                    + "high-frequency streaming tiering scenarios. Only applies when "
+                                    + "lake.tiering.auto-expire-snapshot or "
+                                    + "table.datalake.auto-expire-snapshot is enabled.");
+
+    public static final ConfigOption<Duration> LAKE_ICEBERG_EXPIRE_SNAPSHOT_MIN_INTERVAL_MS =
+            key("lake.iceberg.expire-snapshot.min-interval-ms")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(10))
+                    .withDescription(
+                            "Minimum duration that must elapse since the last snapshot expiration "
+                                    + "before expiration is eligible to run again for Iceberg tables. "
+                                    + "Works in conjunction with lake.iceberg.expire-snapshot.min-interval-commits: "
+                                    + "both thresholds must be satisfied (AND logic) before expiration is triggered. "
+                                    + "This acts as the primary rate-limiter for high-frequency streaming tiering "
+                                    + "scenarios where many commits occur per minute. Only applies when "
+                                    + "lake.tiering.auto-expire-snapshot or "
+                                    + "table.datalake.auto-expire-snapshot is enabled.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for fluss kafka
     // ------------------------------------------------------------------------
