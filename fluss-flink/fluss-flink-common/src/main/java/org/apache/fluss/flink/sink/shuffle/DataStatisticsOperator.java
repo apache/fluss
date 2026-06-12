@@ -19,13 +19,14 @@ package org.apache.fluss.flink.sink.shuffle;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
-import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.flink.row.RowWithOp;
 import org.apache.fluss.flink.sink.serializer.FlussSerializationSchema;
 import org.apache.fluss.flink.sink.serializer.SerializerInitContextImpl;
+import org.apache.fluss.metadata.PartitionExpression;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.PartitionComputer;
 
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.runtime.operators.coordination.OperatorEvent;
@@ -38,6 +39,7 @@ import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 
+import java.util.Collections;
 import java.util.List;
 
 import static org.apache.fluss.flink.adapter.RuntimeContextAdapter.getIndexOfThisSubtask;
@@ -60,12 +62,13 @@ public class DataStatisticsOperator<InputT>
     private final String operatorName;
     private final RowType rowType;
     private final List<String> partitionKeys;
+    private final List<PartitionExpression> partitionExpressions;
     private final FlussSerializationSchema<InputT> flussSerializationSchema;
     private final OperatorEventGateway operatorEventGateway;
 
     private transient int subtaskIndex;
     private transient volatile DataStatistics localStatistics;
-    private transient PartitionGetter partitionGetter;
+    private transient PartitionComputer partitionComputer;
     private transient TypeSerializer<DataStatistics> statisticsSerializer;
 
     DataStatisticsOperator(
@@ -73,6 +76,24 @@ public class DataStatisticsOperator<InputT>
             String operatorName,
             RowType rowType,
             List<String> partitionKeys,
+            OperatorEventGateway operatorEventGateway,
+            FlussSerializationSchema<InputT> flussSerializationSchema) {
+        this(
+                parameters,
+                operatorName,
+                rowType,
+                partitionKeys,
+                Collections.emptyList(),
+                operatorEventGateway,
+                flussSerializationSchema);
+    }
+
+    DataStatisticsOperator(
+            StreamOperatorParameters<StatisticsOrRecord<InputT>> parameters,
+            String operatorName,
+            RowType rowType,
+            List<String> partitionKeys,
+            List<PartitionExpression> partitionExpressions,
             OperatorEventGateway operatorEventGateway,
             FlussSerializationSchema<InputT> flussSerializationSchema) {
         super();
@@ -84,6 +105,7 @@ public class DataStatisticsOperator<InputT>
         this.flussSerializationSchema = flussSerializationSchema;
         this.rowType = rowType;
         this.partitionKeys = partitionKeys;
+        this.partitionExpressions = partitionExpressions;
         this.setup(
                 parameters.getContainingTask(),
                 parameters.getStreamConfig(),
@@ -92,7 +114,8 @@ public class DataStatisticsOperator<InputT>
 
     @Override
     public void open() throws Exception {
-        this.partitionGetter = new PartitionGetter(rowType, partitionKeys);
+        this.partitionComputer =
+                new PartitionComputer(partitionKeys, partitionExpressions, rowType);
         this.statisticsSerializer = new DataStatisticsSerializer();
         try {
             // enable statistics collection for the serialization schema
@@ -136,7 +159,7 @@ public class DataStatisticsOperator<InputT>
         InputT record = streamRecord.getValue();
         RowWithOp rowWithOp = flussSerializationSchema.serialize(record);
         InternalRow row = rowWithOp.getRow();
-        String partition = partitionGetter.getPartition(row);
+        String partition = partitionComputer.getPartition(row);
         // if estimated size is null, use row count rather than bytes size as weight.
         long weight =
                 rowWithOp.getEstimatedSizeInBytes() != null

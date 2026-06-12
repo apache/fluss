@@ -28,7 +28,9 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataTypeRoot;
+import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
 import java.time.Instant;
@@ -352,10 +354,16 @@ public class PartitionUtils {
     /** Projects {@code tableInfo}'s row type down to its partition key columns, in key order. */
     public static RowType partitionRowType(TableInfo tableInfo) {
         RowType schema = tableInfo.getRowType();
-        List<String> fieldNames = schema.getFieldNames();
-        int[] indexes =
-                tableInfo.getPartitionKeys().stream().mapToInt(fieldNames::indexOf).toArray();
-        return schema.project(indexes);
+        List<String> virtualPartitionKeys = tableInfo.getVirtualPartitionKeys();
+        List<DataField> partitionFields = new ArrayList<>();
+        for (String partitionKey : tableInfo.getPartitionKeys()) {
+            if (virtualPartitionKeys.contains(partitionKey)) {
+                partitionFields.add(new DataField(partitionKey, DataTypes.STRING().copy(false)));
+            } else {
+                partitionFields.add(schema.getField(partitionKey));
+            }
+        }
+        return new RowType(partitionFields);
     }
 
     /**

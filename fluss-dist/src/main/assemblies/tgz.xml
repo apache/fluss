@@ -26,7 +26,7 @@
     <baseDirectory>fluss-${project.version}</baseDirectory>
     <fileSets>
         <fileSet>
-            <directory>${project.basedir}/target/fluss-${project.version}-bin/fluss-${project.version}</directory>
+            <directory>${project.basedir}/target/${dist.assembly.finalName}/fluss-${project.version}</directory>
             <outputDirectory>/</outputDirectory>
             <includes>
                 <include>**/*</include>

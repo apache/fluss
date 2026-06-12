@@ -123,7 +123,8 @@ public class MetadataUtils {
                             Map<PhysicalTablePath, Long> newPartitionIdByPath;
 
                             NewTableMetadata newTableMetadata =
-                                    getTableMetadataToUpdate(originCluster, response);
+                                    getTableMetadataToUpdate(
+                                            originCluster, response, tablePaths, tablePartitions);
 
                             if (partialUpdate) {
                                 // If partial update, we will clear the to be updated table out ot
@@ -160,8 +161,12 @@ public class MetadataUtils {
     }
 
     private static NewTableMetadata getTableMetadataToUpdate(
-            Cluster cluster, MetadataResponse metadataResponse) {
+            Cluster cluster,
+            MetadataResponse metadataResponse,
+            @Nullable Set<TablePath> requestedTablePaths,
+            @Nullable Collection<PhysicalTablePath> requestedTablePartitions) {
         Map<TablePath, Long> newTablePathToTableId = new HashMap<>();
+        Map<Long, TablePath> newTablePathByTableId = new HashMap<>();
         Map<PhysicalTablePath, List<BucketLocation>> newBucketLocations = new HashMap<>();
         Map<PhysicalTablePath, Long> newPartitionIdByPath = new HashMap<>();
 
@@ -177,6 +182,7 @@ public class MetadataUtils {
                                     protoTablePath.getDatabaseName(),
                                     protoTablePath.getTableName());
                     newTablePathToTableId.put(tablePath, tableId);
+                    newTablePathByTableId.put(tableId, tablePath);
 
                     // Get all buckets for the table.
                     List<PbBucketMetadata> pbBucketMetadataList =
@@ -195,7 +201,16 @@ public class MetadataUtils {
                 pbPartitionMetadata -> {
                     long tableId = pbPartitionMetadata.getTableId();
                     // the table path should be initialized at begin
-                    TablePath tablePath = cluster.getTablePathOrElseThrow(tableId);
+                    TablePath tablePath =
+                            findTablePathForPartition(
+                                    tableId,
+                                    pbPartitionMetadata,
+                                    cluster,
+                                    newTablePathByTableId,
+                                    requestedTablePaths,
+                                    requestedTablePartitions);
+                    newTablePathToTableId.put(tablePath, tableId);
+                    newTablePathByTableId.put(tableId, tablePath);
                     PhysicalTablePath physicalTablePath =
                             PhysicalTablePath.of(tablePath, pbPartitionMetadata.getPartitionName());
                     newPartitionIdByPath.put(
@@ -212,6 +227,60 @@ public class MetadataUtils {
 
         return new NewTableMetadata(
                 newTablePathToTableId, newBucketLocations, newPartitionIdByPath);
+    }
+
+    private static TablePath findTablePathForPartition(
+            long tableId,
+            PbPartitionMetadata partitionMetadata,
+            Cluster cluster,
+            Map<Long, TablePath> newTablePathByTableId,
+            @Nullable Set<TablePath> requestedTablePaths,
+            @Nullable Collection<PhysicalTablePath> requestedTablePartitions) {
+        if (newTablePathByTableId.containsKey(tableId)) {
+            return newTablePathByTableId.get(tableId);
+        }
+
+        TablePath tablePath =
+                findRequestedTablePath(
+                        partitionMetadata, requestedTablePaths, requestedTablePartitions);
+        if (tablePath != null) {
+            return tablePath;
+        }
+
+        return cluster.getTablePathOrElseThrow(tableId);
+    }
+
+    private static @Nullable TablePath findRequestedTablePath(
+            PbPartitionMetadata partitionMetadata,
+            @Nullable Set<TablePath> requestedTablePaths,
+            @Nullable Collection<PhysicalTablePath> requestedTablePartitions) {
+        // Some partition metadata responses do not include table metadata for the returned table
+        // id. In that case, infer the table path from the requested partition paths only when the
+        // partition name uniquely identifies one requested table. If multiple requested tables use
+        // the same partition name, fall back to the table id mapping from the current cluster.
+        if (requestedTablePartitions != null) {
+            TablePath matchedTablePath = null;
+            for (PhysicalTablePath physicalTablePath : requestedTablePartitions) {
+                if (partitionMetadata
+                        .getPartitionName()
+                        .equals(physicalTablePath.getPartitionName())) {
+                    if (matchedTablePath != null
+                            && !matchedTablePath.equals(physicalTablePath.getTablePath())) {
+                        return null;
+                    }
+                    matchedTablePath = physicalTablePath.getTablePath();
+                }
+            }
+            if (matchedTablePath != null) {
+                return matchedTablePath;
+            }
+        }
+
+        if (requestedTablePaths != null && requestedTablePaths.size() == 1) {
+            return requestedTablePaths.iterator().next();
+        }
+
+        return null;
     }
 
     private static final class NewTableMetadata {

@@ -182,7 +182,10 @@ public class MetadataUpdater {
     public boolean checkAndUpdatePartitionMetadata(PhysicalTablePath physicalTablePath)
             throws PartitionNotExistException {
         if (!cluster.getPartitionId(physicalTablePath).isPresent()) {
-            updateMetadata(null, Collections.singleton(physicalTablePath), null);
+            updateMetadata(
+                    Collections.singleton(physicalTablePath.getTablePath()),
+                    Collections.singleton(physicalTablePath),
+                    null);
         }
         return cluster.getPartitionId(physicalTablePath).isPresent();
     }

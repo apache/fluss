@@ -173,7 +173,13 @@
             --add-opens=java.base/sun.util.calendar=ALL-UNNAMED
             -Djdk.reflect.useDirectMethodHandle=false
             -Dio.netty.tryReflectionSetAccessible=true
-        </extraJavaTestArgs>
+        
+            --add-exports=java.base/sun.net.util=ALL-UNNAMED
+            --add-exports=java.rmi/sun.rmi.registry=ALL-UNNAMED
+            --add-exports=java.security.jgss/sun.security.krb5=ALL-UNNAMED
+            --add-opens=java.base/java.text=ALL-UNNAMED
+            --add-opens=java.base/java.time=ALL-UNNAMED
+            --add-opens=java.base/java.util.concurrent.locks=ALL-UNNAMED</extraJavaTestArgs>
     </properties>
 
     <dependencies>
@@ -1112,7 +1118,7 @@
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-shade-plugin</artifactId>
-                    <version>3.4.1</version>
+                    <version>3.5.2</version>
                 </plugin>
 
                 <plugin>

@@ -76,6 +76,13 @@ class GSFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
         configuration.setString("fs.gs.auth.type", "SERVICE_ACCOUNT_JSON_KEYFILE");
         configuration.setString("fs.gs.auth.service.account.json.keyfile", path);
         configuration.setString("fs.gs.inputstream.support.gzip.encoding.enable", "false");
+        configuration.setString("fs.gs.block.size", "67108864");
+        configuration.setString("fs.gs.outputstream.buffer.size", "8388608");
+        configuration.setString("fs.gs.outputstream.pipe.buffer.size", "1048576");
+        configuration.setString("fs.gs.outputstream.upload.chunk.size", "67108864");
+        configuration.setString("fs.gs.inputstream.inplace.seek.limit", "8388608");
+        configuration.setString("fs.gs.inputstream.min.range.request.size", "2097152");
+        FileSystem.initialize(configuration, null);
 
         FileSystem fileSystem =
                 gsFileSystemPlugin.create(URI.create("gs://test-bucket/flusspath"), configuration);
@@ -108,6 +115,7 @@ class GSFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
 
     @AfterAll
     static void tearDown() throws IOException {
+        FileSystem.initialize(new Configuration(), null);
         mockGSServer.close();
     }
 }

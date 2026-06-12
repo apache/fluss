@@ -17,15 +17,20 @@
 
 package org.apache.fluss.metadata;
 
+import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigBuilder;
 import org.apache.fluss.config.ConfigOption;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.ZoneId;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -245,6 +250,192 @@ class TableDescriptorTest {
     }
 
     @Test
+    void testImplicitPartitionDescriptorCopyHelpersPreserveExpressions() {
+        TableDescriptor descriptor = implicitPartitionDescriptor().build();
+
+        TableDescriptor fromExistingBuilder = TableDescriptor.builder(descriptor).build();
+        assertThat(fromExistingBuilder).isEqualTo(descriptor);
+        assertThat(fromExistingBuilder.getPartitionExpressions())
+                .isEqualTo(descriptor.getPartitionExpressions());
+
+        Map<String, String> properties = Collections.singletonMap("table.test.option", "1");
+        assertThat(descriptor.withProperties(properties).getPartitionExpressions())
+                .isEqualTo(descriptor.getPartitionExpressions());
+        assertThat(descriptor.withBucketCount(8).getPartitionExpressions())
+                .isEqualTo(descriptor.getPartitionExpressions());
+        assertThat(descriptor.withDataLakeFormat(DataLakeFormat.PAIMON).getPartitionExpressions())
+                .isEqualTo(descriptor.getPartitionExpressions());
+    }
+
+    @Test
+    void testExistingDescriptorBuilderKeepsPartitionDeclarationMode() {
+        TableDescriptor implicitDescriptor = implicitPartitionDescriptor().build();
+
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptor.builder(implicitDescriptor)
+                                        .partitionedBy("region")
+                                        .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "partitionedBy(...) and partitionedByKeys(...) cannot be mixed in the same builder.");
+
+        TableDescriptor explicitDescriptor =
+                TableDescriptor.builder().schema(SCHEMA_1).partitionedBy("f0").build();
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptor.builder(explicitDescriptor)
+                                        .partitionedByKeys(PartitionKey.column("f0"))
+                                        .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "partitionedBy(...) and partitionedByKeys(...) cannot be mixed in the same builder.");
+    }
+
+    @Test
+    void testRepeatedPartitionDeclarationClearsStaleStateWithinSameMode() {
+        TableDescriptor legacyDescriptor =
+                TableDescriptor.builder()
+                        .schema(SCHEMA_1)
+                        .partitionedBy("f0")
+                        .partitionedBy("f3")
+                        .build();
+        assertThat(legacyDescriptor.getPartitionKeys()).containsExactly("f3");
+        assertThat(legacyDescriptor.getPartitionExpressions()).isEmpty();
+
+        TableDescriptor partitionKeysDescriptor =
+                implicitPartitionDescriptor()
+                        .partitionedByKeys(PartitionKey.column("region"))
+                        .build();
+        assertThat(partitionKeysDescriptor.getPartitionKeys()).containsExactly("region");
+        assertThat(partitionKeysDescriptor.getPartitionExpressions()).isEmpty();
+    }
+
+    @Test
+    void testTableInfoToDescriptorPreservesImplicitPartitionExpressions() {
+        TableDescriptor descriptor = implicitPartitionDescriptor().build();
+        TableInfo tableInfo =
+                TableInfo.of(TablePath.of("db", "t"), 1L, 1, descriptor, null, 1L, 1L);
+
+        TableDescriptor roundTrippedDescriptor = tableInfo.toTableDescriptor();
+
+        assertThat(roundTrippedDescriptor).isEqualTo(descriptor);
+        assertThat(roundTrippedDescriptor.getPhysicalPartitionKeys())
+                .isEqualTo(tableInfo.getPhysicalPartitionKeys());
+        assertThat(roundTrippedDescriptor.getVirtualPartitionKeys())
+                .isEqualTo(tableInfo.getVirtualPartitionKeys());
+        assertThat(roundTrippedDescriptor.getPartitionSourceColumns())
+                .isEqualTo(tableInfo.getPartitionSourceColumns());
+        assertThat(roundTrippedDescriptor.getPartitionInputColumns())
+                .isEqualTo(tableInfo.getPartitionInputColumns());
+    }
+
+    @Test
+    void testImplicitPartitionMetadataObjectMethodsIncludeExpressions() {
+        TableDescriptor descriptor = implicitPartitionDescriptor().build();
+        TableDescriptor sameDescriptor = TableDescriptor.builder(descriptor).build();
+        TableDescriptor physicalOnlyDescriptor =
+                implicitPartitionDescriptor()
+                        .partitionedByKeys(PartitionKey.column("region"))
+                        .build();
+
+        assertThat(descriptor).isEqualTo(sameDescriptor);
+        assertThat(descriptor.hashCode()).isEqualTo(sameDescriptor.hashCode());
+        assertThat(descriptor).isNotEqualTo(physicalOnlyDescriptor);
+        assertThat(descriptor.toString()).contains("partitionExpressions");
+
+        TableInfo tableInfo =
+                TableInfo.of(
+                        TablePath.of("db", "t"),
+                        1L,
+                        1,
+                        descriptor.withBucketCount(1),
+                        null,
+                        1L,
+                        1L);
+        TableInfo physicalOnlyTableInfo =
+                TableInfo.of(TablePath.of("db", "t"), 1L, 1, physicalOnlyDescriptor, null, 1L, 1L);
+
+        assertThat(tableInfo).isNotEqualTo(physicalOnlyTableInfo);
+        assertThat(tableInfo.toString()).contains("partitionExpressions");
+    }
+
+    @Test
+    void testResolvedImplicitPartitionTimeZoneDoesNotUseAutoPartitionTimeZone() {
+        TableDescriptor descriptor =
+                implicitPartitionDescriptor()
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_TIMEZONE, "UTC")
+                        .build();
+
+        TableDescriptor resolved =
+                descriptor.withResolvedPartitionExpressionTimeZone(ZoneId.of("Asia/Shanghai"));
+        DateTruncPartitionTransform transform =
+                (DateTruncPartitionTransform)
+                        resolved.getPartitionExpressions().get(0).getTransform();
+
+        assertThat(transform.getTimeZone()).hasValue(ZoneId.of("Asia/Shanghai"));
+    }
+
+    @Test
+    void testInvalidImplicitPartitionMetadata() {
+        assertThatThrownBy(
+                        () ->
+                                implicitPartitionDescriptor()
+                                        .partitionedByKeys(
+                                                PartitionKey.expression(
+                                                        PartitionExpression.of(
+                                                                "region",
+                                                                DateTruncPartitionTransform.of(
+                                                                        "event_time",
+                                                                        AutoPartitionTimeUnit
+                                                                                .DAY))))
+                                        .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "Virtual partition spec key 'region' conflicts with a physical column.");
+
+        assertThatThrownBy(
+                        () ->
+                                implicitPartitionDescriptor()
+                                        .partitionedByKeys(
+                                                PartitionKey.expression(
+                                                        PartitionExpression.of(
+                                                                "event_day",
+                                                                DateTruncPartitionTransform.of(
+                                                                        "event_time",
+                                                                        AutoPartitionTimeUnit
+                                                                                .DAY))),
+                                                PartitionKey.expression(
+                                                        PartitionExpression.of(
+                                                                "event_day",
+                                                                DateTruncPartitionTransform.of(
+                                                                        "event_time",
+                                                                        AutoPartitionTimeUnit
+                                                                                .MONTH))))
+                                        .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Duplicate partition keys are not allowed");
+    }
+
+    @Test
+    void testOldServerIgnoringPartitionExpressionsFailsFast() {
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptor.builder()
+                                        .schema(
+                                                Schema.newBuilder()
+                                                        .column(
+                                                                "event_time",
+                                                                DataTypes.TIMESTAMP().copy(false))
+                                                        .build())
+                                        .partitionedBy("event_day")
+                                        .distributedBy(1)
+                                        .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Partition key 'event_day' does not exist in the schema.");
+    }
+
+    @Test
     void testInvalidTableDescriptor() {
         // schema without primary key.
         Schema schema =
@@ -285,7 +476,7 @@ class TableDescriptorTest {
                                         .build())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage(
-                        "Partitioned Primary Key Table requires partition key [dt] is a subset of the primary key [id].");
+                        "Partitioned Primary Key Table requires physical partition keys [dt] is a subset of the primary key [id].");
     }
 
     @Test
@@ -317,6 +508,276 @@ class TableDescriptorTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage(
                         "Bucket key [f0, f3] shouldn't include any column in partition keys [f0].");
+    }
+
+    @Test
+    void testPartitionedByKeysWithImplicitPartitionExpression() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT().copy(false))
+                        .column("ts", DataTypes.TIMESTAMP().copy(false))
+                        .column("region", DataTypes.STRING().copy(false))
+                        .primaryKey("id", "ts", "region")
+                        .build();
+
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .partitionedByKeys(
+                                PartitionKey.column("region"),
+                                PartitionKey.expression(
+                                        PartitionExpression.of(
+                                                DateTruncPartitionTransform.of(
+                                                        "ts", AutoPartitionTimeUnit.DAY))))
+                        .build();
+
+        assertThat(descriptor.getPartitionKeys()).containsExactly("region", "ts_day");
+        assertThat(descriptor.getPhysicalPartitionKeys()).containsExactly("region");
+        assertThat(descriptor.getVirtualPartitionKeys()).containsExactly("ts_day");
+        assertThat(descriptor.getPartitionSourceColumns()).containsExactly("ts");
+        assertThat(descriptor.getPartitionInputColumns()).containsExactly("region", "ts");
+        assertThat(descriptor.getBucketKeys()).containsExactly("id", "ts");
+        assertThat(descriptor.isDefaultBucketKey()).isTrue();
+        assertThat(descriptor.getPartitionExpressions()).hasSize(1);
+
+        TableInfo tableInfo =
+                TableInfo.of(
+                        TablePath.of("db", "t"),
+                        1L,
+                        1,
+                        descriptor.withBucketCount(1),
+                        null,
+                        1L,
+                        1L);
+        assertThat(tableInfo.getPhysicalPrimaryKeys()).containsExactly("id", "ts");
+        assertThat(tableInfo.getPartitionExpressions().get(0).getVirtualPartitionSpecKey())
+                .hasValue("ts_day");
+    }
+
+    @Test
+    void testPartitionedByAndPartitionedByKeysCannotBeMixed() {
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptor.builder()
+                                        .schema(SCHEMA_1)
+                                        .partitionedBy("f0")
+                                        .partitionedByKeys(PartitionKey.column("f3")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "partitionedBy(...) and partitionedByKeys(...) cannot be mixed in the same builder.");
+
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptor.builder()
+                                        .schema(SCHEMA_1)
+                                        .partitionedByKeys(PartitionKey.column("f0"))
+                                        .partitionedBy("f3"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "partitionedBy(...) and partitionedByKeys(...) cannot be mixed in the same builder.");
+    }
+
+    @Test
+    void testInvalidPartitionExpressionMetadata() {
+        Schema nullableSourceSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT().copy(false))
+                        .column("ts", DataTypes.TIMESTAMP())
+                        .build();
+
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptor.builder()
+                                        .schema(nullableSourceSchema)
+                                        .partitionedByKeys(
+                                                PartitionKey.expression(
+                                                        PartitionExpression.of(
+                                                                DateTruncPartitionTransform.of(
+                                                                        "ts",
+                                                                        AutoPartitionTimeUnit
+                                                                                .DAY))))
+                                        .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Partition transform source column 'ts' must be non-nullable.");
+
+        Schema sourceNotInPkSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT().copy(false))
+                        .column("ts", DataTypes.TIMESTAMP().copy(false))
+                        .primaryKey("id")
+                        .build();
+
+        assertThatThrownBy(
+                        () ->
+                                TableDescriptor.builder()
+                                        .schema(sourceNotInPkSchema)
+                                        .partitionedByKeys(
+                                                PartitionKey.expression(
+                                                        PartitionExpression.of(
+                                                                DateTruncPartitionTransform.of(
+                                                                        "ts",
+                                                                        AutoPartitionTimeUnit
+                                                                                .DAY))))
+                                        .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "Partitioned Primary Key Table requires transform source column 'ts' is in the primary key [id].");
+    }
+
+    @Test
+    void testTableInfoRejectsInconsistentPartitionExpressions() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT().copy(false))
+                        .column("event_time", DataTypes.TIMESTAMP().copy(false))
+                        .primaryKey("id", "event_time")
+                        .build();
+
+        assertThatThrownBy(
+                        () ->
+                                tableInfo(
+                                        schema,
+                                        Collections.singletonList("event_day"),
+                                        Collections.emptyList()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "Partition key 'event_day' does not exist in the schema or partition expressions.");
+
+        assertThatThrownBy(
+                        () ->
+                                tableInfo(
+                                        Schema.newBuilder()
+                                                .column("id", DataTypes.INT().copy(false))
+                                                .column(
+                                                        "event_day",
+                                                        DataTypes.TIMESTAMP().copy(false))
+                                                .primaryKey("id", "event_day")
+                                                .build(),
+                                        Collections.singletonList("event_day"),
+                                        Collections.singletonList(
+                                                PartitionExpression.of(
+                                                        "event_day",
+                                                        DateTruncPartitionTransform.of(
+                                                                "event_day",
+                                                                AutoPartitionTimeUnit.DAY)))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "Virtual partition spec key 'event_day' conflicts with a physical column.");
+
+        assertThatThrownBy(
+                        () ->
+                                tableInfo(
+                                        schema,
+                                        Collections.singletonList("event_day"),
+                                        Collections.singletonList(
+                                                PartitionExpression.of(
+                                                        "event_day",
+                                                        DateTruncPartitionTransform.of(
+                                                                "missing_time",
+                                                                AutoPartitionTimeUnit.DAY)))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "Partition transform source column 'missing_time' does not exist in the schema.");
+
+        assertThatThrownBy(
+                        () ->
+                                tableInfo(
+                                        Schema.newBuilder()
+                                                .column("id", DataTypes.INT().copy(false))
+                                                .column("event_time", DataTypes.TIMESTAMP())
+                                                .build(),
+                                        Collections.singletonList("event_day"),
+                                        Collections.singletonList(
+                                                PartitionExpression.of(
+                                                        "event_day",
+                                                        DateTruncPartitionTransform.of(
+                                                                "event_time",
+                                                                AutoPartitionTimeUnit.DAY)))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Partition transform source column 'event_time' must be non-nullable.");
+
+        assertThatThrownBy(
+                        () ->
+                                tableInfo(
+                                        Schema.newBuilder()
+                                                .column("id", DataTypes.INT().copy(false))
+                                                .column("dt", DataTypes.STRING().copy(false))
+                                                .primaryKey("id")
+                                                .build(),
+                                        Collections.singletonList("dt"),
+                                        Collections.emptyList()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "Partitioned Primary Key Table requires physical partition keys [dt] is a subset of the primary key [id].");
+
+        assertThatThrownBy(
+                        () ->
+                                tableInfo(
+                                        Schema.newBuilder()
+                                                .column("id", DataTypes.INT().copy(false))
+                                                .column(
+                                                        "event_time",
+                                                        DataTypes.TIMESTAMP().copy(false))
+                                                .primaryKey("id")
+                                                .build(),
+                                        Collections.singletonList("event_day"),
+                                        Collections.singletonList(
+                                                PartitionExpression.of(
+                                                        "event_day",
+                                                        DateTruncPartitionTransform.of(
+                                                                "event_time",
+                                                                AutoPartitionTimeUnit.DAY)))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "Partitioned Primary Key Table requires transform source column 'event_time' is in the primary key [id].");
+
+        assertThatThrownBy(
+                        () ->
+                                tableInfo(
+                                        schema,
+                                        Collections.singletonList("event_day"),
+                                        Collections.singletonList(
+                                                PartitionExpression.of(
+                                                        DateTruncPartitionTransform.of(
+                                                                "event_time",
+                                                                AutoPartitionTimeUnit.DAY)))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "Partition expression must contain a resolved virtual partition spec key.");
+
+        assertThatThrownBy(
+                        () ->
+                                tableInfo(
+                                        schema,
+                                        Collections.singletonList("event_day"),
+                                        Collections.singletonList(
+                                                PartitionExpression.of(
+                                                        "event_month",
+                                                        DateTruncPartitionTransform.of(
+                                                                "event_time",
+                                                                AutoPartitionTimeUnit.MONTH)))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage(
+                        "Virtual partition spec key 'event_month' is not present in partition keys [event_day].");
+
+        assertThatThrownBy(
+                        () ->
+                                tableInfo(
+                                        schema,
+                                        Collections.singletonList("event_day"),
+                                        Arrays.asList(
+                                                PartitionExpression.of(
+                                                        "event_day",
+                                                        DateTruncPartitionTransform.of(
+                                                                "event_time",
+                                                                AutoPartitionTimeUnit.DAY)),
+                                                PartitionExpression.of(
+                                                        "event_day",
+                                                        DateTruncPartitionTransform.of(
+                                                                "event_time",
+                                                                AutoPartitionTimeUnit.MONTH)))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Duplicate virtual partition spec key 'event_day'.");
     }
 
     @Test
@@ -387,5 +848,46 @@ class TableDescriptorTest {
         // valid case
         AggFunctions.of(AggFunctionType.LAST_VALUE, params).validateDataType(DataTypes.STRING());
         AggFunctions.of(AggFunctionType.LISTAGG, params).validateDataType(DataTypes.STRING());
+    }
+
+    private static TableDescriptor.Builder implicitPartitionDescriptor() {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("region", DataTypes.STRING().copy(false))
+                        .column("id", DataTypes.INT().copy(false))
+                        .column("event_time", DataTypes.TIMESTAMP().copy(false))
+                        .primaryKey("region", "id", "event_time")
+                        .build();
+        return TableDescriptor.builder()
+                .schema(schema)
+                .partitionedByKeys(
+                        PartitionKey.column("region"),
+                        PartitionKey.expression(
+                                PartitionExpression.of(
+                                        "event_day",
+                                        DateTruncPartitionTransform.of(
+                                                "event_time", AutoPartitionTimeUnit.DAY))))
+                .distributedBy(4);
+    }
+
+    private static TableInfo tableInfo(
+            Schema schema,
+            List<String> partitionKeys,
+            List<PartitionExpression> partitionExpressions) {
+        return new TableInfo(
+                TablePath.of("db", "t"),
+                1L,
+                0,
+                schema,
+                Collections.singletonList("id"),
+                partitionKeys,
+                partitionExpressions,
+                1,
+                new Configuration(),
+                new Configuration(),
+                null,
+                null,
+                1L,
+                1L);
     }
 }

@@ -35,8 +35,10 @@ abstract class AbstractSparkTable(val admin: Admin, val tableInfo: TableInfo) ex
   protected lazy val _schema: StructType =
     SparkConversions.toSparkDataType(tableInfo.getSchema.getRowType)
 
-  protected lazy val _partitionSchema = new StructType(
-    _schema.fields.filter(e => tableInfo.getPartitionKeys.contains(e.name)))
+  protected lazy val _partitionSchema: StructType = {
+    checkImplicitPartitionUnsupported()
+    new StructType(_schema.fields.filter(e => tableInfo.getPartitionKeys.contains(e.name)))
+  }
 
   override def name(): String = tableInfo.getTablePath.toString
 
@@ -52,6 +54,14 @@ abstract class AbstractSparkTable(val admin: Admin, val tableInfo: TableInfo) ex
   }
 
   override def partitioning(): Array[Transform] = {
+    checkImplicitPartitionUnsupported()
     CatalogV2UtilShim.toSparkTransforms(_partitionSchema.fields.map(_.name))
+  }
+
+  private def checkImplicitPartitionUnsupported(): Unit = {
+    if (tableInfo.hasPartitionExpressions) {
+      throw new UnsupportedOperationException(
+        "Spark connector does not support implicit partitioned Fluss tables yet.")
+    }
   }
 }
