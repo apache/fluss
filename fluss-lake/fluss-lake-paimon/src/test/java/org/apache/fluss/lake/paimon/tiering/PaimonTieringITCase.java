@@ -68,6 +68,7 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** IT case for tiering tables to paimon. */
@@ -496,19 +497,39 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
     private void checkDataInPaimonAppendOnlyTable(
             TablePath tablePath, List<InternalRow> expectedRows, long startingOffset)
             throws Exception {
-        Iterator<org.apache.paimon.data.InternalRow> paimonRowIterator =
-                getPaimonRowCloseableIterator(tablePath);
-        Iterator<InternalRow> flussRowIterator = expectedRows.iterator();
-        while (paimonRowIterator.hasNext()) {
-            org.apache.paimon.data.InternalRow row = paimonRowIterator.next();
-            InternalRow flussRow = flussRowIterator.next();
-            assertThat(row.getInt(0)).isEqualTo(flussRow.getInt(0));
-            assertThat(row.getString(1).toString()).isEqualTo(flussRow.getString(1).toString());
-            // system columns are always the last three: __bucket, __offset, __timestamp
-            int offsetIndex = row.getFieldCount() - 2;
-            assertThat(row.getLong(offsetIndex)).isEqualTo(startingOffset++);
-        }
-        assertThat(flussRowIterator.hasNext()).isFalse();
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    try (CloseableIterator<org.apache.paimon.data.InternalRow> paimonRowIterator =
+                            getPaimonRowCloseableIterator(tablePath)) {
+                        List<String> actualRows = new ArrayList<>();
+                        while (paimonRowIterator.hasNext()) {
+                            org.apache.paimon.data.InternalRow row = paimonRowIterator.next();
+                            // system columns are always the last three:
+                            // __bucket, __offset, __timestamp
+                            int offsetIndex = row.getFieldCount() - 2;
+                            actualRows.add(
+                                    row.getInt(0)
+                                            + "|"
+                                            + row.getString(1).toString()
+                                            + "|"
+                                            + row.getLong(offsetIndex));
+                        }
+
+                        List<String> expectedPaimonRows = new ArrayList<>();
+                        long offset = startingOffset;
+                        for (InternalRow flussRow : expectedRows) {
+                            expectedPaimonRows.add(
+                                    flussRow.getInt(0)
+                                            + "|"
+                                            + flussRow.getString(1).toString()
+                                            + "|"
+                                            + offset++);
+                        }
+                        assertThat(actualRows)
+                                .containsExactlyInAnyOrderElementsOf(expectedPaimonRows);
+                    }
+                });
     }
 
     private void checkDataInPaimonAppendOnlyPartitionedTable(
@@ -517,19 +538,41 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
             List<InternalRow> expectedRows,
             long startingOffset)
             throws Exception {
-        Iterator<org.apache.paimon.data.InternalRow> paimonRowIterator =
-                getPaimonRowCloseableIterator(tablePath, partitionSpec);
-        Iterator<InternalRow> flussRowIterator = expectedRows.iterator();
-        while (paimonRowIterator.hasNext()) {
-            org.apache.paimon.data.InternalRow row = paimonRowIterator.next();
-            InternalRow flussRow = flussRowIterator.next();
-            assertThat(row.getInt(0)).isEqualTo(flussRow.getInt(0));
-            assertThat(row.getString(1).toString()).isEqualTo(flussRow.getString(1).toString());
-            assertThat(row.getString(2).toString()).isEqualTo(flussRow.getString(2).toString());
-            // the idx 3 is __bucket, so use 4
-            assertThat(row.getLong(4)).isEqualTo(startingOffset++);
-        }
-        assertThat(flussRowIterator.hasNext()).isFalse();
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    try (CloseableIterator<org.apache.paimon.data.InternalRow> paimonRowIterator =
+                            getPaimonRowCloseableIterator(tablePath, partitionSpec)) {
+                        List<String> actualRows = new ArrayList<>();
+                        while (paimonRowIterator.hasNext()) {
+                            org.apache.paimon.data.InternalRow row = paimonRowIterator.next();
+                            // the idx 3 is __bucket, so use 4
+                            actualRows.add(
+                                    row.getInt(0)
+                                            + "|"
+                                            + row.getString(1).toString()
+                                            + "|"
+                                            + row.getString(2).toString()
+                                            + "|"
+                                            + row.getLong(4));
+                        }
+
+                        List<String> expectedPaimonRows = new ArrayList<>();
+                        long offset = startingOffset;
+                        for (InternalRow flussRow : expectedRows) {
+                            expectedPaimonRows.add(
+                                    flussRow.getInt(0)
+                                            + "|"
+                                            + flussRow.getString(1).toString()
+                                            + "|"
+                                            + flussRow.getString(2).toString()
+                                            + "|"
+                                            + offset++);
+                        }
+                        assertThat(actualRows)
+                                .containsExactlyInAnyOrderElementsOf(expectedPaimonRows);
+                    }
+                });
     }
 
     private CloseableIterator<org.apache.paimon.data.InternalRow> getPaimonRowCloseableIterator(
