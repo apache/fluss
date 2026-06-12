@@ -71,13 +71,10 @@ public class HudiSplitPlanner implements Planner<HudiSplit> {
                             hudiTableInfo.getEngineContext(), hudiTableInfo.getMetaClient(), false);
             if (partitionPaths.isEmpty()) {
                 if (hudiTableInfo.isPartitioned()) {
-                    LOG.debug(
-                            "No Hudi partition paths discovered for partitioned table {} at instant {}.",
-                            tablePath,
-                            snapshotTime);
                     LOG.info(
-                            "Planned no Hudi splits for partitioned table {} at instant {} because no Hudi partition paths were discovered.",
+                            "Planned no Hudi splits for partitioned table {} with table type {} at instant {} because no Hudi partition paths were discovered.",
                             tablePath,
+                            hudiTableInfo.getTableType(),
                             snapshotTime);
                     return Collections.emptyList();
                 } else {
@@ -125,18 +122,24 @@ public class HudiSplitPlanner implements Planner<HudiSplit> {
                 splits.add(toHudiSplit(hudiTableInfo, partitionPath, fileSlice));
             }
             return splits;
+        } else if (hudiTableInfo.getTableType() == HoodieTableType.COPY_ON_WRITE) {
+            List<HoodieBaseFile> baseFiles =
+                    fileSystemView
+                            .getLatestBaseFilesBeforeOrOn(partitionPath, snapshotTime)
+                            .collect(Collectors.toList());
+            for (HoodieBaseFile baseFile : baseFiles) {
+                splits.add(
+                        toHudiSplit(
+                                hudiTableInfo,
+                                partitionPath,
+                                toFileSlice(partitionPath, baseFile)));
+            }
+            return splits;
         }
-
-        List<HoodieBaseFile> baseFiles =
-                fileSystemView
-                        .getLatestBaseFilesBeforeOrOn(partitionPath, snapshotTime)
-                        .collect(Collectors.toList());
-        for (HoodieBaseFile baseFile : baseFiles) {
-            splits.add(
-                    toHudiSplit(
-                            hudiTableInfo, partitionPath, toFileSlice(partitionPath, baseFile)));
-        }
-        return splits;
+        throw new IOException(
+                String.format(
+                        "Unsupported Hudi table type %s for table %s.",
+                        hudiTableInfo.getTableType(), tablePath));
     }
 
     private FileSlice toFileSlice(String partitionPath, HoodieBaseFile baseFile) {
