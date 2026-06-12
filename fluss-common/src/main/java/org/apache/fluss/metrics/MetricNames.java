@@ -238,6 +238,7 @@ public class MetricNames {
     public static final String LOG_END_OFFSET = "endOffset";
     public static final String REMOTE_LOG_SIZE = "size";
     public static final String LOG_LAKE_TIMESTAMP_LAG = "timestampLag";
+    public static final String LOG_LAKE_PENDING_RECORD_LAG = "pendingRecordLag";
 
     // for logic storage
     public static final String LOCAL_STORAGE_LOG_SIZE = "logSize";

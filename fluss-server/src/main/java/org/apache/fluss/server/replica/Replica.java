@@ -603,6 +603,12 @@ public final class Replica {
                         logTablet.getLakeMaxTimestamp() < 0L
                                 ? -1
                                 : logTablet.localMaxTimestamp() - logTablet.getLakeMaxTimestamp());
+        lakeTieringMetricGroup.gauge(
+                MetricNames.LOG_LAKE_PENDING_RECORD_LAG,
+                () -> {
+                    long ts = logTablet.getLakePendingTimestamp();
+                    return ts <= 0L ? ts : Math.max(clock.milliseconds() - ts, 0L);
+                });
     }
 
     private void onBecomeNewFollower(int standbyReplica) {
@@ -1061,6 +1067,7 @@ public final class Replica {
                                 "Error while appending records to " + tableBucket, e);
                     }
                     maybeIncrementLeaderHW(logTablet, clock.milliseconds());
+                    logTablet.maybeUpdateLakePendingTimestamp(appendInfo);
 
                     return appendInfo;
                 });
@@ -1102,6 +1109,7 @@ public final class Replica {
                     }
                     // we may need to increment high watermark.
                     maybeIncrementLeaderHW(logTablet, clock.milliseconds());
+                    logTablet.maybeUpdateLakePendingTimestamp(logAppendInfo);
                     return logAppendInfo;
                 });
     }
