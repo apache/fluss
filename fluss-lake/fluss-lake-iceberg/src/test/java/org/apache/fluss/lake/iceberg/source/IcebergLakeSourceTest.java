@@ -157,4 +157,64 @@ class IcebergLakeSourceTest extends IcebergSourceTestBase {
         assertThat(filterPushDownResult.remainingPredicates().toString())
                 .isEqualTo(allFilters.toString());
     }
+
+    @Test
+    void testUnacceptedFiltersClearPreviousAcceptedFilters() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_clear_previous_filters");
+        createTable(tablePath, SCHEMA, PARTITION_SPEC);
+
+        Table table = getTable(tablePath);
+        List<Record> rows = new ArrayList<>();
+        for (int i = 1; i <= 4; i++) {
+            rows.add(
+                    createIcebergRecord(
+                            SCHEMA,
+                            i,
+                            "name" + i,
+                            0,
+                            (long) i,
+                            OffsetDateTime.now(ZoneOffset.UTC)));
+        }
+        writeRecord(table, rows, null, 0);
+        table.refresh();
+
+        Predicate acceptedFilter = FLUSS_BUILDER.greaterOrEqual(0, 3);
+        Predicate nonConvertibleFilter = FLUSS_BUILDER.endsWith(1, BinaryString.fromString("name"));
+
+        LakeSource<IcebergSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource.FilterPushDownResult filterPushDownResult =
+                lakeSource.withFilters(Collections.singletonList(acceptedFilter));
+        assertThat(filterPushDownResult.acceptedPredicates())
+                .containsExactlyInAnyOrder(acceptedFilter);
+        assertThat(readRows(lakeSource, table.currentSnapshot().snapshotId()).toString())
+                .isEqualTo("[+I[3, name3], +I[4, name4]]");
+
+        filterPushDownResult =
+                lakeSource.withFilters(Collections.singletonList(nonConvertibleFilter));
+        assertThat(filterPushDownResult.acceptedPredicates()).isEmpty();
+        assertThat(filterPushDownResult.remainingPredicates())
+                .containsExactly(nonConvertibleFilter);
+
+        assertThat(readRows(lakeSource, table.currentSnapshot().snapshotId()).toString())
+                .isEqualTo("[+I[1, name1], +I[2, name2], +I[3, name3], +I[4, name4]]");
+    }
+
+    private List<Row> readRows(LakeSource<IcebergSplit> lakeSource, long snapshotId)
+            throws Exception {
+        List<Row> actual = new ArrayList<>();
+        org.apache.fluss.row.InternalRow.FieldGetter[] fieldGetters =
+                org.apache.fluss.row.InternalRow.createFieldGetters(
+                        RowType.of(new IntType(), new StringType()));
+        for (IcebergSplit icebergSplit : lakeSource.createPlanner(() -> snapshotId).plan()) {
+            RecordReader recordReader = lakeSource.createRecordReader(() -> icebergSplit);
+            try (CloseableIterator<LogRecord> iterator = recordReader.read()) {
+                actual.addAll(
+                        convertToFlinkRow(
+                                fieldGetters,
+                                TransformingCloseableIterator.transform(
+                                        iterator, LogRecord::getRow)));
+            }
+        }
+        return actual;
+    }
 }
