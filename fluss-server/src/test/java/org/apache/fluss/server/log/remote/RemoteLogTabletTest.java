@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.log.remote;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.server.log.LogTablet;
 
@@ -24,6 +25,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -179,6 +181,23 @@ class RemoteLogTabletTest extends RemoteLogTestBase {
         assertThat(remoteLogTablet.findSegmentByTimestamp(50L).remoteLogStartOffset())
                 .isEqualTo(40L);
         assertThat(remoteLogTablet.findSegmentByTimestamp(51L)).isNull();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testExpiredSegmentsNeverDeletedWhenLogTtlMinusOne(boolean partitionTable)
+            throws Exception {
+        conf.set(ConfigOptions.TABLE_LOG_TTL, Duration.ofMillis(-1));
+        LogTablet logTablet = makeLogTabletAndAddSegments(partitionTable);
+        RemoteLogTablet remoteLogTablet = buildRemoteLogTablet(logTablet);
+        List<RemoteLogSegment> remoteLogSegmentList = createRemoteLogSegmentList(logTablet);
+        remoteLogTablet.addAndDeleteLogSegments(remoteLogSegmentList, Collections.emptyList());
+        assertThat(remoteLogTablet.allRemoteLogSegments()).hasSize(5);
+        manualClock.advanceTime(Duration.ofDays(8));
+        List<RemoteLogSegment> expired =
+                remoteLogTablet.expiredRemoteLogSegments(manualClock.milliseconds(), null);
+        assertThat(expired).isEmpty();
+        assertThat(remoteLogTablet.allRemoteLogSegments()).hasSize(5);
     }
 
     RemoteLogSegment createLogSegmentWithMaxTimestamp(

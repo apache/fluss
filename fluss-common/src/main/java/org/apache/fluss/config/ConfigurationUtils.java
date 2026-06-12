@@ -139,6 +139,10 @@ public class ConfigurationUtils {
             return (Duration) o;
         }
 
+        String s = o.toString().trim();
+        if ("-1".equals(s)) {
+            return Duration.ofMillis(-1);
+        }
         return TimeUtils.parseDuration(o.toString());
     }
 
@@ -155,6 +159,9 @@ public class ConfigurationUtils {
             return (String) o;
         } else if (o.getClass() == Duration.class) {
             Duration duration = (Duration) o;
+            if (duration.toMillis() == -1) {
+                return "-1";
+            }
             return TimeUtils.formatWithHighestUnit(duration);
         } else if (o instanceof List) {
             return ((List<?>) o)
