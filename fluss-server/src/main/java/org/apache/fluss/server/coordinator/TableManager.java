@@ -51,19 +51,33 @@ public class TableManager {
     private final TableBucketStateMachine tableBucketStateMachine;
     private final ExecutorService ioExecutor;
 
+    /**
+     * Throttler used to pace the asynchronous replica cleanup that follows {@link
+     * #onDeleteTable(long)} / {@link #onDeletePartition(long, long)}. {@link #resumeDeletions()}
+     * routes eligible drops through it (one at a time) instead of invoking the state-machine
+     * transitions directly, and {@link #completeDeleteTable(long)} / {@link
+     * #completeDeletePartition(TablePartition)} notify it so the next pending drop can be admitted.
+     *
+     * <p>Wired in via the constructor so that the reference publication is safe (final field) and
+     * cannot race with the coordinator event thread.
+     */
+    private final TableLifecycleThrottler lifecycleThrottler;
+
     public TableManager(
             MetadataManager metadataManager,
             CoordinatorContext coordinatorContext,
             ReplicaStateMachine replicaStateMachine,
             TableBucketStateMachine tableBucketStateMachine,
             RemoteStorageCleaner remoteStorageCleaner,
-            ExecutorService ioExecutor) {
+            ExecutorService ioExecutor,
+            TableLifecycleThrottler lifecycleThrottler) {
         this.metadataManager = metadataManager;
         this.remoteStorageCleaner = remoteStorageCleaner;
         this.coordinatorContext = coordinatorContext;
         this.replicaStateMachine = replicaStateMachine;
         this.tableBucketStateMachine = tableBucketStateMachine;
         this.ioExecutor = ioExecutor;
+        this.lifecycleThrottler = lifecycleThrottler;
     }
 
     public void startup() {
@@ -208,22 +222,13 @@ public class TableManager {
 
     private void resumeTableDeletions() {
         Set<Long> tablesToBeDeleted = new HashSet<>(coordinatorContext.getTablesToBeDeleted());
-        Set<Long> eligibleTableDeletion = new HashSet<>();
-
         for (long tableId : tablesToBeDeleted) {
-            // if all replicas are marked as deleted successfully, then table deletion is done
             if (coordinatorContext.areAllReplicasInState(
                     tableId, ReplicaState.ReplicaDeletionSuccessful)) {
                 completeDeleteTable(tableId);
                 LOG.info("Deletion of table with id {} successfully completed.", tableId);
-            }
-            if (isEligibleForDeletion(tableId)) {
-                eligibleTableDeletion.add(tableId);
-            }
-        }
-        if (!eligibleTableDeletion.isEmpty()) {
-            for (long tableId : eligibleTableDeletion) {
-                onDeleteTable(tableId);
+            } else if (isEligibleForDeletion(tableId)) {
+                lifecycleThrottler.submitTableDropForResume(tableId);
             }
         }
     }
@@ -231,22 +236,18 @@ public class TableManager {
     private void resumePartitionDeletions() {
         Set<TablePartition> partitionsToDelete =
                 new HashSet<>(coordinatorContext.getPartitionsToBeDeleted());
-        Set<TablePartition> eligiblePartitionDeletion = new HashSet<>();
-
         for (TablePartition partition : partitionsToDelete) {
             // if all replicas are marked as deleted successfully, then partition deletion is done
             if (coordinatorContext.areAllReplicasInState(
                     partition, ReplicaState.ReplicaDeletionSuccessful)) {
                 completeDeletePartition(partition);
                 LOG.info("Deletion of partition {} successfully completed.", partition);
-            }
-            if (isEligibleForDeletion(partition)) {
-                eligiblePartitionDeletion.add(partition);
-            }
-        }
-        if (!eligiblePartitionDeletion.isEmpty()) {
-            for (TablePartition partition : eligiblePartitionDeletion) {
-                onDeletePartition(partition.getTableId(), partition.getPartitionId());
+            } else if (isEligibleForDeletion(partition)) {
+                long tableId = partition.getTableId();
+                long partitionId = partition.getPartitionId();
+                String partitionName = coordinatorContext.getPartitionName(partitionId);
+                lifecycleThrottler.submitPartitionDropForResume(
+                        tableId, partitionId, partitionName);
             }
         }
     }
@@ -257,6 +258,8 @@ public class TableManager {
         asyncDeleteRemoteDirectory(tableId);
         asyncDeleteTableMetadata(tableId);
         coordinatorContext.removeTable(tableId);
+        // Release the manager's in-flight tracking so the next batch can be submitted.
+        lifecycleThrottler.onTableDropCompleted(tableId);
     }
 
     private void completeDeletePartition(TablePartition tablePartition) {
@@ -267,6 +270,7 @@ public class TableManager {
         asyncDeleteRemoteDirectory(tablePartition);
         asyncDeletePartitionMetadata(tablePartition.getPartitionId());
         coordinatorContext.removePartition(tablePartition);
+        lifecycleThrottler.onPartitionDropCompleted(tablePartition);
     }
 
     private void asyncDeleteRemoteDirectory(long tableId) {

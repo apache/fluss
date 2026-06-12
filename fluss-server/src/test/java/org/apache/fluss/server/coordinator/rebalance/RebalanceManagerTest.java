@@ -311,7 +311,8 @@ public class RebalanceManagerTest {
                 conf,
                 Executors.newFixedThreadPool(1, new ExecutorThreadFactory("test-coordinator-io")),
                 metadataManager,
-                kvSnapshotLeaseManager);
+                kvSnapshotLeaseManager,
+                SystemClock.getInstance());
     }
 
     /** Records events put into the coordinator event queue. */

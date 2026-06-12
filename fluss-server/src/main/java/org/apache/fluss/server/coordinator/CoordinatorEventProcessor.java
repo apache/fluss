@@ -87,6 +87,7 @@ import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseRecei
 import org.apache.fluss.server.coordinator.event.RebalanceEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceTaskTimeoutEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
+import org.apache.fluss.server.coordinator.event.ResumeDropEvent;
 import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
 import org.apache.fluss.server.coordinator.event.TableRegistrationChangeEvent;
 import org.apache.fluss.server.coordinator.event.watcher.CoordinatorChangeWatcher;
@@ -123,6 +124,7 @@ import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.AutoPartitionStrategy;
+import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -174,6 +176,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final CoordinatorEventManager coordinatorEventManager;
     private final MetadataManager metadataManager;
     private final TableManager tableManager;
+    private final TableLifecycleThrottler lifecycleThrottler;
     private final AutoPartitionManager autoPartitionManager;
     private final LakeTableTieringManager lakeTableTieringManager;
     private final TableChangeWatcher tableChangeWatcher;
@@ -199,7 +202,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
             Configuration conf,
             ExecutorService ioExecutor,
             MetadataManager metadataManager,
-            KvSnapshotLeaseManager kvSnapshotLeaseManager) {
+            KvSnapshotLeaseManager kvSnapshotLeaseManager,
+            Clock clock) {
         this.zooKeeperClient = zooKeeperClient;
         this.serverMetadataCache = serverMetadataCache;
         this.coordinatorChannelManager = coordinatorChannelManager;
@@ -223,6 +227,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         zooKeeperClient);
         this.metadataManager = metadataManager;
 
+        this.lifecycleThrottler = new TableLifecycleThrottler(coordinatorEventManager, clock, conf);
         this.tableManager =
                 new TableManager(
                         metadataManager,
@@ -230,10 +235,13 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         replicaStateMachine,
                         tableBucketStateMachine,
                         new RemoteStorageCleaner(conf, ioExecutor),
-                        ioExecutor);
+                        ioExecutor,
+                        lifecycleThrottler);
         this.coordinatorChangeWatcher =
                 new CoordinatorChangeWatcher(zooKeeperClient, coordinatorEventManager);
-        this.tableChangeWatcher = new TableChangeWatcher(zooKeeperClient, coordinatorEventManager);
+        this.tableChangeWatcher =
+                new TableChangeWatcher(
+                        zooKeeperClient, coordinatorEventManager, lifecycleThrottler);
         this.tabletServerChangeWatcher =
                 new TabletServerChangeWatcher(zooKeeperClient, coordinatorEventManager);
         this.coordinatorRequestBatch =
@@ -271,6 +279,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
         return coordinatorContext;
     }
 
+    @VisibleForTesting
+    TableLifecycleThrottler getLifecycleThrottler() {
+        return lifecycleThrottler;
+    }
+
     public void startup() {
         coordinatorContext.setCoordinatorServerInfo(getCoordinatorServerInfo());
         // start watchers first so that we won't miss node in zk;
@@ -297,6 +310,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 tabletServerInfoList,
                 coordinatorContext.getServerTags());
         updateTabletServerMetadataCacheWhenStartup(tabletServerInfoList);
+
+        lifecycleThrottler.start();
 
         // start table manager
         tableManager.startup();
@@ -563,6 +578,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // first shutdown table manager
         tableManager.shutdown();
 
+        // shut down lifecycle throttler timeout checker
+        lifecycleThrottler.close();
+
         // then stop watchers
         coordinatorChangeWatcher.stop();
         tableChangeWatcher.stop();
@@ -657,6 +675,19 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     timeoutEvent.getTableBucket());
             rebalanceManager.finishRebalanceTask(
                     timeoutEvent.getTableBucket(), RebalanceStatus.TIMEOUT);
+        } else if (event instanceof ResumeDropEvent) {
+            // Resume-mode reconciliation queued by TableLifecycleThrottler: dispatch on the event
+            // thread so the @NotThreadSafe CoordinatorContext / state machines are only mutated
+            // here. The event carries identity-only (kind + ids); the handler chosen below is
+            // determined by the event-thread code path, not by the (potentially non-event-thread)
+            // submitter, so callers cannot smuggle in unsafe lambdas.
+            ResumeDropEvent resumeDropEvent = (ResumeDropEvent) event;
+            if (resumeDropEvent.getPartitionId() == null) {
+                tableManager.onDeleteTable(resumeDropEvent.getTableId());
+            } else {
+                tableManager.onDeletePartition(
+                        resumeDropEvent.getTableId(), resumeDropEvent.getPartitionId());
+            }
         } else if (event instanceof ListRebalanceProgressEvent) {
             ListRebalanceProgressEvent listRebalanceProgressEvent =
                     (ListRebalanceProgressEvent) event;
@@ -1006,6 +1037,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // get the server that receives the response
         int serverId = notifyLeaderAndIsrResponseReceivedEvent.getResponseServerId();
         Set<TableBucketReplica> offlineReplicas = new HashSet<>();
+        List<TableBucket> succeededBuckets = new ArrayList<>();
         // get all the results for each bucket
         List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets =
                 notifyLeaderAndIsrResponseReceivedEvent.getNotifyLeaderAndIsrResultForBuckets();
@@ -1016,6 +1048,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 offlineReplicas.add(
                         new TableBucketReplica(
                                 notifyLeaderAndIsrResultForBucket.getTableBucket(), serverId));
+            } else {
+                succeededBuckets.add(notifyLeaderAndIsrResultForBucket.getTableBucket());
+            }
+        }
+        for (TableBucket tb : succeededBuckets) {
+            Optional<LeaderAndIsr> laiOpt = coordinatorContext.getBucketLeaderAndIsr(tb);
+            if (laiOpt.isPresent() && laiOpt.get().leader() == serverId) {
+                coordinatorContext.clearPendingLeaderActivation(tb);
             }
         }
         if (!offlineReplicas.isEmpty()) {
@@ -1172,6 +1212,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // process dead tablet server
         LOG.info("Tablet server failure callback for {}.", tabletServerId);
         coordinatorContext.removeOfflineBucketInServer(tabletServerId);
+
         coordinatorContext.removeLiveTabletServer(tabletServerId);
         coordinatorContext.shuttingDownTabletServers().remove(tabletServerId);
         coordinatorChannelManager.removeTabletServer(tabletServerId);
