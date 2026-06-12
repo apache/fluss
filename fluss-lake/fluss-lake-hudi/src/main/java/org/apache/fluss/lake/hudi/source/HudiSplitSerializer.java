@@ -43,7 +43,17 @@ public class HudiSplitSerializer implements SimpleVersionedSerializer<HudiSplit>
             throw new IOException("Unsupported HudiSplit serialization version: " + version);
         }
         try {
-            return InstantiationUtils.deserializeObject(serialized, getClass().getClassLoader());
+            Object deserialized =
+                    InstantiationUtils.deserializeObject(serialized, getClass().getClassLoader());
+            if (!(deserialized instanceof HudiSplit)) {
+                throw new IOException(
+                        "Expected HudiSplit but found "
+                                + (deserialized == null
+                                        ? "null"
+                                        : deserialized.getClass().getName())
+                                + " during deserialization.");
+            }
+            return (HudiSplit) deserialized;
         } catch (ClassNotFoundException e) {
             throw new IOException("Failed to deserialize HudiSplit.", e);
         }

@@ -66,6 +66,12 @@ class HudiTableInfoTest {
         assertThatThrownBy(
                         () ->
                                 HudiTableInfo.extractPartitionValues(
+                                        "dt=20260608/dt=20260609", Arrays.asList("dt", "hr")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("duplicate partition field");
+        assertThatThrownBy(
+                        () ->
+                                HudiTableInfo.extractPartitionValues(
                                         "dt=20260608/10", Arrays.asList("dt", "hr")))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("mixes hive-style and raw partition segments");

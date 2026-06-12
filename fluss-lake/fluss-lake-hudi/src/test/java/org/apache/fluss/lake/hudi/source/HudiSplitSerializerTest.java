@@ -17,6 +17,8 @@
 
 package org.apache.fluss.lake.hudi.source;
 
+import org.apache.fluss.utils.InstantiationUtils;
+
 import org.apache.hudi.common.model.FileSlice;
 import org.apache.hudi.common.model.HoodieFileGroupId;
 import org.junit.jupiter.api.Test;
@@ -57,5 +59,15 @@ class HudiSplitSerializerTest {
         assertThatThrownBy(() -> serializer.deserialize(2, new byte[0]))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("Unsupported HudiSplit serialization version");
+    }
+
+    @Test
+    void testDeserializeRejectsUnexpectedObjectType() throws Exception {
+        HudiSplitSerializer serializer = new HudiSplitSerializer();
+        byte[] serialized = InstantiationUtils.serializeObject("not a hudi split");
+
+        assertThatThrownBy(() -> serializer.deserialize(serializer.getVersion(), serialized))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("Expected HudiSplit");
     }
 }

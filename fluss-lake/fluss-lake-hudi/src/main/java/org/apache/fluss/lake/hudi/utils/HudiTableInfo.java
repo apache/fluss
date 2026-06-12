@@ -67,6 +67,7 @@ public class HudiTableInfo implements AutoCloseable {
     private final String basePath;
     private final List<String> partitionFields;
     private final boolean bucketAware;
+    private boolean closed;
 
     private HudiTableInfo(
             TablePath tablePath,
@@ -107,37 +108,45 @@ public class HudiTableInfo implements AutoCloseable {
             String basePath = resolveBasePath(tablePath, tableOptions);
             tableOptions.put(FlinkOptions.PATH.key(), basePath);
 
+            HoodieTableFileSystemView fileSystemView = null;
             HoodieTableMetaClient metaClient = createMetaClient(basePath, hudiConfig);
             HoodieTimeline completedTimeline =
-                    metaClient
-                            .getCommitsAndCompactionTimeline()
-                            .filterCompletedAndCompactionInstants();
+                    metaClient.getCommitsTimeline().filterCompletedInstants();
             HoodieEngineContext engineContext =
                     new HoodieLocalEngineContext(metaClient.getStorageConf());
-            HoodieTableFileSystemView fileSystemView =
-                    HoodieTableFileSystemView.fileListingBasedFileSystemView(
-                            engineContext, metaClient, completedTimeline);
-            HoodieTableType tableType = metaClient.getTableType();
-            List<String> partitionFields =
-                    splitCommaSeparated(
-                            tableOptions.getOrDefault(
-                                    FLUSS_PARTITION_KEYS_OPTION,
-                                    tableOptions.get(FlinkOptions.PARTITION_PATH_FIELD.key())));
-            boolean bucketAware = resolveBucketAware(tableOptions, tableType);
+            try {
+                HoodieTimeline fileSystemViewTimeline =
+                        metaClient
+                                .getCommitsAndCompactionTimeline()
+                                .filterCompletedAndCompactionInstants();
+                fileSystemView =
+                        HoodieTableFileSystemView.fileListingBasedFileSystemView(
+                                engineContext, metaClient, fileSystemViewTimeline);
+                HoodieTableType tableType = metaClient.getTableType();
+                List<String> partitionFields =
+                        splitCommaSeparated(
+                                tableOptions.getOrDefault(
+                                        FLUSS_PARTITION_KEYS_OPTION,
+                                        tableOptions.get(FlinkOptions.PARTITION_PATH_FIELD.key())));
+                boolean bucketAware = resolveBucketAware(tableOptions, tableType);
 
-            return new HudiTableInfo(
-                    tablePath,
-                    hudiCatalog,
-                    hudiTable,
-                    Collections.unmodifiableMap(new HashMap<>(tableOptions)),
-                    metaClient,
-                    engineContext,
-                    completedTimeline,
-                    fileSystemView,
-                    tableType,
-                    basePath,
-                    Collections.unmodifiableList(new ArrayList<>(partitionFields)),
-                    bucketAware);
+                return new HudiTableInfo(
+                        tablePath,
+                        hudiCatalog,
+                        hudiTable,
+                        Collections.unmodifiableMap(new HashMap<>(tableOptions)),
+                        metaClient,
+                        engineContext,
+                        completedTimeline,
+                        fileSystemView,
+                        tableType,
+                        basePath,
+                        Collections.unmodifiableList(new ArrayList<>(partitionFields)),
+                        bucketAware);
+            } catch (Exception e) {
+                closeFileSystemView(fileSystemView);
+                throw e;
+            }
         } catch (Exception e) {
             closeCatalog(hudiCatalog);
             if (e instanceof IOException) {
@@ -286,6 +295,12 @@ public class HudiTableInfo implements AutoCloseable {
         }
     }
 
+    private static void closeFileSystemView(HoodieTableFileSystemView fileSystemView) {
+        if (fileSystemView != null) {
+            IOUtils.closeQuietly(fileSystemView::close, "hudi table file system view");
+        }
+    }
+
     public TablePath getTablePath() {
         return tablePath;
     }
@@ -326,13 +341,21 @@ public class HudiTableInfo implements AutoCloseable {
         return bucketAware;
     }
 
+    public boolean isPartitioned() {
+        return !partitionFields.isEmpty();
+    }
+
     public List<String> partitionValues(String partitionPath) {
         return extractPartitionValues(partitionPath, partitionFields);
     }
 
     @Override
     public void close() {
-        fileSystemView.close();
+        if (closed) {
+            return;
+        }
+        closed = true;
+        closeFileSystemView(fileSystemView);
         closeCatalog(hudiCatalog);
     }
 }

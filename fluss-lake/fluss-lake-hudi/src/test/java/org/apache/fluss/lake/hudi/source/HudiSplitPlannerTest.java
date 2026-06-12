@@ -54,6 +54,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class HudiSplitPlannerTest {
 
     private static final String INSTANT_TIME = "20260608010101000";
+    private static final String LEADING_ZERO_INSTANT_TIME = "02026060801010100";
     private static final String DATABASE = "db1";
     private static final String TABLE = "table1";
 
@@ -103,6 +104,40 @@ class HudiSplitPlannerTest {
                                         .plan())
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("does not exist");
+    }
+
+    @Test
+    void testPlanLeadingZeroInstantTime() throws Exception {
+        TablePath tablePath = TablePath.of(DATABASE, TABLE);
+        createCowTable(tablePath);
+        String partitionPath = "";
+        int bucket = 1;
+        String fileId = BucketIdentifier.newBucketFileIdPrefix(bucket);
+        String fileName =
+                createBaseFile(tablePath, partitionPath, LEADING_ZERO_INSTANT_TIME, fileId);
+        createCompletedCommit(
+                tablePath, partitionPath, LEADING_ZERO_INSTANT_TIME, fileId, fileName);
+
+        List<HudiSplit> splits =
+                new HudiSplitPlanner(
+                                hudiConfig, tablePath, Long.parseLong(LEADING_ZERO_INSTANT_TIME))
+                        .plan();
+
+        assertThat(splits).hasSize(1);
+        assertThat(splits.get(0).getFileSlice().getBaseInstantTime())
+                .isEqualTo(LEADING_ZERO_INSTANT_TIME);
+    }
+
+    @Test
+    void testPlanPartitionedTableWithoutDiscoveredPartitionsReturnsEmptySplits() throws Exception {
+        TablePath tablePath = TablePath.of(DATABASE, TABLE);
+        createPartitionedCowTable(tablePath);
+        createCompletedCommit(tablePath, INSTANT_TIME);
+
+        List<HudiSplit> splits =
+                new HudiSplitPlanner(hudiConfig, tablePath, Long.parseLong(INSTANT_TIME)).plan();
+
+        assertThat(splits).isEmpty();
     }
 
     @Test
@@ -163,6 +198,24 @@ class HudiSplitPlannerTest {
         }
     }
 
+    private void createPartitionedCowTable(TablePath tablePath) throws Exception {
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("dt", DataTypes.STRING())
+                        .build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .partitionedBy("dt")
+                        .distributedBy(4, "id")
+                        .property("hudi.hoodie.datasource.write.recordkey.field", "id")
+                        .build();
+        try (HudiLakeCatalog catalog = new HudiLakeCatalog(hudiConfig)) {
+            catalog.createTable(tablePath, tableDescriptor, new TestingLakeCatalogContext());
+        }
+    }
+
     private String createBaseFile(
             TablePath tablePath, String partitionPath, String instantTime, String fileId)
             throws IOException {
@@ -187,6 +240,25 @@ class HudiSplitPlannerTest {
             String instantTime,
             String fileId,
             String fileName) {
+        HoodieCommitMetadata commitMetadata = new HoodieCommitMetadata();
+        HoodieWriteStat writeStat = new HoodieWriteStat();
+        writeStat.setPartitionPath(partitionPath);
+        writeStat.setFileId(fileId);
+        writeStat.setPath(partitionPath.isEmpty() ? fileName : partitionPath + "/" + fileName);
+        writeStat.setTotalWriteBytes(1);
+        writeStat.setFileSizeInBytes(1);
+        writeStat.setNumWrites(1);
+        commitMetadata.addWriteStat(partitionPath, writeStat);
+
+        createCompletedCommit(tablePath, instantTime, commitMetadata);
+    }
+
+    private void createCompletedCommit(TablePath tablePath, String instantTime) {
+        createCompletedCommit(tablePath, instantTime, new HoodieCommitMetadata());
+    }
+
+    private void createCompletedCommit(
+            TablePath tablePath, String instantTime, HoodieCommitMetadata commitMetadata) {
         HoodieTableMetaClient metaClient =
                 HoodieTableMetaClient.builder()
                         .setBasePath(basePath(tablePath).getAbsolutePath())
@@ -198,16 +270,6 @@ class HudiSplitPlannerTest {
                 metaClient.createNewInstant(
                         HoodieInstant.State.INFLIGHT, HoodieTimeline.COMMIT_ACTION, instantTime);
         metaClient.getActiveTimeline().createNewInstant(inflightInstant);
-
-        HoodieWriteStat writeStat = new HoodieWriteStat();
-        writeStat.setPartitionPath(partitionPath);
-        writeStat.setFileId(fileId);
-        writeStat.setPath(partitionPath.isEmpty() ? fileName : partitionPath + "/" + fileName);
-        writeStat.setTotalWriteBytes(1);
-        writeStat.setFileSizeInBytes(1);
-        writeStat.setNumWrites(1);
-        HoodieCommitMetadata commitMetadata = new HoodieCommitMetadata();
-        commitMetadata.addWriteStat(partitionPath, writeStat);
 
         HoodieInstant instant =
                 metaClient

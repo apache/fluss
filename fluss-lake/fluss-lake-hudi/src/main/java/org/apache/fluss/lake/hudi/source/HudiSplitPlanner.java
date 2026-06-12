@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.hudi.source;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.hudi.utils.HudiTableInfo;
 import org.apache.fluss.lake.source.Planner;
@@ -36,6 +37,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.stream.Collectors;
 
 /** Planner for creating Hudi splits. */
@@ -55,7 +57,7 @@ public class HudiSplitPlanner implements Planner<HudiSplit> {
 
     @Override
     public List<HudiSplit> plan() throws IOException {
-        String snapshotTime = String.valueOf(snapshotId);
+        String snapshotTime = toHudiInstantTime(snapshotId);
         try (HudiTableInfo hudiTableInfo = HudiTableInfo.create(tablePath, hudiConfig)) {
             if (!hudiTableInfo.getCompletedTimeline().containsInstant(snapshotTime)) {
                 throw new IOException(
@@ -68,24 +70,45 @@ public class HudiSplitPlanner implements Planner<HudiSplit> {
                     FSUtils.getAllPartitionPaths(
                             hudiTableInfo.getEngineContext(), hudiTableInfo.getMetaClient(), false);
             if (partitionPaths.isEmpty()) {
-                partitionPaths = Collections.singletonList("");
+                if (hudiTableInfo.isPartitioned()) {
+                    LOG.debug(
+                            "No Hudi partition paths discovered for partitioned table {} at instant {}.",
+                            tablePath,
+                            snapshotTime);
+                    LOG.info(
+                            "Planned no Hudi splits for partitioned table {} at instant {} because no Hudi partition paths were discovered.",
+                            tablePath,
+                            snapshotTime);
+                    return Collections.emptyList();
+                } else {
+                    partitionPaths = Collections.singletonList("");
+                }
             }
 
             List<HudiSplit> splits = new ArrayList<>();
             for (String partitionPath : partitionPaths) {
                 splits.addAll(planPartition(hudiTableInfo, snapshotTime, partitionPath));
             }
-            LOG.debug(
-                    "Planned {} Hudi splits for table {} at instant {}.",
-                    splits.size(),
-                    tablePath,
-                    snapshotTime);
+            if (splits.isEmpty()) {
+                LOG.info(
+                        "Planned no Hudi splits for table {} at instant {} across {} Hudi partition paths.",
+                        tablePath,
+                        snapshotTime,
+                        partitionPaths.size());
+            } else {
+                LOG.debug(
+                        "Planned {} Hudi splits for table {} at instant {}.",
+                        splits.size(),
+                        tablePath,
+                        snapshotTime);
+            }
             return splits;
-        } catch (IOException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new IOException("Failed to plan Hudi splits for table " + tablePath + ".", e);
         }
+    }
+
+    @VisibleForTesting
+    static String toHudiInstantTime(long snapshotId) {
+        return String.format(Locale.ROOT, "%017d", snapshotId);
     }
 
     private List<HudiSplit> planPartition(

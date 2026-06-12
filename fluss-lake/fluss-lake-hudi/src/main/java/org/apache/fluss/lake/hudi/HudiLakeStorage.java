@@ -38,9 +38,8 @@ public class HudiLakeStorage implements LakeStorage {
     @Override
     public LakeTieringFactory<?, ?> createLakeTieringFactory() {
         throw new UnsupportedOperationException(
-                "HudiLakeStorage is currently a scaffold and does not support creating a "
-                        + "LakeTieringFactory yet. Verify that Hudi lake storage was selected "
-                        + "intentionally and that the required Hudi support/module is available.");
+                "Hudi lake tiering writer is not implemented yet, so HudiLakeStorage does not "
+                        + "support creating a LakeTieringFactory.");
     }
 
     @Override

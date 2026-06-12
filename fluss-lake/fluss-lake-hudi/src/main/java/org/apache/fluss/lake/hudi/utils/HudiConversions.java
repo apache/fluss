@@ -185,7 +185,7 @@ public class HudiConversions {
                     recordKeyField); // use primary key as index key
         }
 
-        // buket keys column
+        // bucket keys column
         hudiProperties.put(FlinkOptions.INDEX_TYPE.key(), HoodieIndex.IndexType.BUCKET.name());
         List<String> bucketKeys = tableDescriptor.getBucketKeys();
         int numBuckets =

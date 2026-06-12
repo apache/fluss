@@ -20,11 +20,13 @@ package org.apache.fluss.lake.hudi.source;
 import org.apache.fluss.lake.source.LakeSplit;
 
 import org.apache.hudi.common.model.FileSlice;
+import org.apache.hudi.common.model.HoodieBaseFile;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 /** A readable split of a Hudi table. */
 public class HudiSplit implements LakeSplit {
@@ -68,13 +70,19 @@ public class HudiSplit implements LakeSplit {
         }
         HudiSplit hudiSplit = (HudiSplit) o;
         return bucket == hudiSplit.bucket
-                && Objects.equals(fileSlice, hudiSplit.fileSlice)
+                && equalsFileSlice(fileSlice, hudiSplit.fileSlice)
                 && Objects.equals(partition, hudiSplit.partition);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(fileSlice, bucket, partition);
+        return Objects.hash(
+                fileSlice.getFileGroupId(),
+                fileSlice.getBaseInstantTime(),
+                baseFilePath(fileSlice),
+                logFilePaths(fileSlice),
+                bucket,
+                partition);
     }
 
     @Override
@@ -87,5 +95,28 @@ public class HudiSplit implements LakeSplit {
                 + ", partition="
                 + partition
                 + '}';
+    }
+
+    private static boolean equalsFileSlice(FileSlice first, FileSlice second) {
+        return Objects.equals(first.getFileGroupId(), second.getFileGroupId())
+                && Objects.equals(first.getBaseInstantTime(), second.getBaseInstantTime())
+                && Objects.equals(baseFilePath(first), baseFilePath(second))
+                && Objects.equals(logFilePaths(first), logFilePaths(second));
+    }
+
+    private static String baseFilePath(FileSlice fileSlice) {
+        if (!fileSlice.getBaseFile().isPresent()) {
+            return null;
+        }
+        HoodieBaseFile baseFile = fileSlice.getBaseFile().get();
+        return baseFile.getPath();
+    }
+
+    private static List<String> logFilePaths(FileSlice fileSlice) {
+        return fileSlice
+                .getLogFiles()
+                .map(logFile -> logFile.getPath().toString())
+                .sorted()
+                .collect(Collectors.toList());
     }
 }
