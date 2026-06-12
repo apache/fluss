@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.entity;
 
+import javax.annotation.Nullable;
+
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -25,6 +27,8 @@ import java.util.Set;
 /** To describe the changes of the properties of a table. */
 public class TablePropertyChanges {
 
+    private final @Nullable Integer bucketNum;
+
     public final Map<String, String> tablePropertiesToSet;
     public final Set<String> tablePropertiesToReset;
 
@@ -32,14 +36,20 @@ public class TablePropertyChanges {
     public final Set<String> customPropertiesToReset;
 
     protected TablePropertyChanges(
+            @Nullable Integer bucketNum,
             Map<String, String> tablePropertiesToSet,
             Set<String> tablePropertiesToReset,
             Map<String, String> customPropertiesToSet,
             Set<String> customPropertiesToReset) {
+        this.bucketNum = bucketNum;
         this.tablePropertiesToSet = tablePropertiesToSet;
         this.tablePropertiesToReset = tablePropertiesToReset;
         this.customPropertiesToSet = customPropertiesToSet;
         this.customPropertiesToReset = customPropertiesToReset;
+    }
+
+    public @Nullable Integer getBucketNum() {
+        return bucketNum;
     }
 
     public Set<String> tableKeysToChange() {
@@ -60,11 +70,18 @@ public class TablePropertyChanges {
 
     /** The builder for {@link TablePropertyChanges}. */
     public static class Builder {
+
+        private Integer bucketNum;
+
         private final Map<String, String> tablePropertiesToSet = new HashMap<>();
         private final Set<String> tablePropertiesToReset = new HashSet<>();
 
         private final Map<String, String> customPropertiesToSet = new HashMap<>();
         private final Set<String> customPropertiesToReset = new HashSet<>();
+
+        public void setBucketNum(int bucketNum) {
+            this.bucketNum = bucketNum;
+        }
 
         public void setTableProperty(String key, String value) {
             tablePropertiesToSet.put(key, value);
@@ -84,6 +101,7 @@ public class TablePropertyChanges {
 
         public TablePropertyChanges build() {
             return new TablePropertyChanges(
+                    bucketNum,
                     tablePropertiesToSet,
                     tablePropertiesToReset,
                     customPropertiesToSet,

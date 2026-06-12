@@ -36,6 +36,7 @@ import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
@@ -154,9 +155,27 @@ public class TableDescriptorValidation {
     }
 
     public static void validateAlterTableProperties(
-            TableInfo currentTable, Set<String> tableKeysToChange) {
-        TableConfig currentConfig = currentTable.getTableConfig();
+            TableInfo currentTable, TablePropertyChanges tablePropertyChanges) {
+        // valid table bucket
+        if (tablePropertyChanges.getBucketNum() != null) {
+            if (currentTable.getNumBuckets() >= tablePropertyChanges.getBucketNum()) {
+                throw new InvalidAlterTableException(
+                        "Bucket number can only be increased, current bucket number is "
+                                + currentTable.getNumBuckets()
+                                + ", new bucket number is "
+                                + tablePropertyChanges.getBucketNum());
+            }
 
+            // only support one of alter table bucket or alter table properties for atomic change.
+            if (!tablePropertyChanges.tableKeysToChange().isEmpty()
+                    || !tablePropertyChanges.customKeysToChange().isEmpty()) {
+                throw new InvalidAlterTableException(
+                        "Cannot alter table properties and bucket number at the same time.");
+            }
+        }
+
+        TableConfig currentConfig = currentTable.getTableConfig();
+        Set<String> tableKeysToChange = tablePropertyChanges.tableKeysToChange();
         List<String> unsupportedKeys =
                 tableKeysToChange.stream()
                         .filter(k -> isTableStorageConfig(k) && !isAlterableTableOption(k))
