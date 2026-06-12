@@ -94,7 +94,9 @@ public class LimitBatchScanner implements BatchScanner {
         RowType rowType = tableInfo.getRowType();
         this.fieldGetters = new InternalRow.FieldGetter[rowType.getFieldCount()];
         for (int i = 0; i < rowType.getFieldCount(); i++) {
-            this.fieldGetters[i] = InternalRow.createDeepFieldGetter(rowType.getTypeAt(i), i);
+            // getRecords() returns a heap copy, so rows don't reference the released buffer.
+            this.fieldGetters[i] =
+                    InternalRow.createDeepFieldGetter(rowType.getTypeAt(i), i, false);
         }
 
         LimitScanRequest limitScanRequest =
