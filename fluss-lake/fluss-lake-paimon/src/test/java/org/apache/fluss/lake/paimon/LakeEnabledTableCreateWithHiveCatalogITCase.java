@@ -39,6 +39,7 @@ import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.table.Table;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -73,6 +74,14 @@ class LakeEnabledTableCreateWithHiveCatalogITCase {
 
     private Connection conn;
     private Admin admin;
+
+    @AfterAll
+    static void afterAll() throws Exception {
+        if (paimonCatalog != null) {
+            paimonCatalog.close();
+            paimonCatalog = null;
+        }
+    }
 
     @BeforeEach
     protected void setup() {

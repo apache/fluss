@@ -86,7 +86,6 @@ public class LakeTableHelper {
             return;
         }
 
-        zkClient.deleteLakeTable(tableId);
         LakeTable lakeTable = optLakeTable.get();
         List<LakeTable.LakeSnapshotMetadata> lakeSnapshotMetadatas =
                 lakeTable.getLakeSnapshotMetadatas();
@@ -95,6 +94,7 @@ public class LakeTableHelper {
                 lakeSnapshotMetadata.discard();
             }
         }
+        zkClient.deleteLakeTable(tableId);
     }
 
     /**
