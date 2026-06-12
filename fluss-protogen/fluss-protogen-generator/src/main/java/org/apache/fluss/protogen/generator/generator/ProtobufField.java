@@ -170,4 +170,9 @@ public abstract class ProtobufField<FieldType extends Field<?>> {
     protected int bitFieldIndex() {
         return index / 32;
     }
+
+    public void stringify(PrintWriter w, String sep) {
+        w.format("                + \"%s%s=\"\n", sep, ccName);
+        w.format("                + %s\n", ccName);
+    }
 }

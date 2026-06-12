@@ -204,4 +204,10 @@ public class ProtobufRepeatedNumberField extends ProtobufAbstractRepeated<Field<
     protected String typeTag() {
         return ProtobufNumberField.typeTag(field);
     }
+
+    @Override
+    public void stringify(PrintWriter w, String sep) {
+        w.format("                + \"%s%s=\"\n", sep, pluralName);
+        w.format("                + Arrays.toString(%s)\n", pluralName);
+    }
 }
