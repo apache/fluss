@@ -64,7 +64,7 @@ class SparkTable(
     val isDataLakeEnabled = tableInfo.getTableConfig.isDataLakeEnabled
     if (isDataLakeEnabled && LakeTableUtil.hasCustomLakePath(tableInfo.getProperties)) {
       throw new UnsupportedOperationException(
-        "Custom lake table path is not supported in Spark connector yet.")
+        "Custom lake table path is not supported for Spark lake reads yet.")
     }
     if (tableInfo.getPrimaryKeys.isEmpty) {
       new FlussAppendScanBuilder(tablePath, tableInfo, options, flussConfig)
