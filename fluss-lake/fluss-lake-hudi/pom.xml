@@ -70,6 +70,14 @@
         </dependency>
 
         <dependency>
+            <!-- Hudi's Flink bundle references hadoop-client-api shaded classes
+                 (org.apache.hadoop.shaded.*); supply their runtime at test scope -->
+            <groupId>org.apache.hadoop</groupId>
+            <artifactId>hadoop-client-runtime</artifactId>
+            <version>${fluss.hadoop.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>org.apache.hadoop</groupId>
             <artifactId>hadoop-common</artifactId>
             <version>${fluss.hadoop.version}</version>
