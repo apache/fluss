@@ -63,6 +63,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
@@ -242,6 +243,9 @@ final class ReplicaFetcherThread extends ShutdownableThread {
             responseData = fetchFuture.get(timeoutSeconds, TimeUnit.SECONDS);
         } catch (Throwable t) {
             if (isRunning()) {
+                if (t instanceof TimeoutException) {
+                    serverMetricGroup.replicaFetchTimeoutCount().inc();
+                }
                 LOG.warn(
                         "Error in response from leader server {} for fetch log request from table ids: {}",
                         leader.leaderServerId(),
