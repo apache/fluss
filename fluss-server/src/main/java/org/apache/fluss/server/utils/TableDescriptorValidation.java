@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.utils;
 
+import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -127,6 +128,19 @@ public class TableDescriptorValidation {
         checkSystemColumns(schema.getRowType());
         validateStatisticsConfig(tableDescriptor);
         checkTableLakeFormatMatchesCluster(tableConf, clusterDataLakeFormat);
+    }
+
+    /** Validates the schema after altering table columns. */
+    @Internal
+    public static void validateAlterTableSchema(TableInfo table, Schema newSchema) {
+        if (table.getTableConfig()
+                .getMergeEngineType()
+                .map(MergeEngineType.AGGREGATION::equals)
+                .orElse(false)) {
+            validateAggregationFunctionParameters(newSchema);
+        } else {
+            validateNoAggregationFunctions(newSchema);
+        }
     }
 
     private static void checkTableLakeFormatMatchesCluster(
@@ -381,7 +395,7 @@ public class TableDescriptorValidation {
     }
 
     /** Validates that the schema doesn't contain any aggregation functions. */
-    public static void validateNoAggregationFunctions(Schema schema) {
+    private static void validateNoAggregationFunctions(Schema schema) {
         for (Schema.Column column : schema.getColumns()) {
             Optional<AggFunction> aggFunction = column.getAggFunction();
             if (aggFunction.isPresent()) {
@@ -405,7 +419,7 @@ public class TableDescriptorValidation {
      * @throws InvalidConfigException if any aggregation function has invalid parameters or data
      *     types
      */
-    public static void validateAggregationFunctionParameters(Schema schema) {
+    private static void validateAggregationFunctionParameters(Schema schema) {
         // Get primary key columns for early exit
         List<String> primaryKeys = schema.getPrimaryKeyColumnNames();
 

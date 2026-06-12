@@ -34,7 +34,6 @@ import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ColumnPositionType;
 import org.apache.fluss.config.cluster.ConfigEntry;
-import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
@@ -96,13 +95,11 @@ import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.RegisterProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.protocol.MergeMode;
-import org.apache.fluss.utils.InstantiationUtils;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 
 import javax.annotation.Nullable;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -658,19 +655,16 @@ public class ClientRpcMessageUtils {
             pbAddColumn.setComment(addColumn.getComment());
         }
         if (addColumn.getAggFunction().isPresent()) {
-            pbAddColumn.setSerializedAggFunction(
-                    serializeAggFunction(addColumn.getAggFunction().get()));
+            AggFunction aggFunction = addColumn.getAggFunction().get();
+            pbAddColumn.setAggFunctionType(aggFunction.getType().toString());
+            aggFunction
+                    .getParameters()
+                    .forEach(
+                            (key, value) ->
+                                    pbAddColumn.addAggFunctionParam().setKey(key).setValue(value));
         }
 
         return pbAddColumn;
-    }
-
-    private static byte[] serializeAggFunction(AggFunction aggFunction) {
-        try {
-            return InstantiationUtils.serializeObject(aggFunction);
-        } catch (IOException e) {
-            throw new FlussRuntimeException("Failed to serialize aggregation function.", e);
-        }
     }
 
     public static PbDropColumn toPbDropColumn(TableChange.DropColumn dropColumn) {
