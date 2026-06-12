@@ -23,7 +23,7 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.InvalidCoordinatorException;
+import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.GatewayClientProxy;
@@ -292,7 +292,8 @@ class CoordinatorHighAvailabilityITCase {
 
         TabletServerGateway tsGateway = createGatewayForTabletServer(tabletServer);
 
-        // Send request with old coordinator epoch — tablet server should reject it
+        // UpdateMetadata is an internal-only RPC - external clients should be rejected
+        // regardless of coordinator epoch
         assertThatThrownBy(
                         () ->
                                 tsGateway
@@ -303,7 +304,8 @@ class CoordinatorHighAvailabilityITCase {
                 .satisfies(
                         t ->
                                 assertThat(getRootCause(t))
-                                        .isInstanceOf(InvalidCoordinatorException.class));
+                                        .isInstanceOf(AuthorizationException.class)
+                                        .hasMessageContaining("UpdateMetadata is an internal RPC"));
     }
 
     @Test
