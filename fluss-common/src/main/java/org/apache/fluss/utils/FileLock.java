@@ -19,6 +19,9 @@ package org.apache.fluss.utils;
 
 import org.apache.fluss.annotation.Internal;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -31,6 +34,8 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 /** A file lock used for avoiding race condition among multiple threads/processes. */
 @Internal
 public class FileLock {
+    private static final Logger LOG = LoggerFactory.getLogger(FileLock.class);
+
     private static final String TEMP_DIR = System.getProperty("java.io.tmpdir");
     private final File file;
     private FileOutputStream outputStream;
@@ -151,8 +156,10 @@ public class FileLock {
         }
         try {
             outputStream.close();
-        } catch (IOException ignored) {
+        } catch (IOException e) {
             // Best-effort cleanup; the original failure will be propagated by the caller.
+            // Log here so users are aware that closing the output stream also failed.
+            LOG.warn("Failed to close output stream for file lock {}", file, e);
         } finally {
             outputStream = null;
         }
