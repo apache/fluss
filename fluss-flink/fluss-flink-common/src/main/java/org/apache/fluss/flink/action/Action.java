@@ -19,7 +19,7 @@ package org.apache.fluss.flink.action;
 
 import org.apache.fluss.annotation.Internal;
 
-/** Pluggable Flink action invoked from CLI via {@link FlussFlinkActionEntrypoint}. */
+/** Pluggable Flink action invoked from CLI via {@code FlussActionEntrypoint}. */
 @Internal
 public interface Action {
 

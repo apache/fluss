@@ -53,6 +53,7 @@ import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.shaded.guava32.com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -133,7 +134,7 @@ class CoordinatorServiceOrphanRpcsITCase {
     @Test
     void listSnapshotsReturnsRetainedSubset() throws Exception {
         TableBucket tb = new TableBucket(pkTableId, 0);
-        CompletedSnapshotStore store = createTestStore(tb, snapshot -> false);
+        CompletedSnapshotStore store = createTestStore(snapshot -> false);
         for (long snapId = 1L; snapId <= 4L; snapId++) {
             store.add(createMinimalSnapshot(tb, snapId));
         }
@@ -158,8 +159,7 @@ class CoordinatorServiceOrphanRpcsITCase {
     @Test
     void listSnapshotsReturnsStillInUseBeyondRetention() throws Exception {
         TableBucket tb = new TableBucket(pkTableId, 1);
-        CompletedSnapshotStore store =
-                createTestStore(tb, snapshot -> snapshot.getSnapshotID() == 1L);
+        CompletedSnapshotStore store = createTestStore(snapshot -> snapshot.getSnapshotID() == 1L);
         for (long snapId = 1L; snapId <= 4L; snapId++) {
             store.add(createMinimalSnapshot(tb, snapId));
         }
@@ -195,14 +195,13 @@ class CoordinatorServiceOrphanRpcsITCase {
     // -------------------------------------------------------------------------
 
     private CompletedSnapshotStore createTestStore(
-            TableBucket tb, CompletedSnapshotStore.SnapshotInUseChecker inUseChecker) {
+            CompletedSnapshotStore.SnapshotInUseChecker inUseChecker) {
         return new CompletedSnapshotStore(
                 MAX_SNAPSHOTS_TO_RETAIN,
                 new SharedKvFileRegistry(),
                 Collections.emptyList(),
                 new NoOpSnapshotHandleStore(),
-                org.apache.fluss.shaded.guava32.com.google.common.util.concurrent.MoreExecutors
-                        .directExecutor(),
+                directExecutor(),
                 inUseChecker);
     }
 

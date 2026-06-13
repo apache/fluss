@@ -333,7 +333,7 @@ public final class ActiveRefsFetcher {
     }
 
     /**
-     * Thin abstraction over the {@link FlussAdmin} read-only RPCs the builder depends on ({@code
+     * Thin abstraction over the {@link Admin} read-only RPCs the builder depends on ({@code
      * listRemoteLogManifests} for the log active manifest, {@code listKvSnapshots} for the KV
      * active snapshot dirs). Exposed for test injection.
      */

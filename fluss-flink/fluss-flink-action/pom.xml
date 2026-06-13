@@ -30,7 +30,7 @@
     <packaging>jar</packaging>
 
     <artifactId>fluss-flink-action</artifactId>
-    <name>Fluss : Flink : Action</name>
+    <name>Apache Fluss (Incubating)  : Flink : Action</name>
 
     <properties>
         <flink.minor.version>1.20.3</flink.minor.version>

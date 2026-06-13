@@ -24,7 +24,7 @@ import org.apache.fluss.metadata.TableBucket;
  * A single remote log manifest entry returned by the coordinator. Each entry maps a {@link
  * TableBucket} to its current manifest file path and the end offset covered by that manifest.
  *
- * @since 0.7
+ * @since 1.0
  */
 @PublicEvolving
 public final class RemoteLogManifestInfo {

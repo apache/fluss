@@ -121,7 +121,6 @@ import org.apache.fluss.rpc.messages.PbKvSnapshotLeaseForTable;
 import org.apache.fluss.rpc.messages.PbLakeTieringStats;
 import org.apache.fluss.rpc.messages.PbPrepareLakeTableRespForTable;
 import org.apache.fluss.rpc.messages.PbProducerTableOffsets;
-import org.apache.fluss.rpc.messages.PbRemoteLogManifestEntry;
 import org.apache.fluss.rpc.messages.PbTableBucket;
 import org.apache.fluss.rpc.messages.PbTableOffsets;
 import org.apache.fluss.rpc.messages.PrepareLakeTableSnapshotRequest;
@@ -174,6 +173,7 @@ import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.CoordinatorMetadataProvider;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.ZooKeeperClient.TableBucketAndManifest;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
@@ -223,6 +223,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.groupOffsetsBy
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeAcquireKvSnapshotLeaseResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCreateAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeDropAclsResponse;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListRemoteLogManifestsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableConfigChanges;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toAlterTableSchemaChanges;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toDatabaseChanges;
@@ -800,41 +801,23 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     public CompletableFuture<ListRemoteLogManifestsResponse> listRemoteLogManifests(
             ListRemoteLogManifestsRequest request) {
         long tableId = request.getTableId();
-        // Capture session before entering async block since currentSession() is thread-local
-        Session session = authorizer != null ? currentSession() : null;
+        if (authorizer != null) {
+            authorizeTableWithSession(currentSession(), OperationType.DESCRIBE, tableId);
+        }
         return CompletableFuture.supplyAsync(
                 () -> {
-                    if (authorizer != null) {
-                        authorizeTableWithSession(session, OperationType.DESCRIBE, tableId);
-                    }
                     Long partitionId = request.hasPartitionId() ? request.getPartitionId() : null;
                     validatePartitionOwnership(partitionId, tableId);
-                    ListRemoteLogManifestsResponse response = new ListRemoteLogManifestsResponse();
                     try {
-                        List<ZooKeeperClient.TableBucketAndManifest> entries =
+                        List<TableBucketAndManifest> entries =
                                 zkClient.listRemoteLogManifestHandles(tableId, partitionId);
-                        for (ZooKeeperClient.TableBucketAndManifest entry : entries) {
-                            PbRemoteLogManifestEntry pb = response.addManifest();
-                            PbTableBucket pbTb = pb.setTableBucket();
-                            pbTb.setTableId(entry.getTableBucket().getTableId());
-                            if (entry.getTableBucket().getPartitionId() != null) {
-                                pbTb.setPartitionId(entry.getTableBucket().getPartitionId());
-                            }
-                            pbTb.setBucketId(entry.getTableBucket().getBucket());
-                            pb.setRemoteLogManifestPath(
-                                    entry.getManifestHandle()
-                                            .getRemoteLogManifestPath()
-                                            .toString());
-                            pb.setRemoteLogEndOffset(
-                                    entry.getManifestHandle().getRemoteLogEndOffset());
-                        }
+                        return makeListRemoteLogManifestsResponse(entries);
                     } catch (ApiException e) {
                         throw e;
                     } catch (Exception e) {
                         throw new UnknownServerException(
                                 "Failed to list remote log manifests for tableId=" + tableId, e);
                     }
-                    return response;
                 },
                 ioExecutor);
     }
@@ -843,7 +826,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     public CompletableFuture<ListKvSnapshotsResponse> listKvSnapshots(
             ListKvSnapshotsRequest request) {
         long tableId = request.getTableId();
-        Session session = authorizer != null ? currentSession() : null;
+        if (authorizer != null) {
+            authorizeTableWithSession(currentSession(), OperationType.DESCRIBE, tableId);
+        }
 
         // Resolve numBuckets via event thread (CoordinatorContext is @NotThreadSafe)
         CompletableFuture<Integer> numBucketsFuture = resolveNumBuckets(tableId, request);
@@ -852,10 +837,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 numBuckets ->
                         CompletableFuture.supplyAsync(
                                 () -> {
-                                    if (authorizer != null) {
-                                        authorizeTableWithSession(
-                                                session, OperationType.DESCRIBE, tableId);
-                                    }
                                     Long partitionId =
                                             request.hasPartitionId()
                                                     ? request.getPartitionId()
