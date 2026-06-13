@@ -506,6 +506,36 @@ message ListPartitionInfosResponse {
   repeated PbPartitionInfo partitions_info = 1;
 }
 
+// list remote log manifest entries (one per bucket of a table or partition)
+message ListRemoteLogManifestsRequest {
+  required int64 table_id = 1;
+  optional int64 partition_id = 2;   // required if table is partitioned
+}
+
+message ListRemoteLogManifestsResponse {
+  repeated PbRemoteLogManifestEntry manifests = 1;
+}
+
+message PbRemoteLogManifestEntry {
+  required PbTableBucket table_bucket = 1;
+  required string remote_log_manifest_path = 2;
+  required int64  remote_log_end_offset = 3;
+}
+
+// list active KV snapshot dirs (retained_N + still-in-use) for a unit
+message ListKvSnapshotsRequest {
+  required int64 table_id = 1;
+  optional int64 partition_id = 2;
+}
+
+message ListKvSnapshotsResponse {
+  required int64 table_id = 1;
+  // null if it is a non-partitioned table, otherwise, it must be not null
+  optional int64 partition_id = 2;
+  // Active snapshots = retained_N ∪ still-in-use; multiple entries per bucket allowed.
+  repeated PbKvSnapshot active_snapshots = 3;
+}
+
 // create partition request and response
 message CreatePartitionRequest {
   required PbTablePath table_path = 1;
