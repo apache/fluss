@@ -126,11 +126,11 @@ public final class CoordinatorEventManager implements EventManager {
                             // sizes so the result is robust even if tablesToBeDeleted ever
                             // drifts out of sync with tablePathById -- it can never go negative
                             // and only counts ids that are truly still in tablePathById.
-                            Set<Long> tablesToBeDeleted = context.getTablesToBeDeleted();
-                            int tableCount = 0;
-                            for (Long tableId : context.allTables().keySet()) {
-                                if (!tablesToBeDeleted.contains(tableId)) {
-                                    tableCount++;
+                            Set<Long> allTables = context.allTables().keySet();
+                            int tableCount = allTables.size();
+                            for (Long toDelete : context.getTablesToBeDeleted()) {
+                                if (allTables.contains(toDelete)) {
+                                    tableCount--;
                                 }
                             }
                             int lakeTableCount = context.getLakeTableCount();
