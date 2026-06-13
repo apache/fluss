@@ -47,7 +47,7 @@ public class BucketLocationTest {
         assertThat(bucketLocation.toString())
                 .isEqualTo(
                         "Bucket(physicalTablePath = test_db.test_table, TableBucket{tableId=150001, bucket=0}, "
-                                + "leader = 0, replicas = [0,1,2])");
+                                + "leader = 0, replicas = [0,1,2], isr = [])");
 
         bucketLocation =
                 new BucketLocation(
@@ -55,6 +55,6 @@ public class BucketLocationTest {
         assertThat(bucketLocation.toString())
                 .isEqualTo(
                         "Bucket(physicalTablePath = test_db.test_table, TableBucket{tableId=150001, bucket=0}, "
-                                + "leader = none, replicas = [0,1,2])");
+                                + "leader = none, replicas = [0,1,2], isr = [])");
     }
 }

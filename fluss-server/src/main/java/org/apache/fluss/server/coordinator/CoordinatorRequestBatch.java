@@ -324,6 +324,8 @@ public class CoordinatorRequestBatch {
                 Integer leaderEpoch =
                         bucketLeaderAndIsr.map(LeaderAndIsr::leaderEpoch).orElse(null);
                 Integer leader = bucketLeaderAndIsr.map(LeaderAndIsr::leader).orElse(null);
+                List<Integer> isr =
+                        bucketLeaderAndIsr.map(LeaderAndIsr::isr).orElse(Collections.emptyList());
                 if (currentPartitionId == null) {
                     Map<Integer, List<Integer>> tableAssignment =
                             coordinatorContext.getTableAssignment(currentTableId);
@@ -332,7 +334,8 @@ public class CoordinatorRequestBatch {
                                     tableBucket.getBucket(),
                                     leader,
                                     leaderEpoch,
-                                    tableAssignment.get(tableBucket.getBucket()));
+                                    tableAssignment.get(tableBucket.getBucket()),
+                                    isr);
                     updateMetadataRequestBucketMap
                             .computeIfAbsent(currentTableId, k -> new ArrayList<>())
                             .add(bucketMetadata);
@@ -346,7 +349,8 @@ public class CoordinatorRequestBatch {
                                     tableBucket.getBucket(),
                                     leader,
                                     leaderEpoch,
-                                    partitionAssignment.get(tableBucket.getBucket()));
+                                    partitionAssignment.get(tableBucket.getBucket()),
+                                    isr);
                     updateMetadataRequestPartitionMap
                             .computeIfAbsent(currentTableId, k -> new HashMap<>())
                             .computeIfAbsent(tableBucket.getPartitionId(), k -> new ArrayList<>())
