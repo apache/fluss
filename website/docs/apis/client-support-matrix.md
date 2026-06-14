@@ -19,11 +19,11 @@ These data operations are available under TableAppend, TableScan, TableUpsert an
 | Log          | Scan with Projection       | ✔️                                  | ✔️          | ✔️            | ✔️         |
 | Log          | Typed Scan                 | ✔️                                  |             |               |            |
 | Log          | Batch Scan with Limit      | ✔️                                  |             |               |            |
-| Primary Key  | Upsert                     | ✔️                                  | ✔️          |               |            |
-| Primary Key  | Upsert with Partial Update | ✔️                                  | ✔️          |               |            |
+| Primary Key  | Upsert                     | ✔️                                  | ✔️          | ✔️            | ✔️         |
+| Primary Key  | Upsert with Partial Update | ✔️                                  | ✔️          | ✔️            | ✔️         |
 | Primary Key  | Typed Upsert               | ✔️                                  |             |               |            |
-| Primary Key  | Delete                     | ✔️                                  | ✔️          |               |            |
-| Primary Key  | Lookup                     | ✔️                                  | ✔️          |               |            |
+| Primary Key  | Delete                     | ✔️                                  | ✔️          | ✔️            | ✔️         |
+| Primary Key  | Lookup                     | ✔️                                  | ✔️          | ✔️            | ✔️         |
 | Primary Key  | Prefix Lookup              | ✔️                                  |             |               |            |
 | Primary Key  | Typed Lookup               | ✔️                                  |             |               |            |
 | Primary Key  | Batch Scan with Limit      | ✔️                                  |             |               |            |
@@ -72,24 +72,24 @@ Admin operations are available under FlussAdmin interface.
 
 | Entity    | Operations             | [Java Client](/apis/java-client.md) | Rust Client | Python Client | C++ Client |
 |-----------|------------------------|-------------------------------------|-------------|---------------|------------|
-| Database  | CreateDatabase         | ✔️                                  | ✔️          |               |            |
-| Database  | DropDatabase           | ✔️                                  | ✔️          |               |            |
-| Database  | DatabaseExists         | ✔️                                  | ✔️          |               |            |
-| Database  | GetDatabaseInfo        | ✔️                                  | ✔️          |               |            |
-| Database  | ListDatabases          | ✔️                                  | ✔️          |               |            |
+| Database  | CreateDatabase         | ✔️                                  | ✔️          | ✔️            | ✔️         |
+| Database  | DropDatabase           | ✔️                                  | ✔️          | ✔️            | ✔️         |
+| Database  | DatabaseExists         | ✔️                                  | ✔️          | ✔️            | ✔️         |
+| Database  | GetDatabaseInfo        | ✔️                                  | ✔️          | ✔️            | ✔️         |
+| Database  | ListDatabases          | ✔️                                  | ✔️          | ✔️            | ✔️         |
 | Table     | AlterTable             | ✔️                                  |             |               |            |
 | Table     | CreateTable            | ✔️                                  | ✔️          | ✔️            | ✔️         |
-| Table     | DropTable              | ✔️                                  | ✔️          |               | ✔️         |
+| Table     | DropTable              | ✔️                                  | ✔️          | ✔️            | ✔️         |
 | Table     | GetTableSchema         | ✔️                                  |             |               |            |
 | Table     | GetTableInfo           | ✔️                                  | ✔️          | ✔️            | ✔️         |
-| Table     | ListTables             | ✔️                                  | ✔️          |               |            |
-| Partition | CreatePartition        | ✔️                                  |             |               |            |
-| Partition | DropPartition          | ✔️                                  |             |               |            |
-| Partition | ListPartitionInfos     | ✔️                                  |             |               |            |
+| Table     | ListTables             | ✔️                                  | ✔️          | ✔️            | ✔️         |
+| Partition | CreatePartition        | ✔️                                  | ✔️          | ✔️            | ✔️         |
+| Partition | DropPartition          | ✔️                                  | ✔️          | ✔️            | ✔️         |
+| Partition | ListPartitionInfos     | ✔️                                  | ✔️          | ✔️            | ✔️         |
 | Snapshot  | GetKvSnapshotMetadata  | ✔️                                  |             |               |            |
 | Snapshot  | GetLatestKvSnapshots   | ✔️                                  |             |               |            |
 | Snapshot  | GetLatestLakeSnapshot  | ✔️                                  | ✔️          | ✔️            | ✔️         |
-| Bucket    | ListOffsets            | ✔️                                  | ✔️          |               | ✔️         |
+| Bucket    | ListOffsets            | ✔️                                  | ✔️          | ✔️            | ✔️         |
 | Cluster   | AlterClusterConfigs    | ✔️                                  |             |               |            |
 | Cluster   | DescribeClusterConfigs | ✔️                                  |             |               |            |
 | Cluster   | CancelRebalance        | ✔️                                  |             |               |            |
