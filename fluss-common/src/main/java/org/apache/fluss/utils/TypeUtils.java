@@ -20,6 +20,7 @@ package org.apache.fluss.utils;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.LocalZonedTimestampType;
 import org.apache.fluss.types.TimestampType;
@@ -30,6 +31,59 @@ import java.util.TimeZone;
 
 /** Type related helper functions. */
 public class TypeUtils {
+
+    /**
+     * Checks whether the given {@link DataType} is a primitive type that can be compared using
+     * {@code ==}.
+     */
+    public static boolean isPrimitive(DataType type) {
+        return isPrimitive(type.getTypeRoot());
+    }
+
+    /**
+     * Checks whether the given {@link DataTypeRoot} is a primitive type that can be compared using
+     * {@code ==}.
+     */
+    public static boolean isPrimitive(DataTypeRoot root) {
+        switch (root) {
+            case BOOLEAN:
+            case TINYINT:
+            case SMALLINT:
+            case INTEGER:
+            case BIGINT:
+            case FLOAT:
+            case DOUBLE:
+            case DATE:
+            case TIME_WITHOUT_TIME_ZONE:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /**
+     * Checks whether the given {@link DataTypeRoot} is a binary type that should be compared using
+     * {@code Arrays.equals}.
+     */
+    public static boolean isBinary(DataTypeRoot root) {
+        return root == DataTypeRoot.BINARY || root == DataTypeRoot.BYTES;
+    }
+
+    /**
+     * Checks whether the given {@link DataTypeRoot} is a comparable type that should be compared
+     * using {@code compareTo}.
+     */
+    public static boolean isComparable(DataTypeRoot root) {
+        switch (root) {
+            case DECIMAL:
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     public static Object castFromString(String s, DataType type) {
         BinaryString str = BinaryString.fromString(s);
         switch (type.getTypeRoot()) {
