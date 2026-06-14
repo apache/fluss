@@ -48,6 +48,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
 
@@ -59,6 +60,10 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
     private final Catalog icebergCatalog;
     private final Table icebergTable;
     private final RecordWriter recordWriter;
+
+    // Timeout for waiting on the async compaction future during complete().
+    // Prevents complete() from blocking indefinitely when compaction is slow.
+    private static final long COMPACTION_TIMEOUT_SECONDS = 300L;
 
     @Nullable private final ExecutorService compactionExecutor;
     @Nullable private CompletableFuture<RewriteDataFileResult> compactionFuture;
@@ -114,7 +119,17 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
 
             RewriteDataFileResult rewriteDataFileResult = null;
             if (compactionFuture != null) {
-                rewriteDataFileResult = compactionFuture.get();
+                try {
+                    rewriteDataFileResult =
+                            compactionFuture.get(COMPACTION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                } catch (TimeoutException e) {
+                    LOG.warn(
+                            "Compaction timed out after {} seconds for table {}. "
+                                    + "Skipping compaction result for this write.",
+                            COMPACTION_TIMEOUT_SECONDS,
+                            icebergTable.name());
+                    compactionFuture.cancel(true);
+                }
             }
             return new IcebergWriteResult(writeResult, rewriteDataFileResult);
         } catch (Exception e) {

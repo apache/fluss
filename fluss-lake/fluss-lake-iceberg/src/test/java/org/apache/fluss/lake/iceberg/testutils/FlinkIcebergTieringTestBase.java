@@ -257,6 +257,33 @@ public class FlinkIcebergTieringTestBase {
                 });
     }
 
+    protected void assertReplicaStatus(
+            TableBucket tb, long expectedLogEndOffset, Duration timeout) {
+        retry(
+                timeout,
+                () -> {
+                    Replica replica = getLeaderReplica(tb);
+                    // datalake snapshot id should be updated
+                    assertThat(replica.getLogTablet().getLakeTableSnapshotId())
+                            .isGreaterThanOrEqualTo(0);
+                    assertThat(replica.getLakeLogEndOffset()).isEqualTo(expectedLogEndOffset);
+                });
+    }
+
+    protected void waitForFileStatusInIcebergTable(
+            TablePath tablePath, int expectedFileCount, boolean shouldDeleteFileExist) {
+        retry(
+                Duration.ofMinutes(2),
+                () -> {
+                    try {
+                        checkFileStatusInIcebergTable(
+                                tablePath, expectedFileCount, shouldDeleteFileExist);
+                    } catch (IOException e) {
+                        throw new AssertionError("Failed to check file status in Iceberg table", e);
+                    }
+                });
+    }
+
     /**
      * Wait until the default number of partitions is created. Return the map from partition id to
      * partition name.
