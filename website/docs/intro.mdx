@@ -4,11 +4,18 @@ sidebar_position: 1
 slug: /
 ---
 
+import { useColorMode } from '@docusaurus/theme-common';
+
 # What is Fluss?
 
 Fluss is a streaming storage built for real-time analytics & AI which can serve as the real-time data layer for Lakehouse architectures.
 
-![arch](/img/fluss.png)
+{(() => {
+  const { colorMode } = useColorMode();
+  return (
+    <img src={colorMode === 'dark' ? '/img/fluss.png' : '/img/fluss_light_mode.png'} alt="arch" />
+  );
+})()}
 
 It bridges the gap between **streaming data** and the data **Lakehouse** by enabling low-latency, high-throughput data ingestion and processing while seamlessly integrating with popular compute engines like **Apache Flink**, with **Apache Spark** and **StarRocks** coming soon.
 
