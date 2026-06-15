@@ -132,16 +132,26 @@ public class FileLock {
             } finally {
                 try {
                     if (lock != null) {
-                        lock.channel().close();
-                        lock = null;
+                        try {
+                            lock.channel().close();
+                        } finally {
+                            // Reset state even when close fails so the FileLock is not left in
+                            // an inconsistent, partially-destroyed state.
+                            lock = null;
+                        }
                     }
                 } finally {
                     // Always close the output stream, even when releasing or closing the channel
                     // above threw; otherwise the file descriptor would leak whenever cleanup
                     // failed partway through.
                     if (outputStream != null) {
-                        outputStream.close();
-                        outputStream = null;
+                        try {
+                            outputStream.close();
+                        } finally {
+                            // Guarantee state reset even when close fails so a later tryLock()
+                            // can re-initialize the stream cleanly.
+                            outputStream = null;
+                        }
                     }
                 }
             }
