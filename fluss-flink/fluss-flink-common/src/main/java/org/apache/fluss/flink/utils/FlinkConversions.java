@@ -119,6 +119,11 @@ public class FlinkConversions {
 
     /** Convert Fluss's table to Flink's table. */
     public static CatalogBaseTable toFlinkTable(TableInfo tableInfo) {
+        if (tableInfo.hasPartitionExpressions()) {
+            throw new UnsupportedOperationException(
+                    "Flink catalog does not support implicit partitioned Fluss tables yet.");
+        }
+
         Map<String, String> newOptions = new HashMap<>(tableInfo.getCustomProperties().toMap());
 
         // put fluss table properties into flink options, to make the properties visible to users

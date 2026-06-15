@@ -103,6 +103,11 @@ public class IcebergLakeCatalog implements LakeCatalog {
     @Override
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor, Context context)
             throws TableAlreadyExistException {
+        if (tableDescriptor.hasPartitionExpressions()) {
+            throw new UnsupportedOperationException(
+                    "Iceberg lake tables do not support implicit partition expressions yet.");
+        }
+
         // convert Fluss table path to iceberg table
         boolean isPkTable = tableDescriptor.hasPrimaryKey();
         TableIdentifier icebergId = toIcebergTableIdentifier(tablePath);

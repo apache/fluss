@@ -66,8 +66,9 @@ public class RecoveryOffsetManagerTest {
         Schema schema =
                 Schema.newBuilder()
                         .column("id", DataTypes.INT())
+                        .column("pt", DataTypes.STRING())
                         .column("value", DataTypes.STRING())
-                        .primaryKey("id")
+                        .primaryKey(isPartitioned ? new String[] {"id", "pt"} : new String[] {"id"})
                         .build();
 
         List<String> partitionKeys =

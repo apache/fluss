@@ -153,6 +153,8 @@ public class HudiConversions {
      */
     public static Map<String, String> buildHudiTableProperties(
             TablePath tablePath, TableDescriptor tableDescriptor, boolean isPkTable) {
+        checkImplicitPartitionUnsupported(tableDescriptor);
+
         Map<String, String> hudiProperties = new HashMap<>();
         // Set connector type
         hudiProperties.put(FactoryUtil.CONNECTOR.key(), "hudi");
@@ -226,6 +228,8 @@ public class HudiConversions {
             TableDescriptor tableDescriptor,
             boolean isPkTable,
             String catalogMode) {
+        checkImplicitPartitionUnsupported(tableDescriptor);
+
         ResolvedSchema resolvedSchema =
                 convertToFlinkResolvedSchema(tablePath, tableDescriptor, isPkTable, catalogMode);
         Schema schema = Schema.newBuilder().fromResolvedSchema(resolvedSchema).build();
@@ -239,6 +243,13 @@ public class HudiConversions {
                 ? HudiCatalogUtils.createCatalogTable(schema, partitionKeys, options, comment)
                 : HudiCatalogUtils.createResolvedCatalogTable(
                         schema, partitionKeys, options, comment, resolvedSchema);
+    }
+
+    private static void checkImplicitPartitionUnsupported(TableDescriptor tableDescriptor) {
+        if (tableDescriptor.hasPartitionExpressions()) {
+            throw new UnsupportedOperationException(
+                    "Hudi lake tables do not support implicit partition expressions yet.");
+        }
     }
 
     private static void setFlussPropertyToHudi(

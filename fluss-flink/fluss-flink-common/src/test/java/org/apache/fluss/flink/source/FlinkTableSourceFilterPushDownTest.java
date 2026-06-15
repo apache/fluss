@@ -546,6 +546,7 @@ public class FlinkTableSourceFilterPushDownTest {
 
             assertThat(result.getAcceptedFilters()).hasSize(1);
             assertThat(result.getRemainingFilters()).hasSize(1);
+            assertThat(tableSource.getPartitionFilters()).isNull();
             // record batch filter should be successfully pushdown
             assertThat(tableSource.getLogRecordBatchFilter()).isNotNull();
         }

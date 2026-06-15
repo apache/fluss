@@ -1,0 +1,108 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+@Library(['meetPaasJenkinsLib','ciHelper@master']) _
+
+pipeline {
+    agent { label 'wap-agents' }
+
+    stages {
+        /**
+         * Checkout current repo
+         */
+        stage('Checkout') {
+            steps { checkout scm }
+        }
+
+        /**
+         * Unit Tests (Java 17)
+         */
+        stage('Unit Tests') {
+            steps {
+                withMaven(
+                    jdk: 'OpenJDK-17',
+                    maven: 'Maven 3.6.1',
+                    options: [
+                        artifactsPublisher(disabled: true),
+                        junitPublisher(disabled: true)
+                    ]) {
+
+                    sh '''
+                        set -euxo pipefail
+
+                        # Jenkins 的专用临时目录：不在 repo 树里（避免 RAT），一般也不会 noexec
+                        CI_TMP="${WORKSPACE}@tmp/fluss-ut-tmp-${BUILD_NUMBER}"
+                        NETTY_NATIVE="${CI_TMP}/netty-native"
+                        trap 'rm -rf "${CI_TMP}" || true' EXIT
+
+                        rm -rf "${CI_TMP}" || true
+                        mkdir -p "${NETTY_NATIVE}"
+                        chmod 755 "${WORKSPACE}@tmp" "${CI_TMP}" "${NETTY_NATIVE}" || true
+
+                        # 让所有 Java 进程继承
+                        export JAVA_TOOL_OPTIONS="${JAVA_TOOL_OPTIONS:-} \
+                          -Djava.io.tmpdir=${CI_TMP} \
+                          -Dorg.apache.fluss.shaded.netty4.io.netty.native.workdir=${NETTY_NATIVE} \
+                          -Dcom.github.luben.zstd.tmpdir=${CI_TMP} \
+                          --add-exports=java.security.jgss/sun.security.krb5=ALL-UNNAMED \
+                          --add-exports=java.rmi/sun.rmi.registry=ALL-UNNAMED"
+
+                        MAVEN_REACTOR_EXCLUDES="\
+!fluss-metrics/fluss-metrics-influxdb,\
+!fluss-flink/fluss-flink-1.19,\
+!fluss-flink/fluss-flink-1.20,\
+!fluss-flink/fluss-flink-tiering,\
+!fluss-spark/fluss-spark-common,\
+!fluss-spark/fluss-spark-ut,\
+!fluss-spark/fluss-spark-3.5,\
+!fluss-spark/fluss-spark-3.4,\
+!fluss-spark,\
+!fluss-lake/fluss-lake-paimon,\
+!fluss-lake/fluss-lake-iceberg,\
+!fluss-lake/fluss-lake-lance,\
+!fluss-lake/fluss-lake-hudi,\
+!fluss-lake,\
+!fluss-kafka,\
+!fluss-jmh,\
+!fluss-filesystems/fluss-fs-oss,\
+!fluss-filesystems/fluss-fs-gs,\
+!fluss-filesystems/fluss-fs-azure,\
+!fluss-filesystems/fluss-fs-obs,\
+!fluss-filesystems/fluss-fs-cos,\
+!fluss-filesystems/fluss-fs-hdfs,\
+!fluss-test-coverage"
+
+                        ./mvnw -B -V -T 1C \
+                          -DskipOptionalDistPlugins \
+                          -Ddist.plugins.descriptor=src/main/assemblies/plugins-slim.xml \
+                          -pl "${MAVEN_REACTOR_EXCLUDES}" \
+                          clean test
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            junit allowEmptyResults: true, testResults: '**/target/surefire-reports/*.xml'
+            sh "echo 'Cleanup workspace...'"
+            deleteDir()
+        }
+    }
+}

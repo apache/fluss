@@ -192,6 +192,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.io.UncheckedIOException;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -689,7 +690,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             newDescriptor = newDescriptor.withProperties(newProperties);
         }
 
-        return newDescriptor;
+        return newDescriptor.withResolvedPartitionExpressionTimeZone(ZoneId.systemDefault());
     }
 
     private boolean isDataLakeEnabled(TableDescriptor tableDescriptor) {

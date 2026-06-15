@@ -23,9 +23,14 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -72,6 +77,44 @@ class MetadataUpdaterITCase {
                             null,
                             null);
         }
+    }
+
+    @Test
+    void testUpdatePartitionMetadataForUnknownTable() throws Exception {
+        Configuration clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+        TablePath tablePath = TablePath.of("fluss", "metadata_partition_update");
+        PartitionSpec partitionSpec =
+                new PartitionSpec(Collections.singletonMap("dt", "2026-01-01"));
+        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath, "2026-01-01");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("dt", DataTypes.STRING())
+                                        .build())
+                        .partitionedBy("dt")
+                        .distributedBy(1)
+                        .build();
+        try (Connection conn = ConnectionFactory.createConnection(clientConf);
+                Admin admin = conn.getAdmin()) {
+            admin.createTable(tablePath, tableDescriptor, true).get();
+            admin.createPartition(tablePath, partitionSpec, true).get();
+        }
+
+        MetadataUpdater metadataUpdater =
+                new MetadataUpdater(clientConf, FLUSS_CLUSTER_EXTENSION.getRpcClient());
+        assertThat(metadataUpdater.getCluster().getTableId(tablePath)).isEmpty();
+
+        assertThat(metadataUpdater.checkAndUpdatePartitionMetadata(physicalTablePath)).isTrue();
+
+        assertThat(metadataUpdater.getCluster().getTableId(tablePath)).isPresent();
+        assertThat(metadataUpdater.getPartitionId(physicalTablePath)).isPresent();
+        assertThat(
+                        metadataUpdater
+                                .getCluster()
+                                .getAvailableBucketsForPhysicalTablePath(physicalTablePath))
+                .hasSize(1);
     }
 
     @Test
