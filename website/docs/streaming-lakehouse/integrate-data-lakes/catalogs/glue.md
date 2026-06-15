@@ -200,6 +200,7 @@ For details on union reads and streaming reads, see [Iceberg - Read Tables](../f
 | `403 Forbidden` writing to S3 | Missing S3 permissions | Ensure the IAM policy includes `s3:PutObject`, `s3:GetObject`, etc. on the warehouse bucket |
 | `Region must be specified` | Missing region config | Add `datalake.iceberg.client.region` or set `AWS_REGION` env var |
 | `NoAwsCredentialsException` | S3 plugin can't find credentials | Set `s3.access.key`, `s3.secret.key`, and `s3.session.token` in `server.yaml`, or ensure IMDSv1 is enabled on the instance |
+| `NoSuchMethodError: MappedByteBuffer.duplicate()` | Java version too old | Fluss 0.9.x requires **Java 17+** for the Tablet Server. Upgrade from Java 11 to Java 17. |
 
 ## Further Reading
 
