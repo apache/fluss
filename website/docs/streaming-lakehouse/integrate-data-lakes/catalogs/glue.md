@@ -81,10 +81,11 @@ Place the following JARs in the `${FLUSS_HOME}/plugins/iceberg/` directory:
 
 - **Iceberg AWS Bundle**: [iceberg-aws-bundle-1.10.1.jar](https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-aws-bundle/1.10.1/iceberg-aws-bundle-1.10.1.jar)
 - **Iceberg AWS**: [iceberg-aws-1.10.1.jar](https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-aws/1.10.1/iceberg-aws-1.10.1.jar)
+- **Failsafe**: [failsafe-3.3.2.jar](https://repo1.maven.org/maven2/dev/failsafe/failsafe/3.3.2/failsafe-3.3.2.jar) — required by `iceberg-aws` for Glue API retry logic
 
-Both JARs are required. The bundle provides AWS SDK v2 dependencies, while `iceberg-aws` provides the `GlueCatalog` class that Iceberg loads via reflection. The plugin classloader cannot find `GlueCatalog` from the bundle alone.
+Both Iceberg JARs are required. The bundle provides AWS SDK v2 dependencies, while `iceberg-aws` provides the `GlueCatalog` class that Iceberg loads via reflection. The plugin classloader cannot find `GlueCatalog` from the bundle alone. The `failsafe` library is a transitive dependency of `iceberg-aws` that is not bundled.
 
-> **NOTE**: You need **both** JARs. Using only the bundle will result in `ClassNotFoundException: org.apache.iceberg.aws.glue.GlueCatalog`.
+> **NOTE**: You need **all three** JARs. Using only the bundle will result in `ClassNotFoundException: org.apache.iceberg.aws.glue.GlueCatalog`. Missing `failsafe` will cause `NoClassDefFoundError: dev/failsafe/FailsafeException`.
 
 Additionally, you need the Fluss S3 filesystem plugin for remote storage access. Place [fluss-fs-s3-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-fs-s3/$FLUSS_VERSION$/fluss-fs-s3-$FLUSS_VERSION$.jar) in `${FLUSS_HOME}/plugins/s3/`. See [S3 Dependencies](../../../maintenance/filesystems/s3.md#dependencies) for details.
 
@@ -94,12 +95,16 @@ Place the following JARs in `${FLINK_HOME}/lib`:
 
 1. **Iceberg AWS Bundle**: `iceberg-aws-bundle-1.10.1.jar` (same as above)
 2. **Iceberg AWS**: `iceberg-aws-1.10.1.jar` (same as above — provides `GlueCatalog` class)
-3. **Fluss Flink Connector**: [fluss-flink-1.20-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar) (pick the version matching your Flink runtime)
-4. **Fluss Lake Iceberg**: [fluss-lake-iceberg-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-lake-iceberg/$FLUSS_VERSION$/fluss-lake-iceberg-$FLUSS_VERSION$.jar)
-5. **Fluss S3 Filesystem**: [fluss-fs-s3-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-fs-s3/$FLUSS_VERSION$/fluss-fs-s3-$FLUSS_VERSION$.jar) (if S3 is used as Fluss remote storage)
-6. **Hadoop Client**: [hadoop-client-api-3.3.6.jar](https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-client-api/3.3.6/hadoop-client-api-3.3.6.jar) and [hadoop-client-runtime-3.3.6.jar](https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-client-runtime/3.3.6/hadoop-client-runtime-3.3.6.jar) — required by the Iceberg Parquet writer
+3. **Failsafe**: `failsafe-3.3.2.jar` (same as above — Glue retry logic)
+4. **Fluss Flink Connector**: [fluss-flink-1.20-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar) (pick the version matching your Flink runtime)
+5. **Fluss Lake Iceberg**: [fluss-lake-iceberg-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-lake-iceberg/$FLUSS_VERSION$/fluss-lake-iceberg-$FLUSS_VERSION$.jar)
+6. **Fluss Flink Tiering**: [fluss-flink-tiering-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-tiering/$FLUSS_VERSION$/fluss-flink-tiering-$FLUSS_VERSION$.jar) — the tiering job JAR itself
+7. **Fluss S3 Filesystem**: [fluss-fs-s3-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-fs-s3/$FLUSS_VERSION$/fluss-fs-s3-$FLUSS_VERSION$.jar) (if S3 is used as Fluss remote storage)
+8. **Hadoop Client**: [hadoop-client-api-3.3.6.jar](https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-client-api/3.3.6/hadoop-client-api-3.3.6.jar) and [hadoop-client-runtime-3.3.6.jar](https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-client-runtime/3.3.6/hadoop-client-runtime-3.3.6.jar) — required by the Iceberg Parquet writer
 
-> **NOTE**: Despite the Glue catalog itself not requiring Hadoop, the **tiering service** needs Hadoop classes (`org.apache.hadoop.conf.Configuration`) for writing Parquet files via Iceberg. Use the `hadoop-client-api` and `hadoop-client-runtime` JARs (not the full Hadoop distribution) to avoid classpath conflicts with Flink's bundled Avro version.
+> **NOTE**: Despite the Glue catalog itself not requiring Hadoop, the **tiering service** needs Hadoop classes (`org.apache.hadoop.conf.Configuration`) for writing Parquet files via Iceberg. Use the `hadoop-client-api` and `hadoop-client-runtime` JARs (not the full Hadoop distribution or `flink-shaded-hadoop-2-uber`) to avoid classpath conflicts with Flink's bundled Avro version. Using the uber JAR causes `NoSuchMethodError: LogicalTypes.timestampNanos()`.
+
+> **WARNING**: Do **not** add S3 credentials to `flink-conf.yaml` by appending key-value pairs — this can break Flink's memory configuration parser. Instead, use environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_REGION`) or a `HADOOP_CONF_DIR` with a `core-site.xml` file.
 
 ## Configure Fluss with AWS Glue
 
@@ -143,6 +148,29 @@ s3.endpoint: s3.<your-region>.amazonaws.com
 ```
 
 > **TIP**: On ECS Fargate, fetch temporary credentials from the container metadata endpoint (`http://169.254.170.2$AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`) and inject them into `server.yaml` at startup.
+
+For the **Flink tiering service**, provide credentials via environment variables and a `HADOOP_CONF_DIR`:
+
+```bash
+export AWS_ACCESS_KEY_ID=<your-access-key>
+export AWS_SECRET_ACCESS_KEY=<your-secret-key>
+export AWS_SESSION_TOKEN=<your-session-token>
+export AWS_REGION=<your-region>
+
+# Create core-site.xml for Hadoop S3A (used by Iceberg Parquet writer)
+export HADOOP_CONF_DIR=/tmp/hadoop-conf
+mkdir -p $HADOOP_CONF_DIR
+cat > $HADOOP_CONF_DIR/core-site.xml <<EOF
+<configuration>
+  <property><name>fs.s3a.access.key</name><value>$AWS_ACCESS_KEY_ID</value></property>
+  <property><name>fs.s3a.secret.key</name><value>$AWS_SECRET_ACCESS_KEY</value></property>
+  <property><name>fs.s3a.session.token</name><value>$AWS_SESSION_TOKEN</value></property>
+  <property><name>fs.s3a.endpoint</name><value>s3.$AWS_REGION.amazonaws.com</value></property>
+</configuration>
+EOF
+```
+
+> **WARNING**: Do not append credential properties to `flink-conf.yaml`. This breaks Flink's YAML parser and causes `IllegalConfigurationException: JobManager memory configuration failed`. Use environment variables and `HADOOP_CONF_DIR` instead.
 
 **Static Credentials (Testing Only)**:
 
@@ -221,6 +249,7 @@ For details on union reads and streaming reads, see [Iceberg - Read Tables](../f
 | Symptom | Likely Cause | Fix |
 |---------|-------------|-----|
 | `ClassNotFoundException: org.apache.iceberg.aws.glue.GlueCatalog` | Missing `iceberg-aws` JAR | Add `iceberg-aws-1.10.1.jar` alongside the bundle in `plugins/iceberg/` |
+| `NoClassDefFoundError: dev/failsafe/FailsafeException` | Missing `failsafe` JAR | Add `failsafe-3.3.2.jar` to `plugins/iceberg/` and `${FLINK_HOME}/lib` |
 | `NoClassDefFoundError: software/amazon/awssdk/...` | Missing AWS SDK | Ensure `iceberg-aws-bundle-1.10.1.jar` is in `plugins/iceberg/` and `${FLINK_HOME}/lib` |
 | `NoClassDefFoundError: org/apache/hadoop/conf/Configuration` | Missing Hadoop JARs in tiering | Add `hadoop-client-api-3.3.6.jar` and `hadoop-client-runtime-3.3.6.jar` to `${FLINK_HOME}/lib` |
 | `NoSuchMethodError: LogicalTypes.timestampNanos()` | Avro version conflict | Do NOT use `flink-shaded-hadoop-2-uber` — use `hadoop-client-api` + `hadoop-client-runtime` instead |
@@ -230,6 +259,7 @@ For details on union reads and streaming reads, see [Iceberg - Read Tables](../f
 | `AccessDeniedException` from Glue API | Insufficient IAM or Lake Formation permissions | Check IAM policy includes `glue:CreateTable`. If Lake Formation is enabled, grant table-level permissions to the role. |
 | `403 Forbidden` / `400 Bad Request` writing to S3 | S3 credentials expired or misconfigured | For ECS/Fargate, refresh credentials from the container metadata endpoint. Ensure `s3.endpoint` matches your region (e.g., `s3.us-gov-west-1.amazonaws.com` for GovCloud). |
 | `Table already exists` on CREATE TABLE | Stale Iceberg metadata in Glue from previous run | DROP TABLE in Fluss first, or use a new table name. Glue retains metadata even after Fluss state (ZooKeeper) is reset. |
+| `IllegalConfigurationException: JobManager memory configuration failed` | Flink config file corrupted | Do NOT append keys to `flink-conf.yaml`. Use environment variables or `HADOOP_CONF_DIR` for credential config. |
 
 ## Further Reading
 
