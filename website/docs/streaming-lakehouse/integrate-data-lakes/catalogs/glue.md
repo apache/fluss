@@ -139,17 +139,24 @@ datalake.iceberg.glue.catalog-id: <aws-account-id>
 
 **IAM Role (Recommended)**: If running on AWS (EKS, ECS, EC2) with an attached IAM role, no credential configuration is needed for the **Glue catalog connection**. The Iceberg AWS SDK uses the [default credentials provider chain](https://docs.aws.amazon.com/sdk-for-java/latest/developer-guide/credentials-chain.html) automatically.
 
-However, the **Fluss S3 filesystem plugin** (used for `remote.data.dir`) does not support the standard AWS credential chain on environments using IMDSv2 or ECS task roles. You may need to provide explicit S3 credentials in `server.yaml`:
+However, the **Fluss S3 filesystem plugin** (used for `remote.data.dir`) has a known limitation: it uses a custom delegation token mechanism that does not support IMDSv2 or ECS task role credentials. This affects:
+- ECS Fargate tasks
+- EC2 instances with IMDSv2 enforced (no IMDSv1 fallback)
+
+On these environments, you must provide temporary session credentials explicitly in `server.yaml`:
 
 ```yaml
-# Required for Fluss S3 plugin on ECS Fargate or IMDSv2-only instances
-s3.access.key: <your-access-key>
-s3.secret.key: <your-secret-key>
-s3.session.token: <your-session-token>
+# Workaround for Fluss S3 plugin on IMDSv2-only / ECS Fargate environments
+# These are short-lived session credentials, NOT long-term access keys
+s3.access.key: <temporary-access-key-id>
+s3.secret.key: <temporary-secret-access-key>
+s3.session.token: <temporary-session-token>
 s3.endpoint: s3.<your-region>.amazonaws.com
 ```
 
 > **NOTE**: The `s3.endpoint` must match your AWS partition. For GovCloud, use `s3.us-gov-west-1.amazonaws.com`. For China regions, use `s3.cn-north-1.amazonaws.com.cn`. Standard AWS uses `s3.<region>.amazonaws.com`.
+
+These are **temporary session credentials** (from IAM role assumption), not permanent access keys. They expire and must be refreshed. On most environments (EC2 with IMDSv1, EKS with IRSA), no credential configuration is needed — the Fluss S3 plugin resolves credentials automatically.
 
 > **TIP**: On ECS Fargate, fetch temporary credentials from the container metadata endpoint (`http://169.254.170.2$AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`) and inject them into `server.yaml` at startup.
 
