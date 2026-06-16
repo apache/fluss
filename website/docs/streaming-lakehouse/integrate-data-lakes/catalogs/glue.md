@@ -207,6 +207,116 @@ ${FLINK_HOME}/bin/flink run /path/to/fluss-flink-tiering-$FLUSS_VERSION$.jar \
     --datalake.iceberg.client.region <your-aws-region>
 ```
 
+## Quick Start (Full Bootstrap)
+
+This section shows the complete setup from a blank Linux machine to data queryable in Athena. Adapt paths and versions for your environment.
+
+```bash
+# ─── 1. Install prerequisites ───
+# Java 17+ required (Amazon Corretto, OpenJDK, etc.)
+java -version  # Must show 17+
+
+# ─── 2. Install ZooKeeper ───
+wget -q https://archive.apache.org/dist/zookeeper/zookeeper-3.8.4/apache-zookeeper-3.8.4-bin.tar.gz
+tar -xzf apache-zookeeper-3.8.4-bin.tar.gz -C /opt/zookeeper --strip-components=1
+cat > /opt/zookeeper/conf/zoo.cfg <<EOF
+tickTime=2000
+dataDir=/var/lib/zookeeper
+clientPort=2181
+EOF
+
+# ─── 3. Install Fluss ───
+wget -q https://dlcdn.apache.org/incubator/fluss/fluss-0.9.1-incubating/fluss-0.9.1-incubating-bin.tgz
+tar -xzf fluss-0.9.1-incubating-bin.tgz -C /opt/fluss --strip-components=1
+
+# ─── 4. Add Glue JARs to Fluss plugins/iceberg/ ───
+wget -O /opt/fluss/plugins/iceberg/iceberg-aws-bundle-1.10.1.jar \
+  https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-aws-bundle/1.10.1/iceberg-aws-bundle-1.10.1.jar
+wget -O /opt/fluss/plugins/iceberg/iceberg-aws-1.10.1.jar \
+  https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-aws/1.10.1/iceberg-aws-1.10.1.jar
+wget -O /opt/fluss/plugins/iceberg/failsafe-3.3.2.jar \
+  https://repo1.maven.org/maven2/dev/failsafe/failsafe/3.3.2/failsafe-3.3.2.jar
+
+# ─── 5. Write server.yaml ───
+cat > /opt/fluss/conf/server.yaml <<EOF
+zookeeper.address: localhost:2181
+coordinator.host: localhost
+coordinator.port: 9123
+tablet-server.host: localhost
+tablet-server.id: 0
+tablet-server.port: 9124
+data.dir: /var/lib/fluss/data
+remote.data.dir: s3://YOUR-BUCKET/fluss-data
+
+datalake.format: iceberg
+datalake.iceberg.type: glue
+datalake.iceberg.warehouse: s3://YOUR-BUCKET/iceberg-warehouse
+datalake.iceberg.client.region: YOUR-REGION
+datalake.iceberg.io-impl: org.apache.iceberg.aws.s3.S3FileIO
+
+# S3 credentials (only needed on ECS Fargate / IMDSv2 environments)
+# s3.access.key: ...
+# s3.secret.key: ...
+# s3.session.token: ...
+# s3.endpoint: s3.YOUR-REGION.amazonaws.com
+EOF
+
+# ─── 6. Start services ───
+/opt/zookeeper/bin/zkServer.sh start
+sleep 3
+/opt/fluss/bin/coordinator-server.sh start
+sleep 5
+/opt/fluss/bin/tablet-server.sh start
+sleep 5
+
+# ─── 7. Install Flink + tiering JARs ───
+wget -q https://archive.apache.org/dist/flink/flink-1.20.1/flink-1.20.1-bin-scala_2.12.tgz
+tar -xzf flink-1.20.1-bin-scala_2.12.tgz -C /opt/flink --strip-components=1
+
+# Copy/download all required JARs to Flink lib
+cp /opt/fluss/plugins/iceberg/iceberg-aws-bundle-1.10.1.jar /opt/flink/lib/
+cp /opt/fluss/plugins/iceberg/iceberg-aws-1.10.1.jar /opt/flink/lib/
+cp /opt/fluss/plugins/iceberg/failsafe-3.3.2.jar /opt/flink/lib/
+wget -O /opt/flink/lib/fluss-flink-1.20-0.9.1-incubating.jar \
+  https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/0.9.1-incubating/fluss-flink-1.20-0.9.1-incubating.jar
+wget -O /opt/flink/lib/fluss-lake-iceberg-0.9.1-incubating.jar \
+  https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-iceberg/0.9.1-incubating/fluss-lake-iceberg-0.9.1-incubating.jar
+wget -O /opt/flink/lib/fluss-flink-tiering-0.9.1-incubating.jar \
+  https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/0.9.1-incubating/fluss-flink-tiering-0.9.1-incubating.jar
+wget -O /opt/flink/lib/hadoop-client-api-3.3.6.jar \
+  https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-client-api/3.3.6/hadoop-client-api-3.3.6.jar
+wget -O /opt/flink/lib/hadoop-client-runtime-3.3.6.jar \
+  https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-client-runtime/3.3.6/hadoop-client-runtime-3.3.6.jar
+
+# Start Flink
+/opt/flink/bin/start-cluster.sh
+sleep 5
+
+# ─── 8. Create table + insert data (single Flink SQL session) ───
+cat > /tmp/setup.sql <<EOF
+CREATE CATALOG fluss_catalog WITH ('type' = 'fluss', 'bootstrap.servers' = 'localhost:9123');
+USE CATALOG fluss_catalog;
+CREATE DATABASE IF NOT EXISTS my_database;
+USE my_database;
+CREATE TABLE test_table (id BIGINT, name STRING, PRIMARY KEY (id) NOT ENFORCED)
+  WITH ('table.datalake.enabled' = 'true', 'table.datalake.freshness' = '30s');
+INSERT INTO test_table VALUES (1, 'hello'), (2, 'world');
+EOF
+/opt/flink/bin/sql-client.sh -f /tmp/setup.sql
+
+# ─── 9. Start tiering service ───
+/opt/flink/bin/flink run -d /opt/flink/lib/fluss-flink-tiering-0.9.1-incubating.jar \
+  --fluss.bootstrap.servers localhost:9123 \
+  --datalake.format iceberg \
+  --datalake.iceberg.type glue \
+  --datalake.iceberg.warehouse s3://YOUR-BUCKET/iceberg-warehouse \
+  --datalake.iceberg.client.region YOUR-REGION
+
+# ─── 10. Query in Athena ───
+# Wait ~30s for tiering to flush, then:
+#   SELECT * FROM my_database.test_table;
+```
+
 ## Usage Example
 
 ### Create a Datalake-Enabled Table
