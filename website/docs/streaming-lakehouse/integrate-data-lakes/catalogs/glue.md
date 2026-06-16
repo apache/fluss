@@ -89,7 +89,7 @@ Both Iceberg JARs are required. The bundle provides AWS SDK v2 dependencies, whi
 
 Additionally, you need the Fluss S3 filesystem plugin for remote storage access. Place [fluss-fs-s3-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-fs-s3/$FLUSS_VERSION$/fluss-fs-s3-$FLUSS_VERSION$.jar) in `${FLUSS_HOME}/plugins/s3/`. See [S3 Dependencies](../../../maintenance/filesystems/s3.md#dependencies) for details.
 
-> **TIP**: The Fluss binary distribution ships with `fluss-lake-iceberg-$FLUSS_VERSION$.jar` already in `plugins/iceberg/`. You only need to add the three JARs listed above.
+> **TIP**: The Fluss binary distribution already includes `fluss-lake-iceberg-$FLUSS_VERSION$.jar` in `plugins/iceberg/`. You do not need to download it separately — only add the three JARs above (iceberg-aws-bundle, iceberg-aws, failsafe).
 
 #### For the Flink Tiering Service
 
