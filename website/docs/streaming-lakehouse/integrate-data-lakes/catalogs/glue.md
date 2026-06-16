@@ -89,6 +89,8 @@ Both Iceberg JARs are required. The bundle provides AWS SDK v2 dependencies, whi
 
 Additionally, you need the Fluss S3 filesystem plugin for remote storage access. Place [fluss-fs-s3-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-fs-s3/$FLUSS_VERSION$/fluss-fs-s3-$FLUSS_VERSION$.jar) in `${FLUSS_HOME}/plugins/s3/`. See [S3 Dependencies](../../../maintenance/filesystems/s3.md#dependencies) for details.
 
+> **TIP**: The Fluss binary distribution ships with `fluss-lake-iceberg-$FLUSS_VERSION$.jar` already in `plugins/iceberg/`. You only need to add the three JARs listed above.
+
 #### For the Flink Tiering Service
 
 Place the following JARs in `${FLINK_HOME}/lib`:
@@ -146,6 +148,8 @@ s3.secret.key: <your-secret-key>
 s3.session.token: <your-session-token>
 s3.endpoint: s3.<your-region>.amazonaws.com
 ```
+
+> **NOTE**: The `s3.endpoint` must match your AWS partition. For GovCloud, use `s3.us-gov-west-1.amazonaws.com`. For China regions, use `s3.cn-north-1.amazonaws.com.cn`. Standard AWS uses `s3.<region>.amazonaws.com`.
 
 > **TIP**: On ECS Fargate, fetch temporary credentials from the container metadata endpoint (`http://169.254.170.2$AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`) and inject them into `server.yaml` at startup.
 
