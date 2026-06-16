@@ -15,9 +15,27 @@ This guide explains how to configure Fluss to use AWS Glue as its Iceberg catalo
 
 When Fluss is configured with AWS Glue as its Iceberg catalog:
 
-1. Fluss creates and manages Iceberg database and table metadata within the AWS Glue Data Catalog.
-2. The [tiering service](maintenance/tiered-storage/lakehouse-storage.md#start-the-datalake-tiering-service) writes Parquet data files to Amazon S3 and commits snapshots to the Glue Data Catalog.
-3. Any Iceberg-compatible engine (Amazon Athena, Spark, Trino, Flink, StarRocks, etc.) can discover and query the tiered tables through AWS Glue.
+1. **Data ingestion**: Applications write data to Fluss tables using the Fluss client (Java/Python), Flink SQL, or any Kafka-compatible producer. Fluss stores this data in its real-time log (similar to Kafka topics).
+2. **Tiering to Iceberg**: A separate Flink job (the [tiering service](maintenance/tiered-storage/lakehouse-storage.md#start-the-datalake-tiering-service)) periodically reads accumulated data from Fluss, converts it to Parquet format, writes the files to S3, and commits an Iceberg snapshot to the Glue Data Catalog.
+3. **Query via Athena/Spark/Trino**: Any Iceberg-compatible engine can discover and query the tiered tables through AWS Glue — no additional configuration needed.
+
+```
+┌─ Data Sources ─────────┐     ┌─ Fluss Cluster ──────┐     ┌─ AWS ────────────────────┐
+│                         │     │                      │     │                          │
+│  App (Fluss client)   ─┼────▶│  Coordinator         │     │  Glue Data Catalog       │
+│  Flink CDC job        ─┼────▶│  TabletServer(s)     │     │  (table metadata)        │
+│  Kafka producer       ─┼────▶│  ZooKeeper           │     │                          │
+│                         │     │                      │     │  S3 Bucket               │
+└─────────────────────────┘     └──────────┬───────────┘     │  (Parquet data files)    │
+                                           │                  │                          │
+                                ┌──────────▼───────────┐     │  Athena / Spark / Trino  │
+                                │  Flink Tiering Job   ├────▶│  (query engine)          │
+                                │  (reads Fluss log,   │     │                          │
+                                │   writes Iceberg)    │     └──────────────────────────┘
+                                └──────────────────────┘
+```
+
+> **KEY CONCEPT**: Flink is used here for the **tiering service** (Fluss → Iceberg/S3/Glue) and optionally for data ingestion via SQL. But Flink is NOT the only way to write data to Fluss. Applications can write directly using the Fluss client library (Java, Python) or any Kafka-compatible producer. The tiering service is what bridges Fluss's real-time log to the Glue Data Catalog.
 
 ## Prerequisites
 
