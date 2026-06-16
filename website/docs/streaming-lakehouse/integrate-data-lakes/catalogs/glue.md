@@ -160,12 +160,13 @@ These are **temporary session credentials** (from IAM role assumption), not perm
 
 > **TIP**: On ECS Fargate, fetch temporary credentials from the container metadata endpoint (`http://169.254.170.2$AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`) and inject them into `server.yaml` at startup.
 
-For the **Flink tiering service**, provide credentials via environment variables and a `HADOOP_CONF_DIR`:
+For the **Flink tiering service**, the same limitation applies. Provide temporary session credentials via environment variables and a `HADOOP_CONF_DIR` (this is the same workaround as above, scoped to ECS Fargate / IMDSv2 environments):
 
 ```bash
-export AWS_ACCESS_KEY_ID=<your-access-key>
-export AWS_SECRET_ACCESS_KEY=<your-secret-key>
-export AWS_SESSION_TOKEN=<your-session-token>
+# Temporary session credentials (from IAM role, not permanent keys)
+export AWS_ACCESS_KEY_ID=<temporary-access-key-id>
+export AWS_SECRET_ACCESS_KEY=<temporary-secret-access-key>
+export AWS_SESSION_TOKEN=<temporary-session-token>
 export AWS_REGION=<your-region>
 
 # Create core-site.xml for Hadoop S3A (used by Iceberg Parquet writer)
@@ -180,6 +181,8 @@ cat > $HADOOP_CONF_DIR/core-site.xml <<EOF
 </configuration>
 EOF
 ```
+
+> **NOTE**: On EC2 with IMDSv1 or EKS with IRSA, this `HADOOP_CONF_DIR` step is not needed — Hadoop's default credential chain resolves credentials automatically.
 
 > **WARNING**: Do not append credential properties to `flink-conf.yaml`. This breaks Flink's YAML parser and causes `IllegalConfigurationException: JobManager memory configuration failed`. Use environment variables and `HADOOP_CONF_DIR` instead.
 
