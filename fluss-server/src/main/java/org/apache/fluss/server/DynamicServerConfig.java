@@ -81,6 +81,7 @@ class DynamicServerConfig {
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
     private final Map<Class<? extends ServerReconfigurable>, ServerReconfigurable>
             serverReconfigures = new ConcurrentHashMap<>();
+    private boolean initialized;
 
     /** Registered stateless config validators, organized by config key for efficient lookup. */
     private final Map<String, List<ConfigValidator<?>>> configValidatorsByKey =
@@ -110,7 +111,15 @@ class DynamicServerConfig {
     }
 
     void register(ServerReconfigurable serverReconfigurable) {
-        serverReconfigures.put(serverReconfigurable.getClass(), serverReconfigurable);
+        inWriteLock(
+                lock,
+                () -> {
+                    if (initialized) {
+                        Configuration configToApply = new Configuration(currentConfig);
+                        applyToServerReconfigurable(serverReconfigurable, configToApply);
+                    }
+                    serverReconfigures.put(serverReconfigurable.getClass(), serverReconfigurable);
+                });
     }
 
     /**
@@ -130,6 +139,20 @@ class DynamicServerConfig {
         configValidatorsByKey
                 .computeIfAbsent(configKey, k -> new CopyOnWriteArrayList<>())
                 .add(validator);
+    }
+
+    /**
+     * Initialize dynamic configuration and enable current config replay for later registrations. If
+     * skipping error config, only the error one will be ignored.
+     */
+    void initializeDynamicConfig(Map<String, String> newDynamicConfigs, boolean skipErrorConfig)
+            throws Exception {
+        inWriteLock(
+                lock,
+                () -> {
+                    updateCurrentConfig(newDynamicConfigs, skipErrorConfig);
+                    initialized = true;
+                });
     }
 
     /**
@@ -442,6 +465,31 @@ class DynamicServerConfig {
         if (throwable != null) {
             appliedSet.forEach(r -> r.reconfigure(oldConfig));
             throw throwable;
+        }
+    }
+
+    private void applyToServerReconfigurable(
+            ServerReconfigurable reconfigurable, Configuration newConfig) throws ConfigException {
+        try {
+            reconfigurable.validate(newConfig);
+        } catch (ConfigException e) {
+            LOG.error(
+                    "Validation failed for {}: {}",
+                    reconfigurable.getClass().getSimpleName(),
+                    e.getMessage(),
+                    e);
+            throw e;
+        }
+
+        try {
+            reconfigurable.reconfigure(newConfig);
+        } catch (ConfigException e) {
+            LOG.error(
+                    "Reconfiguration failed for {}: {}",
+                    reconfigurable.getClass().getSimpleName(),
+                    e.getMessage(),
+                    e);
+            throw e;
         }
     }
 

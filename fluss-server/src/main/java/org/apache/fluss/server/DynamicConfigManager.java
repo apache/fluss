@@ -68,7 +68,7 @@ public class DynamicConfigManager {
         try {
             configChangeListener.start();
             Map<String, String> entityConfigs = zooKeeperClient.fetchEntityConfig();
-            dynamicServerConfig.updateDynamicConfig(entityConfigs, true);
+            dynamicServerConfig.initializeDynamicConfig(entityConfigs, true);
         } catch (Exception e) {
             LOG.error("Failed to update dynamic configs from zookeeper", e);
         }

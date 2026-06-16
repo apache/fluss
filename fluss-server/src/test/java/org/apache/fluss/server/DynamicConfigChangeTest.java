@@ -314,6 +314,36 @@ public class DynamicConfigChangeTest {
     }
 
     @Test
+    void testLateRegisteredReconfigurableReceivesCurrentDynamicConfig() throws Exception {
+        Configuration configuration = new Configuration();
+        Map<String, String> config = new HashMap<>();
+        config.put(ConfigOptions.SERVER_SASL_USERS.key(), "admin:admin-secret,bob:bob-secret");
+        zookeeperClient.upsertServerEntityConfig(config);
+
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+        dynamicConfigManager.startup();
+
+        AtomicReference<List<String>> validatedUsers = new AtomicReference<>();
+        AtomicReference<List<String>> reconfiguredUsers = new AtomicReference<>();
+        dynamicConfigManager.register(
+                new ServerReconfigurable() {
+                    @Override
+                    public void validate(Configuration newConfig) throws ConfigException {
+                        validatedUsers.set(newConfig.get(ConfigOptions.SERVER_SASL_USERS));
+                    }
+
+                    @Override
+                    public void reconfigure(Configuration newConfig) {
+                        reconfiguredUsers.set(newConfig.get(ConfigOptions.SERVER_SASL_USERS));
+                    }
+                });
+
+        assertThat(validatedUsers.get()).containsExactly("admin:admin-secret", "bob:bob-secret");
+        assertThat(reconfiguredUsers.get()).containsExactly("admin:admin-secret", "bob:bob-secret");
+    }
+
+    @Test
     void testPreventInvalidConfig() throws Exception {
         // Test that generic type validation prevents invalid config values
         Configuration configuration = new Configuration();
