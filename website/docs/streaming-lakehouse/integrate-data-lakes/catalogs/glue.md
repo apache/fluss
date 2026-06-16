@@ -21,6 +21,10 @@ When Fluss is configured with AWS Glue as its Iceberg catalog:
 
 ## Prerequisites
 
+### Java Version
+
+Fluss 0.9.x requires **Java 17 or later** for the Tablet Server. Java 11 will fail with `NoSuchMethodError: MappedByteBuffer.duplicate()`.
+
 ### AWS IAM Permissions
 
 The processes running Fluss servers and the Flink tiering service must have IAM permissions for both Glue and S3. Below is a minimal IAM policy:
@@ -65,6 +69,8 @@ The processes running Fluss servers and the Flink tiering service must have IAM 
 }
 ```
 
+> **NOTE**: If your account uses **AWS Lake Formation**, the IAM role must also have Lake Formation permissions (Create Table, Describe, Alter, Insert, Select, Delete, Drop) on the target database. Standard IAM `glue:*` permissions alone are not sufficient when Lake Formation governance is enabled.
+
 ### Prepare Required JARs
 
 Fluss bundles `iceberg-core` but does **not** bundle the Glue catalog implementation or the AWS SDK. You must supply additional JARs.
@@ -76,9 +82,9 @@ Place the following JARs in the `${FLUSS_HOME}/plugins/iceberg/` directory:
 - **Iceberg AWS Bundle**: [iceberg-aws-bundle-1.10.1.jar](https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-aws-bundle/1.10.1/iceberg-aws-bundle-1.10.1.jar)
 - **Iceberg AWS**: [iceberg-aws-1.10.1.jar](https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-aws/1.10.1/iceberg-aws-1.10.1.jar)
 
-The bundle JAR contains all required AWS SDK v2 dependencies, while `iceberg-aws` contains the `GlueCatalog` implementation class. Both are required because Fluss's plugin classloader loads `GlueCatalog` via reflection, and the bundle alone does not include it on the expected classpath.
+Both JARs are required. The bundle provides AWS SDK v2 dependencies, while `iceberg-aws` provides the `GlueCatalog` class that Iceberg loads via reflection. The plugin classloader cannot find `GlueCatalog` from the bundle alone.
 
-> **NOTE**: You need **both** JARs. The `iceberg-aws-bundle` provides the AWS SDK, and `iceberg-aws` provides `GlueCatalog` and `S3FileIO` classes that Iceberg loads via reflection.
+> **NOTE**: You need **both** JARs. Using only the bundle will result in `ClassNotFoundException: org.apache.iceberg.aws.glue.GlueCatalog`.
 
 Additionally, you need the Fluss S3 filesystem plugin for remote storage access. Place [fluss-fs-s3-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-fs-s3/$FLUSS_VERSION$/fluss-fs-s3-$FLUSS_VERSION$.jar) in `${FLUSS_HOME}/plugins/s3/`. See [S3 Dependencies](../../../maintenance/filesystems/s3.md#dependencies) for details.
 
@@ -91,8 +97,9 @@ Place the following JARs in `${FLINK_HOME}/lib`:
 3. **Fluss Flink Connector**: [fluss-flink-1.20-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar) (pick the version matching your Flink runtime)
 4. **Fluss Lake Iceberg**: [fluss-lake-iceberg-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-lake-iceberg/$FLUSS_VERSION$/fluss-lake-iceberg-$FLUSS_VERSION$.jar)
 5. **Fluss S3 Filesystem**: [fluss-fs-s3-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-fs-s3/$FLUSS_VERSION$/fluss-fs-s3-$FLUSS_VERSION$.jar) (if S3 is used as Fluss remote storage)
+6. **Hadoop Client**: [hadoop-client-api-3.3.6.jar](https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-client-api/3.3.6/hadoop-client-api-3.3.6.jar) and [hadoop-client-runtime-3.3.6.jar](https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-client-runtime/3.3.6/hadoop-client-runtime-3.3.6.jar) — required by the Iceberg Parquet writer
 
-> **NOTE**: The Glue catalog does **not** require Hadoop classes. You do not need `hadoop-apache-*.jar` or `HADOOP_CLASSPATH` for a Glue + S3FileIO setup.
+> **NOTE**: Despite the Glue catalog itself not requiring Hadoop, the **tiering service** needs Hadoop classes (`org.apache.hadoop.conf.Configuration`) for writing Parquet files via Iceberg. Use the `hadoop-client-api` and `hadoop-client-runtime` JARs (not the full Hadoop distribution) to avoid classpath conflicts with Flink's bundled Avro version.
 
 ## Configure Fluss with AWS Glue
 
@@ -123,7 +130,19 @@ datalake.iceberg.glue.catalog-id: <aws-account-id>
 
 #### Authentication
 
-**IAM Role (Recommended)**: If running on AWS (EKS, ECS, EC2) with an attached IAM role, no credential configuration is needed. The AWS SDK uses the [default credentials provider chain](https://docs.aws.amazon.com/sdk-for-java/latest/developer-guide/credentials-chain.html) automatically.
+**IAM Role (Recommended)**: If running on AWS (EKS, ECS, EC2) with an attached IAM role, no credential configuration is needed for the **Glue catalog connection**. The Iceberg AWS SDK uses the [default credentials provider chain](https://docs.aws.amazon.com/sdk-for-java/latest/developer-guide/credentials-chain.html) automatically.
+
+However, the **Fluss S3 filesystem plugin** (used for `remote.data.dir`) does not support the standard AWS credential chain on environments using IMDSv2 or ECS task roles. You may need to provide explicit S3 credentials in `server.yaml`:
+
+```yaml
+# Required for Fluss S3 plugin on ECS Fargate or IMDSv2-only instances
+s3.access.key: <your-access-key>
+s3.secret.key: <your-secret-key>
+s3.session.token: <your-session-token>
+s3.endpoint: s3.<your-region>.amazonaws.com
+```
+
+> **TIP**: On ECS Fargate, fetch temporary credentials from the container metadata endpoint (`http://169.254.170.2$AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`) and inject them into `server.yaml` at startup.
 
 **Static Credentials (Testing Only)**:
 
@@ -153,7 +172,14 @@ ${FLINK_HOME}/bin/flink run /path/to/fluss-flink-tiering-$FLUSS_VERSION$.jar \
 Connect to Fluss via Flink SQL and create a table with data lake tiering enabled:
 
 ```sql title="Flink SQL"
+CREATE CATALOG fluss_catalog WITH (
+    'type' = 'fluss',
+    'bootstrap.servers' = '<coordinator-host>:9123'
+);
+
 USE CATALOG fluss_catalog;
+CREATE DATABASE IF NOT EXISTS my_database;
+USE my_database;
 
 CREATE TABLE customer_orders (
     `order_id` BIGINT,
@@ -167,15 +193,16 @@ CREATE TABLE customer_orders (
 );
 ```
 
-Fluss will create the database (if it does not exist) and a corresponding Iceberg table in the Glue Data Catalog. Once data is ingested and the tiering service commits, Parquet files appear in the S3 warehouse path.
+Fluss will register the database in ZooKeeper and create a corresponding Iceberg table in the Glue Data Catalog (using the same database name). Once data is ingested and the tiering service commits, Parquet files appear in the S3 warehouse path.
+
+> **NOTE**: The database must be created in the Fluss catalog first — Fluss maintains its own database registry in ZooKeeper. The database name in Fluss maps 1:1 to the Glue database name during tiering.
 
 ### Query Data with Athena
 
 AWS Athena uses the Glue Data Catalog by default, so tiered tables are immediately queryable:
 
 ```sql title="Athena SQL"
--- Replace with your Fluss database name
-SELECT * FROM fluss_database.customer_orders LIMIT 10;
+SELECT * FROM my_database.customer_orders LIMIT 10;
 ```
 
 ### Query Data with Flink (Union Read)
@@ -193,14 +220,16 @@ For details on union reads and streaming reads, see [Iceberg - Read Tables](../f
 
 | Symptom | Likely Cause | Fix |
 |---------|-------------|-----|
+| `ClassNotFoundException: org.apache.iceberg.aws.glue.GlueCatalog` | Missing `iceberg-aws` JAR | Add `iceberg-aws-1.10.1.jar` alongside the bundle in `plugins/iceberg/` |
 | `NoClassDefFoundError: software/amazon/awssdk/...` | Missing AWS SDK | Ensure `iceberg-aws-bundle-1.10.1.jar` is in `plugins/iceberg/` and `${FLINK_HOME}/lib` |
-| `NoClassDefFoundError: org/apache/iceberg/aws/glue/GlueCatalog` | Missing Glue catalog impl | Ensure `iceberg-aws-1.10.1.jar` (not just the bundle) is in `plugins/iceberg/` and `${FLINK_HOME}/lib` |
-| `ClassNotFoundException: org.apache.iceberg.aws.glue.GlueCatalog` | Missing `iceberg-aws` JAR | The bundle does not include `GlueCatalog` on the plugin classloader path — add `iceberg-aws-1.10.1.jar` alongside the bundle |
-| `AccessDeniedException` from Glue API | Insufficient IAM permissions | Check the IAM policy includes all required `glue:*` actions |
-| `403 Forbidden` writing to S3 | Missing S3 permissions | Ensure the IAM policy includes `s3:PutObject`, `s3:GetObject`, etc. on the warehouse bucket |
-| `Region must be specified` | Missing region config | Add `datalake.iceberg.client.region` or set `AWS_REGION` env var |
-| `NoAwsCredentialsException` | S3 plugin can't find credentials | Set `s3.access.key`, `s3.secret.key`, and `s3.session.token` in `server.yaml`, or ensure IMDSv1 is enabled on the instance |
-| `NoSuchMethodError: MappedByteBuffer.duplicate()` | Java version too old | Fluss 0.9.x requires **Java 17+** for the Tablet Server. Upgrade from Java 11 to Java 17. |
+| `NoClassDefFoundError: org/apache/hadoop/conf/Configuration` | Missing Hadoop JARs in tiering | Add `hadoop-client-api-3.3.6.jar` and `hadoop-client-runtime-3.3.6.jar` to `${FLINK_HOME}/lib` |
+| `NoSuchMethodError: LogicalTypes.timestampNanos()` | Avro version conflict | Do NOT use `flink-shaded-hadoop-2-uber` — use `hadoop-client-api` + `hadoop-client-runtime` instead |
+| `NoSuchMethodError: MappedByteBuffer.duplicate()` | Java version too old | Fluss 0.9.x requires **Java 17+**. Upgrade from Java 11. |
+| `NoAwsCredentialsException` / `No AWS Credentials` | S3 plugin can't find credentials | Set `s3.access.key`, `s3.secret.key`, `s3.session.token` in `server.yaml`. The Fluss S3 plugin does not support IMDSv2 or ECS task role credentials natively. |
+| `SecurityTokenException: Region is not set` | S3 token manager missing region | Add `datalake.iceberg.client.region` and set `AWS_REGION` environment variable |
+| `AccessDeniedException` from Glue API | Insufficient IAM or Lake Formation permissions | Check IAM policy includes `glue:CreateTable`. If Lake Formation is enabled, grant table-level permissions to the role. |
+| `403 Forbidden` / `400 Bad Request` writing to S3 | S3 credentials expired or misconfigured | For ECS/Fargate, refresh credentials from the container metadata endpoint. Ensure `s3.endpoint` matches your region (e.g., `s3.us-gov-west-1.amazonaws.com` for GovCloud). |
+| `Table already exists` on CREATE TABLE | Stale Iceberg metadata in Glue from previous run | DROP TABLE in Fluss first, or use a new table name. Glue retains metadata even after Fluss state (ZooKeeper) is reset. |
 
 ## Further Reading
 
