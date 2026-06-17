@@ -668,6 +668,34 @@ class ReplicaManagerTest extends ReplicaTestBase {
     }
 
     @Test
+    void testPutKvAcksOneWaitsForLocalFlushNotHighWatermark() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        makeKvTableAsLeader(
+                tb,
+                DATA1_TABLE_PATH_PK,
+                Arrays.asList(TABLET_SERVER_ID, 2),
+                Arrays.asList(TABLET_SERVER_ID, 2),
+                INITIAL_LEADER_EPOCH,
+                false);
+
+        CompletableFuture<List<PutKvResultForBucket>> future = new CompletableFuture<>();
+        replicaManager.putRecordsToKv(
+                20000,
+                1,
+                Collections.singletonMap(tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
+                null,
+                MergeMode.DEFAULT,
+                PUT_KV_VERSION,
+                future::complete);
+
+        assertThat(future.get(10, TimeUnit.SECONDS)).containsOnly(new PutKvResultForBucket(tb, 8));
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        assertThat(replica.getLocalLogEndOffset()).isEqualTo(8L);
+        assertThat(replica.getKvTablet().getFlushedLogOffset()).isGreaterThanOrEqualTo(8L);
+        assertThat(replica.getLogHighWatermark()).isLessThan(8L);
+    }
+
+    @Test
     void testPutKvWithOutOfBatchSequence() throws Exception {
         TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, 1);
         makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb.getBucket());
@@ -1245,6 +1273,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 PUT_KV_VERSION,
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 4));
+
         // second prefix lookup in table, prefix key = (1, "a").
         Object[] prefixKey1 = new Object[] {1, "a"};
         CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(rowType, new int[] {0, 1});

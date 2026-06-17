@@ -26,12 +26,25 @@ import org.apache.fluss.rpc.protocol.Errors;
 /** Result of {@link PutKvRequest} for each table bucket. */
 @Internal
 public class PutKvResultForBucket extends WriteResultForBucket {
+
+    /** Backpressure pressure value: 0=normal, (0,1)=DELAYED zone. */
+    private float pressure;
+
     public PutKvResultForBucket(TableBucket tableBucket, long changeLogEndOffset) {
         super(tableBucket, changeLogEndOffset, ApiError.NONE);
     }
 
     public PutKvResultForBucket(TableBucket tableBucket, ApiError error) {
         super(tableBucket, -1L, error);
+    }
+
+    public float getPressure() {
+        return pressure;
+    }
+
+    public PutKvResultForBucket setPressure(float pressure) {
+        this.pressure = pressure;
+        return this;
     }
 
     @Override

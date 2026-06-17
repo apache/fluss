@@ -34,6 +34,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -102,6 +103,40 @@ class KvSnapshotDataUploaderTest {
             FSDataInputStream inputStream = fsPath.getFileSystem().open(fsPath);
             assertContentEqual(path, inputStream);
         }
+    }
+
+    @Test
+    void testUploadEmptyFileCorrectly() throws Exception {
+        File snapshotSharedFolder = new File(temporaryFolder.toFile(), "shared");
+        FsPath snapshotSharedDirectory = FsPath.fromLocalFile(snapshotSharedFolder);
+
+        SnapshotLocation snapshotLocation =
+                new SnapshotLocation(
+                        LocalFileSystem.getSharedInstance(),
+                        snapshotSharedDirectory,
+                        snapshotSharedDirectory,
+                        1024);
+
+        File localFolder = new File(temporaryFolder.toFile(), "local");
+        assertThat(localFolder.mkdir()).isTrue();
+        Path emptyFile = localFolder.toPath().resolve("empty.log");
+        Files.createFile(emptyFile);
+
+        KvSnapshotDataUploader snapshotUploader = new KvSnapshotDataUploader(downLoaderThreadPool);
+        List<KvFileHandleAndLocalPath> uploadedFiles =
+                snapshotUploader.uploadFilesToSnapshotLocation(
+                        Arrays.asList(emptyFile),
+                        snapshotLocation,
+                        SnapshotFileScope.EXCLUSIVE,
+                        new CloseableRegistry(),
+                        new CloseableRegistry());
+
+        assertThat(uploadedFiles).hasSize(1);
+        KvFileHandleAndLocalPath uploadedFile = uploadedFiles.get(0);
+        assertThat(uploadedFile.getLocalPath()).isEqualTo("empty.log");
+        assertThat(uploadedFile.getKvFileHandle().getSize()).isEqualTo(0L);
+        FsPath uploadedPath = new FsPath(uploadedFile.getKvFileHandle().getFilePath());
+        assertThat(uploadedPath.getFileSystem().exists(uploadedPath)).isTrue();
     }
 
     private void assertContentEqual(Path stateFilePath, FSDataInputStream inputStream)

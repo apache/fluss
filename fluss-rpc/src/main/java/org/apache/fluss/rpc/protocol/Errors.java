@@ -77,6 +77,7 @@ import org.apache.fluss.exception.SecurityTokenException;
 import org.apache.fluss.exception.ServerNotExistException;
 import org.apache.fluss.exception.ServerTagAlreadyExistException;
 import org.apache.fluss.exception.ServerTagNotExistException;
+import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.exception.StorageException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
@@ -275,7 +276,11 @@ public enum Errors {
     INSUFFICIENT_KV_LEADER_REPLICA_CAPACITY(
             71,
             "The cluster does not have enough KV leader replica capacity.",
-            InsufficientKvLeaderReplicaCapacityException::new);
+            InsufficientKvLeaderReplicaCapacityException::new),
+    STORAGE_BACKPRESSURE_EXCEPTION(
+            72,
+            "The tablet server has rejected the write because the KV storage engine has reached its write-pressure threshold.",
+            StorageBackpressureException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 
