@@ -23,7 +23,10 @@ import org.apache.fluss.cluster.rebalance.RebalanceProgress;
 import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.cluster.rebalance.ServerTag;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.NoRebalanceInProgressException;
+import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.CoordinatorEventProcessor;
@@ -37,6 +40,8 @@ import org.apache.fluss.server.coordinator.rebalance.model.ServerModel;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.RebalanceExecution;
+import org.apache.fluss.server.zk.data.RebalanceRound;
 import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
@@ -48,7 +53,10 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -89,6 +97,7 @@ public class RebalanceManager {
     private final EventManager eventManager;
     private final Clock clock;
     private final ScheduledExecutorService timeoutChecker;
+    private final int rebalanceMaxBucketsPerRound;
 
     /** A queue of in progress table bucket to rebalance. */
     private final Queue<TableBucket> inProgressRebalanceTasksQueue = new ArrayDeque<>();
@@ -105,6 +114,7 @@ public class RebalanceManager {
     private volatile long registerTime;
     private volatile @Nullable RebalanceStatus rebalanceStatus;
     private volatile @Nullable String currentRebalanceId;
+    private volatile @Nullable RebalanceExecution currentRebalanceExecution;
     private volatile boolean isClosed = false;
 
     /**
@@ -126,13 +136,22 @@ public class RebalanceManager {
             ZooKeeperClient zkClient,
             EventManager eventManager,
             Clock clock) {
+        this(eventProcessor, zkClient, eventManager, clock, new Configuration());
+    }
+
+    public RebalanceManager(
+            CoordinatorEventProcessor eventProcessor,
+            ZooKeeperClient zkClient,
+            EventManager eventManager,
+            Clock clock,
+            Configuration conf) {
         this(
                 eventProcessor,
                 zkClient,
                 eventManager,
                 clock,
-                Executors.newScheduledThreadPool(
-                        1, new ExecutorThreadFactory("rebalance-timeout")));
+                Executors.newScheduledThreadPool(1, new ExecutorThreadFactory("rebalance-timeout")),
+                conf);
     }
 
     @VisibleForTesting
@@ -142,11 +161,24 @@ public class RebalanceManager {
             EventManager eventManager,
             Clock clock,
             ScheduledExecutorService timeoutChecker) {
+        this(eventProcessor, zkClient, eventManager, clock, timeoutChecker, new Configuration());
+    }
+
+    @VisibleForTesting
+    RebalanceManager(
+            CoordinatorEventProcessor eventProcessor,
+            ZooKeeperClient zkClient,
+            EventManager eventManager,
+            Clock clock,
+            ScheduledExecutorService timeoutChecker,
+            Configuration conf) {
         this.eventProcessor = eventProcessor;
         this.zkClient = zkClient;
         this.eventManager = eventManager;
         this.clock = clock == null ? SystemClock.getInstance() : clock;
         this.timeoutChecker = timeoutChecker;
+        this.rebalanceMaxBucketsPerRound =
+                Math.max(0, conf.getInt(ConfigOptions.COORDINATOR_REBALANCE_MAX_BUCKETS_PER_ROUND));
         this.goalOptimizer = new GoalOptimizer();
     }
 
@@ -174,13 +206,19 @@ public class RebalanceManager {
 
     private void initialize() {
         try {
-            zkClient.getRebalanceTask()
-                    .ifPresent(
-                            rebalancePlan ->
-                                    registerRebalance(
-                                            rebalancePlan.getRebalanceId(),
-                                            rebalancePlan.getExecutePlan(),
-                                            rebalancePlan.getRebalanceStatus()));
+            Optional<RebalanceExecution> rebalanceExecution = zkClient.getRebalanceExecution();
+            if (rebalanceExecution.isPresent()) {
+                restoreRoundBasedRebalance(rebalanceExecution.get());
+                return;
+            }
+
+            Optional<RebalanceTask> rebalanceTask = zkClient.getRebalanceTask();
+            if (rebalanceTask.isPresent()) {
+                RebalanceTask task = rebalanceTask.get();
+                currentRebalanceExecution = null;
+                registerRebalance(
+                        task.getRebalanceId(), task.getExecutePlan(), task.getRebalanceStatus());
+            }
         } catch (Exception e) {
             LOG.error(
                     "Failed to get rebalance plan from zookeeper, it will be treated as no"
@@ -193,6 +231,18 @@ public class RebalanceManager {
             String rebalanceId,
             Map<TableBucket, RebalancePlanForBucket> rebalancePlan,
             RebalanceStatus newStatus) {
+        Map<TableBucket, RebalanceResultForBucket> rebalanceResults = new HashMap<>();
+        for (Map.Entry<TableBucket, RebalancePlanForBucket> entry : rebalancePlan.entrySet()) {
+            rebalanceResults.put(
+                    entry.getKey(), RebalanceResultForBucket.of(entry.getValue(), newStatus));
+        }
+        registerRebalanceResults(rebalanceId, rebalanceResults, newStatus);
+    }
+
+    private void registerRebalanceResults(
+            String rebalanceId,
+            Map<TableBucket, RebalanceResultForBucket> rebalanceResults,
+            RebalanceStatus newStatus) {
         checkNotClosed();
         registerTime = System.currentTimeMillis();
         // first clear all exists tasks.
@@ -204,21 +254,24 @@ public class RebalanceManager {
         inflightTaskStartMs = -1;
 
         currentRebalanceId = rebalanceId;
-        if (rebalancePlan.isEmpty()) {
+        if (rebalanceResults.isEmpty()) {
             completeRebalance();
             return;
         }
 
-        rebalancePlan.forEach(
-                ((tableBucket, planForBucket) -> {
-                    if (FINAL_STATUSES.contains(newStatus)) {
+        rebalanceResults.forEach(
+                ((tableBucket, resultForBucket) -> {
+                    if (FINAL_STATUSES.contains(resultForBucket.status())) {
                         finishedRebalanceTasks.put(
-                                tableBucket, RebalanceResultForBucket.of(planForBucket, newStatus));
+                                tableBucket,
+                                RebalanceResultForBucket.of(
+                                        resultForBucket.plan(), resultForBucket.status()));
                     } else {
                         inProgressRebalanceTasksQueue.add(tableBucket);
                         inProgressRebalanceTasks.put(
                                 tableBucket,
-                                RebalanceResultForBucket.of(planForBucket, NOT_STARTED));
+                                RebalanceResultForBucket.of(
+                                        resultForBucket.plan(), resultForBucket.status()));
                     }
                 }));
 
@@ -240,6 +293,7 @@ public class RebalanceManager {
             finishedRebalanceTasks.put(
                     tableBucket,
                     RebalanceResultForBucket.of(resultForBucket.plan(), statusForBucket));
+            updateCurrentRoundBucketStatus(tableBucket, resultForBucket.plan(), statusForBucket);
             // Clear gate (bucket) first, then data (startMs).
             inflightTaskBucket = null;
             inflightTaskStartMs = -1;
@@ -251,7 +305,11 @@ public class RebalanceManager {
 
             if (inProgressRebalanceTasksQueue.isEmpty()) {
                 // All rebalance tasks are completed.
-                completeRebalance();
+                if (currentRebalanceExecution == null) {
+                    completeRebalance();
+                } else {
+                    completeRoundAndMaybeStartNext();
+                }
             } else {
                 // Trigger one rebalance task to execute.
                 processNewRebalanceTask();
@@ -275,6 +333,11 @@ public class RebalanceManager {
 
         if (currentRebalanceId == null) {
             return null;
+        }
+
+        Optional<RebalanceProgress> roundBasedProgress = listRoundBasedRebalanceProgress();
+        if (roundBasedProgress.isPresent()) {
+            return roundBasedProgress.get();
         }
 
         Map<TableBucket, RebalanceResultForBucket> progressForBucketMap = new HashMap<>();
@@ -320,6 +383,8 @@ public class RebalanceManager {
             LOG.error("Error when delete rebalance plan from zookeeper.", e);
         }
 
+        cancelRoundBasedRebalance();
+
         rebalanceStatus = CANCELED;
         inProgressRebalanceTasksQueue.clear();
         inProgressRebalanceTasks.clear();
@@ -334,6 +399,11 @@ public class RebalanceManager {
 
     public boolean hasInProgressRebalance() {
         checkNotClosed();
+        RebalanceExecution rebalanceExecution = currentRebalanceExecution;
+        if (rebalanceExecution != null
+                && !FINAL_STATUSES.contains(rebalanceExecution.getRebalanceStatus())) {
+            return true;
+        }
         return !inProgressRebalanceTasks.isEmpty() || !inProgressRebalanceTasksQueue.isEmpty();
     }
 
@@ -364,6 +434,303 @@ public class RebalanceManager {
 
         // group by tableId and partitionId to generate rebalance plan.
         return buildRebalanceTask(rebalanceId, rebalancePlanForBuckets);
+    }
+
+    /**
+     * Generates and registers a rebalance task. Large plans are split into recoverable rounds when
+     * {@link ConfigOptions#COORDINATOR_REBALANCE_MAX_BUCKETS_PER_ROUND} is configured with a
+     * positive value.
+     */
+    public RebalanceTask generateAndRegisterRebalance(List<Goal> goalsByPriority) {
+        checkNotClosed();
+        RebalanceTask rebalanceTask = generateRebalanceTask(goalsByPriority);
+        try {
+            return registerGeneratedRebalanceTask(rebalanceTask);
+        } catch (Exception e) {
+            throw new RebalanceFailureException(
+                    String.format(
+                            "Failed to generate plan and execute rebalance. The root cause: %s",
+                            e.getMessage()),
+                    e);
+        }
+    }
+
+    @VisibleForTesting
+    RebalanceTask registerGeneratedRebalanceTask(RebalanceTask rebalanceTask) throws Exception {
+        Map<TableBucket, RebalancePlanForBucket> executePlan = rebalanceTask.getExecutePlan();
+
+        zkClient.deleteRebalanceTask();
+        if (!shouldSplitRebalancePlan(executePlan)) {
+            currentRebalanceExecution = null;
+            zkClient.registerRebalanceTask(rebalanceTask);
+            registerRebalance(
+                    rebalanceTask.getRebalanceId(), executePlan, RebalanceStatus.NOT_STARTED);
+            return rebalanceTask;
+        }
+
+        List<RebalanceRound> rebalanceRounds = splitRebalancePlan(executePlan);
+        RebalanceExecution rebalanceExecution =
+                new RebalanceExecution(
+                        rebalanceTask.getRebalanceId(),
+                        REBALANCING,
+                        rebalanceMaxBucketsPerRound,
+                        0,
+                        rebalanceRounds.size());
+
+        for (RebalanceRound rebalanceRound : rebalanceRounds) {
+            zkClient.registerRebalanceRound(rebalanceRound);
+        }
+        zkClient.registerRebalanceExecution(rebalanceExecution);
+
+        currentRebalanceExecution = rebalanceExecution;
+        RebalanceRound firstRound = rebalanceRounds.get(0);
+        RebalanceTask firstRoundTask =
+                new RebalanceTask(
+                        rebalanceTask.getRebalanceId(),
+                        RebalanceStatus.NOT_STARTED,
+                        firstRound.getExecutePlan());
+        zkClient.registerRebalanceTask(firstRoundTask);
+        registerRebalanceResults(
+                rebalanceTask.getRebalanceId(),
+                firstRound.getProgressForBucketMap(),
+                RebalanceStatus.NOT_STARTED);
+        LOG.info(
+                "Split rebalance task {} into {} rounds by {}={}, current round buckets {}.",
+                rebalanceTask.getRebalanceId(),
+                rebalanceRounds.size(),
+                ConfigOptions.COORDINATOR_REBALANCE_MAX_BUCKETS_PER_ROUND.key(),
+                rebalanceMaxBucketsPerRound,
+                firstRound.getProgressForBucketMap().size());
+        return firstRoundTask;
+    }
+
+    private boolean shouldSplitRebalancePlan(Map<TableBucket, RebalancePlanForBucket> executePlan) {
+        return rebalanceMaxBucketsPerRound > 0 && executePlan.size() > rebalanceMaxBucketsPerRound;
+    }
+
+    private List<RebalanceRound> splitRebalancePlan(
+            Map<TableBucket, RebalancePlanForBucket> executePlan) {
+        List<Map.Entry<TableBucket, RebalancePlanForBucket>> sortedEntries =
+                new ArrayList<>(executePlan.entrySet());
+        sortedEntries.sort(
+                Comparator.comparing(
+                                (Map.Entry<TableBucket, RebalancePlanForBucket> entry) ->
+                                        entry.getKey().getTableId())
+                        .thenComparing(
+                                entry ->
+                                        entry.getKey().getPartitionId() == null
+                                                ? Long.MIN_VALUE
+                                                : entry.getKey().getPartitionId())
+                        .thenComparing(entry -> entry.getKey().getBucket()));
+
+        List<RebalanceRound> rebalanceRounds = new ArrayList<>();
+        for (int i = 0; i < sortedEntries.size(); i += rebalanceMaxBucketsPerRound) {
+            int end = Math.min(i + rebalanceMaxBucketsPerRound, sortedEntries.size());
+            Map<TableBucket, RebalancePlanForBucket> roundPlan = new LinkedHashMap<>();
+            for (int j = i; j < end; j++) {
+                Map.Entry<TableBucket, RebalancePlanForBucket> entry = sortedEntries.get(j);
+                roundPlan.put(entry.getKey(), entry.getValue());
+            }
+            rebalanceRounds.add(RebalanceRound.ofPlan(rebalanceRounds.size(), roundPlan));
+        }
+        return rebalanceRounds;
+    }
+
+    private void restoreRoundBasedRebalance(RebalanceExecution rebalanceExecution)
+            throws Exception {
+        List<RebalanceRound> rebalanceRounds = zkClient.getRebalanceRounds();
+        currentRebalanceId = rebalanceExecution.getRebalanceId();
+        rebalanceStatus = rebalanceExecution.getRebalanceStatus();
+        currentRebalanceExecution = rebalanceExecution;
+
+        if (FINAL_STATUSES.contains(rebalanceExecution.getRebalanceStatus())) {
+            LOG.info(
+                    "Restore final round-based rebalance {} with status {}.",
+                    rebalanceExecution.getRebalanceId(),
+                    rebalanceExecution.getRebalanceStatus());
+            return;
+        }
+
+        Optional<RebalanceRound> roundToResume = findFirstUnfinishedRound(rebalanceRounds);
+        if (!roundToResume.isPresent()) {
+            RebalanceExecution completedExecution = rebalanceExecution.withStatus(COMPLETED);
+            zkClient.registerRebalanceExecution(completedExecution);
+            currentRebalanceExecution = completedExecution;
+            rebalanceStatus = COMPLETED;
+            return;
+        }
+
+        RebalanceRound rebalanceRound = roundToResume.get();
+        RebalanceExecution resumedExecution =
+                rebalanceExecution.withStatusAndCurrentRound(
+                        REBALANCING, rebalanceRound.getRoundIndex());
+        zkClient.registerRebalanceExecution(resumedExecution);
+        currentRebalanceExecution = resumedExecution;
+        zkClient.registerRebalanceTask(
+                new RebalanceTask(
+                        resumedExecution.getRebalanceId(),
+                        RebalanceStatus.NOT_STARTED,
+                        rebalanceRound.getExecutePlan()));
+        registerRebalanceResults(
+                resumedExecution.getRebalanceId(),
+                rebalanceRound.getProgressForBucketMap(),
+                RebalanceStatus.NOT_STARTED);
+    }
+
+    private Optional<RebalanceRound> findFirstUnfinishedRound(List<RebalanceRound> rounds) {
+        for (RebalanceRound round : rounds) {
+            if (round.hasUnfinishedTasks()) {
+                return Optional.of(round);
+            }
+        }
+        return Optional.empty();
+    }
+
+    private void updateCurrentRoundBucketStatus(
+            TableBucket tableBucket,
+            RebalancePlanForBucket planForBucket,
+            RebalanceStatus rebalanceStatus) {
+        RebalanceExecution rebalanceExecution = currentRebalanceExecution;
+        if (rebalanceExecution == null) {
+            return;
+        }
+
+        try {
+            Optional<RebalanceRound> rebalanceRound =
+                    zkClient.getRebalanceRound(rebalanceExecution.getCurrentRound());
+            if (!rebalanceRound.isPresent()) {
+                LOG.warn(
+                        "No rebalance round {} found when updating bucket {} status to {}.",
+                        rebalanceExecution.getCurrentRound(),
+                        tableBucket,
+                        rebalanceStatus);
+                return;
+            }
+            zkClient.registerRebalanceRound(
+                    rebalanceRound
+                            .get()
+                            .withBucketStatus(tableBucket, planForBucket, rebalanceStatus));
+        } catch (Exception e) {
+            throw new RebalanceFailureException(
+                    String.format(
+                            "Failed to update rebalance round status for bucket %s. The root cause: %s",
+                            tableBucket, e.getMessage()),
+                    e);
+        }
+    }
+
+    private void completeRoundAndMaybeStartNext() {
+        RebalanceExecution rebalanceExecution = checkNotNull(currentRebalanceExecution);
+        try {
+            int nextRoundIndex = rebalanceExecution.getCurrentRound() + 1;
+            if (nextRoundIndex >= rebalanceExecution.getTotalRounds()) {
+                RebalanceExecution completedExecution = rebalanceExecution.withStatus(COMPLETED);
+                zkClient.registerRebalanceExecution(completedExecution);
+                currentRebalanceExecution = completedExecution;
+                Optional<RebalanceRound> currentRound =
+                        zkClient.getRebalanceRound(rebalanceExecution.getCurrentRound());
+                zkClient.registerRebalanceTask(
+                        new RebalanceTask(
+                                rebalanceExecution.getRebalanceId(),
+                                COMPLETED,
+                                currentRound
+                                        .map(RebalanceRound::getExecutePlan)
+                                        .orElseGet(HashMap::new)));
+                completeRebalanceInMemory();
+                return;
+            }
+
+            Optional<RebalanceRound> nextRound = zkClient.getRebalanceRound(nextRoundIndex);
+            if (!nextRound.isPresent()) {
+                throw new RebalanceFailureException(
+                        String.format(
+                                "Rebalance round %s does not exist for rebalance id %s.",
+                                nextRoundIndex, rebalanceExecution.getRebalanceId()));
+            }
+
+            RebalanceExecution nextExecution =
+                    rebalanceExecution.withStatusAndCurrentRound(REBALANCING, nextRoundIndex);
+            zkClient.registerRebalanceExecution(nextExecution);
+            currentRebalanceExecution = nextExecution;
+            zkClient.registerRebalanceTask(
+                    new RebalanceTask(
+                            nextExecution.getRebalanceId(),
+                            RebalanceStatus.NOT_STARTED,
+                            nextRound.get().getExecutePlan()));
+            registerRebalanceResults(
+                    nextExecution.getRebalanceId(),
+                    nextRound.get().getProgressForBucketMap(),
+                    RebalanceStatus.NOT_STARTED);
+            LOG.info(
+                    "Start rebalance round {}/{} for rebalance id {} with {} buckets.",
+                    nextRoundIndex + 1,
+                    nextExecution.getTotalRounds(),
+                    nextExecution.getRebalanceId(),
+                    nextRound.get().getProgressForBucketMap().size());
+        } catch (Exception e) {
+            throw new RebalanceFailureException(
+                    String.format(
+                            "Failed to complete current rebalance round. The root cause: %s",
+                            e.getMessage()),
+                    e);
+        }
+    }
+
+    private Optional<RebalanceProgress> listRoundBasedRebalanceProgress() {
+        RebalanceExecution rebalanceExecution = currentRebalanceExecution;
+        if (rebalanceExecution == null) {
+            try {
+                Optional<RebalanceExecution> persistedExecution = zkClient.getRebalanceExecution();
+                if (persistedExecution.isPresent()) {
+                    rebalanceExecution = persistedExecution.get();
+                }
+            } catch (Exception e) {
+                LOG.error("Error when loading round-based rebalance execution from zookeeper.", e);
+                return Optional.empty();
+            }
+        }
+
+        if (rebalanceExecution == null) {
+            return Optional.empty();
+        }
+
+        try {
+            Map<TableBucket, RebalanceResultForBucket> progressForBucketMap = new HashMap<>();
+            for (RebalanceRound rebalanceRound : zkClient.getRebalanceRounds()) {
+                progressForBucketMap.putAll(rebalanceRound.getProgressForBucketMap());
+            }
+            return Optional.of(
+                    new RebalanceProgress(
+                            rebalanceExecution.getRebalanceId(),
+                            rebalanceExecution.getRebalanceStatus(),
+                            0.0,
+                            progressForBucketMap));
+        } catch (Exception e) {
+            LOG.error("Error when loading round-based rebalance progress from zookeeper.", e);
+            return Optional.empty();
+        }
+    }
+
+    private void cancelRoundBasedRebalance() {
+        RebalanceExecution rebalanceExecution = currentRebalanceExecution;
+        if (rebalanceExecution == null) {
+            return;
+        }
+
+        try {
+            for (RebalanceRound rebalanceRound : zkClient.getRebalanceRounds()) {
+                zkClient.registerRebalanceRound(rebalanceRound.withUnfinishedStatus(CANCELED));
+            }
+            RebalanceExecution canceledExecution = rebalanceExecution.withStatus(CANCELED);
+            zkClient.registerRebalanceExecution(canceledExecution);
+            currentRebalanceExecution = canceledExecution;
+        } catch (Exception e) {
+            throw new RebalanceFailureException(
+                    String.format(
+                            "Failed to cancel round-based rebalance. The root cause: %s",
+                            e.getMessage()),
+                    e);
+        }
     }
 
     public @Nullable RebalancePlanForBucket getRebalancePlanForBucket(TableBucket tableBucket) {
@@ -407,9 +774,16 @@ public class RebalanceManager {
             LOG.error("Error when update rebalance plan from zookeeper.", e);
         }
 
+        completeRebalanceInMemory();
+    }
+
+    private void completeRebalanceInMemory() {
         rebalanceStatus = COMPLETED;
         inProgressRebalanceTasks.clear();
         inProgressRebalanceTasksQueue.clear();
+        // Clear gate (bucket) first, then data (startMs).
+        inflightTaskBucket = null;
+        inflightTaskStartMs = -1;
 
         // Here, it will not clear finishedRebalanceTasks, because it will be used by
         // listRebalanceProgress. It will be cleared when next register.

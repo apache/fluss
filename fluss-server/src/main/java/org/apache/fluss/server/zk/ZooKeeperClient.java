@@ -18,7 +18,6 @@
 package org.apache.fluss.server.zk;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.FlussConfigUtils;
@@ -50,6 +49,8 @@ import org.apache.fluss.server.zk.data.DatabaseRegistration;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.PartitionRegistration;
+import org.apache.fluss.server.zk.data.RebalanceExecution;
+import org.apache.fluss.server.zk.data.RebalanceRound;
 import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.ResourceAcl;
@@ -76,6 +77,9 @@ import org.apache.fluss.server.zk.data.ZkData.PartitionZNode;
 import org.apache.fluss.server.zk.data.ZkData.PartitionsZNode;
 import org.apache.fluss.server.zk.data.ZkData.ProducerIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.ProducersZNode;
+import org.apache.fluss.server.zk.data.ZkData.RebalanceExecutionZNode;
+import org.apache.fluss.server.zk.data.ZkData.RebalanceRoundZNode;
+import org.apache.fluss.server.zk.data.ZkData.RebalanceRoundsZNode;
 import org.apache.fluss.server.zk.data.ZkData.RebalanceZNode;
 import org.apache.fluss.server.zk.data.ZkData.ResourceAclNode;
 import org.apache.fluss.server.zk.data.ZkData.SchemaZNode;
@@ -1623,16 +1627,7 @@ public class ZooKeeperClient implements AutoCloseable {
     }
 
     public void registerRebalanceTask(RebalanceTask rebalanceTask) throws Exception {
-        String path = RebalanceZNode.path();
-        Stat stat = zkClient.checkExists().forPath(path);
-        if (stat == null) {
-            zkClient.create()
-                    .creatingParentsIfNeeded()
-                    .withMode(CreateMode.PERSISTENT)
-                    .forPath(path, RebalanceZNode.encode(rebalanceTask));
-        } else {
-            zkClient.setData().forPath(path, RebalanceZNode.encode(rebalanceTask));
-        }
+        upsertPath(RebalanceZNode.path(), RebalanceZNode.encode(rebalanceTask));
     }
 
     public Optional<RebalanceTask> getRebalanceTask() throws Exception {
@@ -1640,10 +1635,45 @@ public class ZooKeeperClient implements AutoCloseable {
         return getOrEmpty(path).map(RebalanceZNode::decode);
     }
 
-    /** Deletes the rebalance task from ZooKeeper. Only for testing propose now */
-    @VisibleForTesting
+    public void registerRebalanceExecution(RebalanceExecution rebalanceExecution) throws Exception {
+        upsertPath(
+                RebalanceExecutionZNode.path(), RebalanceExecutionZNode.encode(rebalanceExecution));
+    }
+
+    public Optional<RebalanceExecution> getRebalanceExecution() throws Exception {
+        return getOrEmpty(RebalanceExecutionZNode.path()).map(RebalanceExecutionZNode::decode);
+    }
+
+    public void registerRebalanceRound(RebalanceRound rebalanceRound) throws Exception {
+        upsertPath(
+                RebalanceRoundZNode.path(rebalanceRound.getRoundIndex()),
+                RebalanceRoundZNode.encode(rebalanceRound));
+    }
+
+    public Optional<RebalanceRound> getRebalanceRound(int roundIndex) throws Exception {
+        return getOrEmpty(RebalanceRoundZNode.path(roundIndex)).map(RebalanceRoundZNode::decode);
+    }
+
+    public List<RebalanceRound> getRebalanceRounds() throws Exception {
+        List<Integer> roundIndexes = new ArrayList<>();
+        for (String child : getChildren(RebalanceRoundsZNode.path())) {
+            roundIndexes.add(Integer.parseInt(child));
+        }
+        Collections.sort(roundIndexes);
+
+        List<RebalanceRound> rebalanceRounds = new ArrayList<>();
+        for (Integer roundIndex : roundIndexes) {
+            Optional<RebalanceRound> rebalanceRound = getRebalanceRound(roundIndex);
+            if (rebalanceRound.isPresent()) {
+                rebalanceRounds.add(rebalanceRound.get());
+            }
+        }
+        return rebalanceRounds;
+    }
+
+    /** Deletes the rebalance task and all round-based rebalance metadata from ZooKeeper. */
     public void deleteRebalanceTask() throws Exception {
-        deletePath(RebalanceZNode.path());
+        deletePathWithChildren(RebalanceZNode.path());
     }
 
     // --------------------------------------------------------------------------------------------
@@ -1679,6 +1709,26 @@ public class ZooKeeperClient implements AutoCloseable {
         try {
             zkClient.delete().forPath(path);
         } catch (KeeperException.NoNodeException ignored) {
+        }
+    }
+
+    /** Delete a path with all children. */
+    public void deletePathWithChildren(String path) throws Exception {
+        try {
+            zkClient.delete().deletingChildrenIfNeeded().forPath(path);
+        } catch (KeeperException.NoNodeException ignored) {
+        }
+    }
+
+    private void upsertPath(String path, byte[] data) throws Exception {
+        Stat stat = zkClient.checkExists().forPath(path);
+        if (stat == null) {
+            zkClient.create()
+                    .creatingParentsIfNeeded()
+                    .withMode(CreateMode.PERSISTENT)
+                    .forPath(path, data);
+        } else {
+            zkClient.setData().forPath(path, data);
         }
     }
 
