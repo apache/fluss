@@ -124,7 +124,7 @@ CREATE CATALOG fluss_catalog WITH (
 
 :::note
 1. The `bootstrap.servers` means the Fluss server address. Before you config the `bootstrap.servers`,
-   you should start the Fluss server first. See [Deploying Fluss](install-deploy/overview.md#how-to-deploy-fluss)
+   you should start the Fluss server first. See [Deploying Fluss](install-deploy/overview.mdx#how-to-deploy-fluss)
    for how to build a Fluss cluster.
    Here, it is assumed that there is a Fluss cluster running on your local machine and the CoordinatorServer port is 9123.
 2. The`bootstrap.servers` configuration is used to discover all nodes within the Fluss cluster. It can be set with one or more (up to three) Fluss server addresses (either CoordinatorServer or TabletServer) separated by commas.

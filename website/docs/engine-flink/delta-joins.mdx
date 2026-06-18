@@ -3,6 +3,7 @@ sidebar_label: Delta Joins
 title: Flink Delta Joins
 sidebar_position: 7
 ---
+import ThemedImage from '@site/src/components/ThemedImage';
 
 # Flink Delta Join
 Beginning with **Apache Flink 2.1**, a new operator called [Delta Join](https://cwiki.apache.org/confluence/display/FLINK/FLIP-486%3A+Introduce+A+New+DeltaJoin) was introduced.
@@ -19,7 +20,11 @@ Starting with **Apache Fluss 0.8**, streaming join jobs running on **Flink 2.1 o
 
 Traditional streaming joins in Flink require maintaining both input sides entirely in state to match records across streams. Delta join, by contrast, uses a **index-key lookup mechanism** to transform the behavior of querying data from the state into querying data from the Fluss source table, thereby avoiding redundant storage of the same data in both the Fluss source table and the state. This drastically reduces state size and improves performance for many streaming analytics and enrichment workloads.
 
-![](../assets/delta_join.png)
+<ThemedImage
+    alt="Delta Join"
+    light="delta_join_light.png"
+    dark="delta_join.png"
+/>
 
 ## Example: Delta Join in Flink 2.1
 

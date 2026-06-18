@@ -3,6 +3,7 @@ sidebar_label: "Overview"
 title: Installation & Deployment
 sidebar_position: 1
 ---
+import ThemedImage from '@site/src/components/ThemedImage';
 
 # Overview
 
@@ -12,9 +13,11 @@ Below, we provide an overview of the key components of a Fluss cluster, detailin
 
 The figure below shows the building blocks of Fluss clusters:
 
-<img width="1200px" src={require('../assets/deployment_overview.png').default} />
-
-
+<ThemedImage
+    alt="Deployment Overview"
+    light="deployment_overview_light.png"
+    dark="deployment_overview.png"
+/>
 
 When deploying Fluss, there are often multiple options available for each building block.
 We have listed them in the table below the figure.
