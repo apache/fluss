@@ -40,16 +40,19 @@ import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
+import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
+import org.apache.fluss.rpc.messages.PbCommitLakeTableSnapshotRespForTable;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
+import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
@@ -58,6 +61,7 @@ import org.apache.fluss.server.coordinator.statemachine.BucketState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
+import org.apache.fluss.server.entity.CommitLakeTableSnapshotsData;
 import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
 import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -82,6 +86,7 @@ import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
+import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExceptionUtils;
@@ -1558,6 +1563,63 @@ class CoordinatorEventProcessorTest {
         verifyIsr(tb0, 1, Arrays.asList(0, 1, 2));
         verifyIsr(tb1, 2, Arrays.asList(0, 1, 2));
         verifyIsr(tb2, 1, Arrays.asList(0, 1, 2));
+    }
+
+    @Test
+    void testCommitLakeTableSnapshotV2RejectsQueuedForDeletionTable() throws Exception {
+        initCoordinatorChannel();
+        // Create a table
+        TablePath tablePath = TablePath.of(defaultDatabase, "test_v2_reject_queued");
+        long tableId =
+                metadataManager.createTable(
+                        tablePath,
+                        remoteDataDir,
+                        TEST_TABLE,
+                        generateAssignment(
+                                1,
+                                3,
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                }),
+                        false);
+        retryVerifyContext(ctx -> assertThat(ctx.containsTableId(tableId)).isTrue());
+
+        // Queue the table for deletion via AccessContextEvent
+        AccessContextEvent<Void> queueEvent =
+                new AccessContextEvent<>(
+                        ctx -> {
+                            ctx.queueTableDeletion(Collections.singleton(tableId));
+                            return null;
+                        });
+        eventProcessor.getCoordinatorEventManager().put(queueEvent);
+        queueEvent.getResultFuture().get(30, TimeUnit.SECONDS);
+
+        // Verify the table is queued for deletion
+        retryVerifyContext(ctx -> assertThat(ctx.isTableQueuedForDeletion(tableId)).isTrue());
+
+        // Send a V2 commit for the queued-for-deletion tableId
+        CommitLakeTableSnapshotsData.Builder builder = CommitLakeTableSnapshotsData.builder();
+        builder.addTableSnapshot(
+                tableId,
+                null,
+                null,
+                new LakeTable.LakeSnapshotMetadata(1L, new FsPath("/tmp/fake/path.offsets"), null),
+                null);
+        CommitLakeTableSnapshotsData data = builder.build();
+
+        CompletableFuture<CommitLakeTableSnapshotResponse> future = new CompletableFuture<>();
+        CommitLakeTableSnapshotEvent event = new CommitLakeTableSnapshotEvent(data, future);
+        eventProcessor.getCoordinatorEventManager().put(event);
+
+        CommitLakeTableSnapshotResponse response = future.get(30, TimeUnit.SECONDS);
+        assertThat(response.getTableRespsCount()).isEqualTo(1);
+        PbCommitLakeTableSnapshotRespForTable tableResp = response.getTableRespAt(0);
+        assertThat(tableResp.getTableId()).isEqualTo(tableId);
+        // Should contain error because the table is queued for deletion
+        assertThat(tableResp.getErrorCode()).isNotZero();
+        assertThat(tableResp.getErrorMessage()).contains("not found");
     }
 
     private void verifyIsr(TableBucket tb, int expectedLeader, List<Integer> expectedIsr)
