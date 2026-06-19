@@ -172,7 +172,7 @@ public class HudiRecordReader implements RecordReader {
                         .toArray();
         int[] systemFields =
                 SYSTEM_COLUMNS.keySet().stream()
-                        .mapToInt(systemColumn -> schema.getField(systemColumn).pos())
+                        .mapToInt(systemColumn -> requiredFieldPosition(schema, systemColumn))
                         .toArray();
 
         return IntStream.concat(
@@ -216,6 +216,17 @@ public class HudiRecordReader implements RecordReader {
                 .bridgedTo(RowData.class);
     }
 
+    private static int requiredFieldPosition(Schema schema, String fieldName) {
+        Schema.Field field = schema.getField(fieldName);
+        if (field == null) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Required Hudi system column '%s' does not exist in Hudi schema.",
+                            fieldName));
+        }
+        return field.pos();
+    }
+
     /** Iterator for Hudi {@link RowData} as Fluss {@link LogRecord}. */
     public static class HudiRecordAsFlussRecordIterator implements CloseableIterator<LogRecord> {
 
@@ -233,8 +244,8 @@ public class HudiRecordReader implements RecordReader {
                 int metadataFieldCount,
                 int systemFieldCount) {
             this.hudiRecordIterator = hudiRecordIterator;
-            this.logOffsetColIndex = schema.getField(OFFSET_COLUMN_NAME).pos();
-            this.timestampColIndex = schema.getField(TIMESTAMP_COLUMN_NAME).pos();
+            this.logOffsetColIndex = requiredFieldPosition(schema, OFFSET_COLUMN_NAME);
+            this.timestampColIndex = requiredFieldPosition(schema, TIMESTAMP_COLUMN_NAME);
             this.hudiRowAsFlussRow = new HudiRowAsFlussRow();
             this.projectedRow =
                     ProjectedRow.from(

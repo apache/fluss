@@ -35,6 +35,7 @@ import java.util.Iterator;
 import java.util.NoSuchElementException;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link HudiRecordReader}. */
 class HudiRecordReaderTest {
@@ -80,6 +81,24 @@ class HudiRecordReaderTest {
         assertThat(logRecord.timestamp()).isEqualTo(999L);
         assertThat(logRecord.getRow().getFieldCount()).isEqualTo(1);
         assertThat(logRecord.getRow().getString(0)).isEqualTo(BinaryString.fromString("projected"));
+
+        iterator.close();
+        assertThat(hudiIterator.getCloseCount()).isEqualTo(1);
+    }
+
+    @Test
+    void testIteratorFailsClearlyWhenRequiredSystemColumnIsMissing() {
+        TestingClosableIterator hudiIterator =
+                new TestingClosableIterator(
+                        projectedRowData(RowKind.DELETE, "projected", 5, 7L, 999L));
+
+        assertThatThrownBy(
+                        () ->
+                                new HudiRecordReader.HudiRecordAsFlussRecordIterator(
+                                        hudiIterator, schemaWithoutOffsetColumn(), 2, 2))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("__offset")
+                .hasMessageContaining("does not exist");
     }
 
     private static RowData rowData(
@@ -130,6 +149,17 @@ class HudiRecordReaderTest {
                         + "{\"name\":\"value\",\"type\":\"string\"},"
                         + "{\"name\":\"__bucket\",\"type\":\"int\"},"
                         + "{\"name\":\"__offset\",\"type\":\"long\"},"
+                        + "{\"name\":\"__timestamp\",\"type\":\"long\"}"
+                        + "]");
+    }
+
+    private static Schema schemaWithoutOffsetColumn() {
+        return parseSchema(
+                "["
+                        + "{\"name\":\"_hoodie_commit_time\",\"type\":\"string\"},"
+                        + "{\"name\":\"_hoodie_record_key\",\"type\":\"string\"},"
+                        + "{\"name\":\"value\",\"type\":\"string\"},"
+                        + "{\"name\":\"__bucket\",\"type\":\"int\"},"
                         + "{\"name\":\"__timestamp\",\"type\":\"long\"}"
                         + "]");
     }

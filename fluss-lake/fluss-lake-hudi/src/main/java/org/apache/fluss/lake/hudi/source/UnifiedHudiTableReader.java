@@ -288,6 +288,9 @@ public class UnifiedHudiTableReader implements AutoCloseable {
             if (requiredSchema == null) {
                 requiredSchema = tableSchema;
             }
+            if (selectedFields == null) {
+                throw new IllegalArgumentException("selectedFields is required.");
+            }
             if (latestCommitTime == null) {
                 throw new IllegalArgumentException("latestCommitTime is required.");
             }
