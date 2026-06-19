@@ -127,13 +127,13 @@ public class UnifiedHudiTableReader implements AutoCloseable {
                         filePath,
                         fieldNames,
                         fieldTypes,
-                        flinkHudiOptions.getString(FlinkOptions.PARTITION_DEFAULT_NAME),
-                        flinkHudiOptions.getString(FlinkOptions.PARTITION_PATH_FIELD),
-                        flinkHudiOptions.getBoolean(FlinkOptions.HIVE_STYLE_PARTITIONING));
+                        flinkHudiOptions.get(FlinkOptions.PARTITION_DEFAULT_NAME),
+                        flinkHudiOptions.get(FlinkOptions.PARTITION_PATH_FIELD),
+                        flinkHudiOptions.get(FlinkOptions.HIVE_STYLE_PARTITIONING));
 
         return RecordIterators.getParquetRecordIterator(
                 internalSchemaManager,
-                flinkHudiOptions.getBoolean(FlinkOptions.READ_UTC_TIMEZONE),
+                flinkHudiOptions.get(FlinkOptions.READ_UTC_TIMEZONE),
                 caseSensitive,
                 getParquetConf(
                         flinkHudiOptions, HadoopConfigurations.getHadoopConf(flinkHudiOptions)),
@@ -159,8 +159,7 @@ public class UnifiedHudiTableReader implements AutoCloseable {
 
         TypedProperties typedProperties = getReadProps(metaClient, flinkHudiOptions);
         typedProperties.put(
-                HoodieReaderConfig.MERGE_TYPE.key(),
-                flinkHudiOptions.getString(FlinkOptions.MERGE_TYPE));
+                HoodieReaderConfig.MERGE_TYPE.key(), flinkHudiOptions.get(FlinkOptions.MERGE_TYPE));
 
         return HoodieFileGroupReader.<RowData>newBuilder()
                 .withReaderContext(readerContext)
