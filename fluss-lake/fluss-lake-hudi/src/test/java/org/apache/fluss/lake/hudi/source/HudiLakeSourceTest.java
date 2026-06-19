@@ -27,6 +27,7 @@ import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
 import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -75,12 +76,12 @@ class HudiLakeSourceTest {
     }
 
     @Test
-    void testCreateRecordReaderIsExplicitlyUnsupported() {
+    void testCreateRecordReaderWrapsReaderErrors() {
         HudiLakeSource source =
                 new HudiLakeSource(new Configuration(), TablePath.of("db1", "table1"));
 
         assertThatThrownBy(() -> source.createRecordReader(() -> null))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("record reading");
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("Fail to create Hudi record reader");
     }
 }

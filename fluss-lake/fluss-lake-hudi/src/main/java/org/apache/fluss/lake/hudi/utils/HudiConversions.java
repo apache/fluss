@@ -24,6 +24,7 @@ import org.apache.fluss.lake.hudi.FlussDataTypeToHudiDataType;
 import org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.ChangeType;
 
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.catalog.CatalogTable;
@@ -33,6 +34,7 @@ import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.catalog.UniqueConstraint;
 import org.apache.flink.table.factories.FactoryUtil;
 import org.apache.flink.table.types.DataType;
+import org.apache.flink.types.RowKind;
 import org.apache.hudi.common.model.HoodieTableType;
 import org.apache.hudi.configuration.FlinkOptions;
 import org.apache.hudi.index.HoodieIndex;
@@ -315,5 +317,20 @@ public class HudiConversions {
             primaryKeys.add(tableDescriptor.getSchema().getColumns().get(pkIndex).getName());
         }
         return primaryKeys;
+    }
+
+    public static ChangeType toChangeType(RowKind rowKind) {
+        switch (rowKind) {
+            case INSERT:
+                return ChangeType.INSERT;
+            case UPDATE_BEFORE:
+                return ChangeType.UPDATE_BEFORE;
+            case UPDATE_AFTER:
+                return ChangeType.UPDATE_AFTER;
+            case DELETE:
+                return ChangeType.DELETE;
+            default:
+                throw new IllegalArgumentException("Unsupported change type: " + rowKind);
+        }
     }
 }

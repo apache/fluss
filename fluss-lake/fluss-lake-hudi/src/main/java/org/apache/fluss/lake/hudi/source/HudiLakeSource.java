@@ -25,6 +25,8 @@ import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
 
+import javax.annotation.Nullable;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -37,6 +39,7 @@ public class HudiLakeSource implements LakeSource<HudiSplit> {
 
     private final Configuration hudiConfig;
     private final TablePath tablePath;
+    private @Nullable int[][] project;
 
     public HudiLakeSource(Configuration hudiConfig, TablePath tablePath) {
         this.hudiConfig = hudiConfig;
@@ -45,7 +48,7 @@ public class HudiLakeSource implements LakeSource<HudiSplit> {
 
     @Override
     public void withProject(int[][] project) {
-        // Projection is applied by the Hudi record reader, which is not implemented yet.
+        this.project = project;
     }
 
     @Override
@@ -65,8 +68,11 @@ public class HudiLakeSource implements LakeSource<HudiSplit> {
 
     @Override
     public RecordReader createRecordReader(ReaderContext<HudiSplit> context) throws IOException {
-        throw new UnsupportedOperationException(
-                "Hudi lake source does not support record reading yet.");
+        try {
+            return new HudiRecordReader(hudiConfig, tablePath, context.lakeSplit(), project);
+        } catch (Exception e) {
+            throw new IOException("Fail to create Hudi record reader for " + tablePath + ".", e);
+        }
     }
 
     @Override
