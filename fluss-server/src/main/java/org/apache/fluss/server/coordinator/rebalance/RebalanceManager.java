@@ -221,7 +221,7 @@ public class RebalanceManager {
             }
         } catch (Exception e) {
             LOG.error(
-                    "Failed to get rebalance plan from zookeeper, it will be treated as no"
+                    "Failed to get rebalance plan from ZooKeeper, it will be treated as no "
                             + "rebalance tasks.",
                     e);
         }
@@ -380,7 +380,7 @@ public class RebalanceManager {
                                 rebalanceTask.getExecutePlan()));
             }
         } catch (Exception e) {
-            LOG.error("Error when delete rebalance plan from zookeeper.", e);
+            LOG.error("Error when canceling rebalance task in ZooKeeper.", e);
         }
 
         cancelRoundBasedRebalance();
@@ -611,10 +611,11 @@ public class RebalanceManager {
                             .get()
                             .withBucketStatus(tableBucket, planForBucket, rebalanceStatus));
         } catch (Exception e) {
-            throw new RebalanceFailureException(
-                    String.format(
-                            "Failed to update rebalance round status for bucket %s. The root cause: %s",
-                            tableBucket, e.getMessage()),
+            LOG.warn(
+                    "Failed to update rebalance round status for bucket {} to {}. "
+                            + "The current round progress will be persisted again before advancing rounds.",
+                    tableBucket,
+                    rebalanceStatus,
                     e);
         }
     }
@@ -622,6 +623,7 @@ public class RebalanceManager {
     private void completeRoundAndMaybeStartNext() {
         RebalanceExecution rebalanceExecution = checkNotNull(currentRebalanceExecution);
         try {
+            persistCurrentRoundProgress(rebalanceExecution);
             int nextRoundIndex = rebalanceExecution.getCurrentRound() + 1;
             if (nextRoundIndex >= rebalanceExecution.getTotalRounds()) {
                 RebalanceExecution completedExecution = rebalanceExecution.withStatus(COMPLETED);
@@ -674,6 +676,15 @@ public class RebalanceManager {
                             e.getMessage()),
                     e);
         }
+    }
+
+    private void persistCurrentRoundProgress(RebalanceExecution rebalanceExecution)
+            throws Exception {
+        Map<TableBucket, RebalanceResultForBucket> progressForBucketMap = new LinkedHashMap<>();
+        progressForBucketMap.putAll(finishedRebalanceTasks);
+        progressForBucketMap.putAll(inProgressRebalanceTasks);
+        zkClient.registerRebalanceRound(
+                new RebalanceRound(rebalanceExecution.getCurrentRound(), progressForBucketMap));
     }
 
     private Optional<RebalanceProgress> listRoundBasedRebalanceProgress() {

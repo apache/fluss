@@ -43,6 +43,7 @@ import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.RebalanceExecution;
+import org.apache.fluss.server.zk.data.RebalanceRound;
 import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.utils.clock.ManualClock;
@@ -65,6 +66,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.CANCELED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
@@ -72,6 +74,9 @@ import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.REBALANCING;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.TIMEOUT;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.spy;
 
 /** Test for {@link RebalanceManager}. */
 public class RebalanceManagerTest {
@@ -206,6 +211,55 @@ public class RebalanceManagerTest {
         assertThat(progress.status()).isEqualTo(COMPLETED);
         assertThat(progress.progressForBucketMap()).hasSize(5);
         assertThat(progress.progressForBucketMap().values())
+                .allSatisfy(result -> assertThat(result.status()).isEqualTo(COMPLETED));
+
+        manager.close();
+    }
+
+    @Test
+    void testRoundBasedRebalanceContinuesWhenBucketProgressUpdateFails() throws Exception {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_BUCKETS_PER_ROUND, 2);
+        ZooKeeperClient flakyZkClient = spy(zookeeperClient);
+        RebalanceManager manager =
+                new RebalanceManager(
+                        buildCoordinatorEventProcessor(conf),
+                        flakyZkClient,
+                        new RecordingEventManager(),
+                        SystemClock.getInstance(),
+                        new NoOpScheduledExecutor(),
+                        conf);
+        manager.startup();
+
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(3);
+        manager.registerGeneratedRebalanceTask(
+                new RebalanceTask("round-update-failure-test", NOT_STARTED, plan));
+        AtomicBoolean failNextRoundUpdate = new AtomicBoolean(true);
+        doAnswer(
+                        invocation -> {
+                            RebalanceRound rebalanceRound = invocation.getArgument(0);
+                            if (failNextRoundUpdate.getAndSet(false)
+                                    && rebalanceRound.getRoundIndex() == 0) {
+                                throw new Exception("Injected round progress update failure.");
+                            }
+                            invocation.callRealMethod();
+                            return null;
+                        })
+                .when(flakyZkClient)
+                .registerRebalanceRound(any(RebalanceRound.class));
+
+        List<TableBucket> firstRoundBuckets =
+                new ArrayList<>(flakyZkClient.getRebalanceTask().get().getExecutePlan().keySet());
+        for (TableBucket tableBucket : firstRoundBuckets) {
+            manager.finishRebalanceTask(tableBucket, COMPLETED);
+        }
+
+        assertThat(flakyZkClient.getRebalanceExecution())
+                .hasValue(
+                        new RebalanceExecution("round-update-failure-test", REBALANCING, 2, 1, 2));
+        assertThat(flakyZkClient.getRebalanceTask().get().getExecutePlan()).hasSize(1);
+        assertThat(flakyZkClient.getRebalanceRound(0)).isPresent();
+        assertThat(flakyZkClient.getRebalanceRound(0).get().getProgressForBucketMap().values())
                 .allSatisfy(result -> assertThat(result.status()).isEqualTo(COMPLETED));
 
         manager.close();
