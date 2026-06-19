@@ -20,11 +20,8 @@ package org.apache.fluss.lake.paimon.source;
 
 import org.apache.fluss.lake.source.LakeSplit;
 
-import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.table.source.DataSplit;
 
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 /** Split for paimon table. */
@@ -36,9 +33,13 @@ public class PaimonSplit implements LakeSplit {
 
     private final boolean isBucketUnAware;
 
-    public PaimonSplit(DataSplit dataSplit, boolean isBucketUnAware) {
+    // Partition values in Fluss partition-name format
+    private final List<String> partition;
+
+    public PaimonSplit(DataSplit dataSplit, boolean isBucketUnAware, List<String> partition) {
         this.dataSplit = dataSplit;
         this.isBucketUnAware = isBucketUnAware;
+        this.partition = partition;
     }
 
     @Override
@@ -52,19 +53,7 @@ public class PaimonSplit implements LakeSplit {
 
     @Override
     public List<String> partition() {
-        BinaryRow partition = dataSplit.partition();
-        if (partition.getFieldCount() == 0) {
-            return Collections.emptyList();
-        }
-
-        List<String> partitions = new ArrayList<>();
-        for (int i = 0; i < partition.getFieldCount(); i++) {
-            // Todo Currently, partition column must be String datatype, so we can always use
-            // consider it as string. Revisit here when
-            // #489 is finished.
-            partitions.add(partition.getString(i).toString());
-        }
-        return partitions;
+        return partition;
     }
 
     public DataSplit dataSplit() {

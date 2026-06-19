@@ -28,6 +28,8 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 /** Serializer for paimon split. */
 public class PaimonSplitSerializer implements SimpleVersionedSerializer<PaimonSplit> {
@@ -46,6 +48,11 @@ public class PaimonSplitSerializer implements SimpleVersionedSerializer<PaimonSp
         DataSplit dataSplit = paimonSplit.dataSplit();
         InstantiationUtil.serializeObject(view, dataSplit);
         view.writeBoolean(paimonSplit.isBucketUnAware());
+        List<String> partition = paimonSplit.partition();
+        view.writeInt(partition.size());
+        for (String value : partition) {
+            view.writeUTF(value);
+        }
         return out.toByteArray();
     }
 
@@ -59,7 +66,12 @@ public class PaimonSplitSerializer implements SimpleVersionedSerializer<PaimonSp
             if (version == VERSION_1) {
                 DataInputStream dis = new DataInputStream(in);
                 boolean isBucketUnAware = dis.readBoolean();
-                return new PaimonSplit(dataSplit, isBucketUnAware);
+                int size = dis.readInt();
+                List<String> partition = new ArrayList<>(size);
+                for (int i = 0; i < size; i++) {
+                    partition.add(dis.readUTF());
+                }
+                return new PaimonSplit(dataSplit, isBucketUnAware, partition);
             } else {
                 throw new IOException("Unsupported PaimonSplit serialization version: " + version);
             }

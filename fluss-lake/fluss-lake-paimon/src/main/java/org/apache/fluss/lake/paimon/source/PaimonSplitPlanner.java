@@ -19,6 +19,7 @@
 package org.apache.fluss.lake.paimon.source;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.paimon.utils.PaimonPartitionUtils;
 import org.apache.fluss.lake.source.Planner;
 import org.apache.fluss.metadata.TablePath;
 
@@ -33,6 +34,7 @@ import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.source.DataSplit;
 import org.apache.paimon.table.source.InnerTableScan;
 import org.apache.paimon.table.source.Split;
+import org.apache.paimon.types.RowType;
 
 import javax.annotation.Nullable;
 
@@ -69,13 +71,19 @@ public class PaimonSplitPlanner implements Planner<PaimonSplit> {
                 FileStoreTable fileStoreTable = getTable(catalog, tablePath, snapshotId);
                 InnerTableScan tableScan = fileStoreTable.newScan();
                 boolean isBucketUnAware = fileStoreTable.bucketMode() == BucketMode.BUCKET_UNAWARE;
+                RowType partitionType = fileStoreTable.schema().logicalPartitionType();
 
                 if (predicate != null) {
                     tableScan = tableScan.withFilter(predicate);
                 }
                 for (Split split : tableScan.plan().splits()) {
                     DataSplit dataSplit = (DataSplit) split;
-                    splits.add(new PaimonSplit(dataSplit, isBucketUnAware));
+                    List<String> partition =
+                            dataSplit.partition().getFieldCount() == 0
+                                    ? Collections.emptyList()
+                                    : PaimonPartitionUtils.partitionValues(
+                                            dataSplit.partition(), partitionType);
+                    splits.add(new PaimonSplit(dataSplit, isBucketUnAware, partition));
                 }
             }
             return splits;

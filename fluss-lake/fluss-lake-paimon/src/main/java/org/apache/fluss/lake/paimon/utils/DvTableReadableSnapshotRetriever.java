@@ -35,7 +35,6 @@ import org.apache.fluss.utils.types.Tuple2;
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.Snapshot;
 import org.apache.paimon.data.BinaryRow;
-import org.apache.paimon.data.BinaryString;
 import org.apache.paimon.manifest.FileKind;
 import org.apache.paimon.manifest.ManifestEntry;
 import org.apache.paimon.operation.FileStoreScan;
@@ -48,7 +47,6 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -601,13 +599,10 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
      * @return partition name string
      */
     private String getPartitionNameFromBinaryRow(BinaryRow partition) {
-        List<String> partitionValues = new ArrayList<>();
-        for (int i = 0; i < partition.getFieldCount(); i++) {
-            // todo: consider other partition type
-            BinaryString binaryString = partition.getString(i);
-            partitionValues.add(binaryString.toString());
-        }
-        return String.join(ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR, partitionValues);
+        return String.join(
+                ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR,
+                PaimonPartitionUtils.partitionValues(
+                        partition, fileStoreTable.schema().logicalPartitionType()));
     }
 
     @Override
