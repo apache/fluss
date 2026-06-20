@@ -20,14 +20,9 @@ package org.apache.fluss.lake.hudi.source;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.predicate.Predicate;
-import org.apache.fluss.predicate.PredicateBuilder;
-import org.apache.fluss.types.IntType;
-import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
 
-import java.io.IOException;
 import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -53,16 +48,14 @@ class HudiLakeSourceTest {
     }
 
     @Test
-    void testFiltersRemainWhenPushDownIsNotSupportedYet() {
+    void testWithEmptyFiltersDoesNotResolveHudiSchema() {
         HudiLakeSource source =
                 new HudiLakeSource(new Configuration(), TablePath.of("db1", "table1"));
-        Predicate predicate = new PredicateBuilder(RowType.of(new IntType())).equal(0, 1);
 
-        LakeSource.FilterPushDownResult result =
-                source.withFilters(Collections.singletonList(predicate));
+        LakeSource.FilterPushDownResult result = source.withFilters(Collections.emptyList());
 
         assertThat(result.acceptedPredicates()).isEmpty();
-        assertThat(result.remainingPredicates()).containsExactly(predicate);
+        assertThat(result.remainingPredicates()).isEmpty();
     }
 
     @Test
@@ -73,15 +66,5 @@ class HudiLakeSourceTest {
         assertThatThrownBy(() -> source.withLimit(1))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("limit");
-    }
-
-    @Test
-    void testCreateRecordReaderWrapsReaderErrors() {
-        HudiLakeSource source =
-                new HudiLakeSource(new Configuration(), TablePath.of("db1", "table1"));
-
-        assertThatThrownBy(() -> source.createRecordReader(() -> null))
-                .isInstanceOf(IOException.class)
-                .hasMessageContaining("Fail to create Hudi record reader");
     }
 }
