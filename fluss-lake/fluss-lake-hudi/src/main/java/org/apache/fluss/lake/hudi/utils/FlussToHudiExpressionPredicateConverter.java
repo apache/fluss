@@ -206,7 +206,7 @@ public class FlussToHudiExpressionPredicateConverter
 
         private FieldReferenceExpression createFieldReference(
                 Schema.Field field, DataType dataType) {
-            return new FieldReferenceExpression(field.name(), dataType, 0, 0);
+            return new FieldReferenceExpression(field.name(), dataType, 0, field.pos());
         }
 
         private ValueLiteralExpression createValueLiteral(Object literal, DataType dataType) {

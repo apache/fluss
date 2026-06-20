@@ -48,7 +48,7 @@ class HudiLakeSourceTest {
     }
 
     @Test
-    void testWithEmptyFiltersDoesNotResolveHudiSchema() {
+    void testWithEmptyFiltersReturnsEmptyPushDownResult() {
         HudiLakeSource source =
                 new HudiLakeSource(new Configuration(), TablePath.of("db1", "table1"));
 
