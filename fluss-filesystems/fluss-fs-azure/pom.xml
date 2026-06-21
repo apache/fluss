@@ -80,6 +80,18 @@
                     <groupId>org.slf4j</groupId>
                     <artifactId>slf4j-reload4j</artifactId>
                 </exclusion>
+                <!-- jetty-util(-ajax) is pulled in transitively by hadoop-azure but is only
+                     used by Hadoop's web UI server and the unused WASB native store; Fluss uses
+                     ABFS. Excluded to keep them off the bundled FS jar (also drops jetty 9.x
+                     CVEs as a side benefit). -->
+                <exclusion>
+                    <groupId>org.eclipse.jetty</groupId>
+                    <artifactId>jetty-util</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.eclipse.jetty</groupId>
+                    <artifactId>jetty-util-ajax</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
         <dependency>
