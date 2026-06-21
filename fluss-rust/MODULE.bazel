@@ -1,0 +1,65 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Required at repository root for root module mode (`bazel_dep(name = "fluss-cpp", ...)`).
+# Consumer examples use `local_path_override(..., path = "/path/to/fluss-rust")`, so
+# Bazel resolves the module from the repository root. This also matches the Rust
+# workspace layout used by `bindings/cpp` during cargo-based Bazel/CMake builds.
+# `0.0.0` is a local-development placeholder in this repository branch.
+# Consumers should depend on a published release version.
+module(
+    name = "fluss-cpp",
+    version = "0.0.0",
+)
+
+bazel_dep(name = "rules_cc", version = "0.0.17")
+bazel_dep(name = "platforms", version = "0.0.10")
+bazel_dep(name = "rules_foreign_cc", version = "0.15.1")
+bazel_dep(name = "rules_python", version = "1.2.0")
+
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(python_version = "3.12")
+use_repo(python, "python_3_12")
+
+foreign_cc_tools = use_extension("@rules_foreign_cc//foreign_cc:extensions.bzl", "tools")
+use_repo(
+    foreign_cc_tools,
+    "cmake_3.31.8_toolchains",
+    "cmake_src",
+    "ninja_1.13.0_toolchains",
+    "ninja_build_src",
+    "rules_foreign_cc_framework_toolchains",
+)
+
+register_toolchains(
+    "@rules_foreign_cc_framework_toolchains//:all",
+    "@cmake_3.31.8_toolchains//:all",
+    "@ninja_1.13.0_toolchains//:all",
+    "@python_3_12//:all",
+    "@rules_foreign_cc//toolchains:all",
+)
+
+cpp_sdk = use_extension("//bindings/cpp/bazel/cpp:deps.bzl", "cpp_sdk")
+cpp_sdk.config(
+    mode = "build",
+    arrow_cpp_version = "19.0.1",
+    protobuf_version = "3.25.5",
+    ep_cmake_ranlib = "/usr/bin/ranlib",
+    ep_cmake_ar = "/usr/bin/ar",
+    ep_cmake_nm = "/usr/bin/nm",
+)
+use_repo(cpp_sdk, "apache_arrow_cpp")

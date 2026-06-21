@@ -1,0 +1,87 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+[package]
+edition = { workspace = true }
+license.workspace = true
+rust-version = { workspace = true }
+version = { workspace = true }
+name = "fluss-rs"
+authors = { workspace = true }
+description = "The official rust client of Apache Fluss (Incubating)"
+homepage = "https://clients.fluss.apache.org/user-guide/rust/installation/"
+repository = { workspace = true }
+keywords = { workspace = true }
+categories = { workspace = true }
+documentation = "https://docs.rs/fluss-rs"
+
+[lib]
+name = "fluss"
+
+[features]
+default = ["storage-memory", "storage-fs"]
+storage-all = ["storage-memory", "storage-fs", "storage-s3", "storage-oss"]
+
+storage-memory = ["opendal/services-memory"]
+storage-fs = ["opendal/services-fs"]
+storage-s3 = ["opendal/services-s3"]
+storage-oss = ["opendal/services-oss"]
+integration_tests = []
+
+[dependencies]
+arrow = { workspace = true }
+arrow-schema = "57.0.0"
+bitvec = "1"
+byteorder = "1.5"
+futures = "0.3"
+clap = { workspace = true }
+crc32c = "0.6.8"
+linked-hash-map = "0.5.6"
+prost = "0.14"
+rand = "0.9.3"
+serde = { workspace = true, features = ["rc"] }
+serde_json = { workspace = true }
+thiserror = "1.0"
+log = { version = "0.4", features = ["kv_std"] }
+metrics = { workspace = true }
+tokio = { workspace = true }
+parking_lot = "0.12"
+bytes = "1.10.1"
+dashmap = "6.1.0"
+bigdecimal = { workspace = true, features = ["serde"] }
+ordered-float = { version = "5", features = ["serde"] }
+parse-display = "0.10"
+jiff = { workspace = true }
+opendal = "0.55.0"
+url = "2.5.7"
+uuid = { version = "1.10", features = ["v4"] }
+tempfile = "3.23.0"
+snafu = "0.8.3"
+scopeguard = "1.2.0"
+delegate = "0.13.5"
+strum = "0.26"
+strum_macros = "0.26"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+jiff = { workspace = true, features = ["js"] }
+
+[dev-dependencies]
+metrics-util = "0.20"
+fluss-test-cluster = { path = "../fluss-test-cluster" }
+
+[build-dependencies]
+prost-build = "0.14"
