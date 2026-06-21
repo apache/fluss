@@ -27,6 +27,7 @@ import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
+import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
@@ -65,7 +66,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -500,18 +500,20 @@ public class TieringSourceEnumerator
         if (tieringSplits.isEmpty()) {
             return tieringSplits;
         }
-        String tieringRoundId = UUID.randomUUID().toString();
-        List<TieringSplit> taggedSplits = new ArrayList<>(tieringSplits.size());
-        boolean firstSplit = true;
         for (TieringSplit split : tieringSplits) {
-            String tag =
-                    firstSplit
-                            ? TieringSplit.FIRST_SPLIT_TAG_PREFIX + tieringRoundId
-                            : tieringRoundId;
-            taggedSplits.add(split.copy(split.getNumberOfSplits(), tag));
-            firstSplit = false;
+            boolean isTargetLogSplit =
+                    split.isTieringLogSplit()
+                            && ((TieringLogSplit) split).getStartingOffset()
+                                    < ((TieringLogSplit) split).getStoppingOffset()
+                            && ((TieringLogSplit) split).getStoppingOffset() > 0;
+
+            if (isTargetLogSplit || split.isTieringSnapshotSplit()) {
+                split.setTag(TieringSplit.FIRST_SPLIT_TAG_PREFIX + System.currentTimeMillis());
+                LOG.info("Set special tag for the first split: {}", split);
+                break;
+            }
         }
-        return taggedSplits;
+        return tieringSplits;
     }
 
     @Override

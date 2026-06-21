@@ -170,19 +170,25 @@ class TieringSplitSerializerTest {
     }
 
     @Test
-    void testTagDoesNotParticipateInSplitIdentity() {
+    void testTagParticipatesInSplitIdentity() {
         TieringSnapshotSplit snapshotSplit =
                 new TieringSnapshotSplit(tablePath, tableBucket, null, 0L, 200L, 10, "tag-1");
         TieringSnapshotSplit snapshotSplitWithDifferentTag =
                 new TieringSnapshotSplit(tablePath, tableBucket, null, 0L, 200L, 10, "tag-2");
-        assertThat(snapshotSplit).isEqualTo(snapshotSplitWithDifferentTag);
-        assertThat(snapshotSplit.hashCode()).isEqualTo(snapshotSplitWithDifferentTag.hashCode());
+        assertThat(snapshotSplit).isNotEqualTo(snapshotSplitWithDifferentTag);
 
         TieringLogSplit logSplit =
                 new TieringLogSplit(tablePath, tableBucket, null, 100, 200, 40, "tag-1");
         TieringLogSplit logSplitWithDifferentTag =
                 new TieringLogSplit(tablePath, tableBucket, null, 100, 200, 40, "tag-2");
-        assertThat(logSplit).isEqualTo(logSplitWithDifferentTag);
-        assertThat(logSplit.hashCode()).isEqualTo(logSplitWithDifferentTag.hashCode());
+        assertThat(logSplit).isNotEqualTo(logSplitWithDifferentTag);
+    }
+
+    @Test
+    void testLogSplitDefaultTagUsesCurrentTimestamp() {
+        TieringLogSplit logSplit = new TieringLogSplit(tablePath, tableBucket, null, 100, 200);
+
+        assertThat(logSplit.getTag()).matches("\\d+");
+        assertThat(Long.parseLong(logSplit.getTag())).isPositive();
     }
 }

@@ -261,7 +261,8 @@ public class TieringSplitGenerator {
                                 partitionName,
                                 EARLIEST_OFFSET,
                                 latestBucketOffset,
-                                0));
+                                0,
+                                String.valueOf(System.currentTimeMillis())));
             } else {
                 // bucket with snapshot, read kv to latest snapshotId + latestOffsetOfSnapshot
                 checkState(latestOffsetOfSnapshot != null);
@@ -272,7 +273,8 @@ public class TieringSplitGenerator {
                                 partitionName,
                                 latestSnapshotId,
                                 latestOffsetOfSnapshot,
-                                0));
+                                0,
+                                String.valueOf(System.currentTimeMillis())));
             }
         } else {
             // the bucket has been tiered, read bounded log
@@ -284,7 +286,8 @@ public class TieringSplitGenerator {
                                 partitionName,
                                 lastCommittedBucketOffset,
                                 latestBucketOffset,
-                                0));
+                                0,
+                                String.valueOf(System.currentTimeMillis())));
             } else {
                 LOG.debug(
                         "The lastCommittedBucketOffset {} is equals or bigger than latestBucketOffset {}, skip generating split for bucket {}",

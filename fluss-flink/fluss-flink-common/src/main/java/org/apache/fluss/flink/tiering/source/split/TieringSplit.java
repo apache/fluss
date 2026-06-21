@@ -39,7 +39,7 @@ public abstract class TieringSplit implements SourceSplit {
     protected final TablePath tablePath;
     protected final TableBucket tableBucket;
     @Nullable protected final String partitionName;
-    protected final String tag;
+    protected String tag;
 
     // the total number of splits in one round of tiering
     protected final int numberOfSplits;
@@ -156,14 +156,12 @@ public abstract class TieringSplit implements SourceSplit {
         return partitionName;
     }
 
-    /**
-     * Returns the tag used to coordinate lake writers in one tiering round.
-     *
-     * <p>The tag is runtime coordination metadata and is intentionally excluded from split
-     * identity.
-     */
     public String getTag() {
         return tag;
+    }
+
+    public void setTag(String tag) {
+        this.tag = Objects.requireNonNull(tag, "tag must not be null.");
     }
 
     public TieringSplit copy(int numberOfSplits) {
@@ -182,12 +180,13 @@ public abstract class TieringSplit implements SourceSplit {
                 && Objects.equals(tableBucket, that.tableBucket)
                 && Objects.equals(partitionName, that.partitionName)
                 && numberOfSplits == that.numberOfSplits
-                && skipCurrentRound == that.skipCurrentRound;
+                && skipCurrentRound == that.skipCurrentRound
+                && Objects.equals(tag, that.tag);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(
-                tablePath, tableBucket, partitionName, numberOfSplits, skipCurrentRound);
+                tablePath, tableBucket, partitionName, numberOfSplits, skipCurrentRound, tag);
     }
 }

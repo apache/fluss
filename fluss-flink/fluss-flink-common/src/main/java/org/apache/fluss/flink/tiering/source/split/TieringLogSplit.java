@@ -44,7 +44,8 @@ public class TieringLogSplit extends TieringSplit {
                 partitionName,
                 startingOffset,
                 stoppingOffset,
-                UNKNOWN_NUMBER_OF_SPLITS);
+                UNKNOWN_NUMBER_OF_SPLITS,
+                String.valueOf(System.currentTimeMillis()));
     }
 
     public TieringLogSplit(
