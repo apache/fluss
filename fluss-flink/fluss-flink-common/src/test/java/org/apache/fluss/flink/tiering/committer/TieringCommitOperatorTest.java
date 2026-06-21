@@ -246,6 +246,7 @@ class TieringCommitOperatorTest extends FlinkTestBase {
                         numberOfWriteResults));
 
         Map<TableBucket, Long> expectedLogEndOffsets = new HashMap<>();
+        expectedLogEndOffsets.put(new TableBucket(tableId, 0), 3L);
         expectedLogEndOffsets.put(new TableBucket(tableId, 1), 1L);
         expectedLogEndOffsets.put(new TableBucket(tableId, 2), 2L);
         verifyLakeSnapshot(tablePath1, tableId, 1, expectedLogEndOffsets);
