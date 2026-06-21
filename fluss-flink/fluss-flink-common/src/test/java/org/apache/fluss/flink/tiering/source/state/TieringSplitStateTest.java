@@ -38,9 +38,13 @@ class TieringSplitStateTest {
         TieringSnapshotSplit tieringSnapshotSplit =
                 new TieringSnapshotSplit(
                         tablePath, tableBucket, "partition1", 0L, 200L, 10, "snapshot-tag");
+        tieringSnapshotSplit.skipCurrentRound();
         TieringSplitState tieringSnapshotSplitState = new TieringSplitState(tieringSnapshotSplit);
-        assertThat(tieringSnapshotSplitState.toSourceSplit()).isEqualTo(tieringSnapshotSplit);
-        assertThat(tieringSnapshotSplitState.toSourceSplit().getTag()).isEqualTo("snapshot-tag");
+        TieringSnapshotSplit restoredSplit =
+                (TieringSnapshotSplit) tieringSnapshotSplitState.toSourceSplit();
+        assertThat(restoredSplit).isEqualTo(tieringSnapshotSplit);
+        assertThat(restoredSplit.shouldSkipCurrentRound()).isTrue();
+        assertThat(restoredSplit.getTag()).isEqualTo("snapshot-tag");
     }
 
     @Test
@@ -52,8 +56,11 @@ class TieringSplitStateTest {
         TieringLogSplit tieringLogSplit =
                 new TieringLogSplit(
                         tablePath, tableBucket, "partition1", 100L, 200L, 20, "log-tag");
+        tieringLogSplit.skipCurrentRound();
         TieringSplitState tieringLogSplitState = new TieringSplitState(tieringLogSplit);
-        assertThat(tieringLogSplitState.toSourceSplit()).isEqualTo(tieringLogSplit);
-        assertThat(tieringLogSplitState.toSourceSplit().getTag()).isEqualTo("log-tag");
+        TieringLogSplit restoredSplit = (TieringLogSplit) tieringLogSplitState.toSourceSplit();
+        assertThat(restoredSplit).isEqualTo(tieringLogSplit);
+        assertThat(restoredSplit.shouldSkipCurrentRound()).isTrue();
+        assertThat(restoredSplit.getTag()).isEqualTo("log-tag");
     }
 }

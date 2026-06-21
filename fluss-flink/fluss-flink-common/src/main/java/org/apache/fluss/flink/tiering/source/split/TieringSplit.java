@@ -156,6 +156,12 @@ public abstract class TieringSplit implements SourceSplit {
         return partitionName;
     }
 
+    /**
+     * Returns the tag used to coordinate lake writers in one tiering round.
+     *
+     * <p>The tag is runtime coordination metadata and is intentionally excluded from split
+     * identity.
+     */
     public String getTag() {
         return tag;
     }

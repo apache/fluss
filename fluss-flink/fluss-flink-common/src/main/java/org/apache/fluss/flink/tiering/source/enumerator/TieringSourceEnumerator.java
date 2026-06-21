@@ -65,6 +65,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -499,7 +500,7 @@ public class TieringSourceEnumerator
         if (tieringSplits.isEmpty()) {
             return tieringSplits;
         }
-        String tieringRoundId = String.valueOf(System.currentTimeMillis());
+        String tieringRoundId = UUID.randomUUID().toString();
         List<TieringSplit> taggedSplits = new ArrayList<>(tieringSplits.size());
         boolean firstSplit = true;
         for (TieringSplit split : tieringSplits) {

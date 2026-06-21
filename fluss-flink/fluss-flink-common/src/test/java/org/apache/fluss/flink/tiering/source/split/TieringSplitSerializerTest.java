@@ -168,4 +168,21 @@ class TieringSplitSerializerTest {
                 (TieringLogSplit) serializer.deserialize(serializer.getVersion(), serialized);
         assertThat(deserializedLogSplit.getTag()).isEqualTo("tag-2");
     }
+
+    @Test
+    void testTagDoesNotParticipateInSplitIdentity() {
+        TieringSnapshotSplit snapshotSplit =
+                new TieringSnapshotSplit(tablePath, tableBucket, null, 0L, 200L, 10, "tag-1");
+        TieringSnapshotSplit snapshotSplitWithDifferentTag =
+                new TieringSnapshotSplit(tablePath, tableBucket, null, 0L, 200L, 10, "tag-2");
+        assertThat(snapshotSplit).isEqualTo(snapshotSplitWithDifferentTag);
+        assertThat(snapshotSplit.hashCode()).isEqualTo(snapshotSplitWithDifferentTag.hashCode());
+
+        TieringLogSplit logSplit =
+                new TieringLogSplit(tablePath, tableBucket, null, 100, 200, 40, "tag-1");
+        TieringLogSplit logSplitWithDifferentTag =
+                new TieringLogSplit(tablePath, tableBucket, null, 100, 200, 40, "tag-2");
+        assertThat(logSplit).isEqualTo(logSplitWithDifferentTag);
+        assertThat(logSplit.hashCode()).isEqualTo(logSplitWithDifferentTag.hashCode());
+    }
 }
