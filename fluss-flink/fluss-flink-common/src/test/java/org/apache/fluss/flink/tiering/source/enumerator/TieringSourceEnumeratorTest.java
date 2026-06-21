@@ -142,6 +142,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             List<TieringSplit> actualLogAssignment = new ArrayList<>();
             context.getSplitsAssignmentSequence()
                     .forEach(a -> a.assignment().values().forEach(actualLogAssignment::addAll));
+            assertTieringRoundTags(actualLogAssignment);
             assertThat(actualLogAssignment)
                     .containsExactlyInAnyOrderElementsOf(expectedLogAssignment);
         }
@@ -185,6 +186,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             List<TieringSplit> actualAssignment = new ArrayList<>();
             context.getSplitsAssignmentSequence()
                     .forEach(a -> a.assignment().values().forEach(actualAssignment::addAll));
+            assertTieringRoundTags(actualAssignment);
             assertThat(actualAssignment)
                     .containsExactlyInAnyOrderElementsOf(expectedSnapshotAssignment);
 
@@ -673,6 +675,24 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
     }
 
     // --------------------- Test Utils ---------------------
+    private static void assertTieringRoundTags(List<TieringSplit> tieringSplits) {
+        assertThat(tieringSplits).isNotEmpty();
+        List<String> firstSplitTags =
+                tieringSplits.stream()
+                        .map(TieringSplit::getTag)
+                        .filter(tag -> tag.startsWith(TieringSplit.FIRST_SPLIT_TAG_PREFIX))
+                        .collect(Collectors.toList());
+        assertThat(firstSplitTags).hasSize(1);
+
+        String firstSplitTag = firstSplitTags.get(0);
+        String tieringRoundId =
+                firstSplitTag.substring(TieringSplit.FIRST_SPLIT_TAG_PREFIX.length());
+        assertThat(tieringRoundId).isNotEmpty();
+        assertThat(tieringSplits)
+                .allSatisfy(
+                        split -> assertThat(split.getTag()).isIn(firstSplitTag, tieringRoundId));
+    }
+
     private void registerReaderAndHandleSplitRequests(
             FlussMockSplitEnumeratorContext<TieringSplit> context,
             TieringSourceEnumerator enumerator,

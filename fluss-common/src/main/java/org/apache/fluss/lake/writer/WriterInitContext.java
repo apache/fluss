@@ -62,4 +62,17 @@ public interface WriterInitContext {
      * @return the Fluss table info
      */
     TableInfo tableInfo();
+
+    /**
+     * Returns the split tag for the current tiering round.
+     *
+     * <p>The tag is empty when the lake writer does not need split-level coordination. Lake writers
+     * that need to coordinate multiple bucket writers in one tiering round can use this tag as a
+     * round identifier.
+     *
+     * @return the split tag
+     */
+    default String tag() {
+        return "";
+    }
 }

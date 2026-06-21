@@ -454,6 +454,7 @@ public class TieringSourceEnumerator
             // shuffle tiering split to avoid splits tiering skew
             // after introduce tiering max duration
             Collections.shuffle(tieringSplits);
+            tieringSplits = populateTagsForTieringSplits(tieringSplits);
             LOG.info(
                     "Generate Tiering {} splits for table {} with cost {}ms.",
                     tieringSplits.size(),
@@ -492,6 +493,24 @@ public class TieringSourceEnumerator
         return tieringSplits.stream()
                 .map(split -> split.copy(numberOfSplits))
                 .collect(Collectors.toList());
+    }
+
+    private List<TieringSplit> populateTagsForTieringSplits(List<TieringSplit> tieringSplits) {
+        if (tieringSplits.isEmpty()) {
+            return tieringSplits;
+        }
+        String tieringRoundId = String.valueOf(System.currentTimeMillis());
+        List<TieringSplit> taggedSplits = new ArrayList<>(tieringSplits.size());
+        boolean firstSplit = true;
+        for (TieringSplit split : tieringSplits) {
+            String tag =
+                    firstSplit
+                            ? TieringSplit.FIRST_SPLIT_TAG_PREFIX + tieringRoundId
+                            : tieringRoundId;
+            taggedSplits.add(split.copy(split.getNumberOfSplits(), tag));
+            firstSplit = false;
+        }
+        return taggedSplits;
     }
 
     @Override

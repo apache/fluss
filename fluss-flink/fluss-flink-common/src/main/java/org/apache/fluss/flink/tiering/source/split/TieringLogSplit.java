@@ -71,8 +71,47 @@ public class TieringLogSplit extends TieringSplit {
             long startingOffset,
             long stoppingOffset,
             int numberOfSplits,
+            String tag) {
+        this(
+                tablePath,
+                tableBucket,
+                partitionName,
+                startingOffset,
+                stoppingOffset,
+                numberOfSplits,
+                false,
+                tag);
+    }
+
+    public TieringLogSplit(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            @Nullable String partitionName,
+            long startingOffset,
+            long stoppingOffset,
+            int numberOfSplits,
             boolean skipCurrentRound) {
-        super(tablePath, tableBucket, partitionName, numberOfSplits, skipCurrentRound);
+        this(
+                tablePath,
+                tableBucket,
+                partitionName,
+                startingOffset,
+                stoppingOffset,
+                numberOfSplits,
+                skipCurrentRound,
+                EMPTY_TAG);
+    }
+
+    public TieringLogSplit(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            @Nullable String partitionName,
+            long startingOffset,
+            long stoppingOffset,
+            int numberOfSplits,
+            boolean skipCurrentRound,
+            String tag) {
+        super(tablePath, tableBucket, partitionName, numberOfSplits, skipCurrentRound, tag);
         this.startingOffset = startingOffset;
         this.stoppingOffset = stoppingOffset;
     }
@@ -108,11 +147,14 @@ public class TieringLogSplit extends TieringSplit {
                 + startingOffset
                 + ", stoppingOffset="
                 + stoppingOffset
+                + ", tag='"
+                + tag
+                + '\''
                 + '}';
     }
 
     @Override
-    public TieringLogSplit copy(int numberOfSplits) {
+    public TieringLogSplit copy(int numberOfSplits, String tag) {
         return new TieringLogSplit(
                 tablePath,
                 tableBucket,
@@ -120,7 +162,8 @@ public class TieringLogSplit extends TieringSplit {
                 startingOffset,
                 stoppingOffset,
                 numberOfSplits,
-                skipCurrentRound);
+                skipCurrentRound,
+                tag);
     }
 
     @Override

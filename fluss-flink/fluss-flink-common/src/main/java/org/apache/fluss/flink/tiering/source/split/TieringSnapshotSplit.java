@@ -62,8 +62,47 @@ public class TieringSnapshotSplit extends TieringSplit {
             long snapshotId,
             long logOffsetOfSnapshot,
             int numberOfSplits,
+            String tag) {
+        this(
+                tablePath,
+                tableBucket,
+                partitionName,
+                snapshotId,
+                logOffsetOfSnapshot,
+                numberOfSplits,
+                false,
+                tag);
+    }
+
+    public TieringSnapshotSplit(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            @Nullable String partitionName,
+            long snapshotId,
+            long logOffsetOfSnapshot,
+            int numberOfSplits,
             boolean skipCurrentRound) {
-        super(tablePath, tableBucket, partitionName, numberOfSplits, skipCurrentRound);
+        this(
+                tablePath,
+                tableBucket,
+                partitionName,
+                snapshotId,
+                logOffsetOfSnapshot,
+                numberOfSplits,
+                skipCurrentRound,
+                EMPTY_TAG);
+    }
+
+    public TieringSnapshotSplit(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            @Nullable String partitionName,
+            long snapshotId,
+            long logOffsetOfSnapshot,
+            int numberOfSplits,
+            boolean skipCurrentRound,
+            String tag) {
+        super(tablePath, tableBucket, partitionName, numberOfSplits, skipCurrentRound, tag);
         this.snapshotId = snapshotId;
         this.logOffsetOfSnapshot = logOffsetOfSnapshot;
     }
@@ -99,11 +138,14 @@ public class TieringSnapshotSplit extends TieringSplit {
                 + snapshotId
                 + ", logOffsetOfSnapshot="
                 + logOffsetOfSnapshot
+                + ", tag='"
+                + tag
+                + '\''
                 + '}';
     }
 
     @Override
-    public TieringSnapshotSplit copy(int numberOfSplits) {
+    public TieringSnapshotSplit copy(int numberOfSplits, String tag) {
         return new TieringSnapshotSplit(
                 tablePath,
                 tableBucket,
@@ -111,7 +153,8 @@ public class TieringSnapshotSplit extends TieringSplit {
                 snapshotId,
                 logOffsetOfSnapshot,
                 numberOfSplits,
-                skipCurrentRound);
+                skipCurrentRound,
+                tag);
     }
 
     @Override

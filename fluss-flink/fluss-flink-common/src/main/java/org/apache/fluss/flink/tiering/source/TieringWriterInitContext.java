@@ -24,6 +24,8 @@ import org.apache.fluss.metadata.TablePath;
 
 import javax.annotation.Nullable;
 
+import java.util.Objects;
+
 /** The implementation of {@link WriterInitContext}. */
 public class TieringWriterInitContext implements WriterInitContext {
 
@@ -31,16 +33,27 @@ public class TieringWriterInitContext implements WriterInitContext {
     private final TableBucket tableBucket;
     @Nullable private final String partition;
     private final TableInfo tableInfo;
+    private final String tag;
 
     public TieringWriterInitContext(
             TablePath tablePath,
             TableBucket tableBucket,
             @Nullable String partition,
             TableInfo tableInfo) {
+        this(tablePath, tableBucket, partition, tableInfo, "");
+    }
+
+    public TieringWriterInitContext(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            @Nullable String partition,
+            TableInfo tableInfo,
+            String tag) {
         this.tablePath = tablePath;
         this.tableBucket = tableBucket;
         this.partition = partition;
         this.tableInfo = tableInfo;
+        this.tag = Objects.requireNonNull(tag, "tag must not be null.");
     }
 
     @Override
@@ -62,5 +75,10 @@ public class TieringWriterInitContext implements WriterInitContext {
     @Override
     public TableInfo tableInfo() {
         return tableInfo;
+    }
+
+    @Override
+    public String tag() {
+        return tag;
     }
 }

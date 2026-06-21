@@ -31,12 +31,15 @@ public abstract class TieringSplit implements SourceSplit {
 
     public static final byte TIERING_SNAPSHOT_SPLIT_FLAG = 1;
     public static final byte TIERING_LOG_SPLIT_FLAG = 2;
+    public static final String EMPTY_TAG = "";
+    public static final String FIRST_SPLIT_TAG_PREFIX = "firstSplit-";
 
     protected static final int UNKNOWN_NUMBER_OF_SPLITS = -1;
 
     protected final TablePath tablePath;
     protected final TableBucket tableBucket;
     @Nullable protected final String partitionName;
+    protected final String tag;
 
     // the total number of splits in one round of tiering
     protected final int numberOfSplits;
@@ -53,6 +56,16 @@ public abstract class TieringSplit implements SourceSplit {
             @Nullable String partitionName,
             int numberOfSplits,
             boolean skipCurrentRound) {
+        this(tablePath, tableBucket, partitionName, numberOfSplits, skipCurrentRound, EMPTY_TAG);
+    }
+
+    public TieringSplit(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            @Nullable String partitionName,
+            int numberOfSplits,
+            boolean skipCurrentRound,
+            String tag) {
         this.tablePath = tablePath;
         this.tableBucket = tableBucket;
         this.partitionName = partitionName;
@@ -63,6 +76,7 @@ public abstract class TieringSplit implements SourceSplit {
         }
         this.numberOfSplits = numberOfSplits;
         this.skipCurrentRound = skipCurrentRound;
+        this.tag = Objects.requireNonNull(tag, "tag must not be null.");
     }
 
     /** Checks whether this split is a primary key table split to tier. */
@@ -142,7 +156,15 @@ public abstract class TieringSplit implements SourceSplit {
         return partitionName;
     }
 
-    public abstract TieringSplit copy(int numberOfSplits);
+    public String getTag() {
+        return tag;
+    }
+
+    public TieringSplit copy(int numberOfSplits) {
+        return copy(numberOfSplits, tag);
+    }
+
+    public abstract TieringSplit copy(int numberOfSplits, String tag);
 
     @Override
     public boolean equals(Object object) {
