@@ -47,7 +47,8 @@ public class TieringSplitState {
                     split.getLogOffsetOfSnapshot(),
                     split.getNumberOfSplits(),
                     split.shouldSkipCurrentRound(),
-                    split.getTag());
+                    split.getSplitIndex(),
+                    split.getTieringRoundTimestamp());
         } else {
             final TieringLogSplit split = (TieringLogSplit) tieringSplit;
             return new TieringLogSplit(
@@ -58,7 +59,8 @@ public class TieringSplitState {
                     split.getStoppingOffset(),
                     split.getNumberOfSplits(),
                     split.shouldSkipCurrentRound(),
-                    split.getTag());
+                    split.getSplitIndex(),
+                    split.getTieringRoundTimestamp());
         }
     }
 }

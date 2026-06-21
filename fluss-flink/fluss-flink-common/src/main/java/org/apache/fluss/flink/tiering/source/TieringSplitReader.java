@@ -451,7 +451,10 @@ public class TieringSplitReader<WriteResult>
                                 TieringSplit split =
                                         checkNotNull(currentTableSplitsByBucket.get(bucket));
                                 return getOrCreateLakeWriter(
-                                        bucket, split.getPartitionName(), split.getTag());
+                                        bucket,
+                                        split.getPartitionName(),
+                                        split.getSplitIndex(),
+                                        split.getTieringRoundTimestamp());
                             },
                             stoppingOffset);
 
@@ -589,7 +592,11 @@ public class TieringSplitReader<WriteResult>
     }
 
     private LakeWriter<WriteResult> getOrCreateLakeWriter(
-            TableBucket bucket, @Nullable String partitionName, String tag) throws IOException {
+            TableBucket bucket,
+            @Nullable String partitionName,
+            int splitIndex,
+            long tieringRoundTimestamp)
+            throws IOException {
         LakeWriter<WriteResult> lakeWriter = lakeWriters.get(bucket);
         if (lakeWriter == null) {
             lakeWriter =
@@ -599,7 +606,8 @@ public class TieringSplitReader<WriteResult>
                                     bucket,
                                     partitionName,
                                     currentTable.getTableInfo(),
-                                    tag));
+                                    splitIndex,
+                                    tieringRoundTimestamp));
             lakeWriters.put(bucket, lakeWriter);
         }
         return lakeWriter;
@@ -686,7 +694,8 @@ public class TieringSplitReader<WriteResult>
                         getOrCreateLakeWriter(
                                 bucket,
                                 checkNotNull(currentSnapshotSplit).getPartitionName(),
-                                currentSnapshotSplit.getTag());
+                                currentSnapshotSplit.getSplitIndex(),
+                                currentSnapshotSplit.getTieringRoundTimestamp());
             }
             lakeWriter.write(scanRecord);
             if (scanRecord.getSizeInBytes() > 0) {

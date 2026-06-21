@@ -27,7 +27,6 @@ import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
-import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
@@ -450,12 +449,11 @@ public class TieringSourceEnumerator
         try {
             TablePath tablePath = tieringTable.f2;
             final TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
-            List<TieringSplit> tieringSplits =
-                    populateNumberOfTieringSplits(splitGenerator.generateTableSplits(tableInfo));
+            List<TieringSplit> tieringSplits = splitGenerator.generateTableSplits(tableInfo);
             // shuffle tiering split to avoid splits tiering skew
             // after introduce tiering max duration
             Collections.shuffle(tieringSplits);
-            tieringSplits = populateTagsForTieringSplits(tieringSplits);
+            tieringSplits = populateTieringRoundMetadata(tieringSplits);
             LOG.info(
                     "Generate Tiering {} splits for table {} with cost {}ms.",
                     tieringSplits.size(),
@@ -489,31 +487,20 @@ public class TieringSourceEnumerator
         }
     }
 
-    private List<TieringSplit> populateNumberOfTieringSplits(List<TieringSplit> tieringSplits) {
+    private List<TieringSplit> populateTieringRoundMetadata(List<TieringSplit> tieringSplits) {
         int numberOfSplits = tieringSplits.size();
-        return tieringSplits.stream()
-                .map(split -> split.copy(numberOfSplits))
-                .collect(Collectors.toList());
-    }
-
-    private List<TieringSplit> populateTagsForTieringSplits(List<TieringSplit> tieringSplits) {
-        if (tieringSplits.isEmpty()) {
-            return tieringSplits;
+        if (numberOfSplits == 0) {
+            return Collections.emptyList();
         }
-        for (TieringSplit split : tieringSplits) {
-            boolean isTargetLogSplit =
-                    split.isTieringLogSplit()
-                            && ((TieringLogSplit) split).getStartingOffset()
-                                    < ((TieringLogSplit) split).getStoppingOffset()
-                            && ((TieringLogSplit) split).getStoppingOffset() > 0;
-
-            if (isTargetLogSplit || split.isTieringSnapshotSplit()) {
-                split.setTag(TieringSplit.FIRST_SPLIT_TAG_PREFIX + System.currentTimeMillis());
-                LOG.info("Set special tag for the first split: {}", split);
-                break;
-            }
+        long tieringRoundTimestamp = System.currentTimeMillis();
+        List<TieringSplit> splitsWithMetadata = new ArrayList<>(numberOfSplits);
+        for (int splitIndex = 0; splitIndex < numberOfSplits; splitIndex++) {
+            splitsWithMetadata.add(
+                    tieringSplits
+                            .get(splitIndex)
+                            .copy(numberOfSplits, splitIndex, tieringRoundTimestamp));
         }
-        return tieringSplits;
+        return splitsWithMetadata;
     }
 
     @Override

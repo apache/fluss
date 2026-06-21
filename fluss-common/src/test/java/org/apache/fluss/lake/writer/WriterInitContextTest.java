@@ -28,10 +28,10 @@ import javax.annotation.Nullable;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for {@link WriterInitContext}. */
-class WriterInitContextCoverageTest {
+class WriterInitContextTest {
 
     @Test
-    void testDefaultTag() {
+    void testDefaultTieringRoundMetadata() {
         WriterInitContext context =
                 new WriterInitContext() {
                     @Override
@@ -56,6 +56,8 @@ class WriterInitContextCoverageTest {
                     }
                 };
 
-        assertThat(context.tag()).isEmpty();
+        assertThat(context.splitIndex()).isEqualTo(WriterInitContext.UNKNOWN_SPLIT_INDEX);
+        assertThat(context.tieringRoundTimestamp())
+                .isEqualTo(WriterInitContext.UNKNOWN_TIERING_ROUND_TIMESTAMP);
     }
 }

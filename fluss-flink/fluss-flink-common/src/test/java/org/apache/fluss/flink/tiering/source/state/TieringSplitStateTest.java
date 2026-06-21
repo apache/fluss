@@ -37,14 +37,15 @@ class TieringSplitStateTest {
         // verify conversion between TieringSnapshotSplitState and TieringSnapshotSplit
         TieringSnapshotSplit tieringSnapshotSplit =
                 new TieringSnapshotSplit(
-                        tablePath, tableBucket, "partition1", 0L, 200L, 10, "snapshot-tag");
+                        tablePath, tableBucket, "partition1", 0L, 200L, 10, 0, 1000L);
         tieringSnapshotSplit.skipCurrentRound();
         TieringSplitState tieringSnapshotSplitState = new TieringSplitState(tieringSnapshotSplit);
         TieringSnapshotSplit restoredSplit =
                 (TieringSnapshotSplit) tieringSnapshotSplitState.toSourceSplit();
         assertThat(restoredSplit).isEqualTo(tieringSnapshotSplit);
         assertThat(restoredSplit.shouldSkipCurrentRound()).isTrue();
-        assertThat(restoredSplit.getTag()).isEqualTo("snapshot-tag");
+        assertThat(restoredSplit.getSplitIndex()).isZero();
+        assertThat(restoredSplit.getTieringRoundTimestamp()).isEqualTo(1000L);
     }
 
     @Test
@@ -54,13 +55,13 @@ class TieringSplitStateTest {
 
         // verify conversion between TieringLogSplitState and TieringLogSplit
         TieringLogSplit tieringLogSplit =
-                new TieringLogSplit(
-                        tablePath, tableBucket, "partition1", 100L, 200L, 20, "log-tag");
+                new TieringLogSplit(tablePath, tableBucket, "partition1", 100L, 200L, 20, 1, 2000L);
         tieringLogSplit.skipCurrentRound();
         TieringSplitState tieringLogSplitState = new TieringSplitState(tieringLogSplit);
         TieringLogSplit restoredSplit = (TieringLogSplit) tieringLogSplitState.toSourceSplit();
         assertThat(restoredSplit).isEqualTo(tieringLogSplit);
         assertThat(restoredSplit.shouldSkipCurrentRound()).isTrue();
-        assertThat(restoredSplit.getTag()).isEqualTo("log-tag");
+        assertThat(restoredSplit.getSplitIndex()).isEqualTo(1);
+        assertThat(restoredSplit.getTieringRoundTimestamp()).isEqualTo(2000L);
     }
 }

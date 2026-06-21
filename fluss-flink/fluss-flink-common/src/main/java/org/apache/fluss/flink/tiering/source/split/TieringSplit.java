@@ -31,18 +31,21 @@ public abstract class TieringSplit implements SourceSplit {
 
     public static final byte TIERING_SNAPSHOT_SPLIT_FLAG = 1;
     public static final byte TIERING_LOG_SPLIT_FLAG = 2;
-    public static final String EMPTY_TAG = "";
-    public static final String FIRST_SPLIT_TAG_PREFIX = "firstSplit-";
+    public static final int UNKNOWN_SPLIT_INDEX = -1;
+    public static final long UNKNOWN_TIERING_ROUND_TIMESTAMP = -1L;
 
     protected static final int UNKNOWN_NUMBER_OF_SPLITS = -1;
 
     protected final TablePath tablePath;
     protected final TableBucket tableBucket;
     @Nullable protected final String partitionName;
-    protected String tag;
 
     // the total number of splits in one round of tiering
     protected final int numberOfSplits;
+    // the split index in one round of tiering
+    protected final int splitIndex;
+    // the timestamp when one round of tiering was generated
+    protected final long tieringRoundTimestamp;
 
     /**
      * Indicates whether to skip tiering data for this split in the current round of tiering. When
@@ -56,7 +59,14 @@ public abstract class TieringSplit implements SourceSplit {
             @Nullable String partitionName,
             int numberOfSplits,
             boolean skipCurrentRound) {
-        this(tablePath, tableBucket, partitionName, numberOfSplits, skipCurrentRound, EMPTY_TAG);
+        this(
+                tablePath,
+                tableBucket,
+                partitionName,
+                numberOfSplits,
+                skipCurrentRound,
+                UNKNOWN_SPLIT_INDEX,
+                UNKNOWN_TIERING_ROUND_TIMESTAMP);
     }
 
     public TieringSplit(
@@ -65,7 +75,8 @@ public abstract class TieringSplit implements SourceSplit {
             @Nullable String partitionName,
             int numberOfSplits,
             boolean skipCurrentRound,
-            String tag) {
+            int splitIndex,
+            long tieringRoundTimestamp) {
         this.tablePath = tablePath;
         this.tableBucket = tableBucket;
         this.partitionName = partitionName;
@@ -76,7 +87,10 @@ public abstract class TieringSplit implements SourceSplit {
         }
         this.numberOfSplits = numberOfSplits;
         this.skipCurrentRound = skipCurrentRound;
-        this.tag = Objects.requireNonNull(tag, "tag must not be null.");
+        validateSplitIndex(numberOfSplits, splitIndex);
+        validateTieringRoundTimestamp(tieringRoundTimestamp);
+        this.splitIndex = splitIndex;
+        this.tieringRoundTimestamp = tieringRoundTimestamp;
     }
 
     /** Checks whether this split is a primary key table split to tier. */
@@ -130,6 +144,18 @@ public abstract class TieringSplit implements SourceSplit {
         return numberOfSplits;
     }
 
+    public int getSplitIndex() {
+        return splitIndex;
+    }
+
+    public boolean isFirstSplit() {
+        return splitIndex == 0;
+    }
+
+    public long getTieringRoundTimestamp() {
+        return tieringRoundTimestamp;
+    }
+
     protected static String toSplitId(String splitPrefix, TableBucket tableBucket) {
         if (tableBucket.getPartitionId() != null) {
             return splitPrefix
@@ -156,19 +182,12 @@ public abstract class TieringSplit implements SourceSplit {
         return partitionName;
     }
 
-    public String getTag() {
-        return tag;
-    }
-
-    public void setTag(String tag) {
-        this.tag = Objects.requireNonNull(tag, "tag must not be null.");
-    }
-
     public TieringSplit copy(int numberOfSplits) {
-        return copy(numberOfSplits, tag);
+        return copy(numberOfSplits, splitIndex, tieringRoundTimestamp);
     }
 
-    public abstract TieringSplit copy(int numberOfSplits, String tag);
+    public abstract TieringSplit copy(
+            int numberOfSplits, int splitIndex, long tieringRoundTimestamp);
 
     @Override
     public boolean equals(Object object) {
@@ -181,12 +200,38 @@ public abstract class TieringSplit implements SourceSplit {
                 && Objects.equals(partitionName, that.partitionName)
                 && numberOfSplits == that.numberOfSplits
                 && skipCurrentRound == that.skipCurrentRound
-                && Objects.equals(tag, that.tag);
+                && splitIndex == that.splitIndex
+                && tieringRoundTimestamp == that.tieringRoundTimestamp;
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(
-                tablePath, tableBucket, partitionName, numberOfSplits, skipCurrentRound, tag);
+                tablePath,
+                tableBucket,
+                partitionName,
+                numberOfSplits,
+                skipCurrentRound,
+                splitIndex,
+                tieringRoundTimestamp);
+    }
+
+    private static void validateSplitIndex(int numberOfSplits, int splitIndex) {
+        if (splitIndex < UNKNOWN_SPLIT_INDEX) {
+            throw new IllegalArgumentException("Split index must be -1 or non-negative.");
+        }
+        if (splitIndex != UNKNOWN_SPLIT_INDEX
+                && numberOfSplits != UNKNOWN_NUMBER_OF_SPLITS
+                && (numberOfSplits <= 0 || splitIndex >= numberOfSplits)) {
+            throw new IllegalArgumentException(
+                    "Split index must be smaller than the number of splits.");
+        }
+    }
+
+    private static void validateTieringRoundTimestamp(long tieringRoundTimestamp) {
+        if (tieringRoundTimestamp != UNKNOWN_TIERING_ROUND_TIMESTAMP
+                && tieringRoundTimestamp <= 0) {
+            throw new IllegalArgumentException("Tiering round timestamp must be -1 or positive.");
+        }
     }
 }
