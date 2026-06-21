@@ -44,7 +44,7 @@ public class RowToPojoConverterTest {
 
         ConvertersTestFixtures.TestPojo pojo = ConvertersTestFixtures.TestPojo.sample();
         GenericRow row = writer.toRow(pojo);
-        assertThat(row.getFieldCount()).isEqualTo(17);
+        assertThat(row.getFieldCount()).isEqualTo(18);
 
         ConvertersTestFixtures.TestPojo back = scanner.fromRow(row);
         assertThat(back).isEqualTo(pojo);

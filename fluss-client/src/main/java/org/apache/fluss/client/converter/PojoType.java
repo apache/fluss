@@ -112,6 +112,12 @@ final class PojoType<T> {
                                     capitalizedName));
                 }
             }
+            if (props.get(mappedColumnName) != null) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Duplicated property name '%s' in class %s",
+                                mappedColumnName, pojoClass.getName()));
+            }
             props.put(
                     mappedColumnName,
                     new Property(

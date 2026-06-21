@@ -83,6 +83,13 @@ class PojoTypeTest {
                 .hasFieldOrPropertyWithValue("mappedName", "email");
     }
 
+    @Test
+    void testColumnNameAnnotationWithDuplicate() {
+        assertThatThrownBy(() -> PojoType.of(PojoWithDuplicateColumnName.class))
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Duplicated property name");
+    }
+
     public class ClassWithNoPublicConstructor {
         int f;
         int j;
@@ -192,7 +199,21 @@ class PojoTypeTest {
 
         public String email;
 
-        public PojoWithColumnName() {}
+        public String getFirstName() {
+            return firstName;
+        }
+
+        public void setFirstName(String firstName) {
+            this.firstName = firstName;
+        }
+    }
+
+    public static class PojoWithDuplicateColumnName {
+        @ColumnName("first_name")
+        public String userId;
+
+        @ColumnName("first_name")
+        private String firstName;
 
         public String getFirstName() {
             return firstName;
