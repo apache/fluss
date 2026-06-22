@@ -25,8 +25,15 @@ import org.apache.fluss.lake.values.tiering.TestingValuesLakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.TablePath;
 
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
 /** Implementation of {@link LakeStorage} for values lake. */
 public class TestingValuesLakeStorage implements LakeStorage {
+
+    private static final Map<TablePath, TestingValuesLakeSource> LAKE_SOURCES =
+            new ConcurrentHashMap<>();
+
     @Override
     public LakeTieringFactory<?, ?> createLakeTieringFactory() {
         return new TestingValuesLakeTieringFactory();
@@ -39,6 +46,12 @@ public class TestingValuesLakeStorage implements LakeStorage {
 
     @Override
     public LakeSource<?> createLakeSource(TablePath tablePath) {
-        throw new UnsupportedOperationException("Not impl.");
+        TestingValuesLakeSource lakeSource = new TestingValuesLakeSource();
+        LAKE_SOURCES.put(tablePath, lakeSource);
+        return lakeSource;
+    }
+
+    public static TestingValuesLakeSource getLatestLakeSource(TablePath tablePath) {
+        return LAKE_SOURCES.get(tablePath);
     }
 }

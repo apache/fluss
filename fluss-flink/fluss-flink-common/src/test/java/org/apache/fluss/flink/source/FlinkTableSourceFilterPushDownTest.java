@@ -22,6 +22,9 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
+import org.apache.fluss.lake.values.TestingValuesLakeSource;
+import org.apache.fluss.lake.values.TestingValuesLakeStorage;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.row.BinaryString;
@@ -43,6 +46,7 @@ import org.junit.jupiter.api.Test;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -353,6 +357,107 @@ public class FlinkTableSourceFilterPushDownTest {
             assertThat(result.getAcceptedFilters()).isEmpty();
             assertThat(result.getRemainingFilters()).isEmpty();
             assertThat(tableSource.getLogRecordBatchFilter()).isNull();
+        }
+    }
+
+    @Nested
+    class LakeSourcePushDownTests {
+        private FlinkTableSource tableSource;
+        private TablePath tablePath;
+
+        @BeforeEach
+        void setUp() {
+            RowType tableOutputType =
+                    (RowType)
+                            DataTypes.ROW(
+                                            DataTypes.FIELD("id", DataTypes.INT()),
+                                            DataTypes.FIELD("name", DataTypes.STRING()),
+                                            DataTypes.FIELD("value", DataTypes.BIGINT()))
+                                    .getLogicalType();
+
+            tablePath = TablePath.of("test_db", "test_lake_table");
+            Configuration flussConfig = new Configuration();
+            flussConfig.setString(FlinkConnectorOptions.BOOTSTRAP_SERVERS.key(), "localhost:9092");
+
+            Configuration tableConfig = new Configuration();
+            tableConfig.set(ConfigOptions.TABLE_STATISTICS_COLUMNS, "*");
+
+            FlinkConnectorOptionsUtils.StartupOptions startupOptions =
+                    new FlinkConnectorOptionsUtils.StartupOptions();
+            startupOptions.startupMode = FlinkConnectorOptions.ScanStartupMode.EARLIEST;
+
+            Map<String, String> tableOptions = Maps.newHashMap();
+            tableOptions.put(
+                    ConfigOptions.TABLE_DATALAKE_FORMAT.key(), DataLakeFormat.LANCE.toString());
+
+            tableSource =
+                    new FlinkTableSource(
+                            tablePath,
+                            flussConfig,
+                            new TableConfig(tableConfig),
+                            tableOutputType,
+                            new int[] {}, // no primary key indexes
+                            new int[] {}, // bucket key indexes
+                            new int[] {}, // partition key indexes
+                            true, // streaming
+                            startupOptions,
+                            false, // lookup async
+                            false, // insert if not exists
+                            null, // cache
+                            1000L, // scan partition discovery interval
+                            true, // is data lake enabled
+                            null, // merge engine type
+                            tableOptions,
+                            null); // lease context
+        }
+
+        @Test
+        void testCopyUsesIndependentLakeSourceWithReplayedState() {
+            int[][] project = new int[][] {new int[] {0}, new int[] {2}};
+            tableSource.applyProjection(
+                    project,
+                    DataTypes.ROW(
+                            DataTypes.FIELD("id", DataTypes.INT()),
+                            DataTypes.FIELD("value", DataTypes.BIGINT())));
+
+            FieldReferenceExpression idFieldRef =
+                    new FieldReferenceExpression("id", DataTypes.INT(), 0, 0);
+            CallExpression greaterThanCall =
+                    new CallExpression(
+                            BuiltInFunctionDefinitions.GREATER_THAN,
+                            Arrays.asList(idFieldRef, new ValueLiteralExpression(5)),
+                            DataTypes.BOOLEAN());
+
+            tableSource.applyFilters(Collections.singletonList(greaterThanCall));
+
+            TestingValuesLakeSource originalLakeSource =
+                    TestingValuesLakeStorage.getLatestLakeSource(tablePath);
+            List<Predicate> originalPredicates =
+                    originalLakeSource == null
+                            ? Collections.emptyList()
+                            : originalLakeSource.getPredicates();
+            assertThat(originalLakeSource).isNotNull();
+            assertThat(originalPredicates).hasSize(1);
+
+            FlinkTableSource copiedSource = (FlinkTableSource) tableSource.copy();
+            TestingValuesLakeSource copiedLakeSource =
+                    TestingValuesLakeStorage.getLatestLakeSource(tablePath);
+            assertThat(copiedLakeSource).isNotNull();
+            assertThat(copiedLakeSource).isNotSameAs(originalLakeSource);
+            assertThat(copiedLakeSource.getProject()).isDeepEqualTo(project);
+            assertThat(copiedLakeSource.getPredicates()).isEqualTo(originalPredicates);
+
+            CallExpression lessThanCall =
+                    new CallExpression(
+                            BuiltInFunctionDefinitions.LESS_THAN,
+                            Arrays.asList(idFieldRef, new ValueLiteralExpression(10)),
+                            DataTypes.BOOLEAN());
+
+            copiedSource.applyFilters(Collections.singletonList(lessThanCall));
+
+            assertThat(originalLakeSource.getPredicates()).isEqualTo(originalPredicates);
+            assertThat(copiedLakeSource.getPredicates()).hasSize(1);
+            assertThat(copiedLakeSource.getPredicates()).isNotEqualTo(originalPredicates);
         }
     }
 
