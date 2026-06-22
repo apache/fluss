@@ -88,9 +88,6 @@ public final class ConvertersTestFixtures {
         @ColumnName("string_with_column_name")
         public String stringWithColumnName;
 
-        @ColumnName("string_with_column_name")
-        public String stringWithColumnName;
-
         public TestPojo() {}
 
         public TestPojo(
@@ -110,6 +107,7 @@ public final class ConvertersTestFixtures {
                 Instant timestampLtzField,
                 OffsetDateTime offsetDateTimeField,
                 Integer[] arrayField,
+                Map<String, Integer> mapField,
                 StatusEnum enumField,
                 String stringWithColumnName) {
             this.booleanField = booleanField;
