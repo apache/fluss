@@ -319,6 +319,23 @@ public class HudiConversions {
         return primaryKeys;
     }
 
+    /** Converts Fluss change type to Flink row kind used by Hudi row data. */
+    public static RowKind toRowKind(ChangeType changeType) {
+        switch (changeType) {
+            case APPEND_ONLY:
+            case INSERT:
+                return RowKind.INSERT;
+            case UPDATE_BEFORE:
+                return RowKind.UPDATE_BEFORE;
+            case UPDATE_AFTER:
+                return RowKind.UPDATE_AFTER;
+            case DELETE:
+                return RowKind.DELETE;
+            default:
+                throw new IllegalArgumentException("Unsupported change type: " + changeType);
+        }
+    }
+
     public static ChangeType toChangeType(RowKind rowKind) {
         switch (rowKind) {
             case INSERT:
