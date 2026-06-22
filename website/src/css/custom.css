@@ -3306,3 +3306,7 @@ button.clean-btn[class*='toggle'] svg {
 [data-theme='dark'] table[class*='compareTable'] tbody tr:hover td[class*='colHighlight'] {
   background-color: rgba(122, 175, 203, 0.2);
 }
+
+html[data-theme='light'] .navbar__search {
+    opacity: 1;
+}
