@@ -62,6 +62,10 @@ public class CkpMessage implements Serializable, Comparable<CkpMessage> {
         return State.COMPLETED == state;
     }
 
+    public boolean isInflight() {
+        return State.INFLIGHT == state;
+    }
+
     public static String getFileName(String instant, State state) {
         return instant + "." + state.name();
     }

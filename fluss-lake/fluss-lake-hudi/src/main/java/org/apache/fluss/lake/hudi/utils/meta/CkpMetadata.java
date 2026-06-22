@@ -100,7 +100,7 @@ public class CkpMetadata implements Serializable, AutoCloseable {
         load();
         if (!messages.isEmpty()) {
             CkpMessage ckpMsg = messages.get(messages.size() - 1);
-            if (!ckpMsg.isComplete()) {
+            if (ckpMsg.isInflight()) {
                 return ckpMsg.getInstant();
             }
         }

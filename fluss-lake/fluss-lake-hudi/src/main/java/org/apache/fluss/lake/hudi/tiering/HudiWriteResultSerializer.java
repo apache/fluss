@@ -70,29 +70,35 @@ public class HudiWriteResultSerializer implements SimpleVersionedSerializer<Hudi
         Map<String, List<WriteStatus>> writeResult;
         Map<String, List<WriteStatus>> compactionWriteResult;
         try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(serialized))) {
-            int writeResultLength = dis.readInt();
-            validateLength(writeResultLength, serialized.length, "WriteResult");
-            byte[] writeResultBytes = new byte[writeResultLength];
-            dis.readFully(writeResultBytes);
+            byte[] writeResultBytes = readBytes(dis, "WriteResult");
             writeResult =
                     InstantiationUtils.deserializeObject(
                             writeResultBytes, getClass().getClassLoader());
 
-            int compactionWriteResultLength = dis.readInt();
-            validateLength(compactionWriteResultLength, serialized.length, "CompactionWriteResult");
-            byte[] compactionWriteResultBytes = new byte[compactionWriteResultLength];
-            dis.readFully(compactionWriteResultBytes);
+            byte[] compactionWriteResultBytes = readBytes(dis, "CompactionWriteResult");
             compactionWriteResult =
                     InstantiationUtils.deserializeObject(
                             compactionWriteResultBytes, getClass().getClassLoader());
+            if (dis.available() > 0) {
+                throw new IOException("Corrupted serialization: trailing bytes " + dis.available());
+            }
         } catch (ClassNotFoundException e) {
             throw new IOException("Couldn't deserialize HudiWriteResult.", e);
         }
         return new HudiWriteResult(writeResult, compactionWriteResult);
     }
 
-    private static void validateLength(int length, int maxLength, String field) throws IOException {
-        if (length < 0 || length > maxLength) {
+    private static byte[] readBytes(DataInputStream dis, String field) throws IOException {
+        int length = dis.readInt();
+        validateLength(length, dis.available(), field);
+        byte[] bytes = new byte[length];
+        dis.readFully(bytes);
+        return bytes;
+    }
+
+    private static void validateLength(int length, int remainingLength, String field)
+            throws IOException {
+        if (length < 0 || length > remainingLength) {
             throw new IOException(
                     "Corrupted serialization: invalid " + field + " length " + length);
         }

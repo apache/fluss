@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.hudi.tiering.writer;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.lake.hudi.tiering.HudiWriteTableInfo;
 import org.apache.fluss.lake.hudi.utils.meta.CkpMetadata;
 import org.apache.fluss.lake.writer.WriterInitContext;
@@ -55,6 +56,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Random;
 
 /** Buffers records and writes them to Hudi in batches. */
@@ -75,24 +77,45 @@ public class RecordWriteBuffer {
 
     public RecordWriteBuffer(
             HudiWriteTableInfo hudiTableInfo, CkpMetadata ckpMetadata, long tieringRoundTimestamp) {
+        this(
+                hudiTableInfo,
+                hudiTableInfo.getFlinkConfig(),
+                hudiTableInfo.getWriteClient(),
+                ckpMetadata,
+                HudiRecordConverter.getInstance(
+                        RowDataKeyGen.instance(
+                                hudiTableInfo.getFlinkConfig(), hudiTableInfo.getRowType())),
+                tieringRoundTimestamp);
+    }
+
+    @VisibleForTesting
+    RecordWriteBuffer(
+            HudiWriteTableInfo hudiTableInfo,
+            Configuration config,
+            HoodieFlinkWriteClient writeClient,
+            CkpMetadata ckpMetadata,
+            HudiRecordConverter recordConverter,
+            long tieringRoundTimestamp) {
         this.hudiTableInfo = hudiTableInfo;
-        this.config = hudiTableInfo.getFlinkConfig();
+        this.config = config;
         this.tracer = new TotalSizeTracer(config);
-        this.writeClient = hudiTableInfo.getWriteClient();
+        this.writeClient = writeClient;
         this.ckpMetadata = ckpMetadata;
         this.writeStatuses = new HashMap<>();
         this.tieringRoundTimestamp = tieringRoundTimestamp;
-        this.recordConverter =
-                HudiRecordConverter.getInstance(
-                        RowDataKeyGen.instance(
-                                hudiTableInfo.getFlinkConfig(), hudiTableInfo.getRowType()));
+        this.recordConverter = recordConverter;
     }
 
     public void bufferRecord(HoodieFlinkInternalRow internalRow) throws IOException {
-        boolean success = doBufferRecord(internalRow);
+        BucketInfo bucketInfo = getBucketInfo(internalRow);
+        if (bucket != null && !isSameBucketInfo(bucket.getBucketInfo(), bucketInfo)) {
+            flushAndDisposeBucket();
+        }
+
+        boolean success = doBufferRecord(internalRow, bucketInfo);
         if (!success) {
             flushAndDisposeBucket();
-            success = doBufferRecord(internalRow);
+            success = doBufferRecord(internalRow, bucketInfo);
             if (!success) {
                 throw new IOException("Hudi write buffer is too small to hold a single record.");
             }
@@ -107,25 +130,7 @@ public class RecordWriteBuffer {
     }
 
     public void flushRemaining() {
-        if (bucket == null) {
-            return;
-        }
-
-        String instantTime = getLastPendingInstant();
-        if (!bucket.isEmpty()) {
-            LOG.info(
-                    "Flushing remaining Hudi records for instant {}, size {}.",
-                    instantTime,
-                    bucket.getBufferSize());
-            List<WriteStatus> writeStatus =
-                    writeStatuses.getOrDefault(instantTime, new ArrayList<>());
-            writeStatus.addAll(
-                    writeRecords(instantTime, config.getString(FlinkOptions.OPERATION), bucket));
-            writeStatuses.put(instantTime, writeStatus);
-            bucket.dispose();
-            bucket = null;
-        }
-
+        flushAndDisposeBucket();
         tracer.reset();
         writeClient.cleanHandles();
     }
@@ -134,16 +139,11 @@ public class RecordWriteBuffer {
         return writeStatuses;
     }
 
-    private boolean doBufferRecord(HoodieFlinkInternalRow internalRow) throws IOException {
+    private boolean doBufferRecord(HoodieFlinkInternalRow internalRow, BucketInfo bucketInfo)
+            throws IOException {
         try {
             if (bucket == null) {
-                bucket =
-                        new DataBucket(
-                                BufferUtils.createBuffer(
-                                        hudiTableInfo.getRowType(),
-                                        MemorySegmentPoolFactory.createMemorySegmentPool(config)),
-                                getBucketInfo(internalRow),
-                                config.getDouble(FlinkOptions.WRITE_BATCH_SIZE));
+                bucket = createDataBucket(bucketInfo);
                 LOG.debug("Initialized a new Hudi data bucket.");
             }
             return bucket.writeRow(internalRow.getRowData());
@@ -155,6 +155,11 @@ public class RecordWriteBuffer {
 
     private void flushAndDisposeBucket() {
         if (bucket == null) {
+            return;
+        }
+        if (bucket.isEmpty()) {
+            bucket.dispose();
+            bucket = null;
             return;
         }
         if (flushBucket(bucket)) {
@@ -177,6 +182,15 @@ public class RecordWriteBuffer {
                 writeRecords(instantTime, config.getString(FlinkOptions.OPERATION), bucket));
         writeStatuses.put(instantTime, writeStatus);
         return true;
+    }
+
+    protected DataBucket createDataBucket(BucketInfo bucketInfo) {
+        return new DataBucket(
+                BufferUtils.createBuffer(
+                        hudiTableInfo.getRowType(),
+                        MemorySegmentPoolFactory.createMemorySegmentPool(config)),
+                bucketInfo,
+                config.getDouble(FlinkOptions.WRITE_BATCH_SIZE));
     }
 
     protected List<WriteStatus> writeRecords(
@@ -236,6 +250,12 @@ public class RecordWriteBuffer {
         return new BucketInfo(bucketType, internalRow.getFileId(), internalRow.getPartitionPath());
     }
 
+    private static boolean isSameBucketInfo(BucketInfo left, BucketInfo right) {
+        return left.getBucketType() == right.getBucketType()
+                && Objects.equals(left.getFileIdPrefix(), right.getFileIdPrefix())
+                && Objects.equals(left.getPartitionPath(), right.getPartitionPath());
+    }
+
     /** Buffered rows for one Hudi file bucket. */
     protected static class DataBucket {
 
@@ -243,7 +263,7 @@ public class RecordWriteBuffer {
         private final BucketInfo bucketInfo;
         private final BufferSizeDetector detector;
 
-        private DataBucket(
+        protected DataBucket(
                 BinaryInMemorySortBuffer dataBuffer, BucketInfo bucketInfo, double batchSize) {
             this.dataBuffer = dataBuffer;
             this.bucketInfo = bucketInfo;

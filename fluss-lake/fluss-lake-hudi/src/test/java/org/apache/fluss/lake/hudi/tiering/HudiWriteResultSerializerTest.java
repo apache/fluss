@@ -17,8 +17,12 @@
 
 package org.apache.fluss.lake.hudi.tiering;
 
+import org.apache.fluss.utils.InstantiationUtils;
+
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
 import java.io.IOException;
 import java.util.Collections;
 
@@ -48,5 +52,23 @@ class HudiWriteResultSerializerTest {
         assertThatThrownBy(() -> serializer.deserialize(serializer.getVersion() + 1, new byte[0]))
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("Unsupported HudiWriteResult version");
+    }
+
+    @Test
+    void testRejectCorruptedLength() throws Exception {
+        HudiWriteResultSerializer serializer = new HudiWriteResultSerializer();
+        byte[] emptyMapBytes = InstantiationUtils.serializeObject(Collections.emptyMap());
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        try (DataOutputStream dos = new DataOutputStream(baos)) {
+            dos.writeInt(emptyMapBytes.length);
+            dos.write(emptyMapBytes);
+            dos.writeInt(emptyMapBytes.length);
+        }
+
+        assertThatThrownBy(
+                        () -> serializer.deserialize(serializer.getVersion(), baos.toByteArray()))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("Corrupted serialization: invalid CompactionWriteResult");
     }
 }
