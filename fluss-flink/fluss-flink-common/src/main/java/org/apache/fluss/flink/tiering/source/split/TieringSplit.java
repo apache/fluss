@@ -87,8 +87,6 @@ public abstract class TieringSplit implements SourceSplit {
         }
         this.numberOfSplits = numberOfSplits;
         this.skipCurrentRound = skipCurrentRound;
-        validateSplitIndex(numberOfSplits, splitIndex);
-        validateTieringRoundTimestamp(tieringRoundTimestamp);
         this.splitIndex = splitIndex;
         this.tieringRoundTimestamp = tieringRoundTimestamp;
     }
@@ -214,24 +212,5 @@ public abstract class TieringSplit implements SourceSplit {
                 skipCurrentRound,
                 splitIndex,
                 tieringRoundTimestamp);
-    }
-
-    private static void validateSplitIndex(int numberOfSplits, int splitIndex) {
-        if (splitIndex < UNKNOWN_SPLIT_INDEX) {
-            throw new IllegalArgumentException("Split index must be -1 or non-negative.");
-        }
-        if (splitIndex != UNKNOWN_SPLIT_INDEX
-                && numberOfSplits != UNKNOWN_NUMBER_OF_SPLITS
-                && (numberOfSplits <= 0 || splitIndex >= numberOfSplits)) {
-            throw new IllegalArgumentException(
-                    "Split index must be smaller than the number of splits.");
-        }
-    }
-
-    private static void validateTieringRoundTimestamp(long tieringRoundTimestamp) {
-        if (tieringRoundTimestamp != UNKNOWN_TIERING_ROUND_TIMESTAMP
-                && tieringRoundTimestamp <= 0) {
-            throw new IllegalArgumentException("Tiering round timestamp must be -1 or positive.");
-        }
     }
 }

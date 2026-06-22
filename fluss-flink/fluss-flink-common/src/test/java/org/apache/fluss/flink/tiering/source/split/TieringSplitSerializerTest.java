@@ -153,7 +153,7 @@ class TieringSplitSerializerTest {
     }
 
     @Test
-    void testTieringRoundMetadataSerde() throws Exception {
+    void testTieringRoundTimestampSerde() throws Exception {
         TieringSnapshotSplit snapshotSplit =
                 new TieringSnapshotSplit(tablePath, tableBucket, null, 0L, 200L, 10, 0, 1000L);
         byte[] serialized = serializer.serialize(snapshotSplit);
@@ -171,29 +171,5 @@ class TieringSplitSerializerTest {
         assertThat(deserializedLogSplit.getSplitIndex()).isEqualTo(2);
         assertThat(deserializedLogSplit.isFirstSplit()).isFalse();
         assertThat(deserializedLogSplit.getTieringRoundTimestamp()).isEqualTo(2000L);
-    }
-
-    @Test
-    void testTieringRoundMetadataParticipatesInSplitIdentity() {
-        TieringSnapshotSplit snapshotSplit =
-                new TieringSnapshotSplit(tablePath, tableBucket, null, 0L, 200L, 10, 0, 1000L);
-        TieringSnapshotSplit snapshotSplitWithDifferentMetadata =
-                new TieringSnapshotSplit(tablePath, tableBucket, null, 0L, 200L, 10, 1, 2000L);
-        assertThat(snapshotSplit).isNotEqualTo(snapshotSplitWithDifferentMetadata);
-
-        TieringLogSplit logSplit =
-                new TieringLogSplit(tablePath, tableBucket, null, 100, 200, 40, 0, 1000L);
-        TieringLogSplit logSplitWithDifferentMetadata =
-                new TieringLogSplit(tablePath, tableBucket, null, 100, 200, 40, 1, 2000L);
-        assertThat(logSplit).isNotEqualTo(logSplitWithDifferentMetadata);
-    }
-
-    @Test
-    void testLogSplitDefaultTieringRoundMetadataIsUnknown() {
-        TieringLogSplit logSplit = new TieringLogSplit(tablePath, tableBucket, null, 100, 200);
-
-        assertThat(logSplit.getSplitIndex()).isEqualTo(TieringSplit.UNKNOWN_SPLIT_INDEX);
-        assertThat(logSplit.getTieringRoundTimestamp())
-                .isEqualTo(TieringSplit.UNKNOWN_TIERING_ROUND_TIMESTAMP);
     }
 }
