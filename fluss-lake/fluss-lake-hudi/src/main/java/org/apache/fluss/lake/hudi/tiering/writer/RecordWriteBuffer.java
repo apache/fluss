@@ -63,6 +63,7 @@ import java.util.Random;
 public class RecordWriteBuffer {
 
     private static final Logger LOG = LoggerFactory.getLogger(RecordWriteBuffer.class);
+    private static final long WAIT_INSTANT_TIMEOUT_MS = 5 * 60 * 1000L;
 
     private DataBucket bucket;
 
@@ -215,7 +216,11 @@ public class RecordWriteBuffer {
 
     public String getLastPendingInstant() {
         String instant = ckpMetadata.lastPendingInstant();
-        TimeWait timeWait = TimeWait.builder().timeout(-1L).action("instant initialize").build();
+        TimeWait timeWait =
+                TimeWait.builder()
+                        .timeout(WAIT_INSTANT_TIMEOUT_MS)
+                        .action("instant initialize")
+                        .build();
         String roundLowerBoundInstant = roundLowerBoundInstant();
         while (instant == null
                 || (roundLowerBoundInstant != null
@@ -322,14 +327,13 @@ public class RecordWriteBuffer {
             this.batchSizeBytes = batchSizeMb * 1024 * 1024;
         }
 
-        boolean detect(Object record) {
+        void detect(Object record) {
             if (record instanceof BinaryRowData) {
                 lastRecordSize = ((BinaryRowData) record).getSizeInBytes();
             } else if (lastRecordSize == -1 || sampling()) {
                 lastRecordSize = ((FlussRowAsHudiRow) record).sizeInBytes();
             }
             totalSize += lastRecordSize;
-            return totalSize > batchSizeBytes;
         }
 
         boolean isFull() {

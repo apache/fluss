@@ -17,10 +17,13 @@
 
 package org.apache.fluss.lake.hudi.utils.meta;
 
+import org.apache.fluss.utils.InstantiationUtils;
+
 import org.apache.hadoop.fs.FileSystem;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.Serializable;
 import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -35,11 +38,23 @@ class CkpMetadataTest {
         FileSystem fs = FileSystem.getLocal(new org.apache.hadoop.conf.Configuration());
         CkpMetadata ckpMetadata = new CkpMetadata(fs, tempDir.toString(), "");
 
+        assertThat(ckpMetadata).isNotInstanceOf(Serializable.class);
         ckpMetadata.bootstrap();
         ckpMetadata.startInstant("20260622000100000");
         assertThat(ckpMetadata.lastPendingInstant()).isEqualTo("20260622000100000");
 
         ckpMetadata.abortInstant("20260622000100000");
         assertThat(ckpMetadata.lastPendingInstant()).isNull();
+    }
+
+    @Test
+    void testCkpMetadataProviderSerializable() throws Exception {
+        CkpMetadataProvider ckpMetadataProvider = new CkpMetadataProvider();
+
+        byte[] serialized = InstantiationUtils.serializeObject(ckpMetadataProvider);
+        CkpMetadataProvider deserialized =
+                InstantiationUtils.deserializeObject(serialized, getClass().getClassLoader());
+
+        assertThat(deserialized).isNotNull();
     }
 }

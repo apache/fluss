@@ -30,21 +30,36 @@ public class CkpMetadataProvider implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
-    private final Map<TablePath, CkpMetadata> ckpMetadatas = new ConcurrentHashMap<>();
+    private transient volatile Map<TablePath, CkpMetadata> ckpMetadatas;
 
     public CkpMetadata get(TablePath tablePath, HudiWriteTableInfo hudiTableInfo)
             throws IOException {
-        CkpMetadata ckpMetadata = ckpMetadatas.get(tablePath);
+        Map<TablePath, CkpMetadata> metadataCache = getMetadataCache();
+        CkpMetadata ckpMetadata = metadataCache.get(tablePath);
         if (ckpMetadata != null) {
             return ckpMetadata;
         }
         synchronized (this) {
-            ckpMetadata = ckpMetadatas.get(tablePath);
+            metadataCache = getMetadataCache();
+            ckpMetadata = metadataCache.get(tablePath);
             if (ckpMetadata == null) {
                 ckpMetadata = CkpMetadataFactory.getCkpMetadata(hudiTableInfo.getFlinkConfig());
-                ckpMetadatas.put(tablePath, ckpMetadata);
+                metadataCache.put(tablePath, ckpMetadata);
             }
             return ckpMetadata;
+        }
+    }
+
+    private Map<TablePath, CkpMetadata> getMetadataCache() {
+        Map<TablePath, CkpMetadata> metadataCache = ckpMetadatas;
+        if (metadataCache != null) {
+            return metadataCache;
+        }
+        synchronized (this) {
+            if (ckpMetadatas == null) {
+                ckpMetadatas = new ConcurrentHashMap<>();
+            }
+            return ckpMetadatas;
         }
     }
 }

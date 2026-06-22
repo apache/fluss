@@ -30,7 +30,6 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
-import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -38,9 +37,8 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /** DFS-backed checkpoint metadata used as a lightweight message bus for Hudi instants. */
-public class CkpMetadata implements Serializable, AutoCloseable {
+public class CkpMetadata implements AutoCloseable {
 
-    private static final long serialVersionUID = 1L;
     private static final Logger LOG = LoggerFactory.getLogger(CkpMetadata.class);
 
     private static final int MAX_RETAIN_CKP_NUM = 1;

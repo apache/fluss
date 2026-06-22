@@ -74,8 +74,7 @@ public class HudiLakeWriter implements LakeWriter<HudiWriteResult> {
                     writerInitContext.tableBucket());
         }
 
-        this.recordWriter =
-                new HudiRecordWriter(writerInitContext, tableInfo, hudiTableInfo, ckpMetadata);
+        this.recordWriter = new HudiRecordWriter(writerInitContext, hudiTableInfo, ckpMetadata);
         LOG.info("Created HudiLakeWriter with configuration {}.", hudiTableInfo.getFlinkConfig());
     }
 

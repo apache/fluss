@@ -21,7 +21,6 @@ import org.apache.fluss.lake.hudi.tiering.HudiWriteTableInfo;
 import org.apache.fluss.lake.hudi.tiering.RecordWriter;
 import org.apache.fluss.lake.hudi.utils.meta.CkpMetadata;
 import org.apache.fluss.lake.writer.WriterInitContext;
-import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.LogRecord;
 
 import org.apache.flink.configuration.Configuration;
@@ -32,17 +31,14 @@ import org.apache.hudi.sink.bulk.RowDataKeyGen;
 /** Hudi {@link RecordWriter} implementation. */
 public class HudiRecordWriter extends RecordWriter {
 
-    private final TableInfo tableInfo;
     private final Configuration config;
     private final RowDataKeyGen keyGen;
 
     public HudiRecordWriter(
             WriterInitContext writerInitContext,
-            TableInfo tableInfo,
             HudiWriteTableInfo hudiTableInfo,
             CkpMetadata ckpMetadata) {
         super(writerInitContext, hudiTableInfo, ckpMetadata);
-        this.tableInfo = tableInfo;
         this.config = hudiTableInfo.getFlinkConfig();
         this.keyGen =
                 RowDataKeyGen.instance(hudiTableInfo.getFlinkConfig(), hudiTableInfo.getRowType());
@@ -61,9 +57,5 @@ public class HudiRecordWriter extends RecordWriter {
                         flussRecordAsHudiRecord);
         setRecordLocation(internalRow, config);
         recordWriteBuffer.bufferRecord(internalRow);
-    }
-
-    public TableInfo getTableInfo() {
-        return tableInfo;
     }
 }
