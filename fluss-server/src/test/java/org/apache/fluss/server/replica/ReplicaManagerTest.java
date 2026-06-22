@@ -28,6 +28,7 @@ import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -69,6 +70,7 @@ import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.ListOffsetsParam;
+import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.ClusterMetadata;
@@ -96,6 +98,7 @@ import javax.annotation.Nullable;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -2544,5 +2547,42 @@ class ReplicaManagerTest extends ReplicaTestBase {
         assertThat(checkpoint1.get(new TableBucket(DATA1_TABLE_ID, 0))).isEqualTo(10L);
         assertThat(checkpoint2).containsOnlyKeys(new TableBucket(DATA1_TABLE_ID, 1));
         assertThat(checkpoint2.get(new TableBucket(DATA1_TABLE_ID, 1))).isEqualTo(10L);
+    }
+
+    @Test
+    void testStopReplicaSweepsOrphanDirsForNoneReplica() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(DATA1_TABLE_PATH);
+
+        // Create a log directly via LogManager without going through ReplicaManager.
+        // This simulates the state after TS restart where LogManager loaded the log
+        // but no NotifyLeaderAndIsr arrived (so allReplicas is empty → NoneReplica).
+        File dataDir = localDiskManager.dataDirs().get(0);
+        LogTablet logTablet =
+                logManager.getOrCreateLog(
+                        dataDir, physicalTablePath, tb, LogFormat.ARROW, 1, false);
+        File logDir = logTablet.getLogDir();
+        Path tableDir = logManager.getTabletParentDir(dataDir, physicalTablePath, tb);
+        assertThat(logDir).exists();
+        assertThat(tableDir).exists();
+
+        // Verify the bucket is NoneReplica (not in allReplicas).
+        assertThat(replicaManager.getReplica(tb)).isInstanceOf(ReplicaManager.NoneReplica.class);
+
+        // Send stopReplicas with deleteLocal=true. This should hit the NoneReplica
+        // branch and invoke sweepOrphanTabletDirs to clean up the orphan log.
+        CompletableFuture<List<StopReplicaResultForBucket>> future = new CompletableFuture<>();
+        replicaManager.stopReplicas(
+                INITIAL_COORDINATOR_EPOCH,
+                Collections.singletonList(
+                        new StopReplicaData(tb, true, false, INITIAL_COORDINATOR_EPOCH, 0)),
+                future::complete);
+
+        assertThat(future.get()).containsOnly(new StopReplicaResultForBucket(tb));
+        // The log directory and table parent directory should be cleaned up.
+        assertThat(logDir).doesNotExist();
+        assertThat(tableDir).doesNotExist();
+        // LogManager should no longer hold the log.
+        assertThat(logManager.getLog(tb)).isNotPresent();
     }
 }

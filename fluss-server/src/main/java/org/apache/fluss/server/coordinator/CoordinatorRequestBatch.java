@@ -35,6 +35,7 @@ import org.apache.fluss.rpc.messages.PbStopReplicaRespForBucket;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
@@ -413,6 +414,18 @@ public class CoordinatorRequestBatch {
                     makeNotifyLeaderAndIsrRequest(
                             coordinatorEpoch, notifyRequestEntry.getValue().values());
 
+            // Track exactly which buckets THIS request marked as pending leader activation. Only
+            // those entries (where leader == serverId) need to be cleared if the request fails
+            Set<TableBucket> addedToPendingLeaderActivation = new HashSet<>();
+            for (Map.Entry<TableBucket, PbNotifyLeaderAndIsrReqForBucket> entry :
+                    notifyRequestEntry.getValue().entrySet()) {
+                int leader = entry.getValue().getLeader();
+                if (leader == serverId) {
+                    coordinatorContext.addPendingLeaderActivation(entry.getKey());
+                    addedToPendingLeaderActivation.add(entry.getKey());
+                }
+            }
+
             coordinatorChannelManager.sendBucketLeaderAndIsrRequest(
                     serverId,
                     notifyLeaderAndIsrRequest,
@@ -428,6 +441,21 @@ public class CoordinatorRequestBatch {
                             // coordinator will remove the sender for the tablet server and mark all
                             // replica in the tablet server as offline. so, in here, if encounter
                             // any error, we just ignore it.
+
+                            // Clear pending state so the health API does not report stale
+                            // RED. The coordinator will detect actual server death via
+                            // heartbeat timeout and trigger re-election separately.
+                            if (!addedToPendingLeaderActivation.isEmpty()) {
+                                eventManager.put(
+                                        new AccessContextEvent<Void>(
+                                                ctx -> {
+                                                    for (TableBucket tb :
+                                                            addedToPendingLeaderActivation) {
+                                                        ctx.clearPendingLeaderActivation(tb);
+                                                    }
+                                                    return null;
+                                                }));
+                            }
                             return;
                         }
                         // put the response receive event into the event manager

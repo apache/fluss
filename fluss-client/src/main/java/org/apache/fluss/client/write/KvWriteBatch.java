@@ -55,6 +55,7 @@ public class KvWriteBatch extends WriteBatch {
     private final MergeMode mergeMode;
 
     public KvWriteBatch(
+            long tableId,
             int bucketId,
             PhysicalTablePath physicalTablePath,
             int schemaId,
@@ -64,7 +65,7 @@ public class KvWriteBatch extends WriteBatch {
             @Nullable int[] targetColumns,
             MergeMode mergeMode,
             long createdMs) {
-        super(bucketId, physicalTablePath, createdMs);
+        super(tableId, bucketId, physicalTablePath, createdMs);
         this.outputView = outputView;
         this.recordsBuilder =
                 KvRecordBatchBuilder.builder(schemaId, writeLimit, outputView, kvFormat);

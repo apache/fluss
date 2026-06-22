@@ -20,8 +20,10 @@ package org.apache.fluss.spark.lake
 import org.apache.fluss.config.{ConfigOptions, Configuration}
 import org.apache.fluss.metadata.DataLakeFormat
 import org.apache.fluss.spark.SparkConnectorOptions.BUCKET_NUMBER
+import org.apache.fluss.spark.read.FlussMetrics
 
 import org.apache.spark.sql.Row
+import org.apache.spark.sql.execution.datasources.v2.BatchScanExec
 
 import java.nio.file.Files
 
@@ -613,6 +615,41 @@ abstract class SparkLakeLogTableReadTest extends SparkLakeTableReadTestBase {
       checkAnswer(query, Row(2) :: Row(4) :: Nil)
       // The modulo expression is not convertible; only the implicit IS_NOT_NULL Spark adds is pushed.
       assertResult(Set("IS_NOT_NULL"))(pushedPredicates(query).map(_.name()).toSet)
+    }
+  }
+
+  test("Spark Lake Read: log table union read with limit pushdown") {
+    withTable("t_union_limit") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t_union_limit (id INT, name STRING)
+             | TBLPROPERTIES (
+             |  '${ConfigOptions.TABLE_DATALAKE_ENABLED.key()}' = true,
+             |  '${ConfigOptions.TABLE_DATALAKE_FRESHNESS.key()}' = '1s',
+             |  '${BUCKET_NUMBER.key()}' = 1)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_union_limit VALUES
+             |(1, "alpha"), (2, "beta"), (3, "gamma")
+             |""".stripMargin)
+
+      tierToLake("t_union_limit")
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_union_limit VALUES
+             |(4, "delta"), (5, "epsilon")
+             |""".stripMargin)
+
+      val df = sql(s"SELECT * FROM $DEFAULT_DATABASE.t_union_limit LIMIT 2")
+      assert(flussScan(df).flatMap(_.limit).distinct == Seq(2))
+
+      // Verify limit pushdown actually reduces rows read via metrics
+      df.collect()
+      val batchScanExec = df.queryExecution.executedPlan.collectFirst {
+        case b: BatchScanExec => b
+      }.get
+      val numRowsRead = batchScanExec.metrics(FlussMetrics.NUM_ROWS_READ).value
+      assert(numRowsRead == 2L, s"Expected 2 rows read with limit pushdown, got $numRowsRead")
     }
   }
 

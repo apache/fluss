@@ -45,9 +45,10 @@ class FlussLakeUpsertBatch(
     readSchema: StructType,
     pushedPredicate: Option[FlussPredicate],
     partitionPredicate: Option[FlussPredicate],
+    limit: Option[Int],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
-  extends FlussLakeBatch(tablePath, tableInfo, readSchema, options, flussConfig) {
+  extends FlussLakeBatch(tablePath, tableInfo, readSchema, limit, options, flussConfig) {
 
   override val startOffsetsInitializer: OffsetsInitializer = {
     val offsetsInitializer = FlussOffsetInitializers.startOffsetsInitializer(options, flussConfig)
@@ -59,7 +60,7 @@ class FlussLakeUpsertBatch(
 
   override def createReaderFactory(): PartitionReaderFactory = {
     if (isFallback) {
-      new FlussUpsertPartitionReaderFactory(tablePath, projection, options, flussConfig)
+      new FlussUpsertPartitionReaderFactory(tablePath, projection, limit, options, flussConfig)
     } else {
       // PK kv-tail reader does not consume server-side log filters.
       new FlussLakePartitionReaderFactory(
@@ -68,6 +69,7 @@ class FlussLakeUpsertBatch(
         projection,
         pushedPredicate,
         None,
+        limit,
         flussConfig)
     }
   }

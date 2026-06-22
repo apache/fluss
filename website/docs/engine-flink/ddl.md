@@ -267,6 +267,8 @@ When using SET to modify [Storage Options](engine-flink/options.md#storage-optio
   - `table.datalake.enabled`: Enable or disable lakehouse storage for the table.
   - `table.datalake.freshness`: Set the data freshness for lakehouse storage.
   - `table.log.tiered.local-segments`: Set the number of log segments to retain locally when tiered storage is enabled.
+  - `table.auto-partition.num-retention`: Set the number of historical partitions to retain for auto partitioning.
+  - `table.auto-partition.num-precreate`: Set the number of future partitions to pre-create for auto partitioning.
 
 ```sql title="Flink SQL"
 -- Enable lakehouse storage for the table

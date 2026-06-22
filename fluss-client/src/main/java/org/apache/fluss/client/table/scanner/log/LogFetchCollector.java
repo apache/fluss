@@ -20,27 +20,17 @@ package org.apache.fluss.client.table.scanner.log;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.scanner.ScanRecord;
-import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.AuthorizationException;
-import org.apache.fluss.exception.FetchException;
-import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
-import org.apache.fluss.rpc.protocol.ApiError;
-import org.apache.fluss.rpc.protocol.Errors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -55,242 +45,31 @@ import java.util.Map;
  */
 @ThreadSafe
 @Internal
-public class LogFetchCollector {
+public class LogFetchCollector extends AbstractLogFetchCollector<ScanRecord, ScanRecords> {
     private static final Logger LOG = LoggerFactory.getLogger(LogFetchCollector.class);
-
-    private final TablePath tablePath;
-    private final LogScannerStatus logScannerStatus;
-    private final int maxPollRecords;
-    private final MetadataUpdater metadataUpdater;
 
     public LogFetchCollector(
             TablePath tablePath,
             LogScannerStatus logScannerStatus,
             Configuration conf,
             MetadataUpdater metadataUpdater) {
-        this.tablePath = tablePath;
-        this.logScannerStatus = logScannerStatus;
-        this.maxPollRecords = conf.getInt(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS);
-        this.metadataUpdater = metadataUpdater;
+        super(LOG, tablePath, logScannerStatus, conf, metadataUpdater);
     }
 
-    /**
-     * Return the fetched log records, empty the record buffer and update the consumed position.
-     *
-     * <p>NOTE: returning empty records guarantees the consumed position are NOT updated.
-     *
-     * @return The fetched records per partition
-     * @throws LogOffsetOutOfRangeException If there is OffsetOutOfRange error in fetchResponse and
-     *     the defaultResetPolicy is NONE
-     */
-    public ScanRecords collectFetch(final LogFetchBuffer logFetchBuffer) {
-        Map<TableBucket, List<ScanRecord>> fetched = new HashMap<>();
-        int recordsRemaining = maxPollRecords;
-
-        try {
-            while (recordsRemaining > 0) {
-                CompletedFetch nextInLineFetch = logFetchBuffer.nextInLineFetch();
-                if (nextInLineFetch == null || nextInLineFetch.isConsumed()) {
-                    CompletedFetch completedFetch = logFetchBuffer.peek();
-                    if (completedFetch == null) {
-                        break;
-                    }
-
-                    if (!completedFetch.isInitialized()) {
-                        try {
-                            CompletedFetch initialized = initialize(completedFetch);
-                            logFetchBuffer.setNextInLineFetch(initialized);
-                            if (initialized == null) {
-                                completedFetch.drain();
-                            }
-                        } catch (Exception e) {
-                            // Remove a completedFetch upon a parse with exception if
-                            // (1) it contains no records, and
-                            // (2) there are no fetched records with actual content preceding this
-                            // exception.
-                            if (fetched.isEmpty() && completedFetch.sizeInBytes == 0) {
-                                logFetchBuffer.poll();
-                            }
-                            throw e;
-                        }
-                    } else {
-                        logFetchBuffer.setNextInLineFetch(completedFetch);
-                    }
-
-                    logFetchBuffer.poll();
-                } else {
-                    List<ScanRecord> records = fetchRecords(nextInLineFetch, recordsRemaining);
-                    if (!records.isEmpty()) {
-                        TableBucket tableBucket = nextInLineFetch.tableBucket;
-                        List<ScanRecord> currentRecords = fetched.get(tableBucket);
-                        if (currentRecords == null) {
-                            fetched.put(tableBucket, records);
-                        } else {
-                            // this case shouldn't usually happen because we only send one fetch at
-                            // a time per bucket, but it might conceivably happen in some rare
-                            // cases (such as bucket leader changes). we have to copy to a new list
-                            // because the old one may be immutable
-                            List<ScanRecord> newScanRecords =
-                                    new ArrayList<>(records.size() + currentRecords.size());
-                            newScanRecords.addAll(currentRecords);
-                            newScanRecords.addAll(records);
-                            fetched.put(tableBucket, newScanRecords);
-                        }
-
-                        recordsRemaining -= records.size();
-                    }
-                }
-            }
-        } catch (FetchException e) {
-            if (fetched.isEmpty()) {
-                throw e;
-            }
-        }
-
-        return new ScanRecords(fetched);
+    @Override
+    protected List<ScanRecord> doFetchRecords(CompletedFetch nextInLineFetch, int maxRecords) {
+        return nextInLineFetch.fetchRecords(maxRecords);
     }
 
-    private List<ScanRecord> fetchRecords(CompletedFetch nextInLineFetch, int maxRecords) {
-        TableBucket tb = nextInLineFetch.tableBucket;
-        Long offset = logScannerStatus.getBucketOffset(tb);
-        if (offset == null) {
-            LOG.debug(
-                    "Ignoring fetched records for {} at offset {} since the current offset is null which means the "
-                            + "bucket has been unsubscribe.",
-                    tb,
-                    nextInLineFetch.fetchOffset());
-        } else {
-            if (nextInLineFetch.nextFetchOffset() == offset) {
-                List<ScanRecord> records = nextInLineFetch.fetchRecords(maxRecords);
-                LOG.trace(
-                        "Returning {} fetched records at offset {} for assigned bucket {}.",
-                        records.size(),
-                        offset,
-                        tb);
-
-                if (nextInLineFetch.nextFetchOffset() > offset) {
-                    LOG.trace(
-                            "Updating fetch offset from {} to {} for bucket {} and returning {} records from poll()",
-                            offset,
-                            nextInLineFetch.nextFetchOffset(),
-                            tb,
-                            records.size());
-                    logScannerStatus.updateOffset(tb, nextInLineFetch.nextFetchOffset());
-                }
-                return records;
-            } else {
-                // these records aren't next in line based on the last consumed offset, ignore them
-                // they must be from an obsolete request
-                LOG.warn(
-                        "Ignoring fetched records for {} at offset {} since the current offset is {}",
-                        nextInLineFetch.tableBucket,
-                        nextInLineFetch.nextFetchOffset(),
-                        offset);
-            }
-        }
-
-        LOG.trace("Draining fetched records for bucket {}", nextInLineFetch.tableBucket);
-        nextInLineFetch.drain();
-
-        return Collections.emptyList();
+    @Override
+    protected int recordCount(List<ScanRecord> fetchedRecords) {
+        return fetchedRecords.size();
     }
 
-    /** Initialize a {@link CompletedFetch} object. */
-    private @Nullable CompletedFetch initialize(CompletedFetch completedFetch) {
-        TableBucket tb = completedFetch.tableBucket;
-        ApiError error = completedFetch.error;
-
-        try {
-            if (error.isSuccess()) {
-                return handleInitializeSuccess(completedFetch);
-            } else {
-                handleInitializeErrors(completedFetch, error.error(), error.messageWithFallback());
-                return null;
-            }
-        } finally {
-            if (error.isFailure()) {
-                // we move the bucket to the end if there was an error. This way,
-                // it's more likely that buckets for the same table can remain together
-                // (allowing for more efficient serialization).
-                logScannerStatus.moveBucketToEnd(tb);
-            }
-        }
-    }
-
-    private @Nullable CompletedFetch handleInitializeSuccess(CompletedFetch completedFetch) {
-        TableBucket tb = completedFetch.tableBucket;
-        long fetchOffset = completedFetch.fetchOffset();
-
-        // we are interested in this fetch only if the beginning offset matches the
-        // current consumed position.
-        Long offset = logScannerStatus.getBucketOffset(tb);
-        if (offset == null) {
-            LOG.debug(
-                    "Discarding stale fetch response for bucket {} since the expected offset is null which means the bucket has been "
-                            + "unsubscribed.",
-                    tb);
-            return null;
-        }
-        if (offset != fetchOffset) {
-            LOG.warn(
-                    "Discarding stale fetch response for bucket {} since its offset {} does not match the expected offset {}.",
-                    tb,
-                    fetchOffset,
-                    offset);
-            return null;
-        }
-
-        long highWatermark = completedFetch.highWatermark;
-        if (highWatermark >= 0) {
-            LOG.trace("Updating high watermark for bucket {} to {}.", tb, highWatermark);
-            logScannerStatus.updateHighWatermark(tb, highWatermark);
-        }
-
-        completedFetch.setInitialized();
-        return completedFetch;
-    }
-
-    private void handleInitializeErrors(
-            CompletedFetch completedFetch, Errors error, String errorMessage) {
-        TableBucket tb = completedFetch.tableBucket;
-        long fetchOffset = completedFetch.fetchOffset();
-        if (error == Errors.NOT_LEADER_OR_FOLLOWER
-                || error == Errors.LOG_STORAGE_EXCEPTION
-                || error == Errors.KV_STORAGE_EXCEPTION
-                || error == Errors.STORAGE_EXCEPTION
-                || error == Errors.FENCED_LEADER_EPOCH_EXCEPTION) {
-            LOG.debug(
-                    "Error in fetch for bucket {}: {}:{}",
-                    tb,
-                    error.exceptionName(),
-                    error.exception(errorMessage));
-            metadataUpdater.checkAndUpdateMetadata(tablePath, tb);
-        } else if (error == Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION) {
-            LOG.warn("Received unknown table or bucket error in fetch for bucket {}", tb);
-            metadataUpdater.checkAndUpdateMetadata(tablePath, tb);
-        } else if (error == Errors.LOG_OFFSET_OUT_OF_RANGE_EXCEPTION) {
-            throw new FetchException(
-                    String.format(
-                            "The fetching offset %s is out of range: %s",
-                            fetchOffset, error.exception(errorMessage)));
-        } else if (error == Errors.AUTHORIZATION_EXCEPTION) {
-            throw new AuthorizationException(errorMessage);
-        } else if (error == Errors.UNKNOWN_SERVER_ERROR) {
-            LOG.warn(
-                    "Unknown server error while fetching offset {} for bucket {}: {}",
-                    fetchOffset,
-                    tb,
-                    error.exception(errorMessage));
-        } else if (error == Errors.CORRUPT_MESSAGE) {
-            throw new FetchException(
-                    String.format(
-                            "Encountered corrupt message when fetching offset %s for bucket %s: %s",
-                            fetchOffset, tb, error.exception(errorMessage)));
-        } else {
-            throw new FetchException(
-                    String.format(
-                            "Unexpected error code %s while fetching at offset %s from bucket %s: %s",
-                            error, fetchOffset, tb, error.exception(errorMessage)));
-        }
+    @Override
+    protected ScanRecords toResult(
+            Map<TableBucket, List<ScanRecord>> fetchedRecords,
+            Map<TableBucket, Long> consumedUpToOffsets) {
+        return new ScanRecords(fetchedRecords, consumedUpToOffsets);
     }
 }

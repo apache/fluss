@@ -49,6 +49,24 @@
             <version>${project.version}</version>
         </dependency>
 
+        <!-- Unshaded Arrow dependencies for the Arrow scan batch API (ArrowBatchData).
+             Marked as "provided" to avoid Arrow class conflicts with consumers that
+             bring their own Arrow version. Currently only the internal tiering service
+             uses this API and is responsible for including Arrow on its classpath. -->
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-vector</artifactId>
+            <version>${arrow.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-memory-netty</artifactId>
+            <version>${arrow.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- test dependency -->
         <dependency>
             <groupId>org.apache.fluss</groupId>

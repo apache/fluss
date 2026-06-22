@@ -448,12 +448,15 @@
                                         <exclude>org.apache.fluss.predicate.*</exclude>
                                         <!-- end exclude for lake source -->
                                         <exclude>org.apache.fluss.lake.source.*</exclude>
-                                        <!-- exclude for dummy class -->
+                                        <!-- exclude for readiness-probe CLI tool and dist dummy class -->
+                                        <exclude>org.apache.fluss.server.tools.ClusterHealthReadinessCheck</exclude>
+                                        <exclude>org.apache.fluss.server.tools.ClusterHealthReadinessCheck.*</exclude>
                                         <exclude>org.apache.fluss.dist.DummyClass</exclude>
                                         <exclude>org.apache.fluss.flink.DummyClass120</exclude>
                                         <exclude>org.apache.fluss.lake.batch.ArrowRecordBatch</exclude>
                                         <exclude>org.apache.fluss.lake.committer.CommittedLakeSnapshot</exclude>
                                         <exclude>org.apache.fluss.lake.paimon.utils.FlussDataTypeToPaimonDataType</exclude>
+                                        <exclude>org.apache.paimon.arrow.converter.Arrow2PaimonVectorConverter*</exclude>
                                         <!-- start exclude for lake lance -->
                                         <exclude>org.apache.fluss.lake.lance.*</exclude>
                                         <!-- temporarily exclude iceberg -->
@@ -496,6 +499,9 @@
                                         <exclude>org.apache.fluss.flink.tiering.FlussLakeTieringEntrypoint</exclude>
                                         <exclude>org.apache.fluss.flink.tiering.FlussLakeTiering</exclude>
                                         <!-- end exclude for flink tiering service -->
+                                        <exclude>
+                                            org.apache.fluss.flink.functions.bitmap.RbAndAggFunction.AccumulatorSerializer.AccumulatorSerializerSnapshot
+                                        </exclude>
                                         <!-- exclude flink compatibility class for catalogs -->
                                         <exclude>org.apache.flink.table.catalog.*</exclude>
                                     </excludes>

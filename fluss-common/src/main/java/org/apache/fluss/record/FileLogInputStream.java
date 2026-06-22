@@ -180,6 +180,11 @@ public class FileLogInputStream
         }
 
         @Override
+        public ArrowBatchData loadArrowBatch(ReadContext context) {
+            return loadFullBatch().loadArrowBatch(context);
+        }
+
+        @Override
         public boolean isValid() {
             return loadFullBatch().isValid();
         }

@@ -117,6 +117,7 @@ import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
+import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
@@ -294,6 +295,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         options.put(
                 ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                 String.valueOf(CURRENT_KV_FORMAT_VERSION));
+        options.put(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
         assertThat(tableInfo.toTableDescriptor())
                 .isEqualTo(tableDescriptor.withProperties(options));
         assertThat(schemaInfo2).isEqualTo(schemaInfo);
@@ -323,6 +325,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         options.put(
                 ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                 String.valueOf(CURRENT_KV_FORMAT_VERSION));
+        options.put(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
         assertThat(tableInfo.toTableDescriptor()).isEqualTo(expected.withProperties(options));
         assertThat(schemaInfo2).isEqualTo(schemaInfo);
         // assert created time
@@ -950,6 +953,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
             options.put(
                     ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                     String.valueOf(CURRENT_KV_FORMAT_VERSION));
+            options.put(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
             assertThat(tableInfo.toTableDescriptor()).isEqualTo(expected.withProperties(options));
         }
     }
@@ -1085,6 +1089,32 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
             assertThat(partitionIdByNames.get(partitionInfo.getPartitionName()))
                     .isEqualTo(partitionInfo.getPartitionId());
         }
+    }
+
+    @Test
+    void testListPartitionInfosAfterTabletServerRestart() throws Exception {
+        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+        TablePath partitionedTablePath = TablePath.of(dbName, "test_retry_partitioned_table");
+        admin.createTable(partitionedTablePath, DATA1_PARTITIONED_TABLE_DESCRIPTOR, true).get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(partitionedTablePath);
+
+        // First query should succeed.
+        List<PartitionInfo> partitionInfosBefore =
+                admin.listPartitionInfos(partitionedTablePath).get();
+        assertThat(partitionInfosBefore).isNotEmpty();
+
+        // Restart all tablet servers (they bind to new ports, making cached addresses stale).
+        for (int i = 0; i < FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().size(); i++) {
+            FLUSS_CLUSTER_EXTENSION.stopTabletServer(i);
+            FLUSS_CLUSTER_EXTENSION.startTabletServer(i);
+        }
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+
+        // Second query using the same admin client should succeed after retry with metadata
+        // refresh (verifies RetryableGatewayClientProxy convergence on stale addresses).
+        List<PartitionInfo> partitionInfosAfter =
+                admin.listPartitionInfos(partitionedTablePath).get();
+        assertThat(partitionInfosAfter).hasSize(partitionInfosBefore.size());
     }
 
     @Test
@@ -2425,5 +2455,56 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .rootCause()
                 .isInstanceOf(NetworkException.class)
                 .hasMessageContaining("connection timed out");
+    }
+
+    @Test
+    void testClusterHealthDuringRollingUpgrade() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "health_test_table");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(DEFAULT_SCHEMA).distributedBy(3, "id").build();
+        long tableId = createTable(tablePath, tableDescriptor, true);
+        waitAllReplicasReady(tableId, 3);
+
+        // Phase 1: Cluster is healthy — status should be GREEN.
+        ClusterHealth health = admin.getClusterHealth().get();
+        assertThat(health.getStatus()).isEqualTo(ClusterHealthStatus.GREEN);
+        assertThat(health.getNumReplicas()).isEqualTo(health.getInSyncReplicas());
+        assertThat(health.getNumLeaderReplicas()).isEqualTo(health.getActiveLeaderReplicas());
+
+        // Phase 2: Stop one tablet server (simulate server crash during rolling upgrade).
+        int stoppedServerId = 0;
+        FLUSS_CLUSTER_EXTENSION.stopTabletServer(stoppedServerId);
+        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(2);
+
+        for (int bucket = 0; bucket < 3; bucket++) {
+            TableBucket tb = new TableBucket(tableId, bucket);
+            FLUSS_CLUSTER_EXTENSION.waitUntilReplicaShrinkFromIsr(tb, stoppedServerId);
+        }
+
+        // Status should not be GREEN (YELLOW or RED depending on leader placement).
+        ClusterHealth duringDown = admin.getClusterHealth().get();
+        assertThat(duringDown.getStatus()).isNotEqualTo(ClusterHealthStatus.GREEN);
+        assertThat(duringDown.getInSyncReplicas()).isLessThan(duringDown.getNumReplicas());
+
+        // Phase 3: Restart the server.
+        FLUSS_CLUSTER_EXTENSION.startTabletServer(stoppedServerId);
+        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(3);
+
+        // Phase 4: Wait for recovery — status should return to GREEN.
+        for (int bucket = 0; bucket < 3; bucket++) {
+            TableBucket tb = new TableBucket(tableId, bucket);
+            FLUSS_CLUSTER_EXTENSION.waitUntilReplicaExpandToIsr(tb, stoppedServerId);
+        }
+
+        waitUntil(
+                () -> admin.getClusterHealth().get().getStatus() == ClusterHealthStatus.GREEN,
+                Duration.ofMinutes(1),
+                "Cluster should return to GREEN after server restart");
+
+        ClusterHealth afterRecovery = admin.getClusterHealth().get();
+        assertThat(afterRecovery.getStatus()).isEqualTo(ClusterHealthStatus.GREEN);
+        assertThat(afterRecovery.getNumReplicas()).isEqualTo(afterRecovery.getInSyncReplicas());
+        assertThat(afterRecovery.getNumLeaderReplicas())
+                .isEqualTo(afterRecovery.getActiveLeaderReplicas());
     }
 }

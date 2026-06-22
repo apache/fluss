@@ -18,11 +18,13 @@
 package org.apache.fluss.flink.source;
 
 import org.apache.fluss.client.initializer.OffsetsInitializer;
+import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.StatisticsColumnsConfig;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.flink.FlinkConnectorOptions;
+import org.apache.fluss.flink.row.FlinkAsFlussRow;
 import org.apache.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import org.apache.fluss.flink.source.lookup.FlinkAsyncLookupFunction;
 import org.apache.fluss.flink.source.lookup.FlinkLookupFunction;
@@ -38,6 +40,7 @@ import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.ChangelogImage;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.CompoundPredicate;
 import org.apache.fluss.predicate.PartitionPredicateVisitor;
@@ -594,7 +597,8 @@ public class FlinkTableSource
 
             // if not all primary key fields are in condition, fall through to
             // try partition filter pushdown for partitioned PK tables
-            if (visitedPkFields.equals(primaryKeyTypes.keySet())) {
+            if (visitedPkFields.equals(primaryKeyTypes.keySet())
+                    && lookupCoversAllData(lookupRow)) {
                 singleRowFilter = lookupRow;
                 // FLINK-38635: return all filters as remaining for scan vs lookup safety net
                 return Result.of(acceptedFilters, filters);
@@ -887,6 +891,25 @@ public class FlinkTableSource
             projection[primaryKeyIndexes[i]] = i;
         }
         return projection;
+    }
+
+    private boolean lookupCoversAllData(GenericRowData lookupRow) {
+        if (!isDataLakeEnabled || !isPartitioned()) {
+            return true;
+        }
+        // TODO: drop this gate once FIP-28 lets the lookup path read expired partitions from the
+        // lake; then always push the single-row lookup down instead of falling back to a scan.
+        // Partition keys are a subset of the primary key, so the partition resolves from lookupRow.
+        RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
+        PartitionGetter partitionGetter =
+                new PartitionGetter(
+                        flussRowType.project(primaryKeyIndexes),
+                        flussRowType.project(partitionKeyIndexes).getFieldNames());
+        PartitionSpec partitionSpec =
+                partitionGetter
+                        .getResolvedPartitionSpec(new FlinkAsFlussRow(lookupRow))
+                        .toPartitionSpec();
+        return PushdownUtils.partitionExists(tablePath, flussConfig, partitionSpec);
     }
 
     @VisibleForTesting

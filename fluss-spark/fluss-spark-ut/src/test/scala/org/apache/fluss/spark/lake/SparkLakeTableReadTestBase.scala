@@ -133,14 +133,18 @@ abstract class SparkLakeTableReadTestBase extends FlussSparkTestBase {
     }
   }
 
-  protected def pushedPredicates(df: DataFrame): Array[Predicate] = {
+  protected def flussScan(df: DataFrame): Seq[FlussScan] = {
     val scans =
       df.queryExecution.executedPlan.collect {
         case b: BatchScanExec => b.scan
       } ++ df.queryExecution.optimizedPlan.collect {
         case DataSourceV2ScanRelation(_, scan, _, _, _) => scan
       }
-    scans
+    scans.collect { case s: FlussScan => s }
+  }
+
+  protected def pushedPredicates(df: DataFrame): Array[Predicate] = {
+    flussScan(df)
       .collect { case f: FlussScan => f.pushedSparkPredicates }
       .flatten
       .toArray

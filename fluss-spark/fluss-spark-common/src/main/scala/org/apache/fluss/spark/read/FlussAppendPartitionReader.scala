@@ -28,9 +28,10 @@ class FlussAppendPartitionReader(
     tablePath: TablePath,
     projection: Array[Int],
     pushedPredicate: Option[Predicate],
+    limit: Option[Int],
     flussPartition: FlussAppendInputPartition,
     flussConfig: Configuration)
-  extends FlussPartitionReader(tablePath, flussConfig) {
+  extends FlussPartitionReader(tablePath, flussConfig, limit) {
 
   override protected lazy val projectedRowType: RowType = rowType.project(projection)
 

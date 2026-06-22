@@ -17,12 +17,12 @@
 
 package org.apache.fluss.spark
 
-import org.apache.fluss.spark.read.{FlussMetrics, FlussScan}
-import org.apache.fluss.spark.read.FlussAppendScan
+import org.apache.fluss.spark.read.{FlussAppendScan, FlussMetrics, FlussScan}
 
 import org.apache.spark.sql.{DataFrame, Row}
-import org.apache.spark.sql.Row
 import org.apache.spark.sql.connector.expressions.filter.Predicate
+import org.apache.spark.sql.connector.read.InputPartition
+import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanExec
 import org.apache.spark.sql.execution.datasources.v2.{BatchScanExec, DataSourceV2ScanRelation}
 import org.assertj.core.api.Assertions.assertThat
 
@@ -638,6 +638,96 @@ class SparkLogTableReadTest extends FlussSparkTestBase {
 
       val numRowsRead = batchScanExec.metrics(FlussMetrics.NUM_ROWS_READ).value
       assert(numRowsRead == 5L, s"Expected 5 rows read, got $numRowsRead")
+    }
+  }
+
+  test("Spark Read: limit pushdown") {
+    withTable("t") {
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.t (id INT, name STRING)
+             |""".stripMargin)
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t VALUES
+             |(1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e')
+             |""".stripMargin)
+
+      val dfNoLimit = sql(s"SELECT * FROM $DEFAULT_DATABASE.t")
+      assert(flussAppendScans(dfNoLimit).flatMap(_.limit).isEmpty)
+
+      val dfLimit = sql(s"SELECT * FROM $DEFAULT_DATABASE.t LIMIT 2")
+      assert(flussAppendScans(dfLimit).flatMap(_.limit).distinct == Seq(2))
+
+      // Verify limit pushdown actually reduces rows read via metrics
+      dfLimit.collect()
+      val batchScanExec = dfLimit.queryExecution.executedPlan.collectFirst {
+        case b: BatchScanExec => b
+      }.get
+      val numRowsRead = batchScanExec.metrics(FlussMetrics.NUM_ROWS_READ).value
+      assert(numRowsRead == 2L, s"Expected 2 rows read with limit pushdown, got $numRowsRead")
+    }
+  }
+
+  test("Spark Read: split partition by config") {
+    withSampleTable {
+      withSQLConf(
+        s"${SparkFlussConf.SPARK_FLUSS_CONF_PREFIX}${SparkFlussConf.SCAN_MAX_RECORDS_PER_PARTITION.key()}"
+          -> "2") {
+        val df = sql(s"SELECT amount FROM $DEFAULT_DATABASE.t ORDER BY orderId")
+        checkAnswer(df, Row(601) :: Row(602) :: Row(603) :: Row(604) :: Row(605) :: Nil)
+
+        val partitions = getInputPartitions(df)
+        assertThat(partitions.length).isEqualTo(3)
+      }
+    }
+
+    withTable("t_partition") {
+      sql(
+        s"""
+           |CREATE TABLE $DEFAULT_DATABASE.t_partition (orderId BIGINT, itemId BIGINT, amount INT, address STRING, dt STRING)
+           |PARTITIONED BY (dt)
+           |""".stripMargin
+      )
+
+      sql(s"""
+             |INSERT INTO $DEFAULT_DATABASE.t_partition VALUES
+             |(600L, 21L, 601, "addr1", "2026-01-01"), (700L, 22L, 602, "addr2", "2026-01-01"),
+             |(800L, 23L, 603, "addr3", "2026-01-02"), (900L, 24L, 604, "addr4", "2026-01-02"),
+             |(1000L, 25L, 605, "addr5", "2026-01-03")
+             |""".stripMargin)
+      Seq((0, 3), (1, 5), (2, 3)).foreach {
+        case (maxRecords, expectedPartitions) =>
+          withClue(s"maxRecords = $maxRecords, expectedPartitions = $expectedPartitions") {
+            withSQLConf(
+              s"${SparkFlussConf.SPARK_FLUSS_CONF_PREFIX}${SparkFlussConf.SCAN_MAX_RECORDS_PER_PARTITION.key()}"
+                -> maxRecords.toString) {
+              val df = sql(s"SELECT * FROM $DEFAULT_DATABASE.t_partition ORDER BY orderId")
+              checkAnswer(
+                df,
+                Row(600L, 21L, 601, "addr1", "2026-01-01") ::
+                  Row(700L, 22L, 602, "addr2", "2026-01-01") ::
+                  Row(800L, 23L, 603, "addr3", "2026-01-02") ::
+                  Row(900L, 24L, 604, "addr4", "2026-01-02") ::
+                  Row(1000L, 25L, 605, "addr5", "2026-01-03") :: Nil
+              )
+
+              val partitions = getInputPartitions(df)
+              assertThat(partitions.length).isEqualTo(expectedPartitions)
+            }
+          }
+      }
+    }
+  }
+
+  private def getInputPartitions(df: DataFrame): Seq[InputPartition] = {
+    df.queryExecution.executedPlan match {
+      case aeq: AdaptiveSparkPlanExec =>
+        aeq.inputPlan.collect { case b: BatchScanExec => b.inputPartitions }.flatten
+      case e =>
+        e.collect {
+          case b: BatchScanExec => b.inputPartitions
+          case _ => Seq.empty[InputPartition]
+        }.flatten
     }
   }
 }

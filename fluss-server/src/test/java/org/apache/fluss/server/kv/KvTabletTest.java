@@ -59,6 +59,7 @@ import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.kv.scan.OpenScanResult;
 import org.apache.fluss.server.kv.scan.ScannerContext;
+import org.apache.fluss.server.kv.snapshot.TabletState;
 import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogTablet;
@@ -1857,6 +1858,40 @@ class KvTabletTest {
         kvTablet.putAsLeader(updateBatch, null);
         kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
         assertThat(kvTablet.getRowCount()).isEqualTo(12);
+
+        kvTablet.close();
+    }
+
+    @Test
+    void testFlushDoesNotRegressFlushedLogOffset() throws Exception {
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
+
+        List<KvRecord> inserts = new ArrayList<>();
+        for (int i = 1; i <= 5; i++) {
+            inserts.add(kvRecordFactory.ofRecord("key" + i, new Object[] {i, "val" + i}));
+        }
+        kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(inserts), null);
+
+        List<KvRecord> deletes = new ArrayList<>();
+        for (int i = 1; i <= 2; i++) {
+            deletes.add(kvRecordFactory.ofRecord("key" + i, null));
+        }
+        kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(deletes), null);
+
+        long highOffset = logTablet.localLogEndOffset();
+        kvTablet.flush(highOffset, NOPErrorHandler.INSTANCE);
+        TabletState stateAfterHighFlush = kvTablet.getTabletState();
+        assertThat(stateAfterHighFlush.getFlushedLogOffset()).isEqualTo(highOffset);
+        assertThat(stateAfterHighFlush.getRowCount()).isEqualTo(3L);
+        assertThat(kvTablet.getRowCount()).isEqualTo(3);
+
+        long lowOffset = highOffset - 2;
+        kvTablet.flush(lowOffset, NOPErrorHandler.INSTANCE);
+        TabletState stateAfterLowFlush = kvTablet.getTabletState();
+
+        assertThat(stateAfterLowFlush.getFlushedLogOffset()).isEqualTo(highOffset);
+        assertThat(stateAfterLowFlush.getRowCount()).isEqualTo(3L);
+        assertThat(kvTablet.getRowCount()).isEqualTo(3);
 
         kvTablet.close();
     }

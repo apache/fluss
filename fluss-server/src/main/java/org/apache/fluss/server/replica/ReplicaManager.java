@@ -27,6 +27,7 @@ import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
+import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
@@ -124,7 +125,9 @@ import javax.annotation.concurrent.GuardedBy;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -145,7 +148,6 @@ import java.util.stream.Stream;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.apache.fluss.server.TabletManagerBase.getTableInfo;
-import static org.apache.fluss.utils.FileUtils.isDirectoryEmpty;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -990,7 +992,20 @@ public class ReplicaManager implements ServerReconfigurable {
                         TableBucket tb = data.getTableBucket();
                         HostedReplica hostedReplica = getReplica(tb);
                         if (hostedReplica instanceof NoneReplica) {
-                            // do nothing fort this case.
+                            if (data.isDeleteLocal()) {
+                                try {
+                                    sweepOrphanTabletDirs(tb, deletedTableIds, deletedPartitionIds);
+                                } catch (Exception e) {
+                                    LOG.error(
+                                            "Failed to sweep orphan tablet directories for {}",
+                                            tb,
+                                            e);
+                                    result.add(
+                                            new StopReplicaResultForBucket(
+                                                    tb, ApiError.fromThrowable(e)));
+                                    continue;
+                                }
+                            }
                             result.add(new StopReplicaResultForBucket(tb));
                         } else if (hostedReplica instanceof OfflineReplica) {
                             LOG.warn(
@@ -1939,6 +1954,59 @@ public class ReplicaManager implements ServerReconfigurable {
         return new StopReplicaResultForBucket(tb);
     }
 
+    /**
+     * Remove on-disk tablet directories for a bucket that the in-memory ReplicaManager does not
+     * know about. This handles the case where a stopReplica(delete=true) arrives after the
+     * TabletServer was restarted during a delete — LogManager loaded the log at startup but no
+     * NotifyLeaderAndIsr ever ran, so allReplicas is empty.
+     */
+    private void sweepOrphanTabletDirs(
+            TableBucket tb, Map<Long, Path> deletedTableIds, Map<Long, Path> deletedPartitionIds) {
+        Optional<LogTablet> orphanLog = logManager.getLog(tb);
+        if (!orphanLog.isPresent()) {
+            return;
+        }
+
+        LogTablet logTablet = orphanLog.get();
+        File dataDir = logTablet.getDataDir();
+        PhysicalTablePath physicalTablePath = logTablet.getPhysicalTablePath();
+        Path tabletParentDir = logManager.getTabletParentDir(dataDir, physicalTablePath, tb);
+
+        // Clean KV before log so that if KV cleanup fails, the log is still
+        // present and a coordinator retry can re-enter this method.
+        boolean isKvTable = false;
+        if (kvManager.getKv(tb).isPresent()) {
+            kvManager.dropKv(tb);
+            isKvTable = true;
+        } else {
+            File kvTabletDir = FlussPaths.kvTabletDir(dataDir, physicalTablePath, tb);
+            if (kvTabletDir.exists()) {
+                isKvTable = true;
+                try {
+                    FileUtils.deleteDirectory(kvTabletDir);
+                } catch (IOException e) {
+                    throw new KvStorageException(
+                            String.format(
+                                    "Failed to delete orphan KV tablet directory %s", kvTabletDir),
+                            e);
+                }
+            }
+        }
+
+        logManager.dropLog(tb);
+
+        localDiskManager.recordReplicaDelete(dataDir, isKvTable);
+
+        if (tb.getPartitionId() != null) {
+            deletedPartitionIds.put(tb.getPartitionId(), tabletParentDir);
+            deletedTableIds.put(tb.getTableId(), tabletParentDir.getParent());
+        } else {
+            deletedTableIds.put(tb.getTableId(), tabletParentDir);
+        }
+
+        LOG.info("Swept orphan tablet directories for bucket {}", tb);
+    }
+
     private void truncateToHighWatermark(List<Replica> replicas) {
         for (Replica replica : replicas) {
             long highWatermark = replica.getLogTablet().getHighWatermark();
@@ -1972,14 +2040,19 @@ public class ReplicaManager implements ServerReconfigurable {
     }
 
     private void dropEmptyTableOrPartitionDir(Path dir, long id, String dirType) {
-        if (!Files.exists(dir) || !isDirectoryEmpty(dir)) {
-            return;
-        }
-
-        LOG.info("Drop empty {} dir '{}' of {} id {}.", dirType, dir, dirType, id);
         try {
-            FileUtils.deleteDirectory(dir.toFile());
-        } catch (Exception e) {
+            Files.delete(dir);
+            LOG.info("Dropped empty {} dir '{}' of {} id {}.", dirType, dir, dirType, id);
+        } catch (DirectoryNotEmptyException e) {
+            LOG.warn(
+                    "{} dir '{}' of {} id {} is not empty, skipping deletion.",
+                    dirType,
+                    dir,
+                    dirType,
+                    id);
+        } catch (NoSuchFileException ignored) {
+            // Already gone — fine.
+        } catch (IOException e) {
             LOG.error("Failed to delete empty {} dir '{}' of {} id {}.", dirType, dir, dirType, e);
         }
     }

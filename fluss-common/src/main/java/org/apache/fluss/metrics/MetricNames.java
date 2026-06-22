@@ -44,6 +44,7 @@ public class MetricNames {
     public static final String BUCKET_COUNT = "bucketCount";
     public static final String PARTITION_COUNT = "partitionCount";
     public static final String REPLICAS_TO_DELETE_COUNT = "replicasToDeleteCount";
+    public static final String PENDING_LEADER_ACTIVATION_COUNT = "pendingLeaderActivationCount";
 
     // for coordinator event processor
     public static final String EVENT_QUEUE_SIZE = "eventQueueSize";
@@ -275,7 +276,7 @@ public class MetricNames {
 
     // for scanner
     public static final String SCANNER_TIME_MS_BETWEEN_POLL = "timeMsBetweenPoll";
-    public static final String SCANNER_LAST_POLL_SECONDS_AGO = "lastPoolSecondsAgo";
+    public static final String SCANNER_LAST_POLL_SECONDS_AGO = "lastPollSecondsAgo";
     public static final String SCANNER_POLL_IDLE_RATIO = "pollIdleRatio";
     public static final String SCANNER_FETCH_LATENCY_MS = "fetchLatencyMs";
     public static final String SCANNER_FETCH_RATE = "fetchRequestsPerSecond";

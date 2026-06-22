@@ -42,9 +42,10 @@ class FlussLakeAppendBatch(
     readSchema: StructType,
     pushedPredicate: Option[FlussPredicate],
     partitionPredicate: Option[FlussPredicate],
+    limit: Option[Int],
     options: CaseInsensitiveStringMap,
     flussConfig: Configuration)
-  extends FlussLakeBatch(tablePath, tableInfo, readSchema, options, flussConfig) {
+  extends FlussLakeBatch(tablePath, tableInfo, readSchema, limit, options, flussConfig) {
 
   // Required by FlussLakeBatch but unused — lake snapshot determines start offsets.
   override val startOffsetsInitializer: OffsetsInitializer = OffsetsInitializer.earliest()
@@ -59,6 +60,7 @@ class FlussLakeAppendBatch(
         tablePath,
         projection,
         logTailPredicate,
+        limit,
         options,
         flussConfig)
     } else {
@@ -68,6 +70,7 @@ class FlussLakeAppendBatch(
         projection,
         pushedPredicate,
         logTailPredicate,
+        limit,
         flussConfig)
     }
   }

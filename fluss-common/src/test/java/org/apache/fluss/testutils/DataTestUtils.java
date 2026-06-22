@@ -494,6 +494,20 @@ public class DataTestUtils {
             List<Object[]> objects,
             LogFormat logFormat)
             throws Exception {
+        return createRecordsWithoutBaseLogOffset(
+                rowType, schemaId, offsetBase, maxTimestamp, magic, objects, logFormat, false);
+    }
+
+    public static MemoryLogRecords createRecordsWithoutBaseLogOffset(
+            RowType rowType,
+            int schemaId,
+            long offsetBase,
+            long maxTimestamp,
+            byte magic,
+            List<Object[]> objects,
+            LogFormat logFormat,
+            boolean appendOnly)
+            throws Exception {
         List<ChangeType> changeTypes =
                 objects.stream().map(row -> ChangeType.APPEND_ONLY).collect(Collectors.toList());
         return createBasicMemoryLogRecords(
@@ -507,7 +521,8 @@ public class DataTestUtils {
                 changeTypes,
                 objects,
                 logFormat,
-                DEFAULT_COMPRESSION);
+                DEFAULT_COMPRESSION,
+                appendOnly);
     }
 
     public static MemoryLogRecords createBasicMemoryLogRecords(
@@ -534,7 +549,37 @@ public class DataTestUtils {
                 changeTypes,
                 objects,
                 logFormat,
-                arrowCompressionInfo);
+                arrowCompressionInfo,
+                false);
+    }
+
+    public static MemoryLogRecords createBasicMemoryLogRecords(
+            RowType rowType,
+            int schemaId,
+            long offsetBase,
+            long maxTimestamp,
+            byte magic,
+            long writerId,
+            int batchSequence,
+            List<ChangeType> changeTypes,
+            List<Object[]> objects,
+            LogFormat logFormat,
+            ArrowCompressionInfo arrowCompressionInfo,
+            boolean appendOnly)
+            throws Exception {
+        return createMemoryLogRecords(
+                rowType,
+                schemaId,
+                offsetBase,
+                maxTimestamp,
+                magic,
+                writerId,
+                batchSequence,
+                changeTypes,
+                objects,
+                logFormat,
+                arrowCompressionInfo,
+                appendOnly);
     }
 
     public static MemoryLogRecords createMemoryLogRecords(
@@ -548,7 +593,8 @@ public class DataTestUtils {
             List<ChangeType> changeTypes,
             List<Object[]> objects,
             LogFormat logFormat,
-            ArrowCompressionInfo arrowCompressionInfo)
+            ArrowCompressionInfo arrowCompressionInfo,
+            boolean appendOnly)
             throws Exception {
         if (logFormat == LogFormat.ARROW) {
             List<InternalRow> rows =
@@ -563,7 +609,8 @@ public class DataTestUtils {
                     batchSequence,
                     changeTypes,
                     rows,
-                    arrowCompressionInfo);
+                    arrowCompressionInfo,
+                    appendOnly);
         } else {
             return createIndexedMemoryLogRecords(
                     offsetBase,
@@ -614,7 +661,8 @@ public class DataTestUtils {
             int batchSequence,
             List<ChangeType> changeTypes,
             List<InternalRow> rows,
-            ArrowCompressionInfo arrowCompressionInfo)
+            ArrowCompressionInfo arrowCompressionInfo,
+            boolean appendOnly)
             throws Exception {
         try (BufferAllocator allocator = new RootAllocator(Integer.MAX_VALUE);
                 ArrowWriterPool provider = new ArrowWriterPool(allocator)) {
@@ -627,7 +675,8 @@ public class DataTestUtils {
                             magic,
                             schemaId,
                             writer,
-                            new ManagedPagedOutputView(new TestingMemorySegmentPool(10 * 1024)));
+                            new ManagedPagedOutputView(new TestingMemorySegmentPool(10 * 1024)),
+                            appendOnly);
             for (int i = 0; i < changeTypes.size(); i++) {
                 builder.append(changeTypes.get(i), rows.get(i));
             }

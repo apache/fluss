@@ -501,6 +501,24 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
     body
   }
 
+  test("Spark Read: primary key table limit pushdown") {
+    withPkPartitionedTable {
+      val dfNoLimit = sql(s"SELECT * FROM $DEFAULT_DATABASE.t")
+      assert(flussUpsertScan(dfNoLimit).flatMap(_.limit).isEmpty)
+
+      val dfLimit = sql(s"SELECT * FROM $DEFAULT_DATABASE.t WHERE dt = '2026-01-01' LIMIT 1")
+      assert(flussUpsertScan(dfLimit).flatMap(_.limit).contains(1))
+
+      // Verify limit pushdown actually reduces rows read via metrics
+      dfLimit.collect()
+      val batchScanExec = dfLimit.queryExecution.executedPlan.collectFirst {
+        case b: BatchScanExec => b
+      }.get
+      val numRowsRead = batchScanExec.metrics(FlussMetrics.NUM_ROWS_READ).value
+      assert(numRowsRead == 1L, s"Expected 1 rows read with limit pushdown, got $numRowsRead")
+    }
+  }
+
   private def partitionPredicate(df: DataFrame): Option[org.apache.fluss.predicate.Predicate] = {
     flussUpsertScan(df).flatMap(_.partitionPredicate)
   }

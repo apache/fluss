@@ -131,6 +131,7 @@ class ClientRpcMessageUtilsTest {
         PreAllocatedPagedOutputView outputView =
                 new PreAllocatedPagedOutputView(Collections.singletonList(segment));
         return new KvWriteBatch(
+                DATA1_TABLE_ID_PK,
                 bucketId,
                 PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
                 DATA1_TABLE_INFO_PK.getSchemaId(),

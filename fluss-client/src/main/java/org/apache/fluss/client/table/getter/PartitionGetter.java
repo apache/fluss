@@ -59,6 +59,10 @@ public class PartitionGetter {
     }
 
     public String getPartition(InternalRow row) {
+        return getResolvedPartitionSpec(row).getPartitionName();
+    }
+
+    public ResolvedPartitionSpec getResolvedPartitionSpec(InternalRow row) {
         List<String> partitionValues = new ArrayList<>();
         for (int i = 0; i < partitionFieldGetters.size(); i++) {
             InternalRow.FieldGetter partitionFieldGetter = partitionFieldGetters.get(i);
@@ -68,8 +72,6 @@ public class PartitionGetter {
             partitionValues.add(
                     PartitionUtils.convertValueOfType(partitionValue, dataType.getTypeRoot()));
         }
-        ResolvedPartitionSpec resolvedPartitionSpec =
-                new ResolvedPartitionSpec(partitionKeys, partitionValues);
-        return resolvedPartitionSpec.getPartitionName();
+        return new ResolvedPartitionSpec(partitionKeys, partitionValues);
     }
 }

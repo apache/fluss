@@ -18,6 +18,7 @@
 package org.apache.fluss.record;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -33,7 +34,9 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.ArrowUtils;
+import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.Projection;
+import org.apache.fluss.utils.UnshadedArrowReadUtils;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
@@ -42,11 +45,10 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.IntStream;
 
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
-
 /** A simple implementation for {@link LogRecordBatch.ReadContext}. */
 @ThreadSafe
-public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoCloseable {
+public class LogRecordReadContext
+        implements LogRecordBatch.ReadContext, ArrowRecordBatchContext, AutoCloseable {
 
     // the log format of the table
     private final LogFormat logFormat;
@@ -54,15 +56,18 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
     private final RowType dataRowType;
     // the static schemaId of the table, should support dynamic schema evolution in the future
     private final int targetSchemaId;
-    // the Arrow memory buffer allocator for the table, should be null if not ARROW log format
+    // the shaded Arrow memory buffer allocator, should be null if not ARROW log format
     @Nullable private final BufferAllocator bufferAllocator;
-    // the final selected fields of the read data
+    // the unshaded Arrow memory buffer allocator, declared as AutoCloseable to avoid
+    // importing unshaded Arrow classes in this module (they are provided-scope)
+    @Nullable private volatile AutoCloseable unshadedBufferAllocator;
     private final FieldGetter[] selectedFieldGetters;
     // whether the projection is push downed to the server side and the returned data is pruned.
     private final boolean projectionPushDowned;
     private final SchemaGetter schemaGetter;
     private final ConcurrentHashMap<Integer, VectorSchemaRoot> vectorSchemaRootMap =
             new ConcurrentHashMap<>();
+    private final Object unshadedArrowResourceLock = new Object();
 
     public static LogRecordReadContext createReadContext(
             TableInfo tableInfo,
@@ -318,6 +323,22 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         return schemaGetter;
     }
 
+    /**
+     * Returns the column index mapping for schema evolution, or {@code null} if the batch schema
+     * matches the current schema and no remapping is needed.
+     *
+     * <p>Each entry maps an output column to its position in the batch's schema. A value of {@code
+     * -1} means the column does not exist in the batch's schema and should be filled with nulls.
+     */
+    @Nullable
+    private int[] getSchemaEvolutionMapping(int schemaId) {
+        ProjectedRow projectedRow = getOutputProjectedRow(schemaId);
+        if (projectedRow == null) {
+            return null;
+        }
+        return projectedRow.getIndexMapping();
+    }
+
     @Override
     public VectorSchemaRoot getVectorSchemaRoot(int schemaId) {
         if (logFormat != LogFormat.ARROW) {
@@ -338,8 +359,16 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         if (logFormat != LogFormat.ARROW) {
             throw new IllegalArgumentException("Only Arrow log format provides buffer allocator.");
         }
-        checkNotNull(bufferAllocator, "The buffer allocator is not available.");
         return bufferAllocator;
+    }
+
+    @Override
+    public UnshadedArrowBatchAccess createUnshadedArrowBatchAccess(int schemaId) {
+        if (logFormat != LogFormat.ARROW) {
+            throw new IllegalArgumentException(
+                    "Only Arrow log format provides unshaded Arrow resources.");
+        }
+        return new UnshadedArrowBatchAccessImpl(schemaId);
     }
 
     @Nullable
@@ -359,8 +388,87 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
 
     public void close() {
         vectorSchemaRootMap.values().forEach(VectorSchemaRoot::close);
+        vectorSchemaRootMap.clear();
         if (bufferAllocator != null) {
             bufferAllocator.close();
+        }
+
+        synchronized (unshadedArrowResourceLock) {
+            if (unshadedBufferAllocator != null) {
+                try {
+                    unshadedBufferAllocator.close();
+                } catch (Exception e) {
+                    throw new RuntimeException(
+                            "Failed to close Arrow buffer allocator. "
+                                    + "Arrow batches returned by pollRecordBatch() must be closed "
+                                    + "before closing the scanner.",
+                            e);
+                }
+                unshadedBufferAllocator = null;
+            }
+        }
+    }
+
+    private AutoCloseable getOrCreateUnshadedBufferAllocator() {
+        AutoCloseable allocator = unshadedBufferAllocator;
+        if (allocator != null) {
+            return allocator;
+        }
+
+        synchronized (unshadedArrowResourceLock) {
+            if (unshadedBufferAllocator == null) {
+                unshadedBufferAllocator = new org.apache.arrow.memory.RootAllocator(Long.MAX_VALUE);
+            }
+            return unshadedBufferAllocator;
+        }
+    }
+
+    private final class UnshadedArrowBatchAccessImpl implements UnshadedArrowBatchAccess {
+        private final org.apache.arrow.memory.BufferAllocator allocator;
+        private org.apache.arrow.vector.VectorSchemaRoot readRoot;
+        private org.apache.arrow.vector.VectorSchemaRoot outputRoot;
+
+        private UnshadedArrowBatchAccessImpl(int schemaId) {
+            this.allocator =
+                    (org.apache.arrow.memory.BufferAllocator) getOrCreateUnshadedBufferAllocator();
+            this.readRoot =
+                    org.apache.arrow.vector.VectorSchemaRoot.create(
+                            org.apache.fluss.utils.UnshadedArrowReadUtils.toArrowSchema(
+                                    getRowType(schemaId)),
+                            allocator);
+            this.outputRoot = readRoot;
+        }
+
+        @Override
+        public void loadArrowBatch(MemorySegment segment, int arrowOffset, int arrowLength) {
+            UnshadedArrowReadUtils.loadArrowBatch(
+                    segment, arrowOffset, arrowLength, readRoot, allocator);
+        }
+
+        @Override
+        public ArrowBatchData createArrowBatchData(
+                long baseLogOffset, long timestamp, int schemaId) {
+            int[] schemaMapping = getSchemaEvolutionMapping(schemaId);
+            if (schemaMapping != null) {
+                outputRoot =
+                        UnshadedArrowReadUtils.projectVectorSchemaRoot(
+                                readRoot, dataRowType, schemaMapping, allocator);
+                readRoot.close();
+                readRoot = null;
+            }
+            ArrowBatchData arrowBatchData =
+                    new ArrowBatchData(outputRoot, baseLogOffset, timestamp, schemaId);
+            outputRoot = null;
+            readRoot = null;
+            return arrowBatchData;
+        }
+
+        @Override
+        public void close() {
+            IOUtils.closeQuietly(outputRoot);
+            if (outputRoot != readRoot) {
+                IOUtils.closeQuietly(readRoot);
+            }
         }
     }
 
