@@ -18,6 +18,7 @@
 package org.apache.fluss.flink.sink.testutils;
 
 import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.admin.ClusterHealth;
 import org.apache.fluss.client.admin.CreateAclsResult;
 import org.apache.fluss.client.admin.DropAclsResult;
 import org.apache.fluss.client.admin.KvSnapshotLease;
@@ -25,9 +26,11 @@ import org.apache.fluss.client.admin.ListOffsetsResult;
 import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.admin.ProducerOffsetsResult;
 import org.apache.fluss.client.admin.RegisterResult;
+import org.apache.fluss.client.metadata.ActiveKvSnapshots;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
+import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
@@ -315,6 +318,23 @@ public class TestAdminAdapter implements Admin {
 
     @Override
     public CompletableFuture<LakeSnapshot> getReadableLakeSnapshot(TablePath tablePath) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<ClusterHealth> getClusterHealth() {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<List<RemoteLogManifestInfo>> listRemoteLogManifests(
+            long tableId, @Nullable Long partitionId) {
+        throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
+    }
+
+    @Override
+    public CompletableFuture<ActiveKvSnapshots> listKvSnapshots(
+            long tableId, @Nullable Long partitionId) {
         throw new UnsupportedOperationException("Not implemented in TestAdminAdapter");
     }
 }

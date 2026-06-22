@@ -200,6 +200,27 @@ public class ConfigOptions {
                             "The interval of auto partition check. "
                                     + "The default value is 10 minutes.");
 
+    public static final ConfigOption<Duration> COORDINATOR_LIFECYCLE_THROTTLER_INFLIGHT_TIMEOUT =
+            key("coordinator.lifecycle-throttler.inflight-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(3))
+                    .withDescription(
+                            "The timeout for an in-flight drop event in the coordinator's "
+                                    + "TableLifecycleThrottler. If a drop event has been admitted "
+                                    + "but the corresponding completion callback has not arrived "
+                                    + "within this timeout, the throttler abandons tracking of "
+                                    + "that drop and continues admitting the next pending drop.");
+
+    public static final ConfigOption<Duration>
+            COORDINATOR_LIFECYCLE_THROTTLER_TIMEOUT_CHECK_INTERVAL =
+                    key("coordinator.lifecycle-throttler.timeout-check-interval")
+                            .durationType()
+                            .defaultValue(Duration.ofMinutes(1))
+                            .withDescription(
+                                    "The periodic interval at which the coordinator's "
+                                            + "TableLifecycleThrottler scans in-flight drops for "
+                                            + "timeouts.");
+
     public static final ConfigOption<Boolean> LOG_TABLE_ALLOW_CREATION =
             key("allow.create.log.tables")
                     .booleanType()
@@ -1270,6 +1291,18 @@ public class ConfigOptions {
                     .withDescription(
                             "The authentication protocol used to authenticate the client.");
 
+    public static final ConfigOption<Boolean> CLIENT_SECURITY_ENABLE_PLUGIN_DISCOVERY =
+            key("client.security.enable-plugin-discovery")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "When set to true, the client will additionally discover "
+                                    + "authentication plugins from the configured plugins/ folder "
+                                    + "via the PluginManager, in addition to the default classpath. "
+                                    + "This is useful for standalone tools or scripts that run outside "
+                                    + "the server JVM but still need to load authentication plugins "
+                                    + "shipped in plugins/.");
+
     public static final ConfigOption<MemorySize> CLIENT_SCANNER_LOG_FETCH_MAX_BYTES =
             key("client.scanner.log.fetch.max-bytes")
                     .memoryType()
@@ -1413,7 +1446,10 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "JAAS configuration string for the client. If not provided, uses the JVM option -Djava.security.auth.login.config. \n"
+                            "JAAS configuration string for the client. This option is retained for backward "
+                                    + "compatibility only. Since only SASL/PLAIN is currently supported, only "
+                                    + "PlainLoginModule is accepted. Prefer using 'client.security.sasl.username' "
+                                    + "and 'client.security.sasl.password' directly.\n"
                                     + "Example: org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required username=\"admin\" password=\"admin-secret\";");
 
     public static final ConfigOption<String> CLIENT_SASL_JAAS_USERNAME =

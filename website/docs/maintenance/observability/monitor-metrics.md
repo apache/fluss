@@ -294,8 +294,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-       <th rowspan="27"><strong>coordinator</strong></th>
-      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="10">-</td>
+       <th rowspan="28"><strong>coordinator</strong></th>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="11">-</td>
       <td>activeCoordinatorCount</td>
       <td>The number of active CoordinatorServer (only leader) in this cluster.</td>
       <td>Gauge</td>
@@ -343,6 +343,11 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     <tr>
       <td>replicasToDeleteCount</td>
       <td>The total number of replicas in the progress to be deleted in this cluster.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>pendingLeaderActivationCount</td>
+      <td>The number of buckets currently waiting for the leader-activation acknowledgement from the target tablet server. A non-zero, sustained value blocks the cluster-health API from reporting GREEN and will hold the readiness gate during a rolling upgrade; if it stays non-zero indefinitely it indicates a stuck activation that requires investigation.</td>
       <td>Gauge</td>
     </tr>
     <tr>

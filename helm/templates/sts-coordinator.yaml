@@ -25,6 +25,8 @@ metadata:
 spec:
   serviceName: coordinator-server-hs
   replicas: {{ .Values.coordinator.numberOfReplicas }}
+  updateStrategy:
+    type: RollingUpdate
   selector:
     matchLabels:
       {{- include "fluss.selectorLabels" . | nindent 6 }}
@@ -122,7 +124,7 @@ spec:
               echo "bind.listeners: ${BIND_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
               echo "advertised.listeners: ${ADVERTISED_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
 
-              bin/coordinator-server.sh start-foreground
+              exec bin/coordinator-server.sh start-foreground
           livenessProbe:
             failureThreshold: 100
             timeoutSeconds: 1

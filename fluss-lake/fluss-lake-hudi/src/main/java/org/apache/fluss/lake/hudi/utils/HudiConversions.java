@@ -24,6 +24,7 @@ import org.apache.fluss.lake.hudi.FlussDataTypeToHudiDataType;
 import org.apache.fluss.lake.hudi.utils.catalog.HudiCatalogUtils;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.ChangeType;
 
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.catalog.CatalogTable;
@@ -33,6 +34,7 @@ import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.catalog.UniqueConstraint;
 import org.apache.flink.table.factories.FactoryUtil;
 import org.apache.flink.table.types.DataType;
+import org.apache.flink.types.RowKind;
 import org.apache.hudi.common.model.HoodieTableType;
 import org.apache.hudi.configuration.FlinkOptions;
 import org.apache.hudi.index.HoodieIndex;
@@ -65,6 +67,10 @@ public class HudiConversions {
     private static final String HUDI_TABLE_TYPE_KEY = "hoodie.datasource.write.table.type";
     private static final String HUDI_RECORD_KEY_FIELD_OPTION =
             HUDI_CONF_PREFIX + FlinkOptions.RECORD_KEY_FIELD.key();
+
+    public static final String FLUSS_BUCKET_KEYS_OPTION = "fluss.bucket.keys";
+    public static final String FLUSS_BUCKET_AWARE_OPTION = "fluss.bucket-aware";
+    public static final String FLUSS_PARTITION_KEYS_OPTION = "fluss.partition.keys";
 
     /** Hudi config options set by Fluss should not be set by users. */
     @VisibleForTesting public static final Set<String> HUDI_UNSETTABLE_OPTIONS = new HashSet<>();
@@ -181,7 +187,7 @@ public class HudiConversions {
                     recordKeyField); // use primary key as index key
         }
 
-        // buket keys column
+        // bucket keys column
         hudiProperties.put(FlinkOptions.INDEX_TYPE.key(), HoodieIndex.IndexType.BUCKET.name());
         List<String> bucketKeys = tableDescriptor.getBucketKeys();
         int numBuckets =
@@ -209,6 +215,11 @@ public class HudiConversions {
         tableDescriptor
                 .getCustomProperties()
                 .forEach((k, v) -> setFlussPropertyToHudi(k, v, hudiProperties));
+
+        hudiProperties.put(FLUSS_BUCKET_KEYS_OPTION, String.join(DELIMITER, bucketKeys));
+        hudiProperties.put(
+                FLUSS_BUCKET_AWARE_OPTION, String.valueOf(isPkTable || !bucketKeys.isEmpty()));
+        hudiProperties.put(FLUSS_PARTITION_KEYS_OPTION, String.join(DELIMITER, partitionKeys));
 
         return hudiProperties;
     }
@@ -306,5 +317,37 @@ public class HudiConversions {
             primaryKeys.add(tableDescriptor.getSchema().getColumns().get(pkIndex).getName());
         }
         return primaryKeys;
+    }
+
+    /** Converts Fluss change type to Flink row kind used by Hudi row data. */
+    public static RowKind toRowKind(ChangeType changeType) {
+        switch (changeType) {
+            case APPEND_ONLY:
+            case INSERT:
+                return RowKind.INSERT;
+            case UPDATE_BEFORE:
+                return RowKind.UPDATE_BEFORE;
+            case UPDATE_AFTER:
+                return RowKind.UPDATE_AFTER;
+            case DELETE:
+                return RowKind.DELETE;
+            default:
+                throw new IllegalArgumentException("Unsupported change type: " + changeType);
+        }
+    }
+
+    public static ChangeType toChangeType(RowKind rowKind) {
+        switch (rowKind) {
+            case INSERT:
+                return ChangeType.INSERT;
+            case UPDATE_BEFORE:
+                return ChangeType.UPDATE_BEFORE;
+            case UPDATE_AFTER:
+                return ChangeType.UPDATE_AFTER;
+            case DELETE:
+                return ChangeType.DELETE;
+            default:
+                throw new IllegalArgumentException("Unsupported change type: " + rowKind);
+        }
     }
 }
