@@ -18,36 +18,24 @@
 package org.apache.fluss.lake.hudi;
 
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.lake.hudi.source.HudiLakeSource;
-import org.apache.fluss.lake.hudi.source.HudiSplit;
 import org.apache.fluss.lake.hudi.tiering.HudiLakeTieringFactory;
-import org.apache.fluss.lake.lakestorage.LakeCatalog;
-import org.apache.fluss.lake.lakestorage.LakeStorage;
-import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
-import org.apache.fluss.metadata.TablePath;
 
-/** Hudi Implementation of {@link LakeStorage}. */
-public class HudiLakeStorage implements LakeStorage {
+import org.junit.jupiter.api.Test;
 
-    private final Configuration hudiConfig;
+import static org.assertj.core.api.Assertions.assertThat;
 
-    public HudiLakeStorage(Configuration configuration) {
-        this.hudiConfig = configuration;
-    }
+/** Test for {@link HudiLakeStorage}. */
+class HudiLakeStorageTest {
 
-    @Override
-    public LakeTieringFactory<?, ?> createLakeTieringFactory() {
-        return new HudiLakeTieringFactory(hudiConfig);
-    }
+    @Test
+    void testCreateLakeTieringFactory() {
+        HudiLakeStorage lakeStorage = new HudiLakeStorage(new Configuration());
 
-    @Override
-    public LakeCatalog createLakeCatalog() {
-        return new HudiLakeCatalog(hudiConfig);
-    }
+        LakeTieringFactory<?, ?> lakeTieringFactory = lakeStorage.createLakeTieringFactory();
 
-    @Override
-    public LakeSource<HudiSplit> createLakeSource(TablePath tablePath) {
-        return new HudiLakeSource(hudiConfig, tablePath);
+        assertThat(lakeTieringFactory).isInstanceOf(HudiLakeTieringFactory.class);
+        assertThat(lakeTieringFactory.getWriteResultSerializer()).isNotNull();
+        assertThat(lakeTieringFactory.getCommittableSerializer()).isNotNull();
     }
 }

@@ -27,10 +27,10 @@ import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
 
 import java.io.IOException;
-import java.io.Serializable;
 
 /** Hudi implementation of {@link LakeTieringFactory}. */
-public class HudiLakeTieringFactory implements LakeTieringFactory<HudiWriteResult, Serializable> {
+public class HudiLakeTieringFactory
+        implements LakeTieringFactory<HudiWriteResult, HudiCommittable> {
 
     private static final long serialVersionUID = 1L;
 
@@ -54,14 +54,14 @@ public class HudiLakeTieringFactory implements LakeTieringFactory<HudiWriteResul
     }
 
     @Override
-    public LakeCommitter<HudiWriteResult, Serializable> createLakeCommitter(
-            CommitterInitContext committerInitContext) {
-        throw new UnsupportedOperationException("Hudi lake committer is not implemented yet.");
+    public LakeCommitter<HudiWriteResult, HudiCommittable> createLakeCommitter(
+            CommitterInitContext committerInitContext) throws IOException {
+        return new HudiLakeCommitter(
+                hudiCatalogProvider, ckpMetadataProvider, committerInitContext.tablePath());
     }
 
     @Override
-    public SimpleVersionedSerializer<Serializable> getCommittableSerializer() {
-        throw new UnsupportedOperationException(
-                "Hudi lake committable serializer is not implemented yet.");
+    public SimpleVersionedSerializer<HudiCommittable> getCommittableSerializer() {
+        return new HudiCommittableSerializer();
     }
 }
