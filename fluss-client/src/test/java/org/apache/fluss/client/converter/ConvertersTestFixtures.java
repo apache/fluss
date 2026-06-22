@@ -58,6 +58,7 @@ public final class ConvertersTestFixtures {
                 .field("arrayField", DataTypes.ARRAY(DataTypes.INT()))
                 .field("mapField", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()))
                 .field("enumField", DataTypes.STRING())
+                .field("string_with_column_name", DataTypes.STRING())
                 .build();
     }
 
@@ -84,6 +85,9 @@ public final class ConvertersTestFixtures {
         public Map<String, Integer> mapField;
         public StatusEnum enumField;
 
+        @ColumnName("string_with_column_name")
+        public String stringWithColumnName;
+
         public TestPojo() {}
 
         public TestPojo(
@@ -104,7 +108,8 @@ public final class ConvertersTestFixtures {
                 OffsetDateTime offsetDateTimeField,
                 Integer[] arrayField,
                 Map<String, Integer> mapField,
-                StatusEnum enumField) {
+                StatusEnum enumField,
+                String stringWithColumnName) {
             this.booleanField = booleanField;
             this.byteField = byteField;
             this.shortField = shortField;
@@ -123,6 +128,7 @@ public final class ConvertersTestFixtures {
             this.arrayField = arrayField;
             this.mapField = mapField;
             this.enumField = enumField;
+            this.stringWithColumnName = stringWithColumnName;
         }
 
         public static TestPojo sample() {
@@ -149,7 +155,8 @@ public final class ConvertersTestFixtures {
                             put("test_2", 2);
                         }
                     },
-                    StatusEnum.OK);
+                    StatusEnum.OK,
+                    "string value");
         }
 
         @Override
@@ -176,6 +183,7 @@ public final class ConvertersTestFixtures {
                     && Objects.equals(timestampField, testPojo.timestampField)
                     && Objects.equals(timestampLtzField, testPojo.timestampLtzField)
                     && Objects.equals(offsetDateTimeField, testPojo.offsetDateTimeField)
+                    && Objects.equals(stringWithColumnName, testPojo.stringWithColumnName)
                     && Arrays.equals(arrayField, testPojo.arrayField)
                     && Objects.equals(mapField, testPojo.mapField);
         }
@@ -197,6 +205,7 @@ public final class ConvertersTestFixtures {
                             timeField,
                             timestampField,
                             timestampLtzField,
+                            stringWithColumnName,
                             offsetDateTimeField,
                             mapField);
             result = 31 * result + Arrays.hashCode(bytesField);

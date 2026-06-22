@@ -19,6 +19,7 @@ package org.apache.fluss.client.converter;
 
 import org.junit.jupiter.api.Test;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Basic tests for {@link PojoType}. */
@@ -59,6 +60,34 @@ class PojoTypeTest {
         PojoType.of(PublicWithPublicWithBooleanWithIsAndSetter.class);
         PojoType.of(PublicWithPublicWithBooleanWithHasAndSetter.class);
         PojoType.of(PublicWithPublicNonPrimitive.class);
+    }
+
+    @Test
+    void testColumnNameAnnotation() {
+        PojoType<PojoWithColumnName> pojoType = PojoType.of(PojoWithColumnName.class);
+
+        assertThat(pojoType.getProperty("user_id"))
+                .isNotNull()
+                .hasFieldOrPropertyWithValue("name", "userId")
+                .hasFieldOrPropertyWithValue("mappedName", "user_id");
+
+        assertThat(pojoType.getProperty("first_name"))
+                .isNotNull()
+                .hasFieldOrPropertyWithValue("name", "firstName")
+                .hasFieldOrPropertyWithValue("mappedName", "first_name");
+
+        // Fields without @ColumnName should map to themselves
+        assertThat(pojoType.getProperty("email"))
+                .isNotNull()
+                .hasFieldOrPropertyWithValue("name", "email")
+                .hasFieldOrPropertyWithValue("mappedName", "email");
+    }
+
+    @Test
+    void testColumnNameAnnotationWithDuplicate() {
+        assertThatThrownBy(() -> PojoType.of(PojoWithDuplicateColumnName.class))
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Duplicated property name");
     }
 
     public class ClassWithNoPublicConstructor {
@@ -158,6 +187,40 @@ class PojoTypeTest {
 
         public void setB(boolean b) {
             this.b = b;
+        }
+    }
+
+    public static class PojoWithColumnName {
+        @ColumnName("user_id")
+        public Long userId;
+
+        @ColumnName("first_name")
+        private String firstName;
+
+        public String email;
+
+        public String getFirstName() {
+            return firstName;
+        }
+
+        public void setFirstName(String firstName) {
+            this.firstName = firstName;
+        }
+    }
+
+    public static class PojoWithDuplicateColumnName {
+        @ColumnName("first_name")
+        public String userId;
+
+        @ColumnName("first_name")
+        private String firstName;
+
+        public String getFirstName() {
+            return firstName;
+        }
+
+        public void setFirstName(String firstName) {
+            this.firstName = firstName;
         }
     }
 }
