@@ -35,22 +35,20 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 /** Shared utilities for Fluss type and Pojo type. */
 public class FlussTypeToPojoTypeConverter {
 
-    private static final Map<Class<?>, Map<String, Object>> ENUM_CONSTANTS_CACHE =
-            new ConcurrentHashMap<>();
-
     /**
-     * Builds a map of enum name (uppercase) to enum constant for the given enum class. This map is
-     * cached to avoid recreating it for every enum conversion.
+     * Builds a map of enum name to enum constant for the given enum class.
+     *
+     * @param enumClass the enum class
+     * @return an immutable map from enum constant name to enum constant
      */
-    private static Map<String, Object> buildEnumConstantsMap(Class<?> enumClass) {
+    static Map<String, Object> buildEnumConstantsMap(Class<?> enumClass) {
         Map<String, Object> map = new HashMap<>();
         for (Object constant : enumClass.getEnumConstants()) {
-            map.put(constant.toString(), constant);
+            map.put(((Enum<?>) constant).name(), constant);
         }
         return Collections.unmodifiableMap(map);
     }
@@ -66,12 +64,18 @@ public class FlussTypeToPojoTypeConverter {
      * @param fieldName The field name
      * @param pojoType The pojo type
      * @param s The BinaryString read from the row
+     * @param enumConstantsMap (optional) Pre-built enum constants map for enum types; ignored for
+     *     non-enum types
      * @return Converted Java value (String or Character)
      * @throws IllegalArgumentException if the target type is unsupported or constraints are
      *     violated
      */
     static Object convertTextValue(
-            DataType fieldType, String fieldName, Class<?> pojoType, BinaryString s) {
+            DataType fieldType,
+            String fieldName,
+            Class<?> pojoType,
+            BinaryString s,
+            Map<String, Object> enumConstantsMap) {
         if (s == null) {
             return null;
         }
@@ -97,8 +101,7 @@ public class FlussTypeToPojoTypeConverter {
             return v.charAt(0);
         } else if (pojoType.isEnum()) {
             Map<String, Object> enumMap =
-                    ENUM_CONSTANTS_CACHE.computeIfAbsent(
-                            pojoType, FlussTypeToPojoTypeConverter::buildEnumConstantsMap);
+                    enumConstantsMap != null ? enumConstantsMap : buildEnumConstantsMap(pojoType);
             Object enumConstant = enumMap.get(v);
             if (enumConstant == null) {
                 throw new IllegalArgumentException(

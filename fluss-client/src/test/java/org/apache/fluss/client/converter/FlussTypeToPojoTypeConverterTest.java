@@ -31,6 +31,7 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -45,7 +46,7 @@ public class FlussTypeToPojoTypeConverterTest {
         BinaryString binaryStr = BinaryString.fromString("Hello");
         Object result =
                 FlussTypeToPojoTypeConverter.convertTextValue(
-                        DataTypes.STRING(), "field", String.class, binaryStr);
+                        DataTypes.STRING(), "field", String.class, binaryStr, null);
         assertThat(result).isEqualTo("Hello");
     }
 
@@ -54,7 +55,7 @@ public class FlussTypeToPojoTypeConverterTest {
         BinaryString binaryStr = BinaryString.fromString("A");
         Object result =
                 FlussTypeToPojoTypeConverter.convertTextValue(
-                        DataTypes.CHAR(1), "field", String.class, binaryStr);
+                        DataTypes.CHAR(1), "field", String.class, binaryStr, null);
         assertThat(result).isEqualTo("A");
     }
 
@@ -63,7 +64,7 @@ public class FlussTypeToPojoTypeConverterTest {
         BinaryString binaryStr = BinaryString.fromString("X");
         Object result =
                 FlussTypeToPojoTypeConverter.convertTextValue(
-                        DataTypes.STRING(), "field", Character.class, binaryStr);
+                        DataTypes.STRING(), "field", Character.class, binaryStr, null);
         assertThat(result).isEqualTo('X');
     }
 
@@ -72,7 +73,7 @@ public class FlussTypeToPojoTypeConverterTest {
         BinaryString binaryStr = BinaryString.fromString("Z");
         Object result =
                 FlussTypeToPojoTypeConverter.convertTextValue(
-                        DataTypes.CHAR(1), "field", Character.class, binaryStr);
+                        DataTypes.CHAR(1), "field", Character.class, binaryStr, null);
         assertThat(result).isEqualTo('Z');
     }
 
@@ -80,7 +81,7 @@ public class FlussTypeToPojoTypeConverterTest {
     public void testConvertTextValueNullReturnsNull() {
         Object result =
                 FlussTypeToPojoTypeConverter.convertTextValue(
-                        DataTypes.STRING(), "field", String.class, null);
+                        DataTypes.STRING(), "field", String.class, null, null);
         assertThat(result).isNull();
     }
 
@@ -89,7 +90,7 @@ public class FlussTypeToPojoTypeConverterTest {
         BinaryString binaryStr = BinaryString.fromString("M");
         Object result =
                 FlussTypeToPojoTypeConverter.convertTextValue(
-                        DataTypes.CHAR(1), "field", String.class, binaryStr);
+                        DataTypes.CHAR(1), "field", String.class, binaryStr, null);
         assertThat(result).isEqualTo("M");
     }
 
@@ -99,7 +100,11 @@ public class FlussTypeToPojoTypeConverterTest {
         assertThatThrownBy(
                         () ->
                                 FlussTypeToPojoTypeConverter.convertTextValue(
-                                        DataTypes.CHAR(1), "myField", String.class, binaryStr))
+                                        DataTypes.CHAR(1),
+                                        "myField",
+                                        String.class,
+                                        binaryStr,
+                                        null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -109,7 +114,11 @@ public class FlussTypeToPojoTypeConverterTest {
         assertThatThrownBy(
                         () ->
                                 FlussTypeToPojoTypeConverter.convertTextValue(
-                                        DataTypes.CHAR(1), "charField", Character.class, binaryStr))
+                                        DataTypes.CHAR(1),
+                                        "charField",
+                                        Character.class,
+                                        binaryStr,
+                                        null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -122,7 +131,8 @@ public class FlussTypeToPojoTypeConverterTest {
                                         DataTypes.STRING(),
                                         "emptyField",
                                         Character.class,
-                                        binaryStr))
+                                        binaryStr,
+                                        null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -131,7 +141,11 @@ public class FlussTypeToPojoTypeConverterTest {
         BinaryString binaryStr = BinaryString.fromString("ACTIVE");
         Object result =
                 FlussTypeToPojoTypeConverter.convertTextValue(
-                        DataTypes.STRING(), "status", StatusEnum.class, binaryStr);
+                        DataTypes.STRING(),
+                        "status",
+                        StatusEnum.class,
+                        binaryStr,
+                        buildConstantMap());
         assertThat(result).isEqualTo(StatusEnum.ACTIVE);
     }
 
@@ -140,7 +154,11 @@ public class FlussTypeToPojoTypeConverterTest {
         BinaryString binaryStr = BinaryString.fromString("finished");
         Object result =
                 FlussTypeToPojoTypeConverter.convertTextValue(
-                        DataTypes.STRING(), "status", StatusEnum.class, binaryStr);
+                        DataTypes.STRING(),
+                        "status",
+                        StatusEnum.class,
+                        binaryStr,
+                        buildConstantMap());
         assertThat(result).isEqualTo(StatusEnum.finished);
     }
 
@@ -150,7 +168,11 @@ public class FlussTypeToPojoTypeConverterTest {
         assertThatThrownBy(
                         () ->
                                 FlussTypeToPojoTypeConverter.convertTextValue(
-                                        DataTypes.STRING(), "status", StatusEnum.class, binaryStr))
+                                        DataTypes.STRING(),
+                                        "status",
+                                        StatusEnum.class,
+                                        binaryStr,
+                                        buildConstantMap()))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -160,8 +182,21 @@ public class FlussTypeToPojoTypeConverterTest {
         assertThatThrownBy(
                         () ->
                                 FlussTypeToPojoTypeConverter.convertTextValue(
-                                        DataTypes.STRING(), "wrongField", Integer.class, binaryStr))
+                                        DataTypes.STRING(),
+                                        "wrongField",
+                                        Integer.class,
+                                        binaryStr,
+                                        buildConstantMap()))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    public void testConvertTextValueToEnumWithMatchingValueAndWithoutConstantMap() {
+        BinaryString binaryStr = BinaryString.fromString("ACTIVE");
+        Object result =
+                FlussTypeToPojoTypeConverter.convertTextValue(
+                        DataTypes.STRING(), "status", StatusEnum.class, binaryStr, null);
+        assertThat(result).isEqualTo(StatusEnum.ACTIVE);
     }
 
     // ==================== convertDateValue Tests ====================
@@ -228,6 +263,10 @@ public class FlussTypeToPojoTypeConverterTest {
                 FlussTypeToPojoTypeConverter.convertTimestampLtzValue(
                         ts, "field", OffsetDateTime.class);
         assertThat(result).isEqualTo(OffsetDateTime.of(1970, 1, 1, 0, 0, 0, 0, ZoneOffset.UTC));
+    }
+
+    private static Map<String, Object> buildConstantMap() {
+        return FlussTypeToPojoTypeConverter.buildEnumConstantsMap(StatusEnum.class);
     }
 
     // ==================== Helper Enum ====================

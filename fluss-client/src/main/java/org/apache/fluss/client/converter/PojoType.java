@@ -126,8 +126,7 @@ final class PojoType<T> {
                             field.getGenericType(),
                             publicField ? field : null,
                             getter,
-                            setter,
-                            mappedColumnName));
+                            setter));
         }
 
         return new PojoType<>(pojoClass, ctor, props);
@@ -298,12 +297,6 @@ final class PojoType<T> {
         /** The generic type of the field (e.g. {@code Map<String, AddressPojo>}). */
         final Type genericType;
 
-        /**
-         * The name of the column in the Fluss table. This may differ from 'name' if a @ColumnName
-         * annotation is present. Used for looking up the property by table column name.
-         */
-        final String mappedName;
-
         @Nullable final Field publicField;
         @Nullable final Method getter;
         @Nullable final Method setter;
@@ -314,12 +307,10 @@ final class PojoType<T> {
                 Type genericType,
                 @Nullable Field publicField,
                 @Nullable Method getter,
-                @Nullable Method setter,
-                String mappedName) {
+                @Nullable Method setter) {
             this.name = Objects.requireNonNull(name, "name");
             this.type = Objects.requireNonNull(type, "type");
             this.genericType = Objects.requireNonNull(genericType, "genericType");
-            this.mappedName = Objects.requireNonNull(mappedName, "mappedName");
             this.publicField = publicField;
             this.getter = getter;
             this.setter = setter;

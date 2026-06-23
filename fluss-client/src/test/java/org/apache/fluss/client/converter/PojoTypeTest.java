@@ -68,19 +68,16 @@ class PojoTypeTest {
 
         assertThat(pojoType.getProperty("user_id"))
                 .isNotNull()
-                .hasFieldOrPropertyWithValue("name", "userId")
-                .hasFieldOrPropertyWithValue("mappedName", "user_id");
+                .hasFieldOrPropertyWithValue("name", "userId");
 
         assertThat(pojoType.getProperty("first_name"))
                 .isNotNull()
-                .hasFieldOrPropertyWithValue("name", "firstName")
-                .hasFieldOrPropertyWithValue("mappedName", "first_name");
+                .hasFieldOrPropertyWithValue("name", "firstName");
 
         // Fields without @ColumnName should map to themselves
         assertThat(pojoType.getProperty("email"))
                 .isNotNull()
-                .hasFieldOrPropertyWithValue("name", "email")
-                .hasFieldOrPropertyWithValue("mappedName", "email");
+                .hasFieldOrPropertyWithValue("name", "email");
     }
 
     @Test

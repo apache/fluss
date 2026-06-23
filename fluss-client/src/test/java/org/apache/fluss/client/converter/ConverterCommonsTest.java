@@ -431,7 +431,7 @@ public class ConverterCommonsTest {
         PojoType.Property prop = pojoType.getProperty("status");
         assertThatThrownBy(() -> ConverterCommons.validateCompatibility(DataTypes.INT(), prop))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("must be a string type");
+                .hasMessageContaining("must be a STRING column");
     }
 
     @Test
