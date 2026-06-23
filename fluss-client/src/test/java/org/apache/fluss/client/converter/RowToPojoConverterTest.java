@@ -20,6 +20,7 @@ package org.apache.fluss.client.converter;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
+
 import org.junit.jupiter.api.Test;
 
 import java.util.HashMap;
