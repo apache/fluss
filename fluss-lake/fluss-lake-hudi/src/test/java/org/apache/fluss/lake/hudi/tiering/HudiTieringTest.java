@@ -37,6 +37,7 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.types.DataTypes;
 
+import org.apache.hudi.client.WriteStatus;
 import org.apache.hudi.configuration.FlinkOptions;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -52,6 +53,7 @@ import java.util.Collections;
 import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.lake.writer.LakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for tiering Fluss records to Hudi via {@link HudiLakeTieringFactory}. */
 class HudiTieringTest {
@@ -124,6 +126,30 @@ class HudiTieringTest {
                     .containsEntry("commit-user", FLUSS_LAKE_TIERING_COMMIT_USER)
                     .containsEntry(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "fluss-offset-file");
             assertThat(committer.getMissingLakeSnapshot(committedSnapshotId)).isNull();
+        }
+    }
+
+    @Test
+    void testRejectCompactionWriteStatusesOnCommit() throws Exception {
+        TablePath tablePath =
+                TablePath.of("hudi", "test_reject_compaction_write_statuses_on_commit");
+        TableDescriptor tableDescriptor = createLogTableDescriptor();
+        hudiLakeCatalog.createTable(
+                tablePath, tableDescriptor, new TestingLakeCatalogContext(tableDescriptor));
+        TableInfo tableInfo = TableInfo.of(tablePath, 1L, 0, tableDescriptor, null, 1L, 1L);
+
+        try (LakeCommitter<HudiWriteResult, HudiCommittable> committer =
+                createLakeCommitter(tablePath, tableInfo)) {
+            HudiCommittable committable =
+                    new HudiCommittable(
+                            Collections.emptyMap(),
+                            Collections.singletonMap(
+                                    "20260623000100000",
+                                    Collections.singletonList(new WriteStatus(false, 0.0))));
+
+            assertThatThrownBy(() -> committer.commit(committable, Collections.emptyMap()))
+                    .isInstanceOf(IOException.class)
+                    .hasMessageContaining("Hudi compaction write statuses are not supported yet");
         }
     }
 

@@ -40,9 +40,11 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.apache.fluss.lake.writer.LakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
 
@@ -84,6 +86,8 @@ public class HudiLakeCommitter implements LakeCommitter<HudiWriteResult, HudiCom
     public LakeCommitResult commit(
             HudiCommittable committable, Map<String, String> snapshotProperties)
             throws IOException {
+        ensureNoCompactionWriteStatuses(committable);
+
         Map<String, List<WriteStatus>> writeStatuses = committable.getWriteStatuses();
         if (writeStatuses.size() != 1) {
             throw new IOException(
@@ -129,8 +133,9 @@ public class HudiLakeCommitter implements LakeCommitter<HudiWriteResult, HudiCom
 
     @Override
     public void abort(HudiCommittable committable) throws IOException {
-        Map<String, List<WriteStatus>> writeStatuses = committable.getWriteStatuses();
-        for (String instant : writeStatuses.keySet()) {
+        Set<String> instants = new LinkedHashSet<>(committable.getWriteStatuses().keySet());
+        instants.addAll(committable.getCompactionWriteStatuses().keySet());
+        for (String instant : instants) {
             try {
                 writeClient.rollback(instant);
                 ckpMetadata.abortInstant(instant);
@@ -138,6 +143,18 @@ public class HudiLakeCommitter implements LakeCommitter<HudiWriteResult, HudiCom
             } catch (Exception e) {
                 throw new IOException("Failed to abort Hudi instant " + instant + ".", e);
             }
+        }
+    }
+
+    private static void ensureNoCompactionWriteStatuses(HudiCommittable committable)
+            throws IOException {
+        Map<String, List<WriteStatus>> compactionWriteStatuses =
+                committable.getCompactionWriteStatuses();
+        if (!compactionWriteStatuses.isEmpty()) {
+            throw new IOException(
+                    "Hudi compaction write statuses are not supported yet, but got instants "
+                            + compactionWriteStatuses.keySet()
+                            + ".");
         }
     }
 
