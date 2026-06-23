@@ -81,10 +81,12 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                         tableInfo.getTableConfig(),
                         tableInfo.isDefaultBucketKey());
         this.bucketKeyEncoder =
-                tableInfo.isDefaultBucketKey() && lakeFormat != DataLakeFormat.HUDI
-                        ? primaryKeyEncoder
-                        : KeyEncoder.ofBucketKeyEncoder(
-                                lookupRowType, tableInfo.getBucketKeys(), lakeFormat);
+                KeyEncoder.ofBucketKeyEncoder(
+                        lookupRowType,
+                        tableInfo.getBucketKeys(),
+                        tableInfo.getTableConfig(),
+                        tableInfo.isDefaultBucketKey(),
+                        primaryKeyEncoder);
 
         this.bucketingFunction = BucketingFunction.of(lakeFormat);
 
