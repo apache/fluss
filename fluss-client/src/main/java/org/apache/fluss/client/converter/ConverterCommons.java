@@ -152,7 +152,7 @@ final class ConverterCommons {
             if (typeRoot != DataTypeRoot.STRING) {
                 throw new IllegalArgumentException(
                         String.format(
-                                "Enum field '%s' must be a string type, got %s",
+                                "Enum field '%s' must be a STRING column, got %s",
                                 prop.name, typeRoot));
             }
             return;
