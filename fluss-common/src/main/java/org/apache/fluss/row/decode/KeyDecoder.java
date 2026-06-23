@@ -60,6 +60,9 @@ public interface KeyDecoder {
             if (lakeFormat == null || lakeFormat == DataLakeFormat.LANCE) {
                 return CompactedKeyDecoder.createKeyDecoder(rowType, keyFields);
             }
+            if (lakeFormat == DataLakeFormat.HUDI) {
+                return CompactedKeyDecoder.createKeyDecoder(rowType, keyFields);
+            }
             if (lakeFormat == DataLakeFormat.PAIMON) {
                 return new PaimonKeyDecoder(rowType, keyFields);
             }

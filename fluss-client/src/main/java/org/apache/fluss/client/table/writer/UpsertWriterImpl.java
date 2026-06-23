@@ -20,6 +20,7 @@ package org.apache.fluss.client.table.writer;
 import org.apache.fluss.client.write.WriteFormat;
 import org.apache.fluss.client.write.WriteRecord;
 import org.apache.fluss.client.write.WriterClient;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -87,13 +88,12 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
                         tableInfo.getPhysicalPrimaryKeys(),
                         tableInfo.getTableConfig(),
                         tableInfo.isDefaultBucketKey());
+        DataLakeFormat dataLakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
         this.bucketKeyEncoder =
-                tableInfo.isDefaultBucketKey()
+                tableInfo.isDefaultBucketKey() && dataLakeFormat != DataLakeFormat.HUDI
                         ? primaryKeyEncoder
                         : KeyEncoder.ofBucketKeyEncoder(
-                                tableInfo.getRowType(),
-                                tableInfo.getBucketKeys(),
-                                tableInfo.getTableConfig().getDataLakeFormat().orElse(null));
+                                tableInfo.getRowType(), tableInfo.getBucketKeys(), dataLakeFormat);
 
         this.kvFormat = tableInfo.getTableConfig().getKvFormat();
         this.writeFormat = WriteFormat.fromKvFormat(this.kvFormat);
