@@ -170,14 +170,14 @@ public final class ConvertersTestFixtures {
                     },
                     StatusEnum.OK,
                     "string value",
-                    List.of(StatusEnum.error, StatusEnum.OK),
-                    new HashMap<>() {
+                    Arrays.asList(StatusEnum.error, StatusEnum.OK),
+                    new HashMap<String, StatusEnum>() {
                         {
                             put("key1", StatusEnum.OK);
                             put("key2", StatusEnum.error);
                         }
                     },
-                    new HashMap<>() {
+                    new HashMap<StatusEnum, String>() {
                         {
                             put(StatusEnum.OK, "value1");
                             put(StatusEnum.error, "value2");
