@@ -51,12 +51,16 @@ import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.ControlledShutdownRequest;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataRequest;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
+import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.ReleaseKvSnapshotLeaseRequest;
+import org.apache.fluss.rpc.messages.StopReplicaRequest;
+import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.security.acl.AccessControlEntry;
 import org.apache.fluss.security.acl.AccessControlEntryFilter;
@@ -1392,6 +1396,89 @@ public class FlussAuthorizationITCase {
         conf.set(ConfigOptions.SUPER_USERS, "User:root");
         conf.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         return conf;
+    }
+
+    @Test
+    void testInternalReplicationControlAuthorization() throws Exception {
+        // These RPCs are internal-only and should reject all external sessions,
+        // regardless of permissions
+        try (RpcClient rpcClient =
+                RpcClient.create(guestConf, TestingClientMetricGroup.newInstance())) {
+
+            TabletServerGateway guestTabletGateway =
+                    GatewayClientProxy.createGatewayProxy(
+                            () -> FLUSS_CLUSTER_EXTENSION.getTabletServerNodes("CLIENT").get(0),
+                            rpcClient,
+                            TabletServerGateway.class);
+
+            CoordinatorGateway guestCoordinatorGateway =
+                    GatewayClientProxy.createGatewayProxy(
+                            () -> FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode("CLIENT"),
+                            rpcClient,
+                            CoordinatorGateway.class);
+
+            // Test 1: notifyLeaderAndIsr should reject external sessions
+            NotifyLeaderAndIsrRequest notifyRequest = new NotifyLeaderAndIsrRequest();
+            notifyRequest.setCoordinatorEpoch(1);
+            assertThatThrownBy(() -> guestTabletGateway.notifyLeaderAndIsr(notifyRequest).get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            "NotifyLeaderAndIsr is an internal RPC and cannot be called by external clients");
+
+            // Test 2: updateMetadata should reject external sessions
+            UpdateMetadataRequest updateRequest = new UpdateMetadataRequest();
+            updateRequest.setCoordinatorEpoch(1);
+            assertThatThrownBy(() -> guestTabletGateway.updateMetadata(updateRequest).get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            "UpdateMetadata is an internal RPC and cannot be called by external clients");
+
+            // Test 3: stopReplica should reject external sessions
+            StopReplicaRequest stopRequest = new StopReplicaRequest();
+            stopRequest.setCoordinatorEpoch(1);
+            assertThatThrownBy(() -> guestTabletGateway.stopReplica(stopRequest).get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            "StopReplica is an internal RPC and cannot be called by external clients");
+
+            // Test 4: adjustIsr should reject external sessions
+            AdjustIsrRequest adjustRequest = new AdjustIsrRequest();
+            adjustRequest.setServerId(0);
+            assertThatThrownBy(() -> guestCoordinatorGateway.adjustIsr(adjustRequest).get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            "AdjustIsr is an internal RPC and cannot be called by external clients");
+        }
+
+        // Test 5: Even root user (super user) cannot call these RPCs from external sessions
+        Configuration rootClientConf =
+                new Configuration(FLUSS_CLUSTER_EXTENSION.getClientConfig("CLIENT"));
+        rootClientConf.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "sasl");
+        rootClientConf.set(ConfigOptions.CLIENT_SASL_MECHANISM, "plain");
+        rootClientConf.setString("client.security.sasl.username", "root");
+        rootClientConf.setString("client.security.sasl.password", "password");
+
+        try (RpcClient rootRpcClient =
+                RpcClient.create(rootClientConf, TestingClientMetricGroup.newInstance())) {
+
+            TabletServerGateway rootTabletGateway =
+                    GatewayClientProxy.createGatewayProxy(
+                            () -> FLUSS_CLUSTER_EXTENSION.getTabletServerNodes("CLIENT").get(0),
+                            rootRpcClient,
+                            TabletServerGateway.class);
+
+            NotifyLeaderAndIsrRequest notifyRequest = new NotifyLeaderAndIsrRequest();
+            notifyRequest.setCoordinatorEpoch(1);
+            assertThatThrownBy(() -> rootTabletGateway.notifyLeaderAndIsr(notifyRequest).get())
+                    .rootCause()
+                    .isInstanceOf(AuthorizationException.class)
+                    .hasMessageContaining(
+                            "NotifyLeaderAndIsr is an internal RPC and cannot be called by external clients");
+        }
     }
 
     private void assertNoTableDescribeAuth(ThrowableAssert.ThrowingCallable callable) {
