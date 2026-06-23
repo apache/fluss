@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.cluster.ConfigEntry;
@@ -86,6 +87,7 @@ import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.metadata.MetadataProvider;
 import org.apache.fluss.server.metadata.PartitionMetadata;
+import org.apache.fluss.server.metadata.PartitionNegativeCache;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.tablet.TabletService;
@@ -143,6 +145,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     protected final MetadataManager metadataManager;
     protected final @Nullable Authorizer authorizer;
     protected final DynamicConfigManager dynamicConfigManager;
+    protected final PartitionNegativeCache partitionNegativeCache;
 
     private long tokenLastUpdateTimeMs = 0;
     private ObtainedSecurityToken securityToken = null;
@@ -164,7 +167,13 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         this.metadataManager = metadataManager;
         this.authorizer = authorizer;
         this.dynamicConfigManager = dynamicConfigManager;
+        this.partitionNegativeCache = new PartitionNegativeCache();
         this.ioExecutor = ioExecutor;
+    }
+
+    @VisibleForTesting
+    public PartitionNegativeCache getPartitionNegativeCache() {
+        return partitionNegativeCache;
     }
 
     @Override
@@ -614,6 +623,15 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         long[] partitionIds = request.getPartitionsIds();
         List<Long> partitionIdsNotExistsInCache = new ArrayList<>();
         for (long partitionId : partitionIds) {
+            // Fast-path: throw immediately for partition IDs known to not exist,
+            // avoiding ZK queries while preserving the original exception semantics.
+            if (partitionNegativeCache.isKnownNonExistent(partitionId)) {
+                throw new PartitionNotExistException(
+                        String.format(
+                                "The partition id '%d' does not exist or you don't have"
+                                        + " permission to access it.",
+                                partitionId));
+            }
             Optional<PhysicalTablePath> physicalTablePath =
                     metadataProvider.getPhysicalTablePathFromCache(partitionId);
             if (physicalTablePath.isPresent()) {
@@ -634,6 +652,8 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                 if (partitionIdAndPaths.containsKey(partitionId)) {
                     partitionPaths.add(partitionIdAndPaths.get(partitionId));
                 } else {
+                    // Mark this partition ID in the negative cache to avoid future ZK queries
+                    partitionNegativeCache.markNonExistent(partitionId);
                     throw new PartitionNotExistException(
                             String.format(
                                     "The partition id '%d' does not exist or you don't have permission to access it.",
