@@ -18,16 +18,12 @@
 package org.apache.fluss.lake.hudi.tiering;
 
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
-import org.apache.fluss.utils.InstantiationUtils;
-
-import org.apache.hudi.client.WriteStatus;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.util.List;
 import java.util.Map;
 
 /** Serializer for {@link HudiWriteResult}. */
@@ -42,17 +38,10 @@ public class HudiWriteResultSerializer implements SimpleVersionedSerializer<Hudi
 
     @Override
     public byte[] serialize(HudiWriteResult hudiWriteResult) throws IOException {
-        byte[] writeResultBytes =
-                InstantiationUtils.serializeObject(hudiWriteResult.getWriteStatuses());
-        byte[] compactionWriteResultBytes =
-                InstantiationUtils.serializeObject(hudiWriteResult.getCompactionWriteStatuses());
-
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
                 DataOutputStream dos = new DataOutputStream(baos)) {
-            dos.writeInt(writeResultBytes.length);
-            dos.write(writeResultBytes);
-            dos.writeInt(compactionWriteResultBytes.length);
-            dos.write(compactionWriteResultBytes);
+            HudiWriteStatsSerde.writeStatsMap(dos, hudiWriteResult.getWriteStats());
+            HudiWriteStatsSerde.writeStatsMap(dos, hudiWriteResult.getCompactionWriteStats());
             return baos.toByteArray();
         }
     }
@@ -67,40 +56,15 @@ public class HudiWriteResultSerializer implements SimpleVersionedSerializer<Hudi
                             + CURRENT_VERSION);
         }
 
-        Map<String, List<WriteStatus>> writeResult;
-        Map<String, List<WriteStatus>> compactionWriteResult;
+        Map<String, HudiWriteStats> writeStats;
+        Map<String, HudiWriteStats> compactionWriteStats;
         try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(serialized))) {
-            byte[] writeResultBytes = readBytes(dis, "WriteResult");
-            writeResult =
-                    InstantiationUtils.deserializeObject(
-                            writeResultBytes, getClass().getClassLoader());
-
-            byte[] compactionWriteResultBytes = readBytes(dis, "CompactionWriteResult");
-            compactionWriteResult =
-                    InstantiationUtils.deserializeObject(
-                            compactionWriteResultBytes, getClass().getClassLoader());
+            writeStats = HudiWriteStatsSerde.readStatsMap(dis, "WriteStats");
+            compactionWriteStats = HudiWriteStatsSerde.readStatsMap(dis, "CompactionWriteStats");
             if (dis.available() > 0) {
                 throw new IOException("Corrupted serialization: trailing bytes " + dis.available());
             }
-        } catch (ClassNotFoundException e) {
-            throw new IOException("Couldn't deserialize HudiWriteResult.", e);
         }
-        return new HudiWriteResult(writeResult, compactionWriteResult);
-    }
-
-    private static byte[] readBytes(DataInputStream dis, String field) throws IOException {
-        int length = dis.readInt();
-        validateLength(length, dis.available(), field);
-        byte[] bytes = new byte[length];
-        dis.readFully(bytes);
-        return bytes;
-    }
-
-    private static void validateLength(int length, int remainingLength, String field)
-            throws IOException {
-        if (length < 0 || length > remainingLength) {
-            throw new IOException(
-                    "Corrupted serialization: invalid " + field + " length " + length);
-        }
+        return new HudiWriteResult(writeStats, compactionWriteStats);
     }
 }

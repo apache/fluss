@@ -37,7 +37,7 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.types.DataTypes;
 
-import org.apache.hudi.client.WriteStatus;
+import org.apache.hudi.common.model.HoodieWriteStat;
 import org.apache.hudi.configuration.FlinkOptions;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -145,11 +145,12 @@ class HudiTieringTest {
                             Collections.emptyMap(),
                             Collections.singletonMap(
                                     "20260623000100000",
-                                    Collections.singletonList(new WriteStatus(false, 0.0))));
+                                    new HudiWriteStats(
+                                            Collections.singletonList(writeStat()), 0L)));
 
             assertThatThrownBy(() -> committer.commit(committable, Collections.emptyMap()))
                     .isInstanceOf(IOException.class)
-                    .hasMessageContaining("Hudi compaction write statuses are not supported yet");
+                    .hasMessageContaining("Hudi compaction write stats are not supported yet");
         }
     }
 
@@ -177,6 +178,14 @@ class HudiTieringTest {
         row.setField(0, id);
         row.setField(1, BinaryString.fromString(name));
         return new GenericRecord(offset, 1_000L + offset, ChangeType.APPEND_ONLY, row);
+    }
+
+    private static HoodieWriteStat writeStat() {
+        HoodieWriteStat writeStat = new HoodieWriteStat();
+        writeStat.setFileId("file-1");
+        writeStat.setPartitionPath("");
+        writeStat.setPath("file-1.parquet");
+        return writeStat;
     }
 
     private static class TestingWriterInitContext implements WriterInitContext {

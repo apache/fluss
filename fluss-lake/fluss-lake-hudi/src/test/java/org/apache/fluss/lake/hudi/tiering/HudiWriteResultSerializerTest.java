@@ -17,15 +17,17 @@
 
 package org.apache.fluss.lake.hudi.tiering;
 
-import org.apache.fluss.utils.InstantiationUtils;
-
+import org.apache.hudi.common.model.HoodieWriteStat;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 
+import static java.util.Collections.singletonList;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -41,8 +43,24 @@ class HudiWriteResultSerializerTest {
         HudiWriteResult deserialized =
                 serializer.deserialize(serializer.getVersion(), serializer.serialize(writeResult));
 
-        assertThat(deserialized.getWriteStatuses()).isEmpty();
-        assertThat(deserialized.getCompactionWriteStatuses()).isEmpty();
+        assertThat(deserialized.getWriteStats()).isEmpty();
+        assertThat(deserialized.getCompactionWriteStats()).isEmpty();
+    }
+
+    @Test
+    void testSerializeAndDeserializeWriteResult() throws Exception {
+        HudiWriteResultSerializer serializer = new HudiWriteResultSerializer();
+        HudiWriteResult writeResult =
+                new HudiWriteResult(
+                        writeStats("20260622000100000", "file-1", 2L), Collections.emptyMap());
+
+        HudiWriteResult deserialized =
+                serializer.deserialize(serializer.getVersion(), serializer.serialize(writeResult));
+
+        HudiWriteStats writeStats = deserialized.getWriteStats().get("20260622000100000");
+        assertThat(writeStats.getWriteStats()).hasSize(1);
+        assertThat(writeStats.getWriteStats().get(0).getFileId()).isEqualTo("file-1");
+        assertThat(writeStats.getTotalErrorRecords()).isEqualTo(2L);
     }
 
     @Test
@@ -57,18 +75,29 @@ class HudiWriteResultSerializerTest {
     @Test
     void testRejectCorruptedLength() throws Exception {
         HudiWriteResultSerializer serializer = new HudiWriteResultSerializer();
-        byte[] emptyMapBytes = InstantiationUtils.serializeObject(Collections.emptyMap());
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         try (DataOutputStream dos = new DataOutputStream(baos)) {
-            dos.writeInt(emptyMapBytes.length);
-            dos.write(emptyMapBytes);
-            dos.writeInt(emptyMapBytes.length);
+            dos.writeInt(0);
+            dos.writeInt(1);
+            dos.writeInt(1024);
         }
 
         assertThatThrownBy(
                         () -> serializer.deserialize(serializer.getVersion(), baos.toByteArray()))
                 .isInstanceOf(IOException.class)
-                .hasMessageContaining("Corrupted serialization: invalid CompactionWriteResult");
+                .hasMessageContaining("Corrupted serialization: invalid CompactionWriteStats");
+    }
+
+    private static Map<String, HudiWriteStats> writeStats(
+            String instant, String fileId, long totalErrorRecords) {
+        Map<String, HudiWriteStats> writeStats = new HashMap<>();
+        HoodieWriteStat writeStat = new HoodieWriteStat();
+        writeStat.setFileId(fileId);
+        writeStat.setPartitionPath("partition");
+        writeStat.setPath("partition/" + fileId + ".parquet");
+        writeStat.setNumWrites(1L);
+        writeStats.put(instant, new HudiWriteStats(singletonList(writeStat), totalErrorRecords));
+        return writeStats;
     }
 }

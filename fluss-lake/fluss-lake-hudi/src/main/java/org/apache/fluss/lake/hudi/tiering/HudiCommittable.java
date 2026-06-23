@@ -17,15 +17,11 @@
 
 package org.apache.fluss.lake.hudi.tiering;
 
-import org.apache.hudi.client.WriteStatus;
-
 import javax.annotation.Nullable;
 
 import java.io.Serializable;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
@@ -34,74 +30,64 @@ public class HudiCommittable implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
-    private final Map<String, List<WriteStatus>> writeStatuses;
-    private final Map<String, List<WriteStatus>> compactionWriteStatuses;
+    private final Map<String, HudiWriteStats> writeStats;
+    private final Map<String, HudiWriteStats> compactionWriteStats;
 
     public HudiCommittable(
-            Map<String, List<WriteStatus>> writeStatuses,
-            @Nullable Map<String, List<WriteStatus>> compactionWriteStatuses) {
-        this.writeStatuses = copyWriteStatuses(writeStatuses);
-        this.compactionWriteStatuses = copyWriteStatuses(compactionWriteStatuses);
+            Map<String, HudiWriteStats> writeStats,
+            @Nullable Map<String, HudiWriteStats> compactionWriteStats) {
+        this.writeStats = copyWriteStats(writeStats);
+        this.compactionWriteStats = copyWriteStats(compactionWriteStats);
     }
 
-    public Map<String, List<WriteStatus>> getWriteStatuses() {
-        return writeStatuses;
+    public Map<String, HudiWriteStats> getWriteStats() {
+        return writeStats;
     }
 
-    public Map<String, List<WriteStatus>> getCompactionWriteStatuses() {
-        return compactionWriteStatuses;
+    public Map<String, HudiWriteStats> getCompactionWriteStats() {
+        return compactionWriteStats;
     }
 
     public static Builder builder() {
         return new Builder();
     }
 
-    private static Map<String, List<WriteStatus>> copyWriteStatuses(
-            @Nullable Map<String, List<WriteStatus>> statusesByInstant) {
-        if (statusesByInstant == null || statusesByInstant.isEmpty()) {
+    private static Map<String, HudiWriteStats> copyWriteStats(
+            @Nullable Map<String, HudiWriteStats> statsByInstant) {
+        if (statsByInstant == null || statsByInstant.isEmpty()) {
             return Collections.emptyMap();
         }
-
-        Map<String, List<WriteStatus>> copiedStatuses = new HashMap<>();
-        for (Map.Entry<String, List<WriteStatus>> entry : statusesByInstant.entrySet()) {
-            copiedStatuses.put(
-                    entry.getKey(),
-                    Collections.unmodifiableList(new ArrayList<>(entry.getValue())));
-        }
-        return Collections.unmodifiableMap(copiedStatuses);
+        return Collections.unmodifiableMap(new HashMap<>(statsByInstant));
     }
 
     /** Builder for {@link HudiCommittable}. */
     public static class Builder {
 
-        private final Map<String, List<WriteStatus>> writeStatuses = new HashMap<>();
-        private final Map<String, List<WriteStatus>> compactionWriteStatuses = new HashMap<>();
+        private final Map<String, HudiWriteStats> writeStats = new HashMap<>();
+        private final Map<String, HudiWriteStats> compactionWriteStats = new HashMap<>();
 
-        public Builder addWriteStatuses(Map<String, List<WriteStatus>> statusesByInstant) {
-            addAll(writeStatuses, statusesByInstant);
+        public Builder addWriteStats(Map<String, HudiWriteStats> statsByInstant) {
+            addAll(writeStats, statsByInstant);
             return this;
         }
 
-        public Builder addCompactionWriteStatuses(
-                @Nullable Map<String, List<WriteStatus>> statusesByInstant) {
-            addAll(compactionWriteStatuses, statusesByInstant);
+        public Builder addCompactionWriteStats(
+                @Nullable Map<String, HudiWriteStats> statsByInstant) {
+            addAll(compactionWriteStats, statsByInstant);
             return this;
         }
 
         public HudiCommittable build() {
-            return new HudiCommittable(writeStatuses, compactionWriteStatuses);
+            return new HudiCommittable(writeStats, compactionWriteStats);
         }
 
         private static void addAll(
-                Map<String, List<WriteStatus>> target,
-                @Nullable Map<String, List<WriteStatus>> source) {
+                Map<String, HudiWriteStats> target, @Nullable Map<String, HudiWriteStats> source) {
             if (source == null || source.isEmpty()) {
                 return;
             }
-            for (Map.Entry<String, List<WriteStatus>> entry : source.entrySet()) {
-                List<WriteStatus> statuses =
-                        target.computeIfAbsent(entry.getKey(), ignored -> new ArrayList<>());
-                statuses.addAll(entry.getValue());
+            for (Map.Entry<String, HudiWriteStats> entry : source.entrySet()) {
+                target.merge(entry.getKey(), entry.getValue(), HudiWriteStats::merge);
             }
         }
     }
@@ -115,22 +101,22 @@ public class HudiCommittable implements Serializable {
             return false;
         }
         HudiCommittable that = (HudiCommittable) o;
-        return Objects.equals(writeStatuses, that.writeStatuses)
-                && Objects.equals(compactionWriteStatuses, that.compactionWriteStatuses);
+        return Objects.equals(writeStats, that.writeStats)
+                && Objects.equals(compactionWriteStats, that.compactionWriteStats);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(writeStatuses, compactionWriteStatuses);
+        return Objects.hash(writeStats, compactionWriteStats);
     }
 
     @Override
     public String toString() {
         return "HudiCommittable{"
-                + "writeStatuses="
-                + writeStatuses
-                + ", compactionWriteStatuses="
-                + compactionWriteStatuses
+                + "writeStats="
+                + writeStats
+                + ", compactionWriteStats="
+                + compactionWriteStats
                 + '}';
     }
 }

@@ -36,7 +36,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.util.HashMap;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -91,7 +91,7 @@ public class HudiLakeWriter implements LakeWriter<HudiWriteResult> {
     public HudiWriteResult complete() throws IOException {
         try {
             Map<String, List<WriteStatus>> writeStatuses = recordWriter.complete();
-            return new HudiWriteResult(writeStatuses, new HashMap<>());
+            return HudiWriteResult.fromWriteStatuses(writeStatuses, Collections.emptyMap());
         } catch (Exception e) {
             throw new IOException("Failed to complete Hudi write.", e);
         }

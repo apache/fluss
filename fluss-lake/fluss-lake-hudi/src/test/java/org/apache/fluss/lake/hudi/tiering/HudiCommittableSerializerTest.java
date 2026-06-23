@@ -17,9 +17,7 @@
 
 package org.apache.fluss.lake.hudi.tiering;
 
-import org.apache.fluss.utils.InstantiationUtils;
-
-import org.apache.hudi.client.WriteStatus;
+import org.apache.hudi.common.model.HoodieWriteStat;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
@@ -28,6 +26,7 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,29 +39,35 @@ class HudiCommittableSerializerTest {
     void testSerializeAndDeserializeCommittable() throws Exception {
         HudiCommittableSerializer serializer = new HudiCommittableSerializer();
         HudiCommittable committable =
-                new HudiCommittable(writeStatuses("20260622000100000"), Collections.emptyMap());
+                new HudiCommittable(writeStats("20260622000100000"), Collections.emptyMap());
 
         HudiCommittable deserialized =
                 serializer.deserialize(serializer.getVersion(), serializer.serialize(committable));
 
-        assertThat(deserialized.getWriteStatuses())
-                .containsOnlyKeys("20260622000100000")
-                .hasSize(1);
-        assertThat(deserialized.getWriteStatuses().get("20260622000100000")).hasSize(2);
-        assertThat(deserialized.getCompactionWriteStatuses()).isEmpty();
+        assertThat(deserialized.getWriteStats()).containsOnlyKeys("20260622000100000").hasSize(1);
+        HudiWriteStats writeStats = deserialized.getWriteStats().get("20260622000100000");
+        assertThat(writeStats.getWriteStats()).hasSize(2);
+        assertThat(writeStats.getWriteStats())
+                .extracting(HoodieWriteStat::getFileId)
+                .containsExactly("file-1", "file-2");
+        assertThat(writeStats.getTotalErrorRecords()).isEqualTo(3L);
+        assertThat(deserialized.getCompactionWriteStats()).isEmpty();
     }
 
     @Test
-    void testBuilderAggregatesStatusesByInstant() {
+    void testBuilderAggregatesStatsByInstant() {
         HudiCommittable committable =
                 HudiCommittable.builder()
-                        .addWriteStatuses(writeStatuses("20260622000100000"))
-                        .addWriteStatuses(writeStatuses("20260622000100000"))
-                        .addCompactionWriteStatuses(writeStatuses("20260622000200000"))
+                        .addWriteStats(writeStats("20260622000100000"))
+                        .addWriteStats(writeStats("20260622000100000"))
+                        .addCompactionWriteStats(writeStats("20260622000200000"))
                         .build();
 
-        assertThat(committable.getWriteStatuses().get("20260622000100000")).hasSize(4);
-        assertThat(committable.getCompactionWriteStatuses().get("20260622000200000")).hasSize(2);
+        HudiWriteStats writeStats = committable.getWriteStats().get("20260622000100000");
+        assertThat(writeStats.getWriteStats()).hasSize(4);
+        assertThat(writeStats.getTotalErrorRecords()).isEqualTo(6L);
+        assertThat(committable.getCompactionWriteStats().get("20260622000200000").getWriteStats())
+                .hasSize(2);
     }
 
     @Test
@@ -77,25 +82,36 @@ class HudiCommittableSerializerTest {
     @Test
     void testRejectCorruptedLength() throws Exception {
         HudiCommittableSerializer serializer = new HudiCommittableSerializer();
-        byte[] emptyMapBytes = InstantiationUtils.serializeObject(Collections.emptyMap());
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         try (DataOutputStream dos = new DataOutputStream(baos)) {
-            dos.writeInt(emptyMapBytes.length);
-            dos.write(emptyMapBytes);
-            dos.writeInt(emptyMapBytes.length);
+            dos.writeInt(0);
+            dos.writeInt(1);
+            dos.writeInt(1024);
         }
 
         assertThatThrownBy(
                         () -> serializer.deserialize(serializer.getVersion(), baos.toByteArray()))
                 .isInstanceOf(IOException.class)
-                .hasMessageContaining("Corrupted serialization: invalid CompactionWriteStatuses");
+                .hasMessageContaining("Corrupted serialization: invalid CompactionWriteStats");
     }
 
-    private static Map<String, java.util.List<WriteStatus>> writeStatuses(String instant) {
-        Map<String, java.util.List<WriteStatus>> writeStatuses = new HashMap<>();
-        writeStatuses.put(
-                instant, Arrays.asList(new WriteStatus(false, 0.0), new WriteStatus(false, 0.0)));
-        return writeStatuses;
+    private static Map<String, HudiWriteStats> writeStats(String instant) {
+        Map<String, HudiWriteStats> writeStats = new HashMap<>();
+        writeStats.put(instant, new HudiWriteStats(writeStats(), 3L));
+        return writeStats;
+    }
+
+    private static List<HoodieWriteStat> writeStats() {
+        return Arrays.asList(writeStat("file-1"), writeStat("file-2"));
+    }
+
+    private static HoodieWriteStat writeStat(String fileId) {
+        HoodieWriteStat writeStat = new HoodieWriteStat();
+        writeStat.setFileId(fileId);
+        writeStat.setPartitionPath("partition");
+        writeStat.setPath("partition/" + fileId + ".parquet");
+        writeStat.setNumWrites(1L);
+        return writeStat;
     }
 }

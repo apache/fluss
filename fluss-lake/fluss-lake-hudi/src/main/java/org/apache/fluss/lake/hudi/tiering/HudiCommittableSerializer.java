@@ -18,16 +18,12 @@
 package org.apache.fluss.lake.hudi.tiering;
 
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
-import org.apache.fluss.utils.InstantiationUtils;
-
-import org.apache.hudi.client.WriteStatus;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
-import java.util.List;
 import java.util.Map;
 
 /** Serializer for {@link HudiCommittable}. */
@@ -42,17 +38,10 @@ public class HudiCommittableSerializer implements SimpleVersionedSerializer<Hudi
 
     @Override
     public byte[] serialize(HudiCommittable hudiCommittable) throws IOException {
-        byte[] writeStatusesBytes =
-                InstantiationUtils.serializeObject(hudiCommittable.getWriteStatuses());
-        byte[] compactionWriteStatusesBytes =
-                InstantiationUtils.serializeObject(hudiCommittable.getCompactionWriteStatuses());
-
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
                 DataOutputStream dos = new DataOutputStream(baos)) {
-            dos.writeInt(writeStatusesBytes.length);
-            dos.write(writeStatusesBytes);
-            dos.writeInt(compactionWriteStatusesBytes.length);
-            dos.write(compactionWriteStatusesBytes);
+            HudiWriteStatsSerde.writeStatsMap(dos, hudiCommittable.getWriteStats());
+            HudiWriteStatsSerde.writeStatsMap(dos, hudiCommittable.getCompactionWriteStats());
             return baos.toByteArray();
         }
     }
@@ -67,40 +56,15 @@ public class HudiCommittableSerializer implements SimpleVersionedSerializer<Hudi
                             + CURRENT_VERSION);
         }
 
-        Map<String, List<WriteStatus>> writeStatuses;
-        Map<String, List<WriteStatus>> compactionWriteStatuses;
+        Map<String, HudiWriteStats> writeStats;
+        Map<String, HudiWriteStats> compactionWriteStats;
         try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(serialized))) {
-            byte[] writeStatusesBytes = readBytes(dis, "WriteStatuses");
-            writeStatuses =
-                    InstantiationUtils.deserializeObject(
-                            writeStatusesBytes, getClass().getClassLoader());
-
-            byte[] compactionWriteStatusesBytes = readBytes(dis, "CompactionWriteStatuses");
-            compactionWriteStatuses =
-                    InstantiationUtils.deserializeObject(
-                            compactionWriteStatusesBytes, getClass().getClassLoader());
+            writeStats = HudiWriteStatsSerde.readStatsMap(dis, "WriteStats");
+            compactionWriteStats = HudiWriteStatsSerde.readStatsMap(dis, "CompactionWriteStats");
             if (dis.available() > 0) {
                 throw new IOException("Corrupted serialization: trailing bytes " + dis.available());
             }
-        } catch (ClassNotFoundException e) {
-            throw new IOException("Couldn't deserialize HudiCommittable.", e);
         }
-        return new HudiCommittable(writeStatuses, compactionWriteStatuses);
-    }
-
-    private static byte[] readBytes(DataInputStream dis, String field) throws IOException {
-        int length = dis.readInt();
-        validateLength(length, dis.available(), field);
-        byte[] bytes = new byte[length];
-        dis.readFully(bytes);
-        return bytes;
-    }
-
-    private static void validateLength(int length, int remainingLength, String field)
-            throws IOException {
-        if (length < 0 || length > remainingLength) {
-            throw new IOException(
-                    "Corrupted serialization: invalid " + field + " length " + length);
-        }
+        return new HudiCommittable(writeStats, compactionWriteStats);
     }
 }
