@@ -103,10 +103,10 @@ public class HudiRecordReader implements RecordReader {
             boolean emitDelete =
                     hudiTableInfo.getTableType() == HoodieTableType.MERGE_ON_READ
                             && (flinkHudiOptions
-                                            .getString(FlinkOptions.QUERY_TYPE)
+                                            .get(FlinkOptions.QUERY_TYPE)
                                             .equals(FlinkOptions.QUERY_TYPE_SNAPSHOT)
                                     || flinkHudiOptions
-                                            .getString(FlinkOptions.QUERY_TYPE)
+                                            .get(FlinkOptions.QUERY_TYPE)
                                             .equals(FlinkOptions.QUERY_TYPE_INCREMENTAL));
 
             UnifiedHudiTableReader unifiedHudiTableReader =

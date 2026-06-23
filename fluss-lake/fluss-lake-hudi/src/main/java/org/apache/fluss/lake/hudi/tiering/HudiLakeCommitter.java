@@ -39,6 +39,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -197,7 +198,7 @@ public class HudiLakeCommitter implements LakeCommitter<HudiWriteResult, HudiCom
             totalErrorRecords += writeStatus.getTotalErrorRecords();
         }
         if (totalErrorRecords > 0
-                && !hudiTableInfo.getFlinkConfig().getBoolean(FlinkOptions.IGNORE_FAILED)) {
+                && !hudiTableInfo.getFlinkConfig().get(FlinkOptions.IGNORE_FAILED)) {
             throw new HoodieException(
                     String.format(
                             "Commit Hudi instant %s failed with %s error records.",
@@ -205,7 +206,7 @@ public class HudiLakeCommitter implements LakeCommitter<HudiWriteResult, HudiCom
         }
     }
 
-    private HoodieTimeline getCompletedTimelineCommittedBy(String commitUser) {
+    private HoodieTimeline getCompletedTimelineCommittedBy(String commitUser) throws IOException {
         hudiTableInfo.getMetaClient().reloadActiveTimeline();
         HoodieTimeline timeline =
                 writeClient
@@ -214,7 +215,11 @@ public class HudiLakeCommitter implements LakeCommitter<HudiWriteResult, HudiCom
                         .getActiveTimeline()
                         .getCommitsAndCompactionTimeline()
                         .filterCompletedInstants();
-        return timeline.filter(instant -> isCommittedBy(timeline, instant, commitUser));
+        try {
+            return timeline.filter(instant -> isCommittedBy(timeline, instant, commitUser));
+        } catch (UncheckedIOException e) {
+            throw e.getCause();
+        }
     }
 
     private static boolean isCommittedBy(
@@ -223,9 +228,11 @@ public class HudiLakeCommitter implements LakeCommitter<HudiWriteResult, HudiCom
             HoodieCommitMetadata metadata = timeline.readCommitMetadata(instant);
             Map<String, String> extraMetadata = metadata.getExtraMetadata();
             return extraMetadata != null && commitUser.equals(extraMetadata.get(COMMITTER_USER));
-        } catch (Exception e) {
-            LOG.debug("Failed to read Hudi commit metadata for instant {}.", instant, e);
-            return false;
+        } catch (IOException e) {
+            // a read failure must not be silently treated as "not committed by Fluss",
+            // otherwise we may miss an already-tiered snapshot and re-commit duplicated data
+            throw new UncheckedIOException(
+                    "Failed to read Hudi commit metadata for instant " + instant + ".", e);
         }
     }
 }

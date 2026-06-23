@@ -31,10 +31,9 @@ public class CkpMetadataFactory {
     public static CkpMetadata getCkpMetadata(Configuration conf) {
         FileSystem fs =
                 HadoopFSUtils.getFs(
-                        conf.getString(FlinkOptions.PATH),
-                        HadoopConfigurations.getHadoopConf(conf));
-        String basePath = conf.getString(FlinkOptions.PATH);
-        String uniqueId = conf.getString(FlinkOptions.WRITE_CLIENT_ID);
+                        conf.get(FlinkOptions.PATH), HadoopConfigurations.getHadoopConf(conf));
+        String basePath = conf.get(FlinkOptions.PATH);
+        String uniqueId = conf.get(FlinkOptions.WRITE_CLIENT_ID);
         return new CkpMetadata(fs, basePath, uniqueId);
     }
 }

@@ -179,8 +179,7 @@ public class RecordWriteBuffer {
 
         ValidationUtils.checkState(!bucket.isEmpty(), "Data bucket to flush has no records.");
         List<WriteStatus> writeStatus = writeStatuses.getOrDefault(instantTime, new ArrayList<>());
-        writeStatus.addAll(
-                writeRecords(instantTime, config.getString(FlinkOptions.OPERATION), bucket));
+        writeStatus.addAll(writeRecords(instantTime, config.get(FlinkOptions.OPERATION), bucket));
         writeStatuses.put(instantTime, writeStatus);
         return true;
     }
@@ -191,7 +190,7 @@ public class RecordWriteBuffer {
                         hudiTableInfo.getRowType(),
                         MemorySegmentPoolFactory.createMemorySegmentPool(config)),
                 bucketInfo,
-                config.getDouble(FlinkOptions.WRITE_BATCH_SIZE));
+                config.get(FlinkOptions.WRITE_BATCH_SIZE));
     }
 
     protected List<WriteStatus> writeRecords(
@@ -361,11 +360,9 @@ public class RecordWriteBuffer {
 
         TotalSizeTracer(Configuration conf) {
             long mergeReaderMem = 100;
-            long mergeMapMaxMem = conf.getInteger(FlinkOptions.WRITE_MERGE_MAX_MEMORY);
+            long mergeMapMaxMem = conf.get(FlinkOptions.WRITE_MERGE_MAX_MEMORY);
             this.maxBufferSize =
-                    (conf.getDouble(FlinkOptions.WRITE_TASK_MAX_SIZE)
-                                    - mergeReaderMem
-                                    - mergeMapMaxMem)
+                    (conf.get(FlinkOptions.WRITE_TASK_MAX_SIZE) - mergeReaderMem - mergeMapMaxMem)
                             * 1024
                             * 1024;
             ValidationUtils.checkState(

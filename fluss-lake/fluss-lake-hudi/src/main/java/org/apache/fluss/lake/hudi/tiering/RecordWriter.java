@@ -91,9 +91,7 @@ public abstract class RecordWriter implements AutoCloseable {
     public void setRecordLocation(HoodieFlinkInternalRow internalRow, Configuration configuration) {
         String partition = internalRow.getPartitionPath();
 
-        if (!configuration
-                .getString(FlinkOptions.OPERATION)
-                .equals(WriteOperationType.INSERT.value())) {
+        if (!configuration.get(FlinkOptions.OPERATION).equals(WriteOperationType.INSERT.value())) {
             bootstrapIndexIfNeed(partition);
         }
 
