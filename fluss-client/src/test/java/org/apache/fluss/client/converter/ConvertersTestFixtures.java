@@ -171,8 +171,18 @@ public final class ConvertersTestFixtures {
                     StatusEnum.OK,
                     "string value",
                     List.of(StatusEnum.error, StatusEnum.OK),
-                    Map.of("key1", StatusEnum.OK, "key2", StatusEnum.error),
-                    Map.of(StatusEnum.OK, "value1", StatusEnum.error, "value2"));
+                    new HashMap<>() {
+                        {
+                            put("key1", StatusEnum.OK);
+                            put("key2", StatusEnum.error);
+                        }
+                    },
+                    new HashMap<>() {
+                        {
+                            put(StatusEnum.OK, "value1");
+                            put(StatusEnum.error, "value2");
+                        }
+                    });
         }
 
         @Override
