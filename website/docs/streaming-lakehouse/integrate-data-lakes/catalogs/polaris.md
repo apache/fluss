@@ -79,10 +79,11 @@ datalake.iceberg.uri: http://<polaris-host>:8181/api/catalog
 datalake.iceberg.warehouse: <catalog-name>
 datalake.iceberg.credential: <client-id>:<client-secret>
 datalake.iceberg.scope: PRINCIPAL_ROLE:ALL
+datalake.iceberg.oauth2-server-uri: http://<polaris-host>:8181/api/catalog/v1/oauth/tokens
 datalake.iceberg.header.X-Iceberg-Access-Delegation: vended-credentials
 ```
 
-Fluss strips the `datalake.iceberg.` prefix and passes the remaining properties to the Iceberg REST catalog client. The `credential` (`client_id:client_secret`) and `scope` properties configure OAuth2 client-credentials authentication; the Iceberg client derives the token endpoint from `uri` (`/v1/oauth/tokens`), which matches the Polaris endpoint. You can add any additional [Iceberg REST catalog properties](https://iceberg.apache.org/docs/1.10.1/configuration/#catalog-properties) using the same prefix.
+Fluss strips the `datalake.iceberg.` prefix and passes the remaining properties to the Iceberg REST catalog client. The `credential` (`client_id:client_secret`), `scope`, and `oauth2-server-uri` properties configure OAuth2 client-credentials authentication against Polaris. Setting `oauth2-server-uri` explicitly is recommended: the Iceberg client can otherwise fall back to `<uri>/v1/oauth/tokens`, but that implicit fallback is deprecated and logs a warning. You can add any additional [Iceberg REST catalog properties](https://iceberg.apache.org/docs/1.10.1/configuration/#catalog-properties) using the same prefix.
 
 > With credential vending enabled (`X-Iceberg-Access-Delegation: vended-credentials`), Polaris returns temporary, scoped storage credentials for each table request, so Fluss does not need static object-storage credentials. For stores without STS (e.g. MinIO), drop this header and supply static `fs.s3a.*` keys instead, as described in [Vended credentials vs. static keys](#vended-credentials-vs-static-keys) above.
 
@@ -99,6 +100,7 @@ ${FLINK_HOME}/bin/flink run /path/to/fluss-flink-tiering-$FLUSS_VERSION$.jar \
     --datalake.iceberg.warehouse <catalog-name> \
     --datalake.iceberg.credential <client-id>:<client-secret> \
     --datalake.iceberg.scope PRINCIPAL_ROLE:ALL \
+    --datalake.iceberg.oauth2-server-uri http://<polaris-host>:8181/api/catalog/v1/oauth/tokens \
     --datalake.iceberg.header.X-Iceberg-Access-Delegation vended-credentials
 ```
 
