@@ -180,11 +180,15 @@ final class ConverterCommons {
     }
 
     static BinaryString toBinaryStringForText(Object v, String fieldName, DataTypeRoot root) {
-        final String s = String.valueOf(v);
+        final String s = objectToString(v);
         if (root == DataTypeRoot.CHAR && s.length() != 1) {
             throw new IllegalArgumentException(charLengthExceptionMessage(fieldName, s.length()));
         }
         return BinaryString.fromString(s);
+    }
+
+    private static String objectToString(Object v) {
+        return v != null && v.getClass().isEnum() ? ((Enum<?>) v).name() : String.valueOf(v);
     }
 
     static Set<Class<?>> setOf(Class<?>... javaTypes) {
