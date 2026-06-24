@@ -628,6 +628,11 @@ public class ConverterCommonsTest {
     /** Test enum for compatibility testing. */
     public enum StatusEnum {
         ACTIVE,
-        INACTIVE
+        inactive;
+
+        @Override
+        public String toString() {
+            return "StatusEnum{}";
+        }
     }
 }

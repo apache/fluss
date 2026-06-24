@@ -277,5 +277,11 @@ public class FlussTypeToPojoTypeConverterTest {
         INACTIVE,
         PENDING,
         finished,
+        ;
+
+        @Override
+        public String toString() {
+            return "StatusEnum{}";
+        }
     }
 }

@@ -528,6 +528,11 @@ public final class ConvertersTestFixtures {
     /** Enum to test enum conversion. */
     public enum StatusEnum {
         OK,
-        error
+        error;
+
+        @Override
+        public String toString() {
+            return "StatusEnum{}";
+        }
     }
 }
