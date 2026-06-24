@@ -44,6 +44,11 @@ public class TableConfig {
     // the table properties configuration
     private final Configuration config;
 
+    // Cached, lazily-built strategy. Safe because TableConfig is immutable after construction
+    // and AutoPartitionStrategy itself is fully immutable. A benign race on first call
+    // produces the same value, so a plain volatile is sufficient.
+    private volatile AutoPartitionStrategy autoPartitionStrategy;
+
     /**
      * Creates a new table config.
      *
@@ -158,7 +163,12 @@ public class TableConfig {
 
     /** Gets the auto partition strategy of the table. */
     public AutoPartitionStrategy getAutoPartitionStrategy() {
-        return AutoPartitionStrategy.from(config);
+        AutoPartitionStrategy s = autoPartitionStrategy;
+        if (s == null) {
+            s = AutoPartitionStrategy.from(config);
+            autoPartitionStrategy = s;
+        }
+        return s;
     }
 
     /** Gets the number of auto-increment IDs cached per segment. */
