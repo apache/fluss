@@ -188,7 +188,7 @@ final class ConverterCommons {
     }
 
     private static String objectToString(Object v) {
-        return v != null && v.getClass().isEnum() ? ((Enum<?>) v).name() : String.valueOf(v);
+        return v instanceof Enum ? ((Enum<?>) v).name() : String.valueOf(v);
     }
 
     static Set<Class<?>> setOf(Class<?>... javaTypes) {
