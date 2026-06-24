@@ -35,6 +35,8 @@ export TOKEN=$(curl -s http://<polaris-host>:8181/api/catalog/v1/oauth/tokens \
     -d 'scope=PRINCIPAL_ROLE:ALL' | jq -r '.access_token')
 ```
 
+> **NOTE**: These commands target Polaris's default realm. If your deployment uses a custom realm, add a `-H "Polaris-Realm: <your-realm>"` header to **both** the token request above and the catalog request below — otherwise they resolve against the default realm and the requests may be silently misrouted.
+
 Then create a catalog backed by your object storage:
 
 ```bash
@@ -57,6 +59,13 @@ curl -X POST http://<polaris-host>:8181/api/management/v1/catalogs \
 
 > **NOTE**: Adjust the `storageConfigInfo` to match your storage backend. Polaris supports S3, Azure, and GCS. You also need a principal with a role granting `TABLE_WRITE_DATA` on the catalog — see the [Polaris documentation](https://polaris.apache.org/) for catalog, principal, and access-control setup.
 
+#### Vended credentials vs. static keys
+
+Polaris hands storage credentials to Fluss in one of two ways, depending on your object store:
+
+- **Vended credentials (AWS S3 with STS)** — the path used throughout this guide. The catalog's `storageConfigInfo` must include a `roleArn`, and Polaris must be allowed to `AssumeRole` on it; Polaris then vends temporary, scoped credentials per request (enabled by the `X-Iceberg-Access-Delegation: vended-credentials` header in the Fluss config below). Without a `roleArn`, table operations fail with `Failed to get subscoped credentials: roleArn must not be null`.
+- **Static keys (MinIO, NooBaa, or other S3-compatible stores without STS)** — there is no role to assume. Disable credential subscoping on Polaris by setting `SKIP_CREDENTIAL_SUBSCOPING_INDIRECTION=true`, and provide static `fs.s3a.*` keys (access key and secret) to Fluss instead of the vended-credentials header.
+
 ## Configure Fluss with Polaris
 
 ### Cluster Configuration
@@ -75,7 +84,7 @@ datalake.iceberg.header.X-Iceberg-Access-Delegation: vended-credentials
 
 Fluss strips the `datalake.iceberg.` prefix and passes the remaining properties to the Iceberg REST catalog client. The `credential` (`client_id:client_secret`) and `scope` properties configure OAuth2 client-credentials authentication; the Iceberg client derives the token endpoint from `uri` (`/v1/oauth/tokens`), which matches the Polaris endpoint. You can add any additional [Iceberg REST catalog properties](https://iceberg.apache.org/docs/1.10.1/configuration/#catalog-properties) using the same prefix.
 
-> With credential vending enabled (`X-Iceberg-Access-Delegation: vended-credentials`), Polaris returns temporary, scoped storage credentials for each table request, so Fluss does not need static object-storage credentials.
+> With credential vending enabled (`X-Iceberg-Access-Delegation: vended-credentials`), Polaris returns temporary, scoped storage credentials for each table request, so Fluss does not need static object-storage credentials. For stores without STS (e.g. MinIO), drop this header and supply static `fs.s3a.*` keys instead, as described in [Vended credentials vs. static keys](#vended-credentials-vs-static-keys) above.
 
 #### Hadoop Dependencies
 
