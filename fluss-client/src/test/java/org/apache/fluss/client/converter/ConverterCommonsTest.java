@@ -461,7 +461,7 @@ public class ConverterCommonsTest {
     }
 
     @Test
-    public void convertNullToBinaryString() {
+    public void convertNullValueToBinaryString() {
         BinaryString result =
                 ConverterCommons.toBinaryStringForText(
                         null, "field", DataTypes.STRING().getTypeRoot());
