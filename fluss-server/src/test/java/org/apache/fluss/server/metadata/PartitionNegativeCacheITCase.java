@@ -85,6 +85,19 @@ class PartitionNegativeCacheITCase {
                         .getCoordinatorService()
                         .getPartitionNegativeCache();
 
+        // A stale negative-cache entry must not hide a partition that exists in metadata cache.
+        MetadataRequest existingPartitionRequest = new MetadataRequest();
+        existingPartitionRequest.addPartitionsId(partitionId);
+        existingPartitionRequest
+                .addTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        negativeCache.markNonExistent(partitionId);
+        retry(
+                Duration.ofMinutes(1),
+                () -> coordinatorGateway.metadata(existingPartitionRequest).get());
+        negativeCache.clear();
+
         // Drop the partition.
         coordinatorGateway
                 .dropPartition(

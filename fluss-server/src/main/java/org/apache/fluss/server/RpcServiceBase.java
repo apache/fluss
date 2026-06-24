@@ -623,19 +623,18 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         long[] partitionIds = request.getPartitionsIds();
         List<Long> partitionIdsNotExistsInCache = new ArrayList<>();
         for (long partitionId : partitionIds) {
-            // Fast-path: throw immediately for partition IDs known to not exist,
-            // avoiding ZK queries while preserving the original exception semantics.
-            if (partitionNegativeCache.isKnownNonExistent(partitionId)) {
+            Optional<PhysicalTablePath> physicalTablePath =
+                    metadataProvider.getPhysicalTablePathFromCache(partitionId);
+            if (physicalTablePath.isPresent()) {
+                partitionPaths.add(physicalTablePath.get());
+            } else if (partitionNegativeCache.isKnownNonExistent(partitionId)) {
+                // Fast-path only after the positive metadata cache misses. A stale negative-cache
+                // entry must not hide a partition that has already been synced into metadata cache.
                 throw new PartitionNotExistException(
                         String.format(
                                 "The partition id '%d' does not exist or you don't have"
                                         + " permission to access it.",
                                 partitionId));
-            }
-            Optional<PhysicalTablePath> physicalTablePath =
-                    metadataProvider.getPhysicalTablePathFromCache(partitionId);
-            if (physicalTablePath.isPresent()) {
-                partitionPaths.add(physicalTablePath.get());
             } else {
                 partitionIdsNotExistsInCache.add(partitionId);
             }

@@ -46,7 +46,7 @@ public class PartitionNegativeCache {
     private static final Duration DEFAULT_TTL = Duration.ofMinutes(10);
 
     /** Default maximum number of negative cache entries. */
-    private static final long DEFAULT_MAXIMUM_SIZE = 100_000L;
+    private static final long DEFAULT_MAXIMUM_SIZE = 10_000L;
 
     private final Cache<Long, Boolean> cache;
 
