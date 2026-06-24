@@ -31,11 +31,12 @@ class PartitionNegativeCacheTest {
 
     private static final Duration TTL = Duration.ofMinutes(10);
     private static final long TTL_MS = TTL.toMillis();
+    private static final long MAXIMUM_SIZE = 100L;
 
     @Test
     void testMarkAndQueryNonExistent() {
         ManualClock clock = new ManualClock();
-        PartitionNegativeCache cache = new PartitionNegativeCache(TTL, clock);
+        PartitionNegativeCache cache = new PartitionNegativeCache(TTL, MAXIMUM_SIZE, clock);
 
         // Initially, partition is not known as non-existent
         assertThat(cache.isKnownNonExistent(100L)).isFalse();
@@ -51,7 +52,7 @@ class PartitionNegativeCacheTest {
     @Test
     void testUnknownPartitionReturnsFalse() {
         ManualClock clock = new ManualClock();
-        PartitionNegativeCache cache = new PartitionNegativeCache(TTL, clock);
+        PartitionNegativeCache cache = new PartitionNegativeCache(TTL, MAXIMUM_SIZE, clock);
 
         // Never marked partition should return false
         assertThat(cache.isKnownNonExistent(999L)).isFalse();
@@ -62,7 +63,7 @@ class PartitionNegativeCacheTest {
     @Test
     void testMultiplePartitions() {
         ManualClock clock = new ManualClock();
-        PartitionNegativeCache cache = new PartitionNegativeCache(TTL, clock);
+        PartitionNegativeCache cache = new PartitionNegativeCache(TTL, MAXIMUM_SIZE, clock);
 
         cache.markNonExistent(1L);
         cache.markNonExistent(2L);
@@ -78,7 +79,7 @@ class PartitionNegativeCacheTest {
     @Test
     void testTtlExpiration() {
         ManualClock clock = new ManualClock();
-        PartitionNegativeCache cache = new PartitionNegativeCache(TTL, clock);
+        PartitionNegativeCache cache = new PartitionNegativeCache(TTL, MAXIMUM_SIZE, clock);
 
         cache.markNonExistent(100L);
         assertThat(cache.isKnownNonExistent(100L)).isTrue();
@@ -92,21 +93,25 @@ class PartitionNegativeCacheTest {
     }
 
     @Test
-    void testNotExpiredAtExactBoundary() {
+    void testExpiresAtTtlBoundary() {
         ManualClock clock = new ManualClock();
-        PartitionNegativeCache cache = new PartitionNegativeCache(TTL, clock);
+        PartitionNegativeCache cache = new PartitionNegativeCache(TTL, MAXIMUM_SIZE, clock);
 
         cache.markNonExistent(100L);
 
-        // At exactly TTL_MS, condition is "now - lastAccess > ttl" (strict >), so not expired
-        clock.advanceTime(TTL_MS, TimeUnit.MILLISECONDS);
+        clock.advanceTime(TTL_MS - 1, TimeUnit.MILLISECONDS);
         assertThat(cache.isKnownNonExistent(100L)).isTrue();
+
+        // Guava expireAfterAccess expires the entry once the TTL boundary is reached.
+        cache.markNonExistent(100L);
+        clock.advanceTime(TTL_MS, TimeUnit.MILLISECONDS);
+        assertThat(cache.isKnownNonExistent(100L)).isFalse();
     }
 
     @Test
     void testAccessTimeRefreshKeepsEntryAlive() {
         ManualClock clock = new ManualClock();
-        PartitionNegativeCache cache = new PartitionNegativeCache(TTL, clock);
+        PartitionNegativeCache cache = new PartitionNegativeCache(TTL, MAXIMUM_SIZE, clock);
 
         cache.markNonExistent(100L);
 
@@ -131,7 +136,7 @@ class PartitionNegativeCacheTest {
     @Test
     void testClear() {
         ManualClock clock = new ManualClock();
-        PartitionNegativeCache cache = new PartitionNegativeCache(TTL, clock);
+        PartitionNegativeCache cache = new PartitionNegativeCache(TTL, MAXIMUM_SIZE, clock);
 
         cache.markNonExistent(1L);
         cache.markNonExistent(2L);
@@ -148,7 +153,7 @@ class PartitionNegativeCacheTest {
     @Test
     void testRemarkAfterExpiration() {
         ManualClock clock = new ManualClock();
-        PartitionNegativeCache cache = new PartitionNegativeCache(TTL, clock);
+        PartitionNegativeCache cache = new PartitionNegativeCache(TTL, MAXIMUM_SIZE, clock);
 
         cache.markNonExistent(100L);
         assertThat(cache.isKnownNonExistent(100L)).isTrue();
@@ -169,7 +174,7 @@ class PartitionNegativeCacheTest {
     @Test
     void testIndependentExpiration() {
         ManualClock clock = new ManualClock();
-        PartitionNegativeCache cache = new PartitionNegativeCache(TTL, clock);
+        PartitionNegativeCache cache = new PartitionNegativeCache(TTL, MAXIMUM_SIZE, clock);
 
         // Mark partition 1 at t=0
         cache.markNonExistent(1L);
@@ -187,5 +192,17 @@ class PartitionNegativeCacheTest {
         // To expire it, advance past TTL from that refreshed time.
         clock.advanceTime(TTL_MS + 1, TimeUnit.MILLISECONDS);
         assertThat(cache.isKnownNonExistent(2L)).isFalse();
+    }
+
+    @Test
+    void testMaximumSizeBoundsCache() {
+        ManualClock clock = new ManualClock();
+        PartitionNegativeCache cache = new PartitionNegativeCache(TTL, 2L, clock);
+
+        cache.markNonExistent(1L);
+        cache.markNonExistent(2L);
+        cache.markNonExistent(3L);
+
+        assertThat(cache.size()).isLessThanOrEqualTo(2);
     }
 }
