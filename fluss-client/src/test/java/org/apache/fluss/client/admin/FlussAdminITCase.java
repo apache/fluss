@@ -120,6 +120,7 @@ import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
 import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -600,6 +601,17 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
         SchemaInfo schemaInfo = admin.getTableSchema(tablePath).get();
         assertThat(schemaInfo.getSchema().getAggFunction("new_value")).hasValue(AggFunctions.SUM());
+
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            upsertWriter.upsert(row(1, 10L, 100L));
+            upsertWriter.upsert(row(1, 20L, 200L));
+            upsertWriter.flush();
+
+            assertThatRow(lookupRow(table.newLookup().createLookuper(), row(1)))
+                    .withSchema(schemaInfo.getSchema().getRowType())
+                    .isEqualTo(row(1, 30L, 300L));
+        }
     }
 
     @Test
@@ -731,6 +743,12 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         TableInfo tableInfoAggregate = admin.getTableInfo(tablePathAggregate).join();
         assertThat(tableInfoAggregate.getTableConfig().getDeleteBehavior())
                 .hasValue(DeleteBehavior.IGNORE);
+        assertThat(tableInfoAggregate.getSchema().getAggFunction("count"))
+                .hasValue(AggFunctions.SUM());
+        assertThat(tableInfoAggregate.getProperties().toMap())
+                .doesNotContainKey("fields.count.agg");
+        assertThat(tableInfoAggregate.getCustomProperties().toMap())
+                .doesNotContainKey("fields.count.agg");
 
         // Test 2.6: AGGREGATION merge engine with delete behavior explicitly set to ALLOW - should
         // be allowed

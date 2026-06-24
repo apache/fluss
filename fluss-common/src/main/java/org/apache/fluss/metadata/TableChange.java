@@ -285,20 +285,20 @@ public interface TableChange {
 
         @Override
         public String toString() {
-            return "AddColumn{"
-                    + "name='"
-                    + name
-                    + '\''
-                    + ", dataType="
-                    + dataType
-                    + ", comment='"
-                    + comment
-                    + '\''
-                    + ", aggFunction="
-                    + aggFunction
-                    + ", position="
-                    + position
-                    + '}';
+            String result =
+                    "AddColumn{"
+                            + "name='"
+                            + name
+                            + '\''
+                            + ", dataType="
+                            + dataType
+                            + ", comment='"
+                            + comment
+                            + '\'';
+            if (aggFunction != null) {
+                result += ", aggFunction=" + aggFunction;
+            }
+            return result + ", position=" + position + '}';
         }
     }
 
