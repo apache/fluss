@@ -79,6 +79,12 @@ class PartitionNegativeCacheITCase {
                         new PartitionSpec(Collections.singletonMap("b", partitionName)),
                         false);
 
+        PartitionNegativeCache negativeCache =
+                FLUSS_CLUSTER_EXTENSION
+                        .getCoordinatorServer()
+                        .getCoordinatorService()
+                        .getPartitionNegativeCache();
+
         // Drop the partition.
         coordinatorGateway
                 .dropPartition(
@@ -101,15 +107,11 @@ class PartitionNegativeCacheITCase {
                     assertThatThrownBy(() -> coordinatorGateway.metadata(request).get())
                             .cause()
                             .isInstanceOf(PartitionNotExistException.class);
+                    assertThat(negativeCache.isKnownNonExistent(partitionId)).isTrue();
                 });
 
         // At this point, the partition ID should be in the negative cache.
         // Verify the negative cache is populated on the coordinator.
-        PartitionNegativeCache negativeCache =
-                FLUSS_CLUSTER_EXTENSION
-                        .getCoordinatorServer()
-                        .getCoordinatorService()
-                        .getPartitionNegativeCache();
         assertThat(negativeCache.isKnownNonExistent(partitionId)).isTrue();
 
         // Second request should also fail (served from negative cache, no ZK query).

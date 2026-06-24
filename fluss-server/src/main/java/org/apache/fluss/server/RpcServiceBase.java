@@ -652,8 +652,12 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                 if (partitionIdAndPaths.containsKey(partitionId)) {
                     partitionPaths.add(partitionIdAndPaths.get(partitionId));
                 } else {
-                    // Mark this partition ID in the negative cache to avoid future ZK queries
-                    partitionNegativeCache.markNonExistent(partitionId);
+                    // Only cache when the authoritative partition assignment is also gone. A miss
+                    // from the scoped table-path lookup may simply mean that the request omitted
+                    // the owning table or the session is not authorized for it.
+                    if (isPartitionAssignmentMissingFromZk(partitionId)) {
+                        partitionNegativeCache.markNonExistent(partitionId);
+                    }
                     throw new PartitionNotExistException(
                             String.format(
                                     "The partition id '%d' does not exist or you don't have permission to access it.",
@@ -693,5 +697,16 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                 new HashSet<>(metadataCache.getAllAliveTabletServers(listenerName).values());
         return buildMetadataResponse(
                 coordinatorServer, aliveTabletServers, tablesMetadata, partitionsMetadata);
+    }
+
+    private boolean isPartitionAssignmentMissingFromZk(long partitionId) {
+        try {
+            return !zkClient.getPartitionAssignment(partitionId).isPresent();
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Failed to get partition assignment for partition %d.", partitionId),
+                    e);
+        }
     }
 }
