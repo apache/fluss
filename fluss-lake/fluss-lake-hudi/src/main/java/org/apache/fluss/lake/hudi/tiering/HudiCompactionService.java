@@ -274,9 +274,10 @@ public class HudiCompactionService {
         }
 
         String latestInstant = null;
-        for (Map.Entry<String, HudiWriteStats> entry : compactionWriteStats.entrySet()) {
-            String compactionInstant = entry.getKey();
-            HudiWriteStats writeStats = entry.getValue();
+        List<String> compactionInstants = new ArrayList<>(compactionWriteStats.keySet());
+        Collections.sort(compactionInstants);
+        for (String compactionInstant : compactionInstants) {
+            HudiWriteStats writeStats = compactionWriteStats.get(compactionInstant);
 
             if (writeStats.getTotalErrorRecords() > 0 && !conf.get(FlinkOptions.IGNORE_FAILED)) {
                 LOG.warn(

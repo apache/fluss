@@ -133,8 +133,7 @@ public class HudiLakeCommitter implements LakeCommitter<HudiWriteResult, HudiCom
                     commitCompactionAndSchedule(
                             committable.getCompactionWriteStats(), commitMetadata);
             return LakeCommitResult.committedIsReadable(
-                    parseSnapshotId(
-                            latestCommittedInstant == null ? instant : latestCommittedInstant));
+                    parseSnapshotId(getLatestCommittedInstant(instant, latestCommittedInstant)));
         } catch (Exception e) {
             if (e instanceof IOException) {
                 throw (IOException) e;
@@ -249,6 +248,14 @@ public class HudiLakeCommitter implements LakeCommitter<HudiWriteResult, HudiCom
     private boolean isAutoCompactionEnabled() {
         return hudiTableInfo.getTableType() == HoodieTableType.MERGE_ON_READ
                 && hudiTableInfo.getFlinkConfig().get(FlinkOptions.COMPACTION_SCHEDULE_ENABLED);
+    }
+
+    static String getLatestCommittedInstant(
+            String dataCommitInstant, @Nullable String compactionInstant) {
+        if (compactionInstant == null || dataCommitInstant.compareTo(compactionInstant) >= 0) {
+            return dataCommitInstant;
+        }
+        return compactionInstant;
     }
 
     private void validateWriteStats(String instant, HudiWriteStats writeStats) {

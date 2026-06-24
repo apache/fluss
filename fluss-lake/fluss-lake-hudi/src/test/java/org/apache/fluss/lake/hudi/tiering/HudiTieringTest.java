@@ -153,6 +153,20 @@ class HudiTieringTest {
         }
     }
 
+    @Test
+    void testLatestCommittedInstantNeverGoesBackwards() {
+        assertThat(HudiLakeCommitter.getLatestCommittedInstant("20260624000200000", null))
+                .isEqualTo("20260624000200000");
+        assertThat(
+                        HudiLakeCommitter.getLatestCommittedInstant(
+                                "20260624000200000", "20260624000100000"))
+                .isEqualTo("20260624000200000");
+        assertThat(
+                        HudiLakeCommitter.getLatestCommittedInstant(
+                                "20260624000200000", "20260624000300000"))
+                .isEqualTo("20260624000300000");
+    }
+
     private LakeCommitter<HudiWriteResult, HudiCommittable> createLakeCommitter(
             TablePath tablePath, TableInfo tableInfo) throws IOException {
         return hudiLakeTieringFactory.createLakeCommitter(
