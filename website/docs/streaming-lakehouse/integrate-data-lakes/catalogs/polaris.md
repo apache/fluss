@@ -86,17 +86,6 @@ Fluss strips the `datalake.iceberg.` prefix and passes the remaining properties 
 
 > With credential vending enabled (`X-Iceberg-Access-Delegation: vended-credentials`), Polaris returns temporary, scoped storage credentials for each table request, so Fluss does not need static object-storage credentials. For stores without STS (e.g. MinIO), drop this header and supply static `fs.s3a.*` keys instead, as described in [Vended credentials vs. static keys](#vended-credentials-vs-static-keys) above.
 
-#### Hadoop Dependencies
-
-Some FileIO implementations require Hadoop classes. Place the pre-bundled Hadoop JAR into `FLUSS_HOME/plugins/iceberg/`:
-
-```bash
-wget -P ${FLUSS_HOME}/plugins/iceberg/ \
-    https://repo1.maven.org/maven2/io/trino/hadoop/hadoop-apache/3.3.5-2/hadoop-apache-3.3.5-2.jar
-```
-
-See [Iceberg - Hadoop Dependencies](../formats/iceberg.md#1-hadoop-dependencies-configuration) for alternative approaches.
-
 ### Start Tiering Service
 
 Follow the [Iceberg tiering service setup](../formats/iceberg.md#start-tiering-service-to-iceberg) to prepare the required JARs and start the tiering service. Use the REST catalog parameters when launching the Flink tiering job:
