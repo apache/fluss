@@ -17,6 +17,8 @@
 
 package org.apache.fluss.flink.sink;
 
+import org.apache.flink.table.types.DataType;
+import org.apache.flink.table.types.utils.DataTypeUtils;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
@@ -333,8 +335,28 @@ public class FlinkTableSink
     @Override
     public RowLevelDeleteInfo applyRowLevelDelete(
             @Nullable RowLevelModificationScanContext rowLevelModificationScanContext) {
-        throw new UnsupportedOperationException(
-                "Currently, Fluss table only supports DELETE statement with conditions on primary key.");
+        validateUpdatableAndDeletable();
+        Map<String, DataType> primaryKeyDataTypes = getPrimaryKeyDataTypes();
+        if (primaryKeyDataTypes.isEmpty()) {
+            throw new UnsupportedOperationException(
+                    String.format(
+                            "Table %s is a Log Table. Log Table doesn't support DELETE statements.",
+                            tablePath));
+        }
+        return new RowLevelDeleteInfo() {
+            @Override
+            public Optional<List<Column>> requiredColumns() {
+                return Optional.of(primaryKeyDataTypes.entrySet()
+                        .stream()
+                        .map(pkDateType -> Column.physical(pkDateType.getKey(), pkDateType.getValue()))
+                        .collect(Collectors.toList()));
+            }
+
+            @Override
+            public RowLevelDeleteMode getRowLevelDeleteMode() {
+                return RowLevelDeleteMode.DELETED_ROWS;
+            }
+        };
     }
 
     @Override
@@ -394,6 +416,14 @@ public class FlinkTableSink
                             "Table %s has delete behavior set to 'disable' which does not support DELETE statements.",
                             tablePath));
         }
+    }
+
+    private Map<String, DataType> getPrimaryKeyDataTypes() {
+        Map<String, DataType> pkDataTypes = new HashMap<>();
+        for (int index : primaryKeyIndexes) {
+            pkDataTypes.put(tableRowType.getFieldNames().get(index), DataTypeUtils.toInternalDataType(tableRowType.getTypeAt(index)));
+        }
+        return pkDataTypes;
     }
 
     private Map<Integer, LogicalType> getPrimaryKeyTypes() {
