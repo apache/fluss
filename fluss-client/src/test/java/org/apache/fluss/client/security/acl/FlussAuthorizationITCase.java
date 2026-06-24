@@ -150,6 +150,8 @@ public class FlussAuthorizationITCase {
                         DATA1_TABLE_PATH_PK.getDatabaseName(), DatabaseDescriptor.EMPTY, true)
                 .get();
         rootAdmin.createTable(DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK, true).get();
+        TableInfo setupTableInfo = rootAdmin.getTableInfo(DATA1_TABLE_PATH_PK).get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(setupTableInfo.getTableId());
     }
 
     @AfterEach
