@@ -81,7 +81,16 @@ public class HudiCompactionService {
 
     private InternalSchemaManager internalSchemaManager;
 
-    public HudiCompactionService(
+    public static HudiCompactionService forScheduler(HudiWriteTableInfo hudiTableInfo) {
+        return new HudiCompactionService(hudiTableInfo, null, null);
+    }
+
+    public static HudiCompactionService forExecutor(
+            HudiWriteTableInfo hudiTableInfo, TableBucket tableBucket, @Nullable String partition) {
+        return new HudiCompactionService(hudiTableInfo, tableBucket, partition);
+    }
+
+    private HudiCompactionService(
             HudiWriteTableInfo hudiTableInfo,
             @Nullable TableBucket tableBucket,
             @Nullable String partition) {
@@ -94,7 +103,7 @@ public class HudiCompactionService {
         this.partition = partition;
     }
 
-    public boolean scheduleCompaction() {
+    public boolean scheduleCompaction() throws IOException {
         LOG.info("Scheduling Hudi compaction for table {}.", hudiTableInfo.getTablePath());
         metaClient.reloadActiveTimeline();
         try {
@@ -107,16 +116,20 @@ public class HudiCompactionService {
             }
             return scheduled;
         } catch (Exception e) {
-            LOG.warn(
-                    "Failed to schedule Hudi compaction for table {}.",
-                    hudiTableInfo.getTablePath(),
+            throw new IOException(
+                    "Failed to schedule Hudi compaction for table "
+                            + hudiTableInfo.getTablePath()
+                            + ".",
                     e);
-            return false;
         }
     }
 
     public void markSelectedCompactionsInflight() {
         List<String> compactionInstantTimes = getSelectedCompactionInstantTimes();
+        if (compactionInstantTimes.isEmpty()) {
+            return;
+        }
+        compactionInstantTimes = validateSelectedCompactionInstantTimes(compactionInstantTimes);
         if (compactionInstantTimes.isEmpty()) {
             return;
         }
@@ -141,6 +154,8 @@ public class HudiCompactionService {
             HoodieInstant requestedInstant =
                     instantGenerator.getCompactionRequestedInstant(timestamp);
             if (pendingCompactionTimeline.containsInstant(requestedInstant)) {
+                // Each Fluss tiering table has a single lake committer, so requested->inflight
+                // transitions are serialized by the committer task for this table.
                 table.getActiveTimeline().transitionCompactionRequestedToInflight(requestedInstant);
                 LOG.info("Marked Hudi compaction instant {} as inflight.", timestamp);
             }
@@ -219,26 +234,28 @@ public class HudiCompactionService {
         for (Pair<String, HoodieCompactionPlan> planPair : compactionPlans) {
             String instantTime = planPair.getLeft();
             HoodieCompactionPlan compactionPlan = planPair.getRight();
-            for (HoodieCompactionOperation operation : compactionPlan.getOperations()) {
-                if (!belongsToCurrentWriter(operation, hudiPartitionPath, currentBucket)) {
-                    continue;
-                }
+            metaClient.reload();
+            try {
+                CompactionUtil.setAvroSchema(writeConfig, metaClient);
+                internalSchemaManager = null;
+                HoodieReaderContext<?> readerContext = createReaderContext();
+                for (HoodieCompactionOperation operation : compactionPlan.getOperations()) {
+                    if (!belongsToCurrentWriter(operation, hudiPartitionPath, currentBucket)) {
+                        continue;
+                    }
 
-                HoodieFlinkMergeOnReadTableCompactor<?> compactor =
-                        new HoodieFlinkMergeOnReadTableCompactor<>();
-                CompactionOperation compactionOperation =
-                        CompactionOperation.convertFromAvroRecordInstance(operation);
+                    HoodieFlinkMergeOnReadTableCompactor<?> compactor =
+                            new HoodieFlinkMergeOnReadTableCompactor<>();
+                    CompactionOperation compactionOperation =
+                            CompactionOperation.convertFromAvroRecordInstance(operation);
 
-                metaClient.reload();
-                try {
-                    CompactionUtil.setAvroSchema(writeConfig, metaClient);
                     List<WriteStatus> writeStatuses =
                             compactor.compact(
                                     writeConfig,
                                     compactionOperation,
                                     instantTime,
                                     table.getTaskContextSupplier(),
-                                    createReaderContext(true),
+                                    readerContext,
                                     table);
                     writeStatusesByInstant
                             .computeIfAbsent(instantTime, ignored -> new ArrayList<>())
@@ -250,16 +267,11 @@ public class HudiCompactionService {
                             hudiPartitionPath,
                             currentBucket.getBucket(),
                             instantTime);
-                } catch (Exception e) {
-                    throw new IOException(
-                            String.format(
-                                    "Failed to execute Hudi compaction for table %s, partition %s, bucket %s, instant %s.",
-                                    hudiTableInfo.getTablePath(),
-                                    hudiPartitionPath,
-                                    currentBucket.getBucket(),
-                                    instantTime),
-                            e);
                 }
+            } catch (Exception e) {
+                writeStatusesByInstant.remove(instantTime);
+                throw rollbackCompactionAfterFailure(
+                        instantTime, hudiPartitionPath, currentBucket, e);
             }
         }
         return writeStatusesByInstant;
@@ -273,9 +285,9 @@ public class HudiCompactionService {
             return null;
         }
 
-        String latestInstant = null;
         List<String> compactionInstants = new ArrayList<>(compactionWriteStats.keySet());
         Collections.sort(compactionInstants);
+        String latestInstant = compactionInstants.get(compactionInstants.size() - 1);
         for (String compactionInstant : compactionInstants) {
             HudiWriteStats writeStats = compactionWriteStats.get(compactionInstant);
 
@@ -295,9 +307,6 @@ public class HudiCompactionService {
             }
 
             doCommitCompaction(compactionInstant, writeStats, snapshotProperties);
-            if (latestInstant == null || compactionInstant.compareTo(latestInstant) > 0) {
-                latestInstant = compactionInstant;
-            }
             LOG.info("Committed Hudi compaction instant {}.", compactionInstant);
         }
         return latestInstant;
@@ -322,10 +331,51 @@ public class HudiCompactionService {
                 .collect(Collectors.toList());
     }
 
-    private HoodieReaderContext<?> createReaderContext(boolean needReloadMetaClient) {
+    private List<String> validateSelectedCompactionInstantTimes(
+            List<String> compactionInstantTimes) {
+        HoodieTimeline pendingCompactionTimeline =
+                table.getActiveTimeline().filterPendingCompactionTimeline();
+        InstantGenerator instantGenerator = table.getInstantGenerator();
+        List<String> validCompactionInstantTimes = new ArrayList<>();
+        for (String timestamp : compactionInstantTimes) {
+            HoodieCompactionPlan compactionPlan = loadCompactionPlan(timestamp);
+            if (isValidCompactionPlan(compactionPlan)) {
+                validCompactionInstantTimes.add(timestamp);
+                continue;
+            }
+
+            HoodieInstant inflightInstant =
+                    instantGenerator.getCompactionInflightInstant(timestamp);
+            if (pendingCompactionTimeline.containsInstant(inflightInstant)) {
+                LOG.warn(
+                        "Rollback invalid inflight Hudi compaction instant {} for table {}.",
+                        timestamp,
+                        hudiTableInfo.getTablePath());
+                table.rollbackInflightCompaction(
+                        inflightInstant, writeClient.getTransactionManager());
+                metaClient.reloadActiveTimeline();
+            } else {
+                LOG.warn(
+                        "Skip invalid Hudi compaction plan {} for table {}.",
+                        timestamp,
+                        hudiTableInfo.getTablePath());
+            }
+        }
+        return validCompactionInstantTimes;
+    }
+
+    private HoodieCompactionPlan loadCompactionPlan(String timestamp) {
+        try {
+            return CompactionUtils.getCompactionPlan(metaClient, timestamp);
+        } catch (Exception e) {
+            throw new HoodieException("Failed to get Hudi compaction plan " + timestamp, e);
+        }
+    }
+
+    private HoodieReaderContext<?> createReaderContext() {
         Supplier<InternalSchemaManager> internalSchemaManagerSupplier =
                 () -> {
-                    if (internalSchemaManager == null || needReloadMetaClient) {
+                    if (internalSchemaManager == null) {
                         internalSchemaManager =
                                 InternalSchemaManager.get(metaClient.getStorageConf(), metaClient);
                     }
@@ -338,6 +388,33 @@ public class HudiCompactionService {
                 Collections.emptyList(),
                 metaClient.getTableConfig(),
                 Option.empty());
+    }
+
+    private IOException rollbackCompactionAfterFailure(
+            String instantTime,
+            String hudiPartitionPath,
+            TableBucket currentBucket,
+            Exception cause) {
+        IOException failure =
+                new IOException(
+                        String.format(
+                                "Failed to execute Hudi compaction for table %s, partition %s, bucket %s, instant %s.",
+                                hudiTableInfo.getTablePath(),
+                                hudiPartitionPath,
+                                currentBucket.getBucket(),
+                                instantTime),
+                        cause);
+        try {
+            CompactionUtil.rollbackCompaction(
+                    table, instantTime, writeClient.getTransactionManager());
+            metaClient.reloadActiveTimeline();
+        } catch (Exception rollbackFailure) {
+            failure.addSuppressed(
+                    new IOException(
+                            "Failed to rollback Hudi compaction instant " + instantTime + ".",
+                            rollbackFailure));
+        }
+        return failure;
     }
 
     private void doCommitCompaction(
@@ -382,11 +459,12 @@ public class HudiCompactionService {
         try {
             return BucketIdentifier.bucketIdFromFileId(fileId) == currentBucket.getBucket();
         } catch (RuntimeException e) {
-            return fileId.contains(BucketIdentifier.bucketIdStr(currentBucket.getBucket()));
+            LOG.warn("Failed to parse Hudi bucket id from file id {}.", fileId, e);
+            return false;
         }
     }
 
-    private String toHudiPartitionPath(@Nullable String partitionName) {
+    private String toHudiPartitionPath(@Nullable String partitionName) throws IOException {
         if (partitionName == null || partitionName.isEmpty()) {
             return "";
         }
@@ -404,7 +482,10 @@ public class HudiCompactionService {
         String[] fields = partitionFields.split(",");
         String[] values = partitionName.split("\\$");
         if (fields.length != values.length) {
-            return partitionPath;
+            throw new IOException(
+                    String.format(
+                            "Invalid Fluss partition name '%s' for Hudi hive-style partition fields '%s'. Expected %s values separated by '$' but got %s.",
+                            partitionName, partitionFields, fields.length, values.length));
         }
 
         List<String> hiveStylePartitionSegments = new ArrayList<>(fields.length);
@@ -432,7 +513,6 @@ public class HudiCompactionService {
             writeStatus.setPartitionPath(stat.getPartitionPath());
             writeStatuses.add(writeStatus);
         }
-        writeStatuses.get(0).setTotalErrorRecords(writeStats.getTotalErrorRecords());
         return writeStatuses;
     }
 
@@ -440,9 +520,12 @@ public class HudiCompactionService {
         return plan != null && plan.getOperations() != null && !plan.getOperations().isEmpty();
     }
 
-    private static FlinkCompactionConfig toFlinkCompactionConfig(Configuration config) {
+    static FlinkCompactionConfig toFlinkCompactionConfig(Configuration config) {
         FlinkCompactionConfig compactionConfig = new FlinkCompactionConfig();
 
+        // Hudi does not expose a reverse helper for FlinkCompactionConfig. Keep this mapping
+        // focused on the scheduling and cleaning fields used by Fluss tiering; CLI/service-mode
+        // fields intentionally keep Hudi defaults.
         compactionConfig.path = config.get(FlinkOptions.PATH);
         compactionConfig.compactionTriggerStrategy =
                 config.get(FlinkOptions.COMPACTION_TRIGGER_STRATEGY);

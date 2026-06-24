@@ -81,6 +81,7 @@ import java.util.stream.IntStream;
 
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
 import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
+import static org.apache.fluss.lake.writer.LakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
@@ -92,6 +93,10 @@ public abstract class FlinkHudiTieringTestBase {
 
     protected static final String DEFAULT_DB = "fluss";
     protected static final String CATALOG_NAME = "testcatalog";
+    protected static final String HUDI_CONF_PREFIX = "hudi.";
+
+    private static final Duration HUDI_COMPACTION_COMMIT_TIMEOUT = Duration.ofSeconds(30);
+    private static final String COMMITTER_USER = "commit-user";
 
     protected StreamExecutionEnvironment execEnv;
 
@@ -185,11 +190,12 @@ public abstract class FlinkHudiTieringTestBase {
                         .distributedBy(bucketNum)
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
                         .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
-                        .customProperty("hudi.precombine.field", "f_time");
+                        .customProperty(HUDI_CONF_PREFIX + "precombine.field", "f_time");
 
         if (enableAutoCompaction) {
             tableBuilder.property(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(), "true");
-            tableBuilder.customProperty("hudi." + FlinkOptions.COMPACTION_DELTA_COMMITS.key(), "1");
+            tableBuilder.customProperty(
+                    HUDI_CONF_PREFIX + FlinkOptions.COMPACTION_DELTA_COMMITS.key(), "1");
         }
         return createTable(tablePath, tableBuilder.build());
     }
@@ -203,12 +209,14 @@ public abstract class FlinkHudiTieringTestBase {
                         .distributedBy(bucketNum, "f_int")
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
                         .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
-                        .customProperty("hudi.precombine.field", "f_str")
-                        .customProperty("hudi." + FlinkOptions.RECORD_KEY_FIELD.key(), "f_int");
+                        .customProperty(HUDI_CONF_PREFIX + "precombine.field", "f_str")
+                        .customProperty(
+                                HUDI_CONF_PREFIX + FlinkOptions.RECORD_KEY_FIELD.key(), "f_int");
 
         if (enableAutoCompaction) {
             tableBuilder.property(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(), "true");
-            tableBuilder.customProperty("hudi." + FlinkOptions.COMPACTION_DELTA_COMMITS.key(), "1");
+            tableBuilder.customProperty(
+                    HUDI_CONF_PREFIX + FlinkOptions.COMPACTION_DELTA_COMMITS.key(), "1");
         }
         return createTable(tablePath, tableBuilder.build());
     }
@@ -339,31 +347,37 @@ public abstract class FlinkHudiTieringTestBase {
             expectedRecords.add(formatMORRow(row));
         }
 
-        List<String> actualRecords =
-                collectHudiRows(
-                        tablePath,
-                        partition,
-                        bucket,
-                        record ->
-                                record.getBoolean(5)
-                                        + ","
-                                        + record.getInt(6)
-                                        + ","
-                                        + record.getLong(7)
-                                        + ","
-                                        + record.getFloat(8)
-                                        + ","
-                                        + record.getDouble(9)
-                                        + ","
-                                        + record.getString(10).toString()
-                                        + ","
-                                        + record.getDecimal(11, 5, 2).toBigDecimal().toPlainString()
-                                        + ","
-                                        + record.getDecimal(12, 20, 0)
-                                                .toBigDecimal()
-                                                .toPlainString());
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    List<String> actualRecords =
+                            collectHudiRows(
+                                    tablePath,
+                                    partition,
+                                    bucket,
+                                    record ->
+                                            record.getBoolean(5)
+                                                    + ","
+                                                    + record.getInt(6)
+                                                    + ","
+                                                    + record.getLong(7)
+                                                    + ","
+                                                    + record.getFloat(8)
+                                                    + ","
+                                                    + record.getDouble(9)
+                                                    + ","
+                                                    + record.getString(10).toString()
+                                                    + ","
+                                                    + record.getDecimal(11, 5, 2)
+                                                            .toBigDecimal()
+                                                            .toPlainString()
+                                                    + ","
+                                                    + record.getDecimal(12, 20, 0)
+                                                            .toBigDecimal()
+                                                            .toPlainString());
 
-        assertThat(actualRecords).containsExactlyInAnyOrderElementsOf(expectedRecords);
+                    assertThat(actualRecords).containsExactlyInAnyOrderElementsOf(expectedRecords);
+                });
     }
 
     protected void checkDataInHudiMORPartitionTable(
@@ -435,16 +449,10 @@ public abstract class FlinkHudiTieringTestBase {
                 HudiTableInfo.create(tablePath, Configuration.fromMap(getHudiCatalogConf()))) {
             HoodieTableMetaClient metaClient = hudiTableInfo.getMetaClient();
             metaClient.reloadActiveTimeline();
-            HoodieTimeline timeline =
-                    metaClient
-                            .getActiveTimeline()
-                            .getCommitsAndCompactionTimeline()
-                            .filterCompletedInstants();
-            Optional<HoodieInstant> latestInstant =
-                    timeline.getReverseOrderedInstantsByCompletionTime().findFirst();
-            assertThat(latestInstant).isPresent();
+            HoodieTimeline timeline = hudiTableInfo.getCompletedTimeline();
+            HoodieInstant latestInstant = getLatestFlussDataInstant(hudiTableInfo);
 
-            HoodieCommitMetadata metadata = timeline.readCommitMetadata(latestInstant.get());
+            HoodieCommitMetadata metadata = timeline.readCommitMetadata(latestInstant);
             Map<String, String> extraMetadata = metadata.getExtraMetadata();
             assertThat(extraMetadata).isNotNull();
             String offsetFile = extraMetadata.get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
@@ -462,26 +470,8 @@ public abstract class FlinkHudiTieringTestBase {
 
     protected void checkHudiCompactionCommitted(TablePath tablePath) {
         retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    try (HudiTableInfo hudiTableInfo =
-                            HudiTableInfo.create(
-                                    tablePath, Configuration.fromMap(getHudiCatalogConf()))) {
-                        HoodieTimeline timeline =
-                                hudiTableInfo
-                                        .getMetaClient()
-                                        .getActiveTimeline()
-                                        .getCommitsAndCompactionTimeline()
-                                        .filterCompletedInstants();
-                        assertThat(
-                                        timeline.getInstantsAsStream()
-                                                .anyMatch(
-                                                        instant ->
-                                                                isCompactionInstant(
-                                                                        timeline, instant)))
-                                .isTrue();
-                    }
-                });
+                HUDI_COMPACTION_COMMIT_TIMEOUT,
+                () -> assertThat(hasHudiCompactionCommitted(tablePath)).isTrue());
     }
 
     private static String formatMORRow(InternalRow row) {
@@ -551,16 +541,7 @@ public abstract class FlinkHudiTieringTestBase {
 
     private static List<FileSlice> getLatestFileSlicesAtCompletedInstant(
             HudiTableInfo hudiTableInfo, String partition) {
-        HoodieTimeline completedTimeline = hudiTableInfo.getCompletedTimeline();
-        HoodieInstant latestInstant =
-                completedTimeline
-                        .lastInstant()
-                        .orElseThrow(
-                                () ->
-                                        new IllegalStateException(
-                                                "No completed Hudi instant found for table "
-                                                        + hudiTableInfo.getTablePath()
-                                                        + "."));
+        HoodieInstant latestInstant = getLatestFlussDataInstant(hudiTableInfo);
         String latestInstantTime = latestInstant.requestedTime();
         if (hudiTableInfo.getTableType() == HoodieTableType.MERGE_ON_READ) {
             return hudiTableInfo
@@ -568,6 +549,8 @@ public abstract class FlinkHudiTieringTestBase {
                     .getLatestMergedFileSlicesBeforeOrOn(partition, latestInstantTime)
                     .collect(Collectors.toList());
         }
+        // includeFileSliceBefore=true lets COW reads include the base file slice visible at this
+        // completed instant.
         return hudiTableInfo
                 .getFileSystemView()
                 .getLatestFileSlicesBeforeOrOn(partition, latestInstantTime, true)
@@ -586,12 +569,56 @@ public abstract class FlinkHudiTieringTestBase {
         return org.apache.flink.configuration.Configuration.fromMap(hudiOptions);
     }
 
+    private static HoodieInstant getLatestFlussDataInstant(HudiTableInfo hudiTableInfo) {
+        HoodieTimeline completedTimeline = hudiTableInfo.getCompletedTimeline();
+        return completedTimeline
+                .getReverseOrderedInstants()
+                .filter(instant -> isFlussDataInstant(completedTimeline, instant))
+                .findFirst()
+                .orElseThrow(
+                        () ->
+                                new IllegalStateException(
+                                        "No Fluss data instant found for Hudi table "
+                                                + hudiTableInfo.getTablePath()
+                                                + "."));
+    }
+
+    private static boolean isFlussDataInstant(HoodieTimeline timeline, HoodieInstant instant) {
+        try {
+            HoodieCommitMetadata metadata = timeline.readCommitMetadata(instant);
+            Map<String, String> extraMetadata =
+                    metadata == null ? null : metadata.getExtraMetadata();
+            return metadata != null
+                    && metadata.getOperationType() != WriteOperationType.COMPACT
+                    && extraMetadata != null
+                    && FLUSS_LAKE_TIERING_COMMIT_USER.equals(extraMetadata.get(COMMITTER_USER));
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to read Hudi instant metadata " + instant + ".", e);
+        }
+    }
+
+    private static boolean hasHudiCompactionCommitted(TablePath tablePath) {
+        try (HudiTableInfo hudiTableInfo =
+                HudiTableInfo.create(tablePath, Configuration.fromMap(getHudiCatalogConf()))) {
+            HoodieTimeline timeline =
+                    hudiTableInfo
+                            .getMetaClient()
+                            .getActiveTimeline()
+                            .getCommitsAndCompactionTimeline()
+                            .filterCompletedInstants();
+            return timeline.getInstantsAsStream()
+                    .anyMatch(instant -> isCompactionInstant(timeline, instant));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private static boolean isCompactionInstant(HoodieTimeline timeline, HoodieInstant instant) {
         try {
             HoodieCommitMetadata metadata = timeline.readCommitMetadata(instant);
             return metadata != null && metadata.getOperationType() == WriteOperationType.COMPACT;
         } catch (Exception e) {
-            throw new RuntimeException("Failed to read Hudi instant metadata " + instant + ".", e);
+            return false;
         }
     }
 

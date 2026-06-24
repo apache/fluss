@@ -97,7 +97,7 @@ class HudiTieringITCase extends FlinkHudiTieringTestBase {
     @Test
     void testTiering() throws Exception {
         TablePath pkTablePath = TablePath.of(DEFAULT_DB, "pkTable");
-        long pkTableId = createPkTable(pkTablePath, 1, true, PK_SCHEMA);
+        long pkTableId = createPkTable(pkTablePath, 1, false, PK_SCHEMA);
         TableBucket pkTableBucket = new TableBucket(pkTableId, 0);
 
         List<InternalRow> rows = Arrays.asList(pkRow(1, "v1"), pkRow(2, "v2"), pkRow(3, "v3"));
@@ -121,16 +121,45 @@ class HudiTieringITCase extends FlinkHudiTieringTestBase {
             checkDataInHudiMORTable(pkTablePath, "", rows, 0);
             checkFlussOffsetsInSnapshot(pkTablePath, Collections.singletonMap(pkTableBucket, 9L));
 
+            testPartitionedTableTiering();
+        } finally {
+            jobClient.cancel().get();
+        }
+    }
+
+    @Test
+    void testPkTableTieringWithAutoCompaction() throws Exception {
+        TablePath pkTablePath = TablePath.of(DEFAULT_DB, "pkTableWithAutoCompaction");
+        long pkTableId = createPkTable(pkTablePath, 1, true, PK_SCHEMA);
+        TableBucket pkTableBucket = new TableBucket(pkTableId, 0);
+
+        List<InternalRow> rows = Arrays.asList(pkRow(1, "v1"), pkRow(2, "v2"), pkRow(3, "v3"));
+        writeRows(pkTablePath, rows, false);
+        waitUntilSnapshot(pkTableId, 1);
+
+        execEnv.enableCheckpointing(1000);
+        JobClient jobClient = buildTieringJob(execEnv);
+        try {
+            assertReplicaStatus(pkTableBucket, 3);
+            checkDataInHudiMORTable(pkTablePath, "", rows, 0);
+            checkFlussOffsetsInSnapshot(pkTablePath, Collections.singletonMap(pkTableBucket, 3L));
+
+            rows = Arrays.asList(pkRow(1, "v111"), pkRow(2, "v222"), pkRow(3, "v333"));
+            writeRows(pkTablePath, rows, false);
+
+            // 3 initial records + 3 delete records + 3 insert records.
+            assertReplicaStatus(pkTableBucket, 9);
+            checkDataInHudiMORTable(pkTablePath, "", rows, 0);
+            checkFlussOffsetsInSnapshot(pkTablePath, Collections.singletonMap(pkTableBucket, 9L));
+
             rows = Arrays.asList(pkRow(1, "v1111"), pkRow(2, "v2222"), pkRow(3, "v3333"));
             writeRows(pkTablePath, rows, false);
 
-            // 3 current records + 3 delete records + 3 insert records.
+            // 9 previous records + 3 delete records + 3 insert records.
             assertReplicaStatus(pkTableBucket, 15);
             checkDataInHudiMORTable(pkTablePath, "", rows, 0);
             checkFlussOffsetsInSnapshot(pkTablePath, Collections.singletonMap(pkTableBucket, 15L));
             checkHudiCompactionCommitted(pkTablePath);
-
-            testPartitionedTableTiering();
         } finally {
             jobClient.cancel().get();
         }
@@ -206,8 +235,9 @@ class HudiTieringITCase extends FlinkHudiTieringTestBase {
                                 AutoPartitionTimeUnit.YEAR)
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
                         .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
-                        .customProperty("hudi.precombine.field", "date")
-                        .customProperty("hudi.hoodie.datasource.write.recordkey.field", "id")
+                        .customProperty(HUDI_CONF_PREFIX + "precombine.field", "date")
+                        .customProperty(
+                                HUDI_CONF_PREFIX + "hoodie.datasource.write.recordkey.field", "id")
                         .build();
         return Tuple2.of(
                 createTable(partitionedTablePath, partitionedTableDescriptor),

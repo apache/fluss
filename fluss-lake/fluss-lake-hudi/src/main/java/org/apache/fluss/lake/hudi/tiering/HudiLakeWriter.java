@@ -24,6 +24,7 @@ import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.utils.TimeUtils;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
 import org.apache.flink.configuration.Configuration;
@@ -41,13 +42,17 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static org.apache.fluss.lake.writer.WriterInitContext.UNKNOWN_SPLIT_INDEX;
 import static org.apache.fluss.lake.writer.WriterInitContext.UNKNOWN_TIERING_ROUND_TIMESTAMP;
@@ -58,10 +63,19 @@ public class HudiLakeWriter implements LakeWriter<HudiWriteResult> {
 
     private static final Logger LOG = LoggerFactory.getLogger(HudiLakeWriter.class);
 
+    private static final String COMPACTION_COMPLETE_TIMEOUT_KEY =
+            "fluss.tiering.compaction.complete-timeout";
+    private static final String COMPACTION_SHUTDOWN_TIMEOUT_KEY =
+            "fluss.tiering.compaction.shutdown-timeout";
+    private static final Duration DEFAULT_COMPACTION_COMPLETE_TIMEOUT = Duration.ofMinutes(30);
+    private static final Duration DEFAULT_COMPACTION_SHUTDOWN_TIMEOUT = Duration.ofSeconds(30);
+
     private final RecordWriter recordWriter;
     private final TableInfo tableInfo;
     private final HudiWriteTableInfo hudiTableInfo;
     private final CkpMetadata ckpMetadata;
+    private final long compactionCompleteTimeoutMs;
+    private final long compactionShutdownTimeoutMs;
     @Nullable private final ExecutorService compactionExecutor;
     @Nullable private final CompletableFuture<Map<String, List<WriteStatus>>> compactionFuture;
 
@@ -75,6 +89,16 @@ public class HudiLakeWriter implements LakeWriter<HudiWriteResult> {
         this.hudiTableInfo =
                 HudiWriteTableInfo.create(hudiCatalogProvider, tableInfo.getTablePath());
         this.ckpMetadata = ckpMetadataProvider.get(tableInfo.getTablePath(), hudiTableInfo);
+        this.compactionCompleteTimeoutMs =
+                getTimeoutMillis(
+                        hudiTableInfo.getFlinkConfig(),
+                        COMPACTION_COMPLETE_TIMEOUT_KEY,
+                        DEFAULT_COMPACTION_COMPLETE_TIMEOUT);
+        this.compactionShutdownTimeoutMs =
+                getTimeoutMillis(
+                        hudiTableInfo.getFlinkConfig(),
+                        COMPACTION_SHUTDOWN_TIMEOUT_KEY,
+                        DEFAULT_COMPACTION_SHUTDOWN_TIMEOUT);
 
         if (writerInitContext.splitIndex() == 0) {
             ckpMetadata.bootstrap();
@@ -86,17 +110,19 @@ public class HudiLakeWriter implements LakeWriter<HudiWriteResult> {
         }
 
         this.recordWriter = new HudiRecordWriter(writerInitContext, hudiTableInfo, ckpMetadata);
-        if (shouldRunCompaction(writerInitContext)) {
-            this.compactionExecutor =
+        ExecutorService createdCompactionExecutor = null;
+        if (shouldRunCompaction()) {
+            createdCompactionExecutor =
                     Executors.newSingleThreadExecutor(
                             new ExecutorThreadFactory(
                                     "hudi-compact-" + writerInitContext.tableBucket()));
-            this.compactionFuture = executeCompactionAsync(hudiCatalogProvider, writerInitContext);
-        } else {
-            this.compactionExecutor = null;
-            this.compactionFuture = null;
         }
+        this.compactionExecutor = createdCompactionExecutor;
         LOG.info("Created HudiLakeWriter with configuration {}.", hudiTableInfo.getFlinkConfig());
+        this.compactionFuture =
+                compactionExecutor == null
+                        ? null
+                        : executeCompactionAsync(hudiCatalogProvider, writerInitContext);
     }
 
     @Override
@@ -114,9 +140,11 @@ public class HudiLakeWriter implements LakeWriter<HudiWriteResult> {
             Map<String, List<WriteStatus>> writeStatuses = recordWriter.complete();
             Map<String, List<WriteStatus>> compactionWriteStatuses = Collections.emptyMap();
             if (compactionFuture != null) {
-                compactionWriteStatuses = compactionFuture.get();
+                compactionWriteStatuses = waitForCompaction();
             }
             return HudiWriteResult.fromWriteStatuses(writeStatuses, compactionWriteStatuses);
+        } catch (IOException e) {
+            throw e;
         } catch (Exception e) {
             throw new IOException("Failed to complete Hudi write.", e);
         }
@@ -134,22 +162,56 @@ public class HudiLakeWriter implements LakeWriter<HudiWriteResult> {
 
     @Nullable
     private IOException closeCompactionExecutor() {
+        if (compactionExecutor == null) {
+            return null;
+        }
+
         try {
-            if (compactionFuture != null && !compactionFuture.isDone()) {
-                compactionFuture.cancel(true);
-            }
-            if (compactionExecutor != null) {
-                compactionExecutor.shutdown();
-                if (!compactionExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
-                    LOG.warn("Failed to close Hudi compaction executor.");
+            cancelCompaction();
+            compactionExecutor.shutdown();
+            if (!compactionExecutor.awaitTermination(
+                    compactionShutdownTimeoutMs, TimeUnit.MILLISECONDS)) {
+                compactionExecutor.shutdownNow();
+                if (!compactionExecutor.awaitTermination(
+                        compactionShutdownTimeoutMs, TimeUnit.MILLISECONDS)) {
+                    return new IOException(
+                            String.format(
+                                    "Failed to close Hudi compaction executor within %s ms.",
+                                    compactionShutdownTimeoutMs));
                 }
             }
             return null;
         } catch (InterruptedException e) {
+            compactionExecutor.shutdownNow();
             Thread.currentThread().interrupt();
             return new IOException("Interrupted while closing Hudi compaction executor.", e);
         } catch (Exception e) {
             return new IOException("Failed to close Hudi compaction executor.", e);
+        }
+    }
+
+    private Map<String, List<WriteStatus>> waitForCompaction() throws IOException {
+        try {
+            return compactionFuture.get(compactionCompleteTimeoutMs, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            cancelCompaction();
+            throw new IOException(
+                    String.format(
+                            "Timed out after %s ms waiting for Hudi compaction to finish.",
+                            compactionCompleteTimeoutMs),
+                    e);
+        } catch (InterruptedException e) {
+            cancelCompaction();
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while waiting for Hudi compaction to finish.", e);
+        } catch (ExecutionException e) {
+            throw new IOException("Failed to execute Hudi compaction.", e.getCause());
+        }
+    }
+
+    private void cancelCompaction() {
+        if (compactionFuture != null && !compactionFuture.isDone()) {
+            compactionFuture.cancel(true);
         }
     }
 
@@ -170,20 +232,22 @@ public class HudiLakeWriter implements LakeWriter<HudiWriteResult> {
         }
     }
 
-    private boolean shouldRunCompaction(WriterInitContext writerInitContext) {
-        return writerInitContext.tableInfo().getTableConfig().isDataLakeAutoCompaction()
-                && hudiTableInfo.getTableType() == HoodieTableType.MERGE_ON_READ;
+    private boolean shouldRunCompaction() {
+        return hudiTableInfo.getTableType() == HoodieTableType.MERGE_ON_READ
+                && hudiTableInfo.getFlinkConfig().get(FlinkOptions.COMPACTION_SCHEDULE_ENABLED);
     }
 
     private CompletableFuture<Map<String, List<WriteStatus>>> executeCompactionAsync(
             HudiCatalogProvider hudiCatalogProvider, WriterInitContext writerInitContext) {
         return CompletableFuture.supplyAsync(
                 () -> {
+                    // Compaction runs in a separate thread, so it intentionally uses an isolated
+                    // Hudi write client instead of sharing the data writer's client state.
                     try (HudiWriteTableInfo compactionTableInfo =
                             HudiWriteTableInfo.create(
                                     hudiCatalogProvider, writerInitContext.tablePath())) {
                         HudiCompactionService compactionService =
-                                new HudiCompactionService(
+                                HudiCompactionService.forExecutor(
                                         compactionTableInfo,
                                         writerInitContext.tableBucket(),
                                         writerInitContext.partition());
@@ -193,12 +257,12 @@ public class HudiLakeWriter implements LakeWriter<HudiWriteResult> {
                                 compactionService.getCompactionPlans(instantTimes);
                         return compactionService.executeCompaction(compactionPlans);
                     } catch (Exception e) {
-                        LOG.warn(
-                                "Failed to execute Hudi compaction for table {}, bucket {}.",
-                                writerInitContext.tablePath(),
-                                writerInitContext.tableBucket(),
+                        throw new CompletionException(
+                                String.format(
+                                        "Failed to execute Hudi compaction for table %s, bucket %s.",
+                                        writerInitContext.tablePath(),
+                                        writerInitContext.tableBucket()),
                                 e);
-                        return Collections.emptyMap();
                     }
                 },
                 compactionExecutor);
@@ -232,5 +296,20 @@ public class HudiLakeWriter implements LakeWriter<HudiWriteResult> {
         checkArgument(
                 writerInitContext.tieringRoundTimestamp() != UNKNOWN_TIERING_ROUND_TIMESTAMP,
                 "Hudi lake writer requires tiering round timestamp in WriterInitContext.");
+    }
+
+    private static long getTimeoutMillis(Configuration config, String key, Duration defaultTimeout)
+            throws IOException {
+        try {
+            Duration timeout =
+                    TimeUtils.parseDuration(
+                            config.getString(key, TimeUtils.getStringInMillis(defaultTimeout)));
+            if (timeout.toMillis() <= 0) {
+                throw new IllegalArgumentException("timeout must be greater than 0 ms");
+            }
+            return timeout.toMillis();
+        } catch (RuntimeException e) {
+            throw new IOException("Invalid Hudi compaction timeout option " + key + ".", e);
+        }
     }
 }

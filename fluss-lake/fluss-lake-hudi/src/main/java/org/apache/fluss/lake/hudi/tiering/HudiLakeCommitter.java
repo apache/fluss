@@ -28,6 +28,7 @@ import org.apache.fluss.utils.IOUtils;
 import org.apache.hudi.client.HoodieFlinkWriteClient;
 import org.apache.hudi.common.model.HoodieCommitMetadata;
 import org.apache.hudi.common.model.HoodieTableType;
+import org.apache.hudi.common.model.WriteOperationType;
 import org.apache.hudi.common.table.timeline.HoodieInstant;
 import org.apache.hudi.common.table.timeline.HoodieTimeline;
 import org.apache.hudi.common.util.Option;
@@ -41,6 +42,7 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -68,9 +70,19 @@ public class HudiLakeCommitter implements LakeCommitter<HudiWriteResult, HudiCom
         this.hudiTableInfo = HudiWriteTableInfo.create(hudiCatalogProvider, tablePath);
         this.writeClient = hudiTableInfo.getWriteClient();
         this.ckpMetadata = ckpMetadataProvider.get(tablePath, hudiTableInfo);
-        this.compactionService = new HudiCompactionService(hudiTableInfo, null, null);
+        this.compactionService = HudiCompactionService.forScheduler(hudiTableInfo);
         LOG.info(
                 "Created HudiLakeCommitter with configuration {}.", hudiTableInfo.getFlinkConfig());
+    }
+
+    HudiLakeCommitter(
+            HudiWriteTableInfo hudiTableInfo,
+            CkpMetadata ckpMetadata,
+            HudiCompactionService compactionService) {
+        this.hudiTableInfo = hudiTableInfo;
+        this.writeClient = hudiTableInfo.getWriteClient();
+        this.ckpMetadata = ckpMetadata;
+        this.compactionService = compactionService;
     }
 
     @Override
@@ -129,11 +141,8 @@ public class HudiLakeCommitter implements LakeCommitter<HudiWriteResult, HudiCom
 
             ckpMetadata.commitInstant(instant);
             LOG.info("Committed Hudi instant {} successfully.", instant);
-            String latestCommittedInstant =
-                    commitCompactionAndSchedule(
-                            committable.getCompactionWriteStats(), commitMetadata);
-            return LakeCommitResult.committedIsReadable(
-                    parseSnapshotId(getLatestCommittedInstant(instant, latestCommittedInstant)));
+            commitCompactionAndSchedule(committable.getCompactionWriteStats());
+            return LakeCommitResult.committedIsReadable(parseSnapshotId(instant));
         } catch (Exception e) {
             if (e instanceof IOException) {
                 throw (IOException) e;
@@ -145,18 +154,6 @@ public class HudiLakeCommitter implements LakeCommitter<HudiWriteResult, HudiCom
     @Override
     public void abort(HudiCommittable committable) throws IOException {
         IOException failure = null;
-        for (String instant : committable.getWriteStats().keySet()) {
-            try {
-                abortInstant(instant);
-                LOG.info("Aborted Hudi instant {}.", instant);
-            } catch (IOException e) {
-                failure =
-                        addSuppressed(
-                                failure,
-                                new IOException(
-                                        "Failed to abort Hudi instant " + instant + ".", e));
-            }
-        }
         for (String instant : committable.getCompactionWriteStats().keySet()) {
             try {
                 abortCompactionInstant(instant);
@@ -168,6 +165,18 @@ public class HudiLakeCommitter implements LakeCommitter<HudiWriteResult, HudiCom
                                 new IOException(
                                         "Failed to abort Hudi compaction instant " + instant + ".",
                                         e));
+            }
+        }
+        for (String instant : committable.getWriteStats().keySet()) {
+            try {
+                abortInstant(instant);
+                LOG.info("Aborted Hudi instant {}.", instant);
+            } catch (IOException e) {
+                failure =
+                        addSuppressed(
+                                failure,
+                                new IOException(
+                                        "Failed to abort Hudi instant " + instant + ".", e));
             }
         }
         if (failure != null) {
@@ -211,26 +220,16 @@ public class HudiLakeCommitter implements LakeCommitter<HudiWriteResult, HudiCom
         IOUtils.closeQuietly(hudiTableInfo, "hudi table info");
     }
 
-    @Nullable
-    private String commitCompactionAndSchedule(
-            Map<String, HudiWriteStats> compactionWriteStats, Map<String, String> commitMetadata) {
+    private void commitCompactionAndSchedule(Map<String, HudiWriteStats> compactionWriteStats)
+            throws IOException {
         if (!isAutoCompactionEnabled()) {
-            return null;
+            return;
         }
 
-        String latestCommittedInstant = null;
-        try {
-            latestCommittedInstant =
-                    compactionService.commitCompaction(compactionWriteStats, commitMetadata);
-            if (latestCommittedInstant != null) {
-                LOG.info("Committed Hudi compaction instant {}.", latestCommittedInstant);
-            }
-        } catch (Exception e) {
-            LOG.warn(
-                    "Failed to commit Hudi compaction for table {}. "
-                            + "The next tiering round can rollback and retry pending compactions.",
-                    hudiTableInfo.getTablePath(),
-                    e);
+        String latestCommittedInstant =
+                compactionService.commitCompaction(compactionWriteStats, Collections.emptyMap());
+        if (latestCommittedInstant != null) {
+            LOG.info("Committed Hudi compaction instant {}.", latestCommittedInstant);
         }
 
         try {
@@ -242,20 +241,11 @@ public class HudiLakeCommitter implements LakeCommitter<HudiWriteResult, HudiCom
                     hudiTableInfo.getTablePath(),
                     e);
         }
-        return latestCommittedInstant;
     }
 
     private boolean isAutoCompactionEnabled() {
         return hudiTableInfo.getTableType() == HoodieTableType.MERGE_ON_READ
                 && hudiTableInfo.getFlinkConfig().get(FlinkOptions.COMPACTION_SCHEDULE_ENABLED);
-    }
-
-    static String getLatestCommittedInstant(
-            String dataCommitInstant, @Nullable String compactionInstant) {
-        if (compactionInstant == null || dataCommitInstant.compareTo(compactionInstant) >= 0) {
-            return dataCommitInstant;
-        }
-        return compactionInstant;
     }
 
     private void validateWriteStats(String instant, HudiWriteStats writeStats) {
@@ -303,6 +293,7 @@ public class HudiLakeCommitter implements LakeCommitter<HudiWriteResult, HudiCom
 
     private void abortCompactionInstant(String instant) throws IOException {
         try {
+            hudiTableInfo.getMetaClient().reloadActiveTimeline();
             CompactionUtil.rollbackCompaction(
                     writeClient.getHoodieTable(), instant, writeClient.getTransactionManager());
         } catch (Exception e) {
@@ -334,7 +325,9 @@ public class HudiLakeCommitter implements LakeCommitter<HudiWriteResult, HudiCom
                 throw new IOException("Failed to load committed Hudi instant metadata.");
             }
             Map<String, String> extraMetadata = metadata.getExtraMetadata();
-            return extraMetadata != null && commitUser.equals(extraMetadata.get(COMMITTER_USER));
+            return metadata.getOperationType() != WriteOperationType.COMPACT
+                    && extraMetadata != null
+                    && commitUser.equals(extraMetadata.get(COMMITTER_USER));
         } catch (IOException e) {
             // a read failure must not be silently treated as "not committed by Fluss",
             // otherwise we may miss an already-tiered snapshot and re-commit duplicated data

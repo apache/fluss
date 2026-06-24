@@ -20,8 +20,10 @@ package org.apache.fluss.lake.hudi.tiering;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.CommitterInitContext;
+import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.hudi.HudiLakeCatalog;
+import org.apache.fluss.lake.hudi.utils.meta.CkpMetadata;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
@@ -37,26 +39,49 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.types.DataTypes;
 
+import org.apache.hudi.client.HoodieFlinkWriteClient;
+import org.apache.hudi.common.model.HoodieTableType;
 import org.apache.hudi.common.model.HoodieWriteStat;
+import org.apache.hudi.common.table.HoodieTableMetaClient;
+import org.apache.hudi.common.util.Option;
 import org.apache.hudi.configuration.FlinkOptions;
+import org.apache.hudi.sink.compact.FlinkCompactionConfig;
+import org.apache.hudi.sink.compact.strategy.CompactionPlanStrategy;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.InOrder;
 
 import javax.annotation.Nullable;
 
 import java.io.File;
 import java.io.IOException;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.apache.fluss.lake.committer.LakeCommitter.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.lake.writer.LakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.anyList;
+import static org.mockito.Mockito.anyMap;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.eq;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /** Test for tiering Fluss records to Hudi via {@link HudiLakeTieringFactory}. */
 class HudiTieringTest {
+
+    private static final String HUDI_CONF_PREFIX = "hudi.";
+    private static final String DATA_INSTANT = "20260624000200000";
+    private static final String COMPACTION_INSTANT = "20260624000300000";
 
     @TempDir private File tempWarehouseDir;
 
@@ -154,23 +179,169 @@ class HudiTieringTest {
     }
 
     @Test
-    void testLatestCommittedInstantNeverGoesBackwards() {
-        assertThat(HudiLakeCommitter.getLatestCommittedInstant("20260624000200000", null))
-                .isEqualTo("20260624000200000");
-        assertThat(
-                        HudiLakeCommitter.getLatestCommittedInstant(
-                                "20260624000200000", "20260624000100000"))
-                .isEqualTo("20260624000200000");
-        assertThat(
-                        HudiLakeCommitter.getLatestCommittedInstant(
-                                "20260624000200000", "20260624000300000"))
-                .isEqualTo("20260624000300000");
+    void testCommitReturnsDataInstantAndSchedulesCompaction() throws Exception {
+        TestingCommitterContext context = createTestingCommitterContext();
+        HudiCommittable committable = committableWithCompaction();
+        whenDataCommitSucceeds(context);
+        when(context.compactionService.commitCompaction(
+                        eq(committable.getCompactionWriteStats()), anyMap()))
+                .thenReturn(COMPACTION_INSTANT);
+
+        LakeCommitResult commitResult =
+                context.committer.commit(committable, Collections.emptyMap());
+
+        assertThat(commitResult.getCommittedSnapshotId()).isEqualTo(Long.parseLong(DATA_INSTANT));
+        InOrder inOrder =
+                inOrder(context.writeClient, context.ckpMetadata, context.compactionService);
+        inOrder.verify(context.writeClient)
+                .commitStats(eq(DATA_INSTANT), anyList(), any(Option.class), eq("commit"));
+        inOrder.verify(context.ckpMetadata).commitInstant(DATA_INSTANT);
+        inOrder.verify(context.compactionService)
+                .commitCompaction(eq(committable.getCompactionWriteStats()), anyMap());
+        inOrder.verify(context.compactionService).scheduleCompaction();
+        inOrder.verify(context.compactionService).markSelectedCompactionsInflight();
+    }
+
+    @Test
+    void testCommitFailsWhenCompactionCommitFails() throws Exception {
+        TestingCommitterContext context = createTestingCommitterContext();
+        HudiCommittable committable = committableWithCompaction();
+        whenDataCommitSucceeds(context);
+        doThrow(new IOException("compaction failed"))
+                .when(context.compactionService)
+                .commitCompaction(eq(committable.getCompactionWriteStats()), anyMap());
+
+        assertThatThrownBy(() -> context.committer.commit(committable, Collections.emptyMap()))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("compaction failed");
+        verify(context.compactionService, never()).scheduleCompaction();
+        verify(context.compactionService, never()).markSelectedCompactionsInflight();
+    }
+
+    @Test
+    void testScheduleCompactionFailureDoesNotFailCommit() throws Exception {
+        TestingCommitterContext context = createTestingCommitterContext();
+        HudiCommittable committable = committableWithCompaction();
+        whenDataCommitSucceeds(context);
+        when(context.compactionService.commitCompaction(
+                        eq(committable.getCompactionWriteStats()), anyMap()))
+                .thenReturn(COMPACTION_INSTANT);
+        doThrow(new IOException("schedule failed"))
+                .when(context.compactionService)
+                .scheduleCompaction();
+
+        LakeCommitResult commitResult =
+                context.committer.commit(committable, Collections.emptyMap());
+
+        assertThat(commitResult.getCommittedSnapshotId()).isEqualTo(Long.parseLong(DATA_INSTANT));
+        verify(context.compactionService, never()).markSelectedCompactionsInflight();
+    }
+
+    @Test
+    void testAbortRollsBackCompactionBeforeDataInstant() throws Exception {
+        TestingCommitterContext context = createTestingCommitterContext();
+        when(context.writeClient.getHoodieTable())
+                .thenThrow(new RuntimeException("rollback failed"));
+        when(context.writeClient.rollback(DATA_INSTANT)).thenReturn(true);
+
+        assertThatThrownBy(() -> context.committer.abort(committableWithCompaction()))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining(COMPACTION_INSTANT);
+        InOrder inOrder = inOrder(context.metaClient, context.writeClient, context.ckpMetadata);
+        inOrder.verify(context.metaClient).reloadActiveTimeline();
+        inOrder.verify(context.writeClient).getHoodieTable();
+        inOrder.verify(context.writeClient).rollback(DATA_INSTANT);
+        inOrder.verify(context.ckpMetadata).abortInstant(DATA_INSTANT);
+    }
+
+    @Test
+    void testFlinkCompactionConfigMapping() {
+        org.apache.flink.configuration.Configuration config =
+                new org.apache.flink.configuration.Configuration();
+        config.set(FlinkOptions.PATH, "/tmp/hudi/table");
+        config.set(FlinkOptions.COMPACTION_TRIGGER_STRATEGY, FlinkCompactionConfig.NUM_OR_TIME);
+        config.set(FlinkOptions.ARCHIVE_MAX_COMMITS, 30);
+        config.set(FlinkOptions.ARCHIVE_MIN_COMMITS, 20);
+        config.set(FlinkOptions.CLEAN_POLICY, "KEEP_LATEST_COMMITS");
+        config.set(FlinkOptions.CLEAN_RETAIN_COMMITS, 10);
+        config.set(FlinkOptions.CLEAN_RETAIN_HOURS, 24);
+        config.set(FlinkOptions.CLEAN_RETAIN_FILE_VERSIONS, 5);
+        config.set(FlinkOptions.COMPACTION_DELTA_COMMITS, 2);
+        config.set(FlinkOptions.COMPACTION_DELTA_SECONDS, 120);
+        config.set(FlinkOptions.COMPACTION_MAX_MEMORY, 256);
+        config.set(FlinkOptions.COMPACTION_TARGET_IO, 1024L);
+        config.set(FlinkOptions.COMPACTION_TASKS, 3);
+        config.set(FlinkOptions.CLEAN_ASYNC_ENABLED, true);
+        config.set(FlinkOptions.COMPACTION_SCHEDULE_ENABLED, true);
+
+        FlinkCompactionConfig compactionConfig =
+                HudiCompactionService.toFlinkCompactionConfig(config);
+
+        assertThat(compactionConfig.path).isEqualTo("/tmp/hudi/table");
+        assertThat(compactionConfig.compactionTriggerStrategy)
+                .isEqualTo(FlinkCompactionConfig.NUM_OR_TIME);
+        assertThat(compactionConfig.archiveMaxCommits).isEqualTo(30);
+        assertThat(compactionConfig.archiveMinCommits).isEqualTo(20);
+        assertThat(compactionConfig.cleanPolicy).isEqualTo("KEEP_LATEST_COMMITS");
+        assertThat(compactionConfig.cleanRetainCommits).isEqualTo(10);
+        assertThat(compactionConfig.cleanRetainHours).isEqualTo(24);
+        assertThat(compactionConfig.cleanRetainFileVersions).isEqualTo(5);
+        assertThat(compactionConfig.compactionDeltaCommits).isEqualTo(2);
+        assertThat(compactionConfig.compactionDeltaSeconds).isEqualTo(120);
+        assertThat(compactionConfig.compactionMaxMemory).isEqualTo(256);
+        assertThat(compactionConfig.compactionTargetIo).isEqualTo(1024L);
+        assertThat(compactionConfig.compactionTasks).isEqualTo(3);
+        assertThat(compactionConfig.cleanAsyncEnable).isTrue();
+        assertThat(compactionConfig.schedule).isTrue();
+        assertThat(compactionConfig.compactionPlanSelectStrategy)
+                .isEqualTo(CompactionPlanStrategy.NUM_INSTANTS);
+        assertThat(compactionConfig.maxNumCompactionPlans).isEqualTo(1);
     }
 
     private LakeCommitter<HudiWriteResult, HudiCommittable> createLakeCommitter(
             TablePath tablePath, TableInfo tableInfo) throws IOException {
         return hudiLakeTieringFactory.createLakeCommitter(
                 new TestingCommitterInitContext(tablePath, tableInfo));
+    }
+
+    private static TestingCommitterContext createTestingCommitterContext() {
+        HudiWriteTableInfo hudiTableInfo = mock(HudiWriteTableInfo.class);
+        HoodieFlinkWriteClient writeClient = mock(HoodieFlinkWriteClient.class);
+        HoodieTableMetaClient metaClient = mock(HoodieTableMetaClient.class);
+        CkpMetadata ckpMetadata = mock(CkpMetadata.class);
+        HudiCompactionService compactionService = mock(HudiCompactionService.class);
+        org.apache.flink.configuration.Configuration flinkConfig =
+                new org.apache.flink.configuration.Configuration();
+        flinkConfig.set(FlinkOptions.COMPACTION_SCHEDULE_ENABLED, true);
+
+        when(hudiTableInfo.getWriteClient()).thenReturn(writeClient);
+        when(hudiTableInfo.getMetaClient()).thenReturn(metaClient);
+        when(hudiTableInfo.getFlinkConfig()).thenReturn(flinkConfig);
+        when(hudiTableInfo.getTableType()).thenReturn(HoodieTableType.MERGE_ON_READ);
+        when(hudiTableInfo.getTablePath()).thenReturn(TablePath.of("hudi", "mock_table"));
+        when(metaClient.getCommitActionType()).thenReturn("commit");
+        return new TestingCommitterContext(
+                new HudiLakeCommitter(hudiTableInfo, ckpMetadata, compactionService),
+                writeClient,
+                metaClient,
+                ckpMetadata,
+                compactionService);
+    }
+
+    private static void whenDataCommitSucceeds(TestingCommitterContext context) {
+        when(context.writeClient.commitStats(
+                        eq(DATA_INSTANT), anyList(), any(Option.class), eq("commit")))
+                .thenReturn(true);
+    }
+
+    private static HudiCommittable committableWithCompaction() {
+        Map<String, HudiWriteStats> writeStats = new HashMap<>();
+        writeStats.put(
+                DATA_INSTANT, new HudiWriteStats(Collections.singletonList(writeStat()), 0L));
+        Map<String, HudiWriteStats> compactionWriteStats = new HashMap<>();
+        compactionWriteStats.put(
+                COMPACTION_INSTANT, new HudiWriteStats(Collections.singletonList(writeStat()), 0L));
+        return new HudiCommittable(writeStats, compactionWriteStats);
     }
 
     private static TableDescriptor createLogTableDescriptor() {
@@ -181,8 +352,8 @@ class HudiTieringTest {
                                 .column("name", DataTypes.STRING())
                                 .build())
                 .distributedBy(1, "id")
-                .customProperty("hudi." + FlinkOptions.RECORD_KEY_FIELD.key(), "id")
-                .customProperty("hudi.precombine.field", "name")
+                .customProperty(HUDI_CONF_PREFIX + FlinkOptions.RECORD_KEY_FIELD.key(), "id")
+                .customProperty(HUDI_CONF_PREFIX + "precombine.field", "name")
                 .build();
     }
 
@@ -199,6 +370,28 @@ class HudiTieringTest {
         writeStat.setPartitionPath("");
         writeStat.setPath("file-1.parquet");
         return writeStat;
+    }
+
+    private static class TestingCommitterContext {
+
+        private final HudiLakeCommitter committer;
+        private final HoodieFlinkWriteClient writeClient;
+        private final HoodieTableMetaClient metaClient;
+        private final CkpMetadata ckpMetadata;
+        private final HudiCompactionService compactionService;
+
+        private TestingCommitterContext(
+                HudiLakeCommitter committer,
+                HoodieFlinkWriteClient writeClient,
+                HoodieTableMetaClient metaClient,
+                CkpMetadata ckpMetadata,
+                HudiCompactionService compactionService) {
+            this.committer = committer;
+            this.writeClient = writeClient;
+            this.metaClient = metaClient;
+            this.ckpMetadata = ckpMetadata;
+            this.compactionService = compactionService;
+        }
     }
 
     private static class TestingWriterInitContext implements WriterInitContext {
