@@ -72,8 +72,6 @@ import static org.apache.fluss.utils.PartitionUtils.validateTimeFormat;
 /** Validator of {@link TableDescriptor}. */
 public class TableDescriptorValidation {
 
-    private static final String PAIMON_PATH_KEY = "paimon.path";
-
     private static final Set<String> SYSTEM_COLUMNS =
             Collections.unmodifiableSet(
                     new LinkedHashSet<>(
@@ -194,11 +192,6 @@ public class TableDescriptorValidation {
 
     public static void validateAlterTableProperties(
             TableInfo currentTable, Set<String> tableKeysToChange) {
-        validateAlterTableProperties(currentTable, tableKeysToChange, Collections.emptySet());
-    }
-
-    public static void validateAlterTableProperties(
-            TableInfo currentTable, Set<String> tableKeysToChange, Set<String> customKeysToChange) {
         TableConfig currentConfig = currentTable.getTableConfig();
 
         List<String> unsupportedKeys =
@@ -234,13 +227,6 @@ public class TableDescriptorValidation {
                             lakePathKeys.stream()
                                     .map(k -> "'" + k + "'")
                                     .collect(Collectors.joining(", "))));
-        }
-
-        if (customKeysToChange.contains(PAIMON_PATH_KEY) && lakePathKeys.isEmpty()) {
-            throw new InvalidAlterTableException(
-                    String.format(
-                            "'%s' can only be altered together with lake table path options.",
-                            PAIMON_PATH_KEY));
         }
 
         if (!currentConfig.getDataLakeFormat().isPresent()) {
