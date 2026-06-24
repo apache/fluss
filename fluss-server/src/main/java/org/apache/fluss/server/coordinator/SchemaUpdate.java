@@ -94,7 +94,23 @@ public class SchemaUpdate {
     }
 
     private SchemaUpdate dropColumn(TableChange.DropColumn dropColumn) {
-        throw new SchemaChangeException("Not support drop column now.");
+        String name = dropColumn.getName();
+        Schema.Column existingColumn = builder.getColumn(name).orElse(null);
+
+        if (existingColumn == null) {
+            throw new InvalidAlterTableException("Column " + name + " does not exist.");
+        }
+        if (builder.getPrimaryKey().map(pk -> pk.getColumnNames().contains(name)).orElse(false)) {
+            throw new InvalidAlterTableException(
+                    "Cannot drop column '" + name + "' because it is part of the primary key.");
+        }
+        if (builder.getAutoIncrementColumnNames().contains(name)) {
+            throw new InvalidAlterTableException(
+                    "Cannot drop auto-increment column '" + name + "'.");
+        }
+        builder.dropColumn(name);
+
+        return this;
     }
 
     private SchemaUpdate modifiedColumn(TableChange.ModifyColumn modifyColumn) {

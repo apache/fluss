@@ -62,11 +62,15 @@ import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static org.apache.fluss.testutils.DataTestUtils.createBasicMemoryLogRecords;
 import static org.apache.fluss.testutils.LogRecordsAssert.assertThatLogRecords;
 
-/** Tests for {@link KvTablet} partial update/delete after schema evolution (ADD COLUMN). */
+/**
+ * Tests for {@link KvTablet} partial update/delete after schema evolution (ADD COLUMN, DROP
+ * COLUMN).
+ */
 class KvTabletSchemaEvolutionTest {
 
     private static final short SCHEMA_ID_V0 = 0;
     private static final short SCHEMA_ID_V1 = 1;
+    private static final short SCHEMA_ID_V2 = 2;
 
     // Schema v0: {a INT PK, b STRING, c STRING}
     private static final Schema SCHEMA_V0 =
@@ -82,8 +86,14 @@ class KvTabletSchemaEvolutionTest {
     private static final Schema SCHEMA_V1 =
             Schema.newBuilder().fromSchema(SCHEMA_V0).column("d", DataTypes.STRING()).build();
 
+    // Schema v2: DROP COLUMN c
+    // {a INT PK, b STRING}
+    private static final Schema SCHEMA_V2 =
+            Schema.newBuilder().fromSchema(SCHEMA_V0).dropColumn("c").build();
+
     private static final RowType ROW_TYPE_V0 = SCHEMA_V0.getRowType();
     private static final RowType ROW_TYPE_V1 = SCHEMA_V1.getRowType();
+    private static final RowType ROW_TYPE_V2 = SCHEMA_V2.getRowType();
 
     private final Configuration conf = new Configuration();
 
@@ -242,6 +252,48 @@ class KvTabletSchemaEvolutionTest {
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(ROW_TYPE_V1)
+                .assertCheckSum(true)
+                .isEqualTo(expectedLogs);
+    }
+
+    @Test
+    void testPartialUpdateAfterDropColumn() throws Exception {
+        KvRecordTestUtils.KvRecordFactory recordFactoryV0 =
+                KvRecordTestUtils.KvRecordFactory.of(ROW_TYPE_V0);
+        KvRecordTestUtils.KvRecordBatchFactory batchFactoryV0 =
+                KvRecordTestUtils.KvRecordBatchFactory.of(SCHEMA_ID_V0);
+
+        // Insert {a=1, b="b_val", c="c_val"} with schema v0.
+        KvRecordBatch insertBatch =
+                batchFactoryV0.ofRecords(
+                        recordFactoryV0.ofRecord(
+                                "k1".getBytes(), new Object[] {1, "b_val", "c_val"}));
+        kvTablet.putAsLeader(insertBatch, null);
+
+        // Evolve schema to v2 (DROP COLUMN c).
+        schemaGetter.updateLatestSchemaInfo(new SchemaInfo(SCHEMA_V2, SCHEMA_ID_V2));
+
+        long beforePartialUpdate = logTablet.localLogEndOffset();
+
+        // Partial update targeting columns [a, b] with old schemaId.
+        int[] targetColumns = {0, 1};
+        KvRecordBatch partialBatch =
+                batchFactoryV0.ofRecords(
+                        recordFactoryV0.ofRecord("k1".getBytes(), new Object[] {1, "new_b", null}));
+        kvTablet.putAsLeader(partialBatch, targetColumns);
+
+        // After DROP COLUMN c, the read result must expose only {a, b}.
+        LogRecords actualLogRecords = readLogRecords(beforePartialUpdate);
+        MemoryLogRecords expectedLogs =
+                logRecords(
+                        ROW_TYPE_V2,
+                        SCHEMA_ID_V2,
+                        beforePartialUpdate,
+                        Arrays.asList(ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER),
+                        Arrays.asList(new Object[] {1, "b_val"}, new Object[] {1, "new_b"}));
+
+        assertThatLogRecords(actualLogRecords)
+                .withSchema(ROW_TYPE_V2)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
     }
