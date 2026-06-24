@@ -119,6 +119,9 @@ public class HudiSplitPlanner implements Planner<HudiSplit> {
                             .getLatestMergedFileSlicesBeforeOrOn(partitionPath, snapshotTime)
                             .collect(Collectors.toList());
             for (FileSlice fileSlice : fileSlices) {
+                if (fileSlice.isEmpty()) {
+                    continue;
+                }
                 splits.add(toHudiSplit(hudiTableInfo, partitionPath, fileSlice));
             }
             return splits;

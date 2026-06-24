@@ -49,6 +49,8 @@ import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.data.RowData;
 import org.apache.hudi.common.model.FileSlice;
 import org.apache.hudi.common.model.HoodieCommitMetadata;
+import org.apache.hudi.common.model.HoodieTableType;
+import org.apache.hudi.common.model.WriteOperationType;
 import org.apache.hudi.common.table.HoodieTableMetaClient;
 import org.apache.hudi.common.table.timeline.HoodieInstant;
 import org.apache.hudi.common.table.timeline.HoodieTimeline;
@@ -187,6 +189,7 @@ public abstract class FlinkHudiTieringTestBase {
 
         if (enableAutoCompaction) {
             tableBuilder.property(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(), "true");
+            tableBuilder.customProperty("hudi." + FlinkOptions.COMPACTION_DELTA_COMMITS.key(), "1");
         }
         return createTable(tablePath, tableBuilder.build());
     }
@@ -205,6 +208,7 @@ public abstract class FlinkHudiTieringTestBase {
 
         if (enableAutoCompaction) {
             tableBuilder.property(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(), "true");
+            tableBuilder.customProperty("hudi." + FlinkOptions.COMPACTION_DELTA_COMMITS.key(), "1");
         }
         return createTable(tablePath, tableBuilder.build());
     }
@@ -456,6 +460,30 @@ public abstract class FlinkHudiTieringTestBase {
         }
     }
 
+    protected void checkHudiCompactionCommitted(TablePath tablePath) {
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    try (HudiTableInfo hudiTableInfo =
+                            HudiTableInfo.create(
+                                    tablePath, Configuration.fromMap(getHudiCatalogConf()))) {
+                        HoodieTimeline timeline =
+                                hudiTableInfo
+                                        .getMetaClient()
+                                        .getActiveTimeline()
+                                        .getCommitsAndCompactionTimeline()
+                                        .filterCompletedInstants();
+                        assertThat(
+                                        timeline.getInstantsAsStream()
+                                                .anyMatch(
+                                                        instant ->
+                                                                isCompactionInstant(
+                                                                        timeline, instant)))
+                                .isTrue();
+                    }
+                });
+    }
+
     private static String formatMORRow(InternalRow row) {
         return row.getBoolean(0)
                 + ","
@@ -492,12 +520,12 @@ public abstract class FlinkHudiTieringTestBase {
             int columnCount = avroSchema.getFields().size();
 
             List<FileSlice> fileSlices =
-                    hudiTableInfo
-                            .getFileSystemView()
-                            .getLatestFileSlices(partition)
-                            .collect(Collectors.toList());
+                    getLatestFileSlicesAtCompletedInstant(hudiTableInfo, partition);
             List<String> records = new ArrayList<>();
             for (FileSlice fileSlice : fileSlices) {
+                if (fileSlice.isEmpty()) {
+                    continue;
+                }
                 if (!fileSlice.getFileId().contains(BucketIdentifier.bucketIdStr(bucket))) {
                     continue;
                 }
@@ -521,6 +549,31 @@ public abstract class FlinkHudiTieringTestBase {
         }
     }
 
+    private static List<FileSlice> getLatestFileSlicesAtCompletedInstant(
+            HudiTableInfo hudiTableInfo, String partition) {
+        HoodieTimeline completedTimeline = hudiTableInfo.getCompletedTimeline();
+        HoodieInstant latestInstant =
+                completedTimeline
+                        .lastInstant()
+                        .orElseThrow(
+                                () ->
+                                        new IllegalStateException(
+                                                "No completed Hudi instant found for table "
+                                                        + hudiTableInfo.getTablePath()
+                                                        + "."));
+        String latestInstantTime = latestInstant.requestedTime();
+        if (hudiTableInfo.getTableType() == HoodieTableType.MERGE_ON_READ) {
+            return hudiTableInfo
+                    .getFileSystemView()
+                    .getLatestMergedFileSlicesBeforeOrOn(partition, latestInstantTime)
+                    .collect(Collectors.toList());
+        }
+        return hudiTableInfo
+                .getFileSystemView()
+                .getLatestFileSlicesBeforeOrOn(partition, latestInstantTime, true)
+                .collect(Collectors.toList());
+    }
+
     private org.apache.flink.configuration.Configuration buildFlinkHudiOptions(
             TablePath tablePath,
             HudiTableInfo hudiTableInfo,
@@ -531,6 +584,15 @@ public abstract class FlinkHudiTieringTestBase {
         hudiOptions.put(FlinkOptions.TABLE_NAME.key(), tablePath.getTableName());
         hudiOptions.put(FlinkOptions.SOURCE_AVRO_SCHEMA.key(), avroSchema.toString());
         return org.apache.flink.configuration.Configuration.fromMap(hudiOptions);
+    }
+
+    private static boolean isCompactionInstant(HoodieTimeline timeline, HoodieInstant instant) {
+        try {
+            HoodieCommitMetadata metadata = timeline.readCommitMetadata(instant);
+            return metadata != null && metadata.getOperationType() == WriteOperationType.COMPACT;
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to read Hudi instant metadata " + instant + ".", e);
+        }
     }
 
     private interface HudiRowFormatter {

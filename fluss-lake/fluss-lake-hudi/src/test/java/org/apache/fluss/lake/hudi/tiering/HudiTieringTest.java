@@ -130,9 +130,8 @@ class HudiTieringTest {
     }
 
     @Test
-    void testRejectCompactionWriteStatusesOnCommit() throws Exception {
-        TablePath tablePath =
-                TablePath.of("hudi", "test_reject_compaction_write_statuses_on_commit");
+    void testRejectMissingWriteStatsOnCommit() throws Exception {
+        TablePath tablePath = TablePath.of("hudi", "test_reject_missing_write_stats_on_commit");
         TableDescriptor tableDescriptor = createLogTableDescriptor();
         hudiLakeCatalog.createTable(
                 tablePath, tableDescriptor, new TestingLakeCatalogContext(tableDescriptor));
@@ -150,7 +149,7 @@ class HudiTieringTest {
 
             assertThatThrownBy(() -> committer.commit(committable, Collections.emptyMap()))
                     .isInstanceOf(IOException.class)
-                    .hasMessageContaining("Hudi compaction write stats are not supported yet");
+                    .hasMessageContaining("Hudi write stats must contain exactly one instant");
         }
     }
 

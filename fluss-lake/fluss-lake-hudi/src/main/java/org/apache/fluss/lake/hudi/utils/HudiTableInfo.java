@@ -111,7 +111,9 @@ public class HudiTableInfo implements AutoCloseable {
             HoodieTableFileSystemView fileSystemView = null;
             HoodieTableMetaClient metaClient = createMetaClient(basePath, hudiConfig);
             HoodieTimeline completedTimeline =
-                    metaClient.getCommitsTimeline().filterCompletedInstants();
+                    metaClient
+                            .getCommitsAndCompactionTimeline()
+                            .filterCompletedAndCompactionInstants();
             HoodieEngineContext engineContext =
                     new HoodieLocalEngineContext(metaClient.getStorageConf());
             try {

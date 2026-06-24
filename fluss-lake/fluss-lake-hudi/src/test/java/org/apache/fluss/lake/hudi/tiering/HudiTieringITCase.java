@@ -97,7 +97,7 @@ class HudiTieringITCase extends FlinkHudiTieringTestBase {
     @Test
     void testTiering() throws Exception {
         TablePath pkTablePath = TablePath.of(DEFAULT_DB, "pkTable");
-        long pkTableId = createPkTable(pkTablePath, 1, false, PK_SCHEMA);
+        long pkTableId = createPkTable(pkTablePath, 1, true, PK_SCHEMA);
         TableBucket pkTableBucket = new TableBucket(pkTableId, 0);
 
         List<InternalRow> rows = Arrays.asList(pkRow(1, "v1"), pkRow(2, "v2"), pkRow(3, "v3"));
@@ -120,6 +120,15 @@ class HudiTieringITCase extends FlinkHudiTieringTestBase {
             assertReplicaStatus(pkTableBucket, 9);
             checkDataInHudiMORTable(pkTablePath, "", rows, 0);
             checkFlussOffsetsInSnapshot(pkTablePath, Collections.singletonMap(pkTableBucket, 9L));
+
+            rows = Arrays.asList(pkRow(1, "v1111"), pkRow(2, "v2222"), pkRow(3, "v3333"));
+            writeRows(pkTablePath, rows, false);
+
+            // 3 current records + 3 delete records + 3 insert records.
+            assertReplicaStatus(pkTableBucket, 15);
+            checkDataInHudiMORTable(pkTablePath, "", rows, 0);
+            checkFlussOffsetsInSnapshot(pkTablePath, Collections.singletonMap(pkTableBucket, 15L));
+            checkHudiCompactionCommitted(pkTablePath);
 
             testPartitionedTableTiering();
         } finally {
