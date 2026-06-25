@@ -72,10 +72,12 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -321,6 +323,14 @@ public abstract class FlinkHudiTieringTestBase {
         return getFlussClusterExtension().waitAndGetLeaderReplica(tableBucket);
     }
 
+    protected void assertReplicaStatus(Map<TableBucket, Long> expectedLogEndOffset) {
+        for (Map.Entry<TableBucket, Long> expectedLogEndOffsetEntry :
+                expectedLogEndOffset.entrySet()) {
+            assertReplicaStatus(
+                    expectedLogEndOffsetEntry.getKey(), expectedLogEndOffsetEntry.getValue());
+        }
+    }
+
     protected void assertReplicaStatus(TableBucket tb, long expectedLogEndOffset) {
         retry(
                 Duration.ofMinutes(1),
@@ -330,6 +340,30 @@ public abstract class FlinkHudiTieringTestBase {
                             .isGreaterThanOrEqualTo(0);
                     assertThat(replica.getLakeLogEndOffset()).isEqualTo(expectedLogEndOffset);
                 });
+    }
+
+    protected void waitUntilBucketSynced(
+            TablePath tablePath, long tableId, int bucketCount, boolean isPartitioned) {
+        Set<TableBucket> tableBuckets = new HashSet<>();
+        if (isPartitioned) {
+            Map<Long, String> partitionById = waitUntilPartitions(tablePath);
+            for (Long partitionId : partitionById.keySet()) {
+                for (int i = 0; i < bucketCount; i++) {
+                    tableBuckets.add(new TableBucket(tableId, partitionId, i));
+                }
+            }
+        } else {
+            for (int i = 0; i < bucketCount; i++) {
+                tableBuckets.add(new TableBucket(tableId, i));
+            }
+        }
+        waitUntilBucketsSynced(tableBuckets);
+    }
+
+    protected void waitUntilBucketsSynced(Set<TableBucket> tableBuckets) {
+        for (TableBucket tableBucket : tableBuckets) {
+            waitUntilBucketSynced(tableBucket);
+        }
     }
 
     protected void waitUntilBucketSynced(TableBucket tb) {
