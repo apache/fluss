@@ -23,6 +23,7 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
@@ -390,6 +391,8 @@ class LakeEnabledTableCreateITCase {
 
     @Test
     void testCreateLakeEnableTableWithUnsettablePaimonOptions() {
+        assertThat(PAIMON_UNSETTABLE_OPTIONS).doesNotContain(CoreOptions.PATH.key());
+
         Map<String, String> customProperties = new HashMap<>();
 
         for (String key : PAIMON_UNSETTABLE_OPTIONS) {
@@ -416,6 +419,67 @@ class LakeEnabledTableCreateITCase {
                                     "The Paimon option %s will be set automatically by Fluss and should not be set manually.",
                                     key));
         }
+    }
+
+    @Test
+    void testAlterPaimonPathOnlyWhenLakeDisabled() throws Exception {
+        TableDescriptor lakeDisabledTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .build())
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, false)
+                        .distributedBy(BUCKET_NUM, "c1", "c2")
+                        .build();
+        TablePath lakeDisabledTablePath = TablePath.of(DATABASE, "alter_paimon_path_disabled");
+        admin.createTable(lakeDisabledTablePath, lakeDisabledTable, false).get();
+
+        String customPaimonPath =
+                Files.createTempDirectory("alter-paimon-path-disabled").toUri().toString();
+        admin.alterTable(
+                        lakeDisabledTablePath,
+                        Collections.singletonList(TableChange.set("paimon.path", customPaimonPath)),
+                        false)
+                .get();
+        assertThat(
+                        admin.getTableInfo(lakeDisabledTablePath)
+                                .get()
+                                .toTableDescriptor()
+                                .getCustomProperties())
+                .containsEntry("paimon.path", customPaimonPath);
+
+        TableDescriptor lakeEnabledTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .build())
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .distributedBy(BUCKET_NUM, "c1", "c2")
+                        .build();
+        TablePath lakeEnabledTablePath = TablePath.of(DATABASE, "alter_paimon_path_enabled");
+        admin.createTable(lakeEnabledTablePath, lakeEnabledTable, false).get();
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                lakeEnabledTablePath,
+                                                Collections.singletonList(
+                                                        TableChange.set(
+                                                                "paimon.path",
+                                                                Files.createTempDirectory(
+                                                                                "alter-paimon-path-enabled")
+                                                                        .toUri()
+                                                                        .toString())),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining(
+                        "'paimon.path' can only be altered when datalake is disabled");
     }
 
     @Test
