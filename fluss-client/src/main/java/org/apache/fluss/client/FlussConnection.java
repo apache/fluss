@@ -17,6 +17,7 @@
 
 package org.apache.fluss.client;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.admin.FlussAdmin;
 import org.apache.fluss.client.lookup.LookupClient;
@@ -33,7 +34,9 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.fs.S3FileSystemConfigUtils;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.rpc.GatewayClientProxy;
@@ -45,6 +48,7 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 
 import static org.apache.fluss.client.utils.MetadataUtils.getOneAvailableTabletServerNode;
 import static org.apache.fluss.config.FlussConfigUtils.CLIENT_PREFIX;
@@ -52,6 +56,8 @@ import static org.apache.fluss.utils.PropertiesUtils.extractAndRemovePrefix;
 
 /** A connection to Fluss cluster, and holds the client session resources. */
 public final class FlussConnection implements Connection {
+    private static final String CLIENT_FS_PREFIX = CLIENT_PREFIX + "fs.";
+
     private final Configuration conf;
     private final RpcClient rpcClient;
     private final MetadataUpdater metadataUpdater;
@@ -72,10 +78,7 @@ public final class FlussConnection implements Connection {
         this.conf = conf;
         // init Filesystem with configuration from FlussConnection,
         // only pass options with 'client.fs.' prefix
-        FileSystem.initialize(
-                Configuration.fromMap(
-                        extractAndRemovePrefix(new HashMap<>(conf.toMap()), CLIENT_PREFIX + "fs.")),
-                null);
+        FileSystem.initialize(getClientFileSystemConfiguration(conf), null);
         // for client metrics.
         setupClientMetricsConfiguration();
         String clientId = conf.getString(ConfigOptions.CLIENT_ID);
@@ -86,6 +89,26 @@ public final class FlussConnection implements Connection {
         // TODO this maybe remove after we introduce client metadata.
         this.metadataUpdater = new MetadataUpdater(conf, rpcClient);
         this.writerClient = null;
+    }
+
+    @VisibleForTesting
+    static Configuration getClientFileSystemConfiguration(Configuration conf) {
+        Map<String, String> clientFsOptions =
+                extractAndRemovePrefix(new HashMap<>(conf.toMap()), CLIENT_FS_PREFIX);
+        validateClientFileSystemConfiguration(clientFsOptions);
+        return Configuration.fromMap(clientFsOptions);
+    }
+
+    private static void validateClientFileSystemConfiguration(Map<String, String> clientFsOptions) {
+        for (String key : clientFsOptions.keySet()) {
+            if (S3FileSystemConfigUtils.isCredentialConfigKey(key)) {
+                throw new IllegalConfigurationException(
+                        "Client-side S3 credential configuration '%s' is not supported. "
+                                + "Configure S3 credentials on Fluss servers and let Fluss clients "
+                                + "use server-issued temporary filesystem tokens.",
+                        CLIENT_FS_PREFIX + key);
+            }
+        }
     }
 
     @Override

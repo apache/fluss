@@ -18,6 +18,7 @@
 package org.apache.fluss.fs.s3;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.S3FileSystemConfigUtils;
 import org.apache.fluss.fs.s3.token.DynamicTemporaryAWSCredentialsProvider;
 import org.apache.fluss.fs.s3.token.S3DelegationTokenReceiver;
 import org.apache.fluss.fs.token.Credentials;
@@ -34,6 +35,26 @@ import static org.assertj.core.api.Assertions.assertThat;
 class S3FileSystemPluginTest {
 
     private static final String PROVIDER_CONFIG = "fs.s3a.aws.credentials.provider";
+
+    @Test
+    void testConvertFlussS3ConfigPrefixesToHadoopConfig() {
+        Configuration flussConfig = new Configuration();
+        flussConfig.setString("s3.endpoint", "http://localhost:9000");
+        flussConfig.setString("s3a.region", "us-east-1");
+        flussConfig.setString("fs.s3a.path-style-access", "true");
+        flussConfig.setString("oss.endpoint", "http://oss-local");
+
+        S3FileSystemPlugin plugin = new S3FileSystemPlugin();
+        org.apache.hadoop.conf.Configuration hadoopConfig =
+                plugin.getHadoopConfiguration(flussConfig);
+
+        assertThat(hadoopConfig.get(S3FileSystemConfigUtils.ENDPOINT))
+                .isEqualTo("http://localhost:9000");
+        assertThat(hadoopConfig.get(S3FileSystemConfigUtils.REGION)).isEqualTo("us-east-1");
+        assertThat(hadoopConfig.get(S3FileSystemConfigUtils.PATH_STYLE_ACCESS_ALIAS))
+                .isEqualTo("true");
+        assertThat(hadoopConfig.get("fs.s3a.oss.endpoint")).isNull();
+    }
 
     @Test
     void testServerModeWithStaticKeys() {

@@ -17,6 +17,7 @@
 
 package org.apache.fluss.fs.s3.token;
 
+import org.apache.fluss.fs.S3FileSystemConfigUtils;
 import org.apache.fluss.fs.token.CredentialsJsonSerde;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 
@@ -47,15 +48,15 @@ public class S3DelegationTokenProvider {
 
     private static final Logger LOG = LoggerFactory.getLogger(S3DelegationTokenProvider.class);
 
-    private static final String ACCESS_KEY_ID = "fs.s3a.access.key";
-    private static final String ACCESS_KEY_SECRET = "fs.s3a.secret.key";
+    private static final String ACCESS_KEY_ID = S3FileSystemConfigUtils.ACCESS_KEY;
+    private static final String ACCESS_KEY_SECRET = S3FileSystemConfigUtils.SECRET_KEY;
 
-    private static final String REGION_KEY = "fs.s3a.region";
-    private static final String ENDPOINT_KEY = "fs.s3a.endpoint";
-    private static final String PATH_STYLE_ACCESS_KEY = "fs.s3a.path.style.access";
+    private static final String REGION_KEY = S3FileSystemConfigUtils.REGION;
+    private static final String ENDPOINT_KEY = S3FileSystemConfigUtils.ENDPOINT;
+    private static final String PATH_STYLE_ACCESS_KEY = S3FileSystemConfigUtils.PATH_STYLE_ACCESS;
 
-    private static final String ROLE_ARN_KEY = "fs.s3a.assumed.role.arn";
-    private static final String STS_ENDPOINT_KEY = "fs.s3a.assumed.role.sts.endpoint";
+    private static final String ROLE_ARN_KEY = S3FileSystemConfigUtils.ROLE_ARN;
+    private static final String STS_ENDPOINT_KEY = S3FileSystemConfigUtils.STS_ENDPOINT;
 
     private final String scheme;
     private final String region;

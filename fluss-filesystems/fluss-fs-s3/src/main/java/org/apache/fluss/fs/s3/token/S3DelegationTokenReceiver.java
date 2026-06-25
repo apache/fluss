@@ -17,6 +17,7 @@
 
 package org.apache.fluss.fs.s3.token;
 
+import org.apache.fluss.fs.S3FileSystemConfigUtils;
 import org.apache.fluss.fs.token.Credentials;
 import org.apache.fluss.fs.token.CredentialsJsonSerde;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
@@ -35,7 +36,8 @@ import java.util.Map;
 /** Security token receiver for S3 filesystem. */
 public class S3DelegationTokenReceiver implements SecurityTokenReceiver {
 
-    public static final String PROVIDER_CONFIG_NAME = "fs.s3a.aws.credentials.provider";
+    public static final String PROVIDER_CONFIG_NAME =
+            S3FileSystemConfigUtils.AWS_CREDENTIALS_PROVIDER;
 
     private static final Logger LOG = LoggerFactory.getLogger(S3DelegationTokenReceiver.class);
 

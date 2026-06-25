@@ -22,6 +22,7 @@ import org.apache.fluss.config.ConfigBuilder;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FileSystemPlugin;
+import org.apache.fluss.fs.S3FileSystemConfigUtils;
 import org.apache.fluss.fs.s3.token.S3ADelegationTokenReceiver;
 import org.apache.fluss.fs.s3.token.S3DelegationTokenReceiver;
 
@@ -40,19 +41,10 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
 
     private static final Logger LOG = LoggerFactory.getLogger(S3FileSystemPlugin.class);
 
-    private static final String[] FLUSS_CONFIG_PREFIXES = {"s3.", "s3a.", "fs.s3a."};
-
-    private static final String HADOOP_CONFIG_PREFIX = "fs.s3a.";
-
-    private static final String ACCESS_KEY_ID = "fs.s3a.access.key";
-    private static final String ACCESS_KEY_SECRET = "fs.s3a.secret.key";
-
-    private static final String ROLE_ARN_KEY = "fs.s3a.assumed.role.arn";
-
     private static final String[][] MIRRORED_CONFIG_KEYS = {
-        {"fs.s3a.access-key", "fs.s3a.access.key"},
-        {"fs.s3a.secret-key", "fs.s3a.secret.key"},
-        {"fs.s3a.path-style-access", "fs.s3a.path.style.access"}
+        {S3FileSystemConfigUtils.ACCESS_KEY_ALIAS, S3FileSystemConfigUtils.ACCESS_KEY},
+        {S3FileSystemConfigUtils.SECRET_KEY_ALIAS, S3FileSystemConfigUtils.SECRET_KEY},
+        {S3FileSystemConfigUtils.PATH_STYLE_ACCESS_ALIAS, S3FileSystemConfigUtils.PATH_STYLE_ACCESS}
     };
 
     @Override
@@ -85,17 +77,17 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
         }
 
         for (String key : flussConfig.keySet()) {
-            for (String prefix : FLUSS_CONFIG_PREFIXES) {
-                if (key.startsWith(prefix)) {
-                    String newKey = HADOOP_CONFIG_PREFIX + key.substring(prefix.length());
-                    String newValue =
-                            flussConfig.getString(
-                                    ConfigBuilder.key(key).stringType().noDefaultValue(), null);
-                    conf.set(newKey, newValue);
+            String hadoopConfigKey = S3FileSystemConfigUtils.toHadoopConfigKey(key);
+            if (hadoopConfigKey != null) {
+                String newValue =
+                        flussConfig.getString(
+                                ConfigBuilder.key(key).stringType().noDefaultValue(), null);
+                conf.set(hadoopConfigKey, newValue);
 
-                    LOG.debug(
-                            "Adding Fluss config entry for {} as {} to Hadoop config", key, newKey);
-                }
+                LOG.debug(
+                        "Adding Fluss config entry for {} as {} to Hadoop config",
+                        key,
+                        hadoopConfigKey);
             }
         }
         return conf;
@@ -131,9 +123,9 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
 
     private void setCredentialProvider(org.apache.hadoop.conf.Configuration hadoopConfig) {
         boolean hasStaticKeys =
-                hadoopConfig.get(ACCESS_KEY_ID) != null
-                        && hadoopConfig.get(ACCESS_KEY_SECRET) != null;
-        boolean hasRoleArn = hadoopConfig.get(ROLE_ARN_KEY) != null;
+                hadoopConfig.get(S3FileSystemConfigUtils.ACCESS_KEY) != null
+                        && hadoopConfig.get(S3FileSystemConfigUtils.SECRET_KEY) != null;
+        boolean hasRoleArn = hadoopConfig.get(S3FileSystemConfigUtils.ROLE_ARN) != null;
 
         if (hasStaticKeys || hasRoleArn) {
             LOG.info(
