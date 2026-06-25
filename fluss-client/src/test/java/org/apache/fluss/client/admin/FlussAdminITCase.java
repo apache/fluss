@@ -1549,6 +1549,23 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
         waitUntil(
                 () -> {
+                    // First, verify that cluster configs have been updated
+                    Collection<ConfigEntry> configEntries = admin.describeClusterConfigs().get();
+                    Map<String, String> clusterConfigs =
+                            configEntries.stream()
+                                    .collect(
+                                            Collectors.toMap(ConfigEntry::key, ConfigEntry::value));
+                    return clusterConfigs.containsKey(DATALAKE_FORMAT.key())
+                            && PAIMON.toString().equals(clusterConfigs.get(DATALAKE_FORMAT.key()))
+                            && clusterConfigs.containsKey("datalake.paimon.warehouse")
+                            && "test-warehouse"
+                                    .equals(clusterConfigs.get("datalake.paimon.warehouse"));
+                },
+                Duration.ofMinutes(1),
+                "Cluster configs should be updated with datalake properties");
+
+        waitUntil(
+                () -> {
                     TableInfo tableInfo = admin.getTableInfo(tablePath).get();
                     Map<String, String> tableProperties = tableInfo.getProperties().toMap();
                     return tableProperties.containsKey(TABLE_DATALAKE_FORMAT.key())
