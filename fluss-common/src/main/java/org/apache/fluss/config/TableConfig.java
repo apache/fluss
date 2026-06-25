@@ -161,7 +161,12 @@ public class TableConfig {
         return ArrowCompressionInfo.fromConf(config);
     }
 
-    /** Gets the auto partition strategy of the table. */
+    /**
+     * Gets the auto partition strategy of the table.
+     *
+     * <p>The result is cached on first access; this assumes the underlying config is not mutated
+     * after this {@code TableConfig} is constructed.
+     */
     public AutoPartitionStrategy getAutoPartitionStrategy() {
         AutoPartitionStrategy s = autoPartitionStrategy;
         if (s == null) {

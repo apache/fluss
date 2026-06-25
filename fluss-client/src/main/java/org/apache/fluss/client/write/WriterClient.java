@@ -179,7 +179,7 @@ public class WriterClient {
             // Skip on non-partitioned tables: the callee returns immediately when
             // partitionName is null, but the expensive AutoPartitionStrategy argument
             // would still be evaluated per record without this guard.
-            if (!tableInfo.getPartitionKeys().isEmpty()) {
+            if (tableInfo.isPartitioned()) {
                 dynamicPartitionCreator.checkAndCreatePartitionAsync(
                         physicalTablePath,
                         tableInfo.getPartitionKeys(),
