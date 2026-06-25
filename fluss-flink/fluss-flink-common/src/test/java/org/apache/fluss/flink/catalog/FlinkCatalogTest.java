@@ -22,7 +22,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidTableException;
-import org.apache.fluss.flink.adapter.ResolvedCatalogMaterializedTableAdapter;
+import org.apache.fluss.flink.adapter.CatalogMaterializedTableAdapter;
 import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.utils.FlinkConversionsTest;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -41,6 +41,7 @@ import org.apache.flink.table.catalog.Column;
 import org.apache.flink.table.catalog.GenericInMemoryCatalog;
 import org.apache.flink.table.catalog.IntervalFreshness;
 import org.apache.flink.table.catalog.ObjectPath;
+import org.apache.flink.table.catalog.ResolvedCatalogMaterializedTable;
 import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.catalog.TableChange;
@@ -144,13 +145,16 @@ class FlinkCatalogTest {
             CatalogMaterializedTable.RefreshMode refreshMode,
             Map<String, String> options) {
         CatalogMaterializedTable origin =
-                CatalogMaterializedTable.newBuilder()
+                CatalogMaterializedTableAdapter.newAdapter()
                         .schema(Schema.newBuilder().fromResolvedSchema(resolvedSchema).build())
                         .comment("test comment")
                         .options(options)
                         .partitionKeys(Collections.emptyList())
                         .definitionQuery("select first, second, third from t")
-                        .freshness(IntervalFreshness.of("5", IntervalFreshness.TimeUnit.SECOND))
+                        // TODO The configuration added in Flink 2.3 currently uses the same SQL.
+                        .originalQuery("select first, second, third from t")
+                        .expandedQuery("select first, second, third from t")
+                        .freshness(IntervalFreshness.ofSecond("5"))
                         .logicalRefreshMode(
                                 refreshMode == CatalogMaterializedTable.RefreshMode.CONTINUOUS
                                         ? CatalogMaterializedTable.LogicalRefreshMode.CONTINUOUS
@@ -158,11 +162,16 @@ class FlinkCatalogTest {
                         .refreshMode(refreshMode)
                         .refreshStatus(CatalogMaterializedTable.RefreshStatus.INITIALIZING)
                         .build();
-        return ResolvedCatalogMaterializedTableAdapter.create(
-                origin,
-                resolvedSchema,
-                refreshMode,
-                IntervalFreshness.of("5", IntervalFreshness.TimeUnit.SECOND));
+        return createResolvedCatalogMaterializedTable(
+                origin, resolvedSchema, refreshMode, IntervalFreshness.ofSecond("5"));
+    }
+
+    protected ResolvedCatalogMaterializedTable createResolvedCatalogMaterializedTable(
+            CatalogMaterializedTable origin,
+            ResolvedSchema resolvedSchema,
+            CatalogMaterializedTable.RefreshMode refreshMode,
+            IntervalFreshness intervalFreshness) {
+        return new ResolvedCatalogMaterializedTable(origin, resolvedSchema);
     }
 
     protected FlinkCatalog initCatalog(
