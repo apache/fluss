@@ -32,6 +32,7 @@ import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.apache.fluss.metrics.utils.MetricGroupUtils.makeScope;
 
@@ -41,8 +42,10 @@ public class ScannerMetricGroup extends AbstractMetricGroup {
 
     private static final String NAME = "scanner";
     private static final int WINDOW_SIZE = 1024;
+    private static final AtomicLong NEXT_SCANNER_ID = new AtomicLong();
 
     private final TablePath tablePath;
+    private final String scannerId;
 
     private final Counter fetchRequestCount;
     private final Histogram bytesPerRequest;
@@ -61,6 +64,7 @@ public class ScannerMetricGroup extends AbstractMetricGroup {
     public ScannerMetricGroup(ClientMetricGroup parent, TablePath tablePath) {
         super(parent.getMetricRegistry(), makeScope(parent, NAME), parent);
         this.tablePath = tablePath;
+        this.scannerId = Long.toString(NEXT_SCANNER_ID.getAndIncrement());
 
         fetchRequestCount = new ThreadSafeSimpleCounter();
         meter(MetricNames.SCANNER_FETCH_RATE, new MeterView(fetchRequestCount));
@@ -131,5 +135,6 @@ public class ScannerMetricGroup extends AbstractMetricGroup {
     protected final void putVariables(Map<String, String> variables) {
         variables.put("database", tablePath.getDatabaseName());
         variables.put("table", tablePath.getTableName());
+        variables.put("scanner_id", scannerId);
     }
 }
