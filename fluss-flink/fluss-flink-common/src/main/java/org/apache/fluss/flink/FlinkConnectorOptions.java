@@ -115,6 +115,47 @@ public class FlinkConnectorOptions {
                                     + "with the lookup key values. This feature cannot be used with PREFIX_LOOKUP type. "
                                     + "Default is false.");
 
+    public static final ConfigOption<Boolean> LOOKUP_LAKE_FALLBACK_ENABLED =
+            ConfigOptions.key("lookup.lake-fallback.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to fall back to the lake table when asynchronous lookup misses in Fluss.");
+
+    public static final ConfigOption<Duration> LOOKUP_HOT_WINDOW =
+            ConfigOptions.key("lookup.hot-window")
+                    .durationType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The hot data window for lake fallback lookup. Lookup keys inside this window only query Fluss.");
+
+    public static final ConfigOption<String> LOOKUP_TIME_ZONE =
+            ConfigOptions.key("lookup.time-zone")
+                    .stringType()
+                    .defaultValue(java.time.ZoneId.systemDefault().getId())
+                    .withDescription(
+                            "The time zone used to interpret hour partition values for lake fallback lookup.");
+
+    public static final ConfigOption<Duration> LOOKUP_LAKE_FALLBACK_TIMEOUT =
+            ConfigOptions.key("lookup.lake-fallback.timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(30))
+                    .withDescription("The timeout for a single lake fallback lookup.");
+
+    public static final ConfigOption<Integer> LOOKUP_LAKE_FALLBACK_EXECUTOR_THREADS =
+            ConfigOptions.key("lookup.lake-fallback.executor-threads")
+                    .intType()
+                    .defaultValue(4)
+                    .withDescription(
+                            "The number of worker threads used for blocking lake fallback lookups.");
+
+    public static final ConfigOption<Integer> LOOKUP_LAKE_FALLBACK_MAX_CONCURRENCY =
+            ConfigOptions.key("lookup.lake-fallback.max-concurrency")
+                    .intType()
+                    .defaultValue(1024)
+                    .withDescription(
+                            "The maximum number of active and queued lake fallback lookups per lookup function instance.");
+
     // --------------------------------------------------------------------------------------------
     // Scan specific options
     // --------------------------------------------------------------------------------------------

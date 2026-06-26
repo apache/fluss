@@ -284,6 +284,21 @@ public class MetricNames {
     public static final String SCANNER_REMOTE_FETCH_RATE = "remoteFetchRequestsPerSecond";
     public static final String SCANNER_REMOTE_FETCH_ERROR_RATE = "remoteFetchErrorPerSecond";
 
+    // for flink hybrid lake lookup
+    public static final String LOOKUP_HOT_FLUSS_HITS_TOTAL = "lookupHotFlussHitsTotal";
+    public static final String LOOKUP_HOT_FLUSS_MISSES_TOTAL = "lookupHotFlussMissesTotal";
+    public static final String LOOKUP_COLD_FLUSS_HITS_TOTAL = "lookupColdFlussHitsTotal";
+    public static final String LOOKUP_COLD_FLUSS_MISSES_TOTAL = "lookupColdFlussMissesTotal";
+    public static final String LAKE_FALLBACK_REQUESTS_TOTAL = "lakeFallbackRequestsTotal";
+    public static final String LAKE_FALLBACK_HITS_TOTAL = "lakeFallbackHitsTotal";
+    public static final String LAKE_FALLBACK_MISSES_TOTAL = "lakeFallbackMissesTotal";
+    public static final String LAKE_FALLBACK_FAILURES_TOTAL = "lakeFallbackFailuresTotal";
+    public static final String LAKE_FALLBACK_TIMEOUTS_TOTAL = "lakeFallbackTimeoutsTotal";
+    public static final String LAKE_FALLBACK_REJECTED_TOTAL = "lakeFallbackRejectedTotal";
+    public static final String LAKE_FALLBACK_LATENCY_MS = "lakeFallbackLatencyMs";
+    public static final String LAKE_FALLBACK_PENDING_COUNT = "lakeFallbackPendingCount";
+    public static final String LAKE_FALLBACK_QUEUE_SIZE = "lakeFallbackQueueSize";
+
     // for netty
     public static final String NETTY_USED_DIRECT_MEMORY = "usedDirectMemory";
     public static final String NETTY_NUM_DIRECT_ARENAS = "numDirectArenas";

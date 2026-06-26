@@ -26,6 +26,7 @@ import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import org.apache.fluss.flink.source.lookup.FlinkAsyncLookupFunction;
 import org.apache.fluss.flink.source.lookup.FlinkLookupFunction;
+import org.apache.fluss.flink.source.lookup.HybridLakeAsyncLookupFunction;
 import org.apache.fluss.flink.source.lookup.LookupNormalizer;
 import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
@@ -36,6 +37,7 @@ import org.apache.fluss.flink.utils.PushdownUtils.FieldEqual;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.ChangelogImage;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TablePath;
@@ -54,6 +56,7 @@ import org.apache.flink.api.connector.source.Boundedness;
 import org.apache.flink.api.connector.source.Source;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.table.api.TableException;
 import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.connector.ProviderContext;
 import org.apache.flink.table.connector.RowLevelModificationScanContext;
@@ -87,6 +90,8 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.time.Duration;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -134,6 +139,12 @@ public class FlinkTableSource
     // options for lookup source
     private final boolean lookupAsync;
     private final boolean insertIfNotExists;
+    private final boolean lakeFallbackEnabled;
+    @Nullable private final Duration lookupHotWindow;
+    private final ZoneId lookupTimeZone;
+    private final Duration lakeFallbackTimeout;
+    private final int lakeFallbackExecutorThreads;
+    private final int lakeFallbackMaxConcurrency;
     @Nullable private final LookupCache cache;
 
     private final long scanPartitionDiscoveryIntervalMs;
@@ -205,6 +216,62 @@ public class FlinkTableSource
                 startupOptions,
                 lookupAsync,
                 insertIfNotExists,
+                false,
+                null,
+                FlinkConnectorOptions.LOOKUP_TIME_ZONE.defaultValue(),
+                FlinkConnectorOptions.LOOKUP_LAKE_FALLBACK_TIMEOUT.defaultValue(),
+                FlinkConnectorOptions.LOOKUP_LAKE_FALLBACK_EXECUTOR_THREADS.defaultValue(),
+                FlinkConnectorOptions.LOOKUP_LAKE_FALLBACK_MAX_CONCURRENCY.defaultValue(),
+                cache,
+                scanPartitionDiscoveryIntervalMs,
+                isDataLakeEnabled,
+                mergeEngineType,
+                tableOptions,
+                leaseContext);
+    }
+
+    public FlinkTableSource(
+            TablePath tablePath,
+            Configuration flussConfig,
+            TableConfig tableConfig,
+            org.apache.flink.table.types.logical.RowType tableOutputType,
+            int[] primaryKeyIndexes,
+            int[] bucketKeyIndexes,
+            int[] partitionKeyIndexes,
+            boolean streaming,
+            FlinkConnectorOptionsUtils.StartupOptions startupOptions,
+            boolean lookupAsync,
+            boolean insertIfNotExists,
+            boolean lakeFallbackEnabled,
+            @Nullable Duration lookupHotWindow,
+            String lookupTimeZone,
+            Duration lakeFallbackTimeout,
+            int lakeFallbackExecutorThreads,
+            int lakeFallbackMaxConcurrency,
+            @Nullable LookupCache cache,
+            long scanPartitionDiscoveryIntervalMs,
+            boolean isDataLakeEnabled,
+            @Nullable MergeEngineType mergeEngineType,
+            Map<String, String> tableOptions,
+            LeaseContext leaseContext) {
+        this(
+                tablePath,
+                flussConfig,
+                tableConfig,
+                tableOutputType,
+                primaryKeyIndexes,
+                bucketKeyIndexes,
+                partitionKeyIndexes,
+                streaming,
+                startupOptions,
+                lookupAsync,
+                insertIfNotExists,
+                lakeFallbackEnabled,
+                lookupHotWindow,
+                lookupTimeZone,
+                lakeFallbackTimeout,
+                lakeFallbackExecutorThreads,
+                lakeFallbackMaxConcurrency,
                 cache,
                 scanPartitionDiscoveryIntervalMs,
                 FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.defaultValue(),
@@ -233,6 +300,58 @@ public class FlinkTableSource
             @Nullable MergeEngineType mergeEngineType,
             Map<String, String> tableOptions,
             LeaseContext leaseContext) {
+        this(
+                tablePath,
+                flussConfig,
+                tableConfig,
+                tableOutputType,
+                primaryKeyIndexes,
+                bucketKeyIndexes,
+                partitionKeyIndexes,
+                streaming,
+                startupOptions,
+                lookupAsync,
+                insertIfNotExists,
+                false,
+                null,
+                FlinkConnectorOptions.LOOKUP_TIME_ZONE.defaultValue(),
+                FlinkConnectorOptions.LOOKUP_LAKE_FALLBACK_TIMEOUT.defaultValue(),
+                FlinkConnectorOptions.LOOKUP_LAKE_FALLBACK_EXECUTOR_THREADS.defaultValue(),
+                FlinkConnectorOptions.LOOKUP_LAKE_FALLBACK_MAX_CONCURRENCY.defaultValue(),
+                cache,
+                scanPartitionDiscoveryIntervalMs,
+                splitPerAssignmentBatchSize,
+                isDataLakeEnabled,
+                mergeEngineType,
+                tableOptions,
+                leaseContext);
+    }
+
+    public FlinkTableSource(
+            TablePath tablePath,
+            Configuration flussConfig,
+            TableConfig tableConfig,
+            org.apache.flink.table.types.logical.RowType tableOutputType,
+            int[] primaryKeyIndexes,
+            int[] bucketKeyIndexes,
+            int[] partitionKeyIndexes,
+            boolean streaming,
+            FlinkConnectorOptionsUtils.StartupOptions startupOptions,
+            boolean lookupAsync,
+            boolean insertIfNotExists,
+            boolean lakeFallbackEnabled,
+            @Nullable Duration lookupHotWindow,
+            String lookupTimeZone,
+            Duration lakeFallbackTimeout,
+            int lakeFallbackExecutorThreads,
+            int lakeFallbackMaxConcurrency,
+            @Nullable LookupCache cache,
+            long scanPartitionDiscoveryIntervalMs,
+            int splitPerAssignmentBatchSize,
+            boolean isDataLakeEnabled,
+            @Nullable MergeEngineType mergeEngineType,
+            Map<String, String> tableOptions,
+            LeaseContext leaseContext) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.tableOutputType = tableOutputType;
@@ -245,6 +364,12 @@ public class FlinkTableSource
 
         this.lookupAsync = lookupAsync;
         this.insertIfNotExists = insertIfNotExists;
+        this.lakeFallbackEnabled = lakeFallbackEnabled;
+        this.lookupHotWindow = lookupHotWindow;
+        this.lookupTimeZone = ZoneId.of(lookupTimeZone);
+        this.lakeFallbackTimeout = lakeFallbackTimeout;
+        this.lakeFallbackExecutorThreads = lakeFallbackExecutorThreads;
+        this.lakeFallbackMaxConcurrency = lakeFallbackMaxConcurrency;
         this.cache = cache;
 
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
@@ -471,6 +596,27 @@ public class FlinkTableSource
                         partitionKeyIndexes,
                         tableOutputType,
                         projectedFields);
+        if (lakeFallbackEnabled) {
+            validateLakeFallbackLookup(lookupNormalizer);
+            AsyncLookupFunction asyncLookupFunction =
+                    new HybridLakeAsyncLookupFunction(
+                            flussConfig,
+                            tablePath,
+                            tableOutputType,
+                            primaryKeyIndexes,
+                            partitionKeyIndexes,
+                            lookupNormalizer,
+                            projectedFields,
+                            tableOptions,
+                            checkNotNull(
+                                    lookupHotWindow,
+                                    "lookupHotWindow must not be null when lake fallback is enabled."),
+                            lookupTimeZone,
+                            lakeFallbackTimeout,
+                            lakeFallbackExecutorThreads,
+                            lakeFallbackMaxConcurrency);
+            return AsyncLookupFunctionProvider.of(asyncLookupFunction);
+        }
         if (lookupAsync) {
             AsyncLookupFunction asyncLookupFunction =
                     new FlinkAsyncLookupFunction(
@@ -502,6 +648,51 @@ public class FlinkTableSource
         }
     }
 
+    private void validateLakeFallbackLookup(LookupNormalizer lookupNormalizer) {
+        if (!lookupAsync) {
+            throw new TableException(
+                    "Option 'lookup.lake-fallback.enabled' requires 'lookup.async' to be true.");
+        }
+        if (insertIfNotExists) {
+            throw new TableException(
+                    "Option 'lookup.lake-fallback.enabled' cannot be used with 'lookup.insert-if-not-exists'.");
+        }
+        if (cache != null) {
+            throw new TableException(
+                    "Option 'lookup.lake-fallback.enabled' cannot be used with lookup cache.");
+        }
+        if (lookupHotWindow == null) {
+            throw new TableException(
+                    "Option 'lookup.hot-window' must be configured when 'lookup.lake-fallback.enabled' is true.");
+        }
+        if (!tableConfig.getAutoPartitionStrategy().isAutoPartitionEnabled()) {
+            throw new TableException(
+                    "Option 'lookup.lake-fallback.enabled' requires auto partition to be enabled.");
+        }
+        if (!isDataLakeEnabled) {
+            throw new TableException(
+                    "Option 'lookup.lake-fallback.enabled' requires a datalake-enabled Fluss table.");
+        }
+        if (!tableConfig.getDataLakeFormat().isPresent()
+                || tableConfig.getDataLakeFormat().get() != DataLakeFormat.PAIMON) {
+            throw new TableException(
+                    "Option 'lookup.lake-fallback.enabled' currently only supports Paimon lake tables.");
+        }
+        if (lookupNormalizer.getLookupType() != org.apache.fluss.client.lookup.LookupType.LOOKUP) {
+            throw new TableException(
+                    "Option 'lookup.lake-fallback.enabled' only supports full primary-key lookup.");
+        }
+        if (partitionKeyIndexes.length == 0) {
+            throw new TableException(
+                    "Option 'lookup.lake-fallback.enabled' requires a partitioned table.");
+        }
+        if (lakeFallbackExecutorThreads <= 0 || lakeFallbackMaxConcurrency <= 0) {
+            throw new TableException(
+                    "Options 'lookup.lake-fallback.executor-threads' and "
+                            + "'lookup.lake-fallback.max-concurrency' must be positive.");
+        }
+    }
+
     @Override
     public DynamicTableSource copy() {
         FlinkTableSource source =
@@ -517,6 +708,12 @@ public class FlinkTableSource
                         startupOptions,
                         lookupAsync,
                         insertIfNotExists,
+                        lakeFallbackEnabled,
+                        lookupHotWindow,
+                        lookupTimeZone.getId(),
+                        lakeFallbackTimeout,
+                        lakeFallbackExecutorThreads,
+                        lakeFallbackMaxConcurrency,
                         cache,
                         scanPartitionDiscoveryIntervalMs,
                         splitPerAssignmentBatchSize,
