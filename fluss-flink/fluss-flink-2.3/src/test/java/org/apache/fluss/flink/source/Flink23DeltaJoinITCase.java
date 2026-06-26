@@ -82,6 +82,13 @@ public class Flink23DeltaJoinITCase extends FlinkTestBase {
                 .set(
                         OptimizerConfigOptions.TABLE_OPTIMIZER_DELTA_JOIN_STRATEGY,
                         OptimizerConfigOptions.DeltaJoinStrategy.FORCE);
+        // Flink 2.3 introduces ExecutionConfigOptions.TABLE_EXEC_SINK_REQUIRE_ON_CONFLICT
+        // (default true), which makes FlinkChangelogModeInferenceProgram throw a
+        // "upsert key differs from primary key" ValidationException before the
+        // StreamPhysicalDeltaJoinForceValidator runs. Disable it here so the existing
+        // delta-join "doesn't support to do delta join optimization" error remains
+        // reachable from these tests.
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_SINK_REQUIRE_ON_CONFLICT, false);
     }
 
     @AfterEach
