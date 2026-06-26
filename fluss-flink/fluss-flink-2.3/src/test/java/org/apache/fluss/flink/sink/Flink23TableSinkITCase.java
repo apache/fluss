@@ -17,5 +17,23 @@
 
 package org.apache.fluss.flink.sink;
 
+import org.apache.flink.table.api.config.ExecutionConfigOptions;
+import org.junit.jupiter.api.BeforeEach;
+
 /** IT case for {@link FlinkTableSink} in Flink 2.3. */
-public class Flink23TableSinkITCase extends FlinkTableSinkITCase {}
+public class Flink23TableSinkITCase extends FlinkTableSinkITCase {
+
+    /**
+     * Flink 2.3 introduces {@link ExecutionConfigOptions#TABLE_EXEC_SINK_REQUIRE_ON_CONFLICT}
+     * (default {@code true}). In {@code FlinkChangelogModeInferenceProgram} this triggers a "upsert
+     * key differs from primary key" ValidationException for partial upserts such as {@code INSERT
+     * INTO pk_table(a, b) VALUES ...} where the query carries no upsert key. The parent class
+     * {@link FlinkTableSinkITCase#testPartialUpsert()} (and its siblings) rely on Fluss's own
+     * partial-update handling at the sink layer, so disable the option here to keep those tests
+     * reachable.
+     */
+    @BeforeEach
+    void beforeEach() {
+        tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_SINK_REQUIRE_ON_CONFLICT, false);
+    }
+}
