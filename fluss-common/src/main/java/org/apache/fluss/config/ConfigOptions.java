@@ -287,6 +287,16 @@ public class ConfigOptions {
                                     + "and each super user should be specified in the format `principal_type:principal_name`, e.g., `User:admin;User:bob`. "
                                     + "This configuration is critical for defining administrative privileges in the system.");
 
+    public static final ConfigOption<Boolean> SECURITY_ACL_PRINCIPAL_IGNORE_CASE =
+            key("security.acl.principal.ignore-case")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to perform case-insensitive matching on principal name and type "
+                                    + "during ACL authorization checks. When set to true, principals "
+                                    + "such as 'User:Admin' and 'user:admin' will be treated as the same principal. "
+                                    + "Default is false for strict case-sensitive matching.");
+
     public static final ConfigOption<Integer> MAX_BUCKET_NUM =
             key("max.bucket.num")
                     .intType()
