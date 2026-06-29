@@ -27,6 +27,7 @@ import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
 
+import org.apache.hudi.common.model.HoodieTableType;
 import org.apache.hudi.org.apache.avro.Schema;
 import org.apache.hudi.source.ExpressionPredicates;
 import org.apache.hudi.util.StreamerUtil;
@@ -102,6 +103,10 @@ public class HudiLakeSource implements LakeSource<HudiSplit> {
     @Override
     public RecordReader createRecordReader(ReaderContext<HudiSplit> context) throws IOException {
         try {
+            if (shouldUseSortedRecordReader()) {
+                return new HudiSortedRecordReader(
+                        hudiConfig, tablePath, context.lakeSplit(), project, predicates);
+            }
             return new HudiRecordReader(
                     hudiConfig, tablePath, context.lakeSplit(), project, predicates);
         } catch (Exception e) {
@@ -119,6 +124,13 @@ public class HudiLakeSource implements LakeSource<HudiSplit> {
             return StreamerUtil.getTableAvroSchema(hudiTableInfo.getMetaClient(), true);
         } catch (Exception e) {
             throw new RuntimeException("Fail to get Hudi schema for " + tablePath + ".", e);
+        }
+    }
+
+    private boolean shouldUseSortedRecordReader() throws IOException {
+        try (HudiTableInfo hudiTableInfo = HudiTableInfo.create(tablePath, hudiConfig)) {
+            return hudiTableInfo.getTableType() == HoodieTableType.MERGE_ON_READ
+                    && HudiSortedRecordReader.canSortByRecordKey(hudiTableInfo, project);
         }
     }
 }
