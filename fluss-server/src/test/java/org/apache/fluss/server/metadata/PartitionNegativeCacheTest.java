@@ -151,6 +151,18 @@ class PartitionNegativeCacheTest {
     }
 
     @Test
+    void testMarkExistentRemovesStaleNegativeEntry() {
+        ManualClock clock = new ManualClock();
+        PartitionNegativeCache cache = new PartitionNegativeCache(TTL, MAXIMUM_SIZE, clock);
+
+        cache.markNonExistent(100L);
+        assertThat(cache.isKnownNonExistent(100L)).isTrue();
+
+        cache.markExistent(100L);
+        assertThat(cache.isKnownNonExistent(100L)).isFalse();
+    }
+
+    @Test
     void testRemarkAfterExpiration() {
         ManualClock clock = new ManualClock();
         PartitionNegativeCache cache = new PartitionNegativeCache(TTL, MAXIMUM_SIZE, clock);
