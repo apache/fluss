@@ -96,6 +96,8 @@ public class FlussRequestHandler implements RequestHandler<FlussRequest> {
         } catch (Throwable t) {
             LOG.debug("Error while executing RPC {}", api, t);
             request.fail(stripException(t, InvocationTargetException.class));
+        } finally {
+            service.tryCompleteActions();
         }
     }
 }

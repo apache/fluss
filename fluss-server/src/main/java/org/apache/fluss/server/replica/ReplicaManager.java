@@ -100,6 +100,8 @@ import org.apache.fluss.server.metrics.UserMetrics;
 import org.apache.fluss.server.metrics.group.BucketMetricGroup;
 import org.apache.fluss.server.metrics.group.TableMetricGroup;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
+import org.apache.fluss.server.replica.delay.ActionQueue;
+import org.apache.fluss.server.replica.delay.DelayedActionQueue;
 import org.apache.fluss.server.replica.delay.DelayedFetchLog;
 import org.apache.fluss.server.replica.delay.DelayedFetchLog.FetchBucketStatus;
 import org.apache.fluss.server.replica.delay.DelayedOperationManager;
@@ -188,6 +190,8 @@ public class ReplicaManager implements ServerReconfigurable {
      * is up.
      */
     private final DelayedOperationManager<DelayedFetchLog> delayedFetchLogManager;
+
+    private final ActionQueue actionQueue;
 
     private final ReplicaFetcherManager replicaFetcherManager;
     // The manager used to manager the replica alter, especially the isr expand and shrink.
@@ -311,6 +315,7 @@ public class ReplicaManager implements ServerReconfigurable {
                         "delay fetch log",
                         serverId,
                         conf.getInt(ConfigOptions.LOG_REPLICA_FETCH_OPERATION_PURGE_NUMBER));
+        this.actionQueue = new DelayedActionQueue();
         this.internalListenerName = conf.get(ConfigOptions.INTERNAL_LISTENER_NAME);
 
         this.replicaFetcherManager =
@@ -637,6 +642,10 @@ public class ReplicaManager implements ServerReconfigurable {
         Map<TableBucket, ProduceLogResultForBucket> appendResult =
                 appendToLocalLog(entriesPerBucket, requiredAcks, userContext);
         LOG.debug("Append records to local log in {} ms", System.currentTimeMillis() - startTime);
+
+        // Enqueue delayed fetch completions — not executed here.
+        // Framework layer invokes tryCompleteActions() after this method returns.
+        addCompletePurgatoryAction(appendResult);
 
         // maybe do delay write operation.
         maybeAddDelayedWrite(
@@ -1796,6 +1805,32 @@ public class ReplicaManager implements ServerReconfigurable {
     private boolean isNonCriticalFetchError(Errors error) {
         return error == Errors.NOT_LEADER_OR_FOLLOWER
                 || error == Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION;
+    }
+
+    /**
+     * Adds actions to complete delayed fetch log operations for successfully written buckets.
+     *
+     * <p>Actions are added to the {@link ActionQueue} rather than executed immediately. The
+     * framework layer is responsible for invoking {@link #tryCompleteActions()} to execute the
+     * queued actions after the write path is fully finished.
+     */
+    private void addCompletePurgatoryAction(
+            Map<TableBucket, ? extends WriteResultForBucket> writeResults) {
+        actionQueue.add(
+                () -> {
+                    for (Map.Entry<TableBucket, ? extends WriteResultForBucket> entry :
+                            writeResults.entrySet()) {
+                        if (entry.getValue().succeeded()) {
+                            delayedFetchLogManager.checkAndComplete(
+                                    new DelayedTableBucketKey(entry.getKey()));
+                        }
+                    }
+                });
+    }
+
+    /** Tries to complete all pending delayed actions in the action queue. */
+    public void tryCompleteActions() {
+        actionQueue.tryCompleteActions();
     }
 
     private void completeDelayedOperations(TableBucket tableBucket) {
