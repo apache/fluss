@@ -103,7 +103,14 @@ public class HudiLakeSource implements LakeSource<HudiSplit> {
     @Override
     public RecordReader createRecordReader(ReaderContext<HudiSplit> context) throws IOException {
         try {
-            if (shouldUseSortedRecordReader()) {
+            if (context.requireSortedRecords()) {
+                if (!shouldUseSortedRecordReader()) {
+                    throw new UnsupportedOperationException(
+                            "Hudi lake source can not provide sorted records for "
+                                    + tablePath
+                                    + ". Sorted records are only supported for MERGE_ON_READ tables"
+                                    + " whose projection contains all Hudi record key fields.");
+                }
                 return new HudiSortedRecordReader(
                         hudiConfig, tablePath, context.lakeSplit(), project, predicates);
             }
