@@ -1994,7 +1994,14 @@ class CoordinatorEventProcessorTest {
     private int countInProgressRebalanceTasks(TableBucket... buckets) {
         int count = 0;
         for (TableBucket tb : buckets) {
-            if (eventProcessor.getRebalanceManager().getRebalancePlanForBucket(tb) != null) {
+            RebalanceStatus status =
+                    eventProcessor
+                            .getRebalanceManager()
+                            .listRebalanceProgress(null)
+                            .progressForBucketMap()
+                            .get(tb)
+                            .status();
+            if (!RebalanceStatus.FINAL_STATUSES.contains(status)) {
                 count++;
             }
         }
