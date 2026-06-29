@@ -104,6 +104,15 @@ public class PartitionNegativeCache {
     }
 
     /**
+     * Marks the given partition ID as existing by removing any stale negative-cache entry.
+     *
+     * @param partitionId the partition ID to mark as existent
+     */
+    public void markExistent(long partitionId) {
+        cache.invalidate(partitionId);
+    }
+
+    /**
      * Returns the current number of entries in the cache. Includes potentially expired entries that
      * haven't been cleaned up yet.
      */

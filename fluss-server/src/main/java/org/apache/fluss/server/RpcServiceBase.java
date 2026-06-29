@@ -626,6 +626,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             Optional<PhysicalTablePath> physicalTablePath =
                     metadataProvider.getPhysicalTablePathFromCache(partitionId);
             if (physicalTablePath.isPresent()) {
+                partitionNegativeCache.markExistent(partitionId);
                 partitionPaths.add(physicalTablePath.get());
             } else if (partitionNegativeCache.isKnownNonExistent(partitionId)) {
                 // Fast-path only after the positive metadata cache misses. A stale negative-cache
@@ -649,6 +650,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             }
             for (long partitionId : partitionIdsNotExistsInCache) {
                 if (partitionIdAndPaths.containsKey(partitionId)) {
+                    partitionNegativeCache.markExistent(partitionId);
                     partitionPaths.add(partitionIdAndPaths.get(partitionId));
                 } else {
                     // Only cache when the authoritative partition assignment is also gone. A miss

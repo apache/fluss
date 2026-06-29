@@ -96,7 +96,7 @@ class PartitionNegativeCacheITCase {
         retry(
                 Duration.ofMinutes(1),
                 () -> coordinatorGateway.metadata(existingPartitionRequest).get());
-        negativeCache.clear();
+        assertThat(negativeCache.isKnownNonExistent(partitionId)).isFalse();
 
         // Drop the partition.
         coordinatorGateway
