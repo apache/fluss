@@ -54,6 +54,7 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     private final Counter delayedWriteExpireCount;
     private final Counter delayedFetchFromFollowerExpireCount;
     private final Counter delayedFetchFromClientExpireCount;
+    private final Counter replicaFetchTimeoutCount;
 
     // aggregated metrics
     private final Counter messagesIn;
@@ -98,6 +99,8 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         meter(
                 MetricNames.DELAYED_FETCH_FROM_CLIENT_EXPIRES_RATE,
                 new MeterView(delayedFetchFromClientExpireCount));
+        replicaFetchTimeoutCount = new ThreadSafeSimpleCounter();
+        meter(MetricNames.REPLICA_FETCH_TIMEOUT_RATE, new MeterView(replicaFetchTimeoutCount));
 
         messagesIn = new ThreadSafeSimpleCounter();
         meter(MetricNames.MESSAGES_IN_RATE, new MeterView(messagesIn));
@@ -189,6 +192,10 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
 
     public Counter delayedFetchFromClientExpireCount() {
         return delayedFetchFromClientExpireCount;
+    }
+
+    public Counter replicaFetchTimeoutCount() {
+        return replicaFetchTimeoutCount;
     }
 
     public Counter messageIn() {
