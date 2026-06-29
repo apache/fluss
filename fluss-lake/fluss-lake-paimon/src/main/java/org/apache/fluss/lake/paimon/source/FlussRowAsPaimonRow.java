@@ -21,10 +21,12 @@ import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 
 import org.apache.paimon.data.BinaryString;
+import org.apache.paimon.data.Blob;
 import org.apache.paimon.data.Decimal;
 import org.apache.paimon.data.InternalArray;
 import org.apache.paimon.data.InternalMap;
 import org.apache.paimon.data.InternalRow;
+import org.apache.paimon.data.InternalVector;
 import org.apache.paimon.data.Timestamp;
 import org.apache.paimon.data.variant.Variant;
 import org.apache.paimon.types.ArrayType;
@@ -159,12 +161,24 @@ public class FlussRowAsPaimonRow implements InternalRow {
     }
 
     @Override
+    public Blob getBlob(int pos) {
+        throw new UnsupportedOperationException(
+                "getBlob is not support for Fluss record currently.");
+    }
+
+    @Override
     public InternalArray getArray(int pos) {
         org.apache.fluss.row.InternalArray flussArray = internalRow.getArray(pos);
         return flussArray == null
                 ? null
                 : new FlussArrayAsPaimonArray(
                         flussArray, ((ArrayType) tableRowType.getTypeAt(pos)).getElementType());
+    }
+
+    @Override
+    public InternalVector getVector(int pos) {
+        throw new UnsupportedOperationException(
+                "getVector is not support for Fluss record currently.");
     }
 
     @Override
