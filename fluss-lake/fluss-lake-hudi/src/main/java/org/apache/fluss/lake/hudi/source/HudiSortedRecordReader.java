@@ -86,6 +86,8 @@ public class HudiSortedRecordReader implements SortedRecordReader {
             return CloseableIterator.wrap(Collections.emptyIterator());
         }
         CloseableIterator<LogRecord> iterator = delegate.read();
+        // TODO: Introduce a spillable sorter for large Hudi splits to avoid keeping all records
+        // in memory while preserving the SortedRecordReader order contract.
         List<LogRecord> records = new ArrayList<>();
         try {
             while (iterator.hasNext()) {
