@@ -349,6 +349,7 @@ public class CoordinatorServer extends ServerBase {
                             kvSnapshotLeaseManager,
                             scheduler,
                             clock);
+            dynamicConfigManager.register(coordinatorEventProcessor.getRebalanceManager());
             coordinatorEventProcessor.startup();
 
             createDefaultDatabase();

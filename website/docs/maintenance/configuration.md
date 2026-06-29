@@ -21,8 +21,8 @@ auto-partition.check.interval: 5min
 ```
 
 Server configuration refers to a set of configurations used to specify the running parameters of a server.
-These settings can only be configured at the time of cluster startup and do not support dynamic modification
-during the Fluss cluster working.
+Most settings are parsed when the Fluss processes start and require restarting the relevant processes to take effect.
+Some server configurations can be updated dynamically while the cluster is running. See [Updating Cluster Configs](operations/updating-configs.md#updating-cluster-configs) for the supported dynamic options.
 
 ## Common
 
@@ -64,6 +64,7 @@ during the Fluss cluster working.
 | coordinator.lifecycle-throttler.inflight-timeout       | Duration   | 3min      | The timeout for an in-flight drop event in the coordinator's TableLifecycleThrottler. If a drop event has been admitted but the corresponding completion callback has not arrived within this timeout, the throttler abandons tracking of that drop and continues admitting the next pending drop.                                                                                                                                                                                                                                          |
 | coordinator.lifecycle-throttler.timeout-check-interval | Duration   | 1min      | The periodic interval at which the coordinator's TableLifecycleThrottler scans in-flight drops for timeouts.                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | coordinator.offline-leader.retry-delay                 | Duration   | 1min      | The delay before the coordinator retries offline leaders on live tablet servers after they are marked offline. This lets a leader that was rejected because of temporary tablet-server conditions, such as disk write protection, become electable again after recovery.                                                                                                                                                                                                                                                                    |
+| coordinator.rebalance.max-inflight-tasks               | Integer    | 1         | The maximum number of bucket-level rebalance tasks that can be executed concurrently by the coordinator. A higher value can speed up rebalance, while a lower value reduces the number of simultaneous bucket movements. Setting it to 0 pauses scheduling new rebalance tasks; already in-flight tasks continue until they complete or time out. The value must be non-negative.                                                                                                                                                           |
 
 ## TabletServer
 
