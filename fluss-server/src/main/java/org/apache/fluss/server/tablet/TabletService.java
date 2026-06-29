@@ -442,6 +442,15 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<NotifyKvSnapshotOffsetResponse> notifyKvSnapshotOffset(
             NotifyKvSnapshotOffsetRequest request) {
+        // This is an internal-only RPC, reject all external sessions
+        if (!currentSession().isInternal()) {
+            CompletableFuture<NotifyKvSnapshotOffsetResponse> failedFuture =
+                    new CompletableFuture<>();
+            failedFuture.completeExceptionally(
+                    new AuthorizationException(
+                            "NotifyKvSnapshotOffset is an internal RPC and cannot be called by external clients"));
+            return failedFuture;
+        }
         CompletableFuture<NotifyKvSnapshotOffsetResponse> response = new CompletableFuture<>();
         replicaManager.notifyKvSnapshotOffset(
                 getNotifySnapshotOffsetData(request), response::complete);
@@ -451,6 +460,15 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     @Override
     public CompletableFuture<NotifyLakeTableOffsetResponse> notifyLakeTableOffset(
             NotifyLakeTableOffsetRequest request) {
+        // This is an internal-only RPC, reject all external sessions
+        if (!currentSession().isInternal()) {
+            CompletableFuture<NotifyLakeTableOffsetResponse> failedFuture =
+                    new CompletableFuture<>();
+            failedFuture.completeExceptionally(
+                    new AuthorizationException(
+                            "NotifyLakeTableOffset is an internal RPC and cannot be called by external clients"));
+            return failedFuture;
+        }
         CompletableFuture<NotifyLakeTableOffsetResponse> response = new CompletableFuture<>();
         replicaManager.notifyLakeTableOffset(getNotifyLakeTableOffset(request), response::complete);
         return response;
