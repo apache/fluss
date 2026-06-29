@@ -34,6 +34,7 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -70,11 +71,13 @@ public class FlussSourceEnumeratorStateSerializer
     private static final int VERSION_0 = 0;
     private static final int VERSION_1 = 1;
     private static final int VERSION_2 = 2;
+    private static final int VERSION_3 = 3;
+    private static final int VERSION_4 = 4;
 
     private static final ThreadLocal<DataOutputSerializer> SERIALIZER_CACHE =
             ThreadLocal.withInitial(() -> new DataOutputSerializer(64));
 
-    private static final int CURRENT_VERSION = VERSION_2;
+    private static final int CURRENT_VERSION = VERSION_4;
 
     public FlussSourceEnumeratorStateSerializer(LakeSource<LakeSplit> lakeSource) {
         this.lakeSource = lakeSource;
@@ -98,6 +101,12 @@ public class FlussSourceEnumeratorStateSerializer
 
         // write lease context
         serializeLeaseId(out, state);
+
+        // write initial discovery finished flag (VERSION_3+)
+        out.writeBoolean(state.isInitialDiscoveryFinished());
+
+        // write unassigned splits (VERSION_4)
+        serializeUnassignedSplits(out, state.getUnassignedSplits());
 
         final byte[] result = out.getCopyOfBuffer();
         out.clear();
@@ -169,6 +178,10 @@ public class FlussSourceEnumeratorStateSerializer
     @Override
     public SourceEnumeratorState deserialize(int version, byte[] serialized) throws IOException {
         switch (version) {
+            case VERSION_4:
+                return deserializeV4(serialized);
+            case VERSION_3:
+                return deserializeV3(serialized);
             case VERSION_2:
                 return deserializeV2(serialized);
             case VERSION_1:
@@ -229,11 +242,67 @@ public class FlussSourceEnumeratorStateSerializer
 
         // deserialize lease context
         LeaseContext leaseContext = deserializeLeaseId(in);
+        // V2 does not have initialDiscoveryFinished flag; default to true (safe choice
+        // to prevent data loss: treat all newly discovered partitions as post-initial).
         return new SourceEnumeratorState(
                 assignBucketAndPartitions.f0,
                 assignBucketAndPartitions.f1,
                 remainingHybridLakeFlussSplits,
                 leaseContext.getKvSnapshotLeaseId());
+    }
+
+    private SourceEnumeratorState deserializeV3(byte[] serialized) throws IOException {
+        DataInputDeserializer in = new DataInputDeserializer(serialized);
+        Tuple2<Set<TableBucket>, Map<Long, String>> assignBucketAndPartitions =
+                deserializeAssignBucketAndPartitions(in);
+        List<SourceSplitBase> remainingHybridLakeFlussSplits =
+                deserializeRemainingHybridLakeFlussSplits(in);
+
+        // deserialize lease context
+        LeaseContext leaseContext = deserializeLeaseId(in);
+
+        // deserialize initial discovery finished flag
+        boolean initialDiscoveryFinished = in.readBoolean();
+
+        // skip initial partition IDs if present (backward compatibility with older V3 format)
+        if (in.available() > 0) {
+            int initialPartitionIdsSize = in.readInt();
+            for (int i = 0; i < initialPartitionIdsSize; i++) {
+                in.readLong();
+            }
+        }
+
+        return new SourceEnumeratorState(
+                assignBucketAndPartitions.f0,
+                assignBucketAndPartitions.f1,
+                remainingHybridLakeFlussSplits,
+                leaseContext.getKvSnapshotLeaseId(),
+                initialDiscoveryFinished);
+    }
+
+    private SourceEnumeratorState deserializeV4(byte[] serialized) throws IOException {
+        DataInputDeserializer in = new DataInputDeserializer(serialized);
+        Tuple2<Set<TableBucket>, Map<Long, String>> assignBucketAndPartitions =
+                deserializeAssignBucketAndPartitions(in);
+        List<SourceSplitBase> remainingHybridLakeFlussSplits =
+                deserializeRemainingHybridLakeFlussSplits(in);
+
+        // deserialize lease context
+        LeaseContext leaseContext = deserializeLeaseId(in);
+
+        // deserialize initial discovery finished flag
+        boolean initialDiscoveryFinished = in.readBoolean();
+
+        // deserialize unassigned splits
+        List<SourceSplitBase> unassignedSplits = deserializeUnassignedSplits(in);
+
+        return new SourceEnumeratorState(
+                assignBucketAndPartitions.f0,
+                assignBucketAndPartitions.f1,
+                remainingHybridLakeFlussSplits,
+                leaseContext.getKvSnapshotLeaseId(),
+                initialDiscoveryFinished,
+                unassignedSplits);
     }
 
     private Tuple2<Set<TableBucket>, Map<Long, String>> deserializeAssignBucketAndPartitions(
@@ -301,5 +370,38 @@ public class FlussSourceEnumeratorStateSerializer
         String kvSnapshotLeaseId = in.readUTF();
         return new LeaseContext(
                 kvSnapshotLeaseId, LeaseContext.DEFAULT.getKvSnapshotLeaseDurationMs());
+    }
+
+    private void serializeUnassignedSplits(
+            final DataOutputSerializer out, Collection<SourceSplitBase> unassignedSplits)
+            throws IOException {
+        out.writeInt(unassignedSplits.size());
+        if (!unassignedSplits.isEmpty()) {
+            SourceSplitSerializer sourceSplitSerializer = new SourceSplitSerializer(lakeSource);
+            out.writeInt(sourceSplitSerializer.getVersion());
+            for (SourceSplitBase split : unassignedSplits) {
+                byte[] serializeBytes = sourceSplitSerializer.serialize(split);
+                out.writeInt(serializeBytes.length);
+                out.write(serializeBytes);
+            }
+        }
+    }
+
+    private List<SourceSplitBase> deserializeUnassignedSplits(final DataInputDeserializer in)
+            throws IOException {
+        int numSplits = in.readInt();
+        if (numSplits == 0) {
+            return new ArrayList<>();
+        }
+        SourceSplitSerializer sourceSplitSerializer = new SourceSplitSerializer(lakeSource);
+        int version = in.readInt();
+        List<SourceSplitBase> splits = new ArrayList<>(numSplits);
+        for (int i = 0; i < numSplits; i++) {
+            int splitSizeInBytes = in.readInt();
+            byte[] splitBytes = new byte[splitSizeInBytes];
+            in.readFully(splitBytes);
+            splits.add(sourceSplitSerializer.deserialize(version, splitBytes));
+        }
+        return splits;
     }
 }

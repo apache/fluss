@@ -191,4 +191,104 @@ class SourceEnumeratorStateSerializerTest {
                 .isNotNull()
                 .isEmpty();
     }
+
+    @Test
+    void testV3SerdeWithInitialDiscoveryFinished() throws Exception {
+        FlussSourceEnumeratorStateSerializer serializer =
+                new FlussSourceEnumeratorStateSerializer(null);
+
+        Set<TableBucket> assignedBuckets =
+                new HashSet<>(Arrays.asList(new TableBucket(1, 0), new TableBucket(1, 4L, 1)));
+        Map<Long, String> assignedPartitions = new HashMap<>();
+        assignedPartitions.put(1L, "partition1");
+        assignedPartitions.put(2L, "partition2");
+
+        SourceEnumeratorState sourceEnumeratorState =
+                new SourceEnumeratorState(
+                        assignedBuckets, assignedPartitions, null, "testLeaseId", true);
+
+        byte[] serialized = serializer.serialize(sourceEnumeratorState);
+        SourceEnumeratorState deserialized =
+                serializer.deserialize(serializer.getVersion(), serialized);
+
+        assertThat(deserialized).isEqualTo(sourceEnumeratorState);
+        assertThat(deserialized.isInitialDiscoveryFinished()).isTrue();
+    }
+
+    @Test
+    void testV3SerdeWithInitialDiscoveryNotFinished() throws Exception {
+        FlussSourceEnumeratorStateSerializer serializer =
+                new FlussSourceEnumeratorStateSerializer(null);
+
+        Set<TableBucket> assignedBuckets =
+                new HashSet<>(Collections.singletonList(new TableBucket(1, 5L, 0)));
+        Map<Long, String> assignedPartitions = new HashMap<>();
+        assignedPartitions.put(5L, "p5");
+
+        SourceEnumeratorState sourceEnumeratorState =
+                new SourceEnumeratorState(
+                        assignedBuckets,
+                        assignedPartitions,
+                        Collections.emptyList(),
+                        "leaseId2",
+                        false);
+
+        byte[] serialized = serializer.serialize(sourceEnumeratorState);
+        SourceEnumeratorState deserialized =
+                serializer.deserialize(serializer.getVersion(), serialized);
+
+        assertThat(deserialized).isEqualTo(sourceEnumeratorState);
+        assertThat(deserialized.isInitialDiscoveryFinished()).isFalse();
+    }
+
+    @Test
+    void testV2CompatibilityDefaultsInitialDiscoveryFinished() throws Exception {
+        // Serialize a state using V2 format (without initialDiscoveryFinished) and verify
+        // that deserialization defaults to safe values.
+        FlussSourceEnumeratorStateSerializer serializer =
+                new FlussSourceEnumeratorStateSerializer(null);
+
+        Set<TableBucket> assignedBuckets =
+                new HashSet<>(Arrays.asList(new TableBucket(1, 0), new TableBucket(1, 2L, 1)));
+        Map<Long, String> assignedPartitions = new HashMap<>();
+        assignedPartitions.put(2L, "partition2");
+
+        SourceEnumeratorState originalState =
+                new SourceEnumeratorState(assignedBuckets, assignedPartitions, null, "v2LeaseId");
+
+        // Serialize using current format (V3) and strip the trailing boolean to produce V2 bytes.
+        // V3 appends: boolean(1 byte) for initialDiscoveryFinished
+        byte[] v3Bytes = serializer.serialize(originalState);
+        // V3 adds: 1 byte (boolean false)
+        int v2Length = v3Bytes.length - 1;
+        byte[] v2Bytes = new byte[v2Length];
+        System.arraycopy(v3Bytes, 0, v2Bytes, 0, v2Length);
+
+        SourceEnumeratorState deserialized = serializer.deserialize(2, v2Bytes);
+
+        assertThat(deserialized.getAssignedBuckets()).isEqualTo(assignedBuckets);
+        assertThat(deserialized.getAssignedPartitions()).isEqualTo(assignedPartitions);
+        assertThat(deserialized.getLeaseId()).isEqualTo("v2LeaseId");
+        // V2 uses the 4-param constructor which defaults initialDiscoveryFinished=false.
+        // On restore, the first discovery round will treat all discovered partitions
+        // as initial partitions (safe behavior).
+        assertThat(deserialized.isInitialDiscoveryFinished()).isFalse();
+    }
+
+    @Test
+    void testV3SerdeWithEmptyState() throws Exception {
+        FlussSourceEnumeratorStateSerializer serializer =
+                new FlussSourceEnumeratorStateSerializer(null);
+
+        SourceEnumeratorState sourceEnumeratorState =
+                new SourceEnumeratorState(
+                        Collections.emptySet(), Collections.emptyMap(), null, "leaseEmpty", true);
+
+        byte[] serialized = serializer.serialize(sourceEnumeratorState);
+        SourceEnumeratorState deserialized =
+                serializer.deserialize(serializer.getVersion(), serialized);
+
+        assertThat(deserialized).isEqualTo(sourceEnumeratorState);
+        assertThat(deserialized.isInitialDiscoveryFinished()).isTrue();
+    }
 }
