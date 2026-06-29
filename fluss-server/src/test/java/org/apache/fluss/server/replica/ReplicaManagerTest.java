@@ -556,6 +556,64 @@ class ReplicaManagerTest extends ReplicaTestBase {
     }
 
     @Test
+    void testNewKvLeaderRejectedWhenDiskLocked() throws Exception {
+        TableBucket kvTb = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        TableBucket logTb = new TableBucket(DATA1_TABLE_ID, 1);
+
+        replicaManager.getDiskUsageMonitor().update(0.99);
+        assertThat(replicaManager.isDiskWriteLocked()).isTrue();
+
+        CompletableFuture<List<NotifyLeaderAndIsrResultForBucket>> future =
+                new CompletableFuture<>();
+        replicaManager.becomeLeaderOrFollower(
+                INITIAL_COORDINATOR_EPOCH,
+                Collections.singletonList(
+                        new NotifyLeaderAndIsrData(
+                                PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
+                                kvTb,
+                                Collections.singletonList(TABLET_SERVER_ID),
+                                new LeaderAndIsr(
+                                        TABLET_SERVER_ID,
+                                        INITIAL_LEADER_EPOCH,
+                                        Collections.singletonList(TABLET_SERVER_ID),
+                                        Collections.emptyList(),
+                                        INITIAL_COORDINATOR_EPOCH,
+                                        INITIAL_BUCKET_EPOCH))),
+                future::complete);
+
+        List<NotifyLeaderAndIsrResultForBucket> results = future.get();
+        assertThat(results).hasSize(1);
+        NotifyLeaderAndIsrResultForBucket result = results.get(0);
+        assertThat(result.getError().error()).isEqualTo(Errors.DISK_WRITE_LOCKED);
+        assertThat(result.getError().messageWithFallback()).contains("data disk usage");
+        Replica kvReplica = replicaManager.getReplicaOrException(kvTb);
+        assertThat(kvReplica.isLeader()).isFalse();
+        assertThat(kvReplica.getKvTablet()).isNull();
+
+        future = new CompletableFuture<>();
+        replicaManager.becomeLeaderOrFollower(
+                INITIAL_COORDINATOR_EPOCH,
+                Collections.singletonList(
+                        new NotifyLeaderAndIsrData(
+                                PhysicalTablePath.of(DATA1_TABLE_PATH),
+                                logTb,
+                                Collections.singletonList(TABLET_SERVER_ID),
+                                new LeaderAndIsr(
+                                        TABLET_SERVER_ID,
+                                        INITIAL_LEADER_EPOCH,
+                                        Collections.singletonList(TABLET_SERVER_ID),
+                                        Collections.emptyList(),
+                                        INITIAL_COORDINATOR_EPOCH,
+                                        INITIAL_BUCKET_EPOCH))),
+                future::complete);
+
+        assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(logTb));
+        assertThat(replicaManager.getReplicaOrException(logTb).isLeader()).isTrue();
+
+        replicaManager.getDiskUsageMonitor().update(0.10);
+    }
+
+    @Test
     void testPutKv() throws Exception {
         TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, 1);
         makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb.getBucket());
