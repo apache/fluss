@@ -23,6 +23,7 @@ import org.apache.fluss.record.FileLogRecords;
 import java.io.File;
 import java.io.IOException;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 /** Represents the future of a remote log download request. */
 public class RemoteLogDownloadFuture {
@@ -57,7 +58,7 @@ public class RemoteLogDownloadFuture {
         return recycleCallback;
     }
 
-    public void onComplete(Runnable callback) {
-        logFileFuture.thenRun(callback);
+    public void whenComplete(Consumer<Throwable> callback) {
+        logFileFuture.whenComplete((file, throwable) -> callback.accept(throwable));
     }
 }
