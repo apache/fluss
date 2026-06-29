@@ -1,0 +1,11 @@
+public class TestClass {
+  // Class-level comment
+  private static final int CONST = 42;
+
+// Unindented comment at class level
+  public void test() {
+    // Multi-line raw
+    int x = 1;
+    int y = 2;
+  }
+}
