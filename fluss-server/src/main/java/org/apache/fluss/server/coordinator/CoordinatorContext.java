@@ -225,6 +225,41 @@ public class CoordinatorContext {
         replicasOnOffline.remove(serverId);
     }
 
+    /** Removes the offline marker for one table bucket on the given tablet server. */
+    public void removeOfflineBucketInServer(TableBucket tableBucket, int serverId) {
+        Set<TableBucket> tableBuckets = replicasOnOffline.get(serverId);
+        if (tableBuckets == null) {
+            return;
+        }
+        tableBuckets.remove(tableBucket);
+        if (tableBuckets.isEmpty()) {
+            replicasOnOffline.remove(serverId);
+        }
+    }
+
+    /**
+     * Returns offline replicas that are on live tablet servers.
+     *
+     * <p>The {@code replicasOnOffline} map is part of {@link #isReplicaOnline(int, TableBucket)},
+     * so replicas in it are filtered out from leader election even when their tablet server is
+     * still live. The coordinator periodically probes these replicas again because some failures,
+     * such as disk write protection, can recover without a tablet-server restart.
+     */
+    public Set<TableBucketReplica> offlineReplicasOnLiveTabletServers() {
+        Set<Integer> liveTabletServers = liveTabletServerSet();
+        Set<TableBucketReplica> offlineReplicas = new HashSet<>();
+        for (Map.Entry<Integer, Set<TableBucket>> entry : replicasOnOffline.entrySet()) {
+            int serverId = entry.getKey();
+            if (!liveTabletServers.contains(serverId)) {
+                continue;
+            }
+            for (TableBucket tableBucket : entry.getValue()) {
+                offlineReplicas.add(new TableBucketReplica(tableBucket, serverId));
+            }
+        }
+        return offlineReplicas;
+    }
+
     // ---- Pending leader activation tracking (for Cluster Health API) ----
 
     public void addPendingLeaderActivation(TableBucket bucket) {
