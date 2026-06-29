@@ -268,14 +268,6 @@ public class LogRecordReadContext
         return createCompactedRowReadContext(-1L, target, schemaGetter);
     }
 
-    /** Creates a LogRecordReadContext for COMPACTED log format with schema evolution support. */
-    public static LogRecordReadContext createCompactedRowReadContext(
-            long tableId, RowType rowType, int schemaId, SchemaGetter schemaGetter) {
-        int[] selectedFields = IntStream.range(0, rowType.getFieldCount()).toArray();
-        ReadTarget target = new ReadTarget(schemaId, rowType, selectedFields, true);
-        return createCompactedRowReadContext(tableId, target, schemaGetter);
-    }
-
     // -------------------------------------------------------------------------
     //  Constructor
     // -------------------------------------------------------------------------
@@ -306,7 +298,7 @@ public class LogRecordReadContext
 
     @Override
     public RowType getRowType(int schemaId) {
-        if (isProjectionPushDowned()) {
+        if (isProjectionPushDowned() || (target != null && target.schemaId == schemaId)) {
             assert target != null;
             return target.dataRowType;
         }

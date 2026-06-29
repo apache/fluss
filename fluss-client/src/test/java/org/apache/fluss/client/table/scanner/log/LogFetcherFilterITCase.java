@@ -24,6 +24,7 @@ import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.record.LogRecordBatchStatisticsTestUtils;
@@ -49,6 +50,7 @@ import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.record.TestData.TEST_SCHEMA_GETTER;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newProduceLogRequest;
@@ -118,7 +120,18 @@ public class LogFetcherFilterITCase extends ClientToServerITCaseBase {
                         new RemoteFileDownloader(1),
                         LogRecordReadContext.SchemaResolution.TARGET);
         logFetcher.registerTable(
-                new TableScanSpec(DATA1_TABLE_INFO, null, recordBatchFilter), TEST_SCHEMA_GETTER);
+                new TableScanSpec(
+                        TableInfo.of(
+                                DATA1_TABLE_PATH,
+                                tableId,
+                                1,
+                                DATA1_TABLE_DESCRIPTOR,
+                                DEFAULT_REMOTE_DATA_DIR,
+                                System.currentTimeMillis(),
+                                System.currentTimeMillis()),
+                        null,
+                        recordBatchFilter),
+                TEST_SCHEMA_GETTER);
     }
 
     @AfterEach

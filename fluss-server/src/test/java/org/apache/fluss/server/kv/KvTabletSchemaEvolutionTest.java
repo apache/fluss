@@ -198,6 +198,7 @@ class KvTabletSchemaEvolutionTest {
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(ROW_TYPE_V1)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
     }
@@ -242,6 +243,7 @@ class KvTabletSchemaEvolutionTest {
 
         assertThatLogRecords(actualLogRecords)
                 .withSchema(ROW_TYPE_V1)
+                .withSchemaGetter(schemaGetter)
                 .assertCheckSum(true)
                 .isEqualTo(expectedLogs);
     }

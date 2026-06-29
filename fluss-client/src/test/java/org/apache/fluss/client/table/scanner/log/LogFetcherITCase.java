@@ -63,6 +63,7 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA2;
 import static org.apache.fluss.record.TestData.DATA2_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA2_SCHEMA;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newProduceLogRequest;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
@@ -72,6 +73,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class LogFetcherITCase extends ClientToServerITCaseBase {
     private LogFetcher logFetcher;
     private long tableId;
+    private TableInfo tableInfo;
     private final int bucketId0 = 0;
     private final int bucketId1 = 1;
     private LogScannerStatus logScannerStatus;
@@ -109,8 +111,16 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                         TestingScannerMetricGroup.newInstance(),
                         new RemoteFileDownloader(1),
                         LogRecordReadContext.SchemaResolution.TARGET);
-        logFetcher.registerTable(
-                new TableScanSpec(DATA1_TABLE_INFO, null, null), clientSchemaGetter);
+        tableInfo =
+                TableInfo.of(
+                        DATA1_TABLE_PATH,
+                        tableId,
+                        1,
+                        DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis());
+        logFetcher.registerTable(new TableScanSpec(tableInfo, null, null), clientSchemaGetter);
     }
 
     @Test
@@ -292,8 +302,7 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                         new RemoteFileDownloader(1),
                         LogRecordReadContext.SchemaResolution.TARGET);
 
-        logFetcher.registerTable(
-                new TableScanSpec(DATA1_TABLE_INFO, null, null), clientSchemaGetter);
+        logFetcher.registerTable(new TableScanSpec(tableInfo, null, null), clientSchemaGetter);
         // send fetches to fetch data, should have no available fetch.
         logFetcher.sendFetches();
         assertThat(logFetcher.hasAvailableFetches()).isFalse();
@@ -332,8 +341,7 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                         TestingScannerMetricGroup.newInstance(),
                         new RemoteFileDownloader(1),
                         LogRecordReadContext.SchemaResolution.TARGET);
-        logFetcher.registerTable(
-                new TableScanSpec(DATA1_TABLE_INFO, null, null), clientSchemaGetter);
+        logFetcher.registerTable(new TableScanSpec(tableInfo, null, null), clientSchemaGetter);
 
         ExecutorService executor = Executors.newSingleThreadExecutor();
         Future<?> future =

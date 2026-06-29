@@ -336,6 +336,7 @@ public final class FlussClusterExtension
         tabletServerConf.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS, zooKeeperServer.getConnectString());
         tabletServerConf.setString(ConfigOptions.BIND_LISTENERS, tabletServerListeners);
+        tabletServerConf.setDouble(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 1.0);
         if (overwriteConfig != null) {
             tabletServerConf.addAll(overwriteConfig);
         }

@@ -63,15 +63,18 @@ public abstract class LogTestBase {
     }
 
     public static void assertLogRecordsListEquals(
-            List<MemoryLogRecords> expected, LogRecords actual, RowType rowType) {
+            List<MemoryLogRecords> expected,
+            LogRecords actual,
+            RowType rowType,
+            SchemaGetter schemaGetter) {
         LogRecordsAssert.assertThatLogRecords(actual)
                 .withSchema(rowType)
-                .withSchemaGetter(TEST_SCHEMA_GETTER)
+                .withSchemaGetter(schemaGetter)
                 .isEqualTo(new ListLogRecords(expected));
     }
 
     protected void assertLogRecordsListEquals(List<MemoryLogRecords> expected, LogRecords actual) {
-        assertLogRecordsListEquals(expected, actual, baseRowType);
+        assertLogRecordsListEquals(expected, actual, baseRowType, TEST_SCHEMA_GETTER);
     }
 
     protected void assertIndexedLogRecordBatchAndRowEquals(
