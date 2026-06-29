@@ -55,6 +55,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.lake.hudi.HudiLakeCatalog.SYSTEM_COLUMNS;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** Sorted Hudi record reader for primary key table union read. */
 public class HudiSortedRecordReader implements SortedRecordReader {
@@ -88,6 +89,8 @@ public class HudiSortedRecordReader implements SortedRecordReader {
         List<LogRecord> records = new ArrayList<>();
         try {
             while (iterator.hasNext()) {
+                // HudiRecordReader reuses its projected row wrapper, so records must be copied
+                // before they are buffered for sorting.
                 records.add(copyRecord(iterator.next(), sortOrder.producedTypes));
             }
         } finally {
@@ -114,8 +117,8 @@ public class HudiSortedRecordReader implements SortedRecordReader {
         if (project == null) {
             return true;
         }
-        for (int originalPosition : recordKeyInfo.keyOriginalPositions) {
-            if (findProducedPosition(originalPosition, project) < 0) {
+        for (int userFieldPosition : recordKeyInfo.keyUserFieldPositions) {
+            if (findProducedPosition(userFieldPosition, project) < 0) {
                 return false;
             }
         }
@@ -133,9 +136,9 @@ public class HudiSortedRecordReader implements SortedRecordReader {
     private static SortOrder resolveSortOrder(
             HudiTableInfo hudiTableInfo, @Nullable int[][] project) {
         RecordKeyInfo recordKeyInfo = resolveRecordKeyInfo(hudiTableInfo);
-        int[] keyPositions = new int[recordKeyInfo.keyOriginalPositions.length];
-        for (int i = 0; i < recordKeyInfo.keyOriginalPositions.length; i++) {
-            int keyPosition = findProducedPosition(recordKeyInfo.keyOriginalPositions[i], project);
+        int[] keyPositions = new int[recordKeyInfo.keyUserFieldPositions.length];
+        for (int i = 0; i < recordKeyInfo.keyUserFieldPositions.length; i++) {
+            int keyPosition = findProducedPosition(recordKeyInfo.keyUserFieldPositions[i], project);
             if (keyPosition < 0) {
                 throw new IllegalArgumentException(
                         "Can not find Hudi record key field in projected fields.");
@@ -157,9 +160,9 @@ public class HudiSortedRecordReader implements SortedRecordReader {
         }
 
         Map<String, DataType> dataTypesByName = new HashMap<>();
-        Map<String, Integer> positionsByName = new HashMap<>();
+        Map<String, Integer> userFieldPositionsByName = new HashMap<>();
         List<DataType> userDataTypes = new ArrayList<>();
-        int position = 0;
+        int userFieldPosition = 0;
         for (Schema.UnresolvedColumn column :
                 hudiTableInfo.getHudiTable().getUnresolvedSchema().getColumns()) {
             if (SYSTEM_COLUMNS.containsKey(column.getName())) {
@@ -167,7 +170,7 @@ public class HudiSortedRecordReader implements SortedRecordReader {
             }
             DataType dataType = getDataType(column);
             dataTypesByName.put(column.getName(), dataType);
-            positionsByName.put(column.getName(), position++);
+            userFieldPositionsByName.put(column.getName(), userFieldPosition++);
             userDataTypes.add(dataType);
         }
 
@@ -178,19 +181,19 @@ public class HudiSortedRecordReader implements SortedRecordReader {
                         .collect(Collectors.toList());
 
         List<DataType> keyTypes = new ArrayList<>(keyFields.size());
-        int[] keyOriginalPositions = new int[keyFields.size()];
+        int[] keyUserFieldPositions = new int[keyFields.size()];
         for (int i = 0; i < keyFields.size(); i++) {
             String key = keyFields.get(i);
             DataType dataType = dataTypesByName.get(key);
-            Integer originalPosition = positionsByName.get(key);
-            if (dataType == null || originalPosition == null) {
+            Integer keyUserFieldPosition = userFieldPositionsByName.get(key);
+            if (dataType == null || keyUserFieldPosition == null) {
                 throw new IllegalArgumentException(
                         "Can not find Hudi record key field " + key + ".");
             }
             keyTypes.add(dataType);
-            keyOriginalPositions[i] = originalPosition;
+            keyUserFieldPositions[i] = keyUserFieldPosition;
         }
-        return new RecordKeyInfo(userDataTypes, keyTypes, keyOriginalPositions);
+        return new RecordKeyInfo(userDataTypes, keyTypes, keyUserFieldPositions);
     }
 
     private static DataType getDataType(Schema.UnresolvedColumn column) {
@@ -300,10 +303,15 @@ public class HudiSortedRecordReader implements SortedRecordReader {
             InternalRow row1, InternalRow row2, int[] keyPositions, List<DataType> keyTypes) {
         for (int pos = 0; pos < keyTypes.size(); pos++) {
             DataType keyType = keyTypes.get(pos);
+            int keyPosition = keyPositions[pos];
+            checkState(
+                    !row1.isNullAt(keyPosition) && !row2.isNullAt(keyPosition),
+                    "Hudi record key field at position %s must not be null.",
+                    keyPosition);
             int result =
                     compareValues(
-                            getField(row1, keyPositions[pos], keyType),
-                            getField(row2, keyPositions[pos], keyType),
+                            getField(row1, keyPosition, keyType),
+                            getField(row2, keyPosition, keyType),
                             keyType.getLogicalType());
             if (result != 0) {
                 return result;
@@ -421,13 +429,15 @@ public class HudiSortedRecordReader implements SortedRecordReader {
     private static class RecordKeyInfo {
         private final List<DataType> userDataTypes;
         private final List<DataType> keyTypes;
-        private final int[] keyOriginalPositions;
+        private final int[] keyUserFieldPositions;
 
         private RecordKeyInfo(
-                List<DataType> userDataTypes, List<DataType> keyTypes, int[] keyOriginalPositions) {
+                List<DataType> userDataTypes,
+                List<DataType> keyTypes,
+                int[] keyUserFieldPositions) {
             this.userDataTypes = userDataTypes;
             this.keyTypes = keyTypes;
-            this.keyOriginalPositions = keyOriginalPositions;
+            this.keyUserFieldPositions = keyUserFieldPositions;
         }
     }
 }

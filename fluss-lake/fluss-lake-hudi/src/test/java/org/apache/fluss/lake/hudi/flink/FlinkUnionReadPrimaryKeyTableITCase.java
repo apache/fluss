@@ -77,7 +77,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
     }
 
     @ParameterizedTest
-    @ValueSource(booleans = {false})
+    @ValueSource(booleans = {false, true})
     void testUnionReadFullType(boolean isPartitioned) throws Exception {
         JobClient jobClient = buildCheckpointedTieringJob();
 
