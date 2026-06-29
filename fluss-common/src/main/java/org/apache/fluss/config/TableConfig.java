@@ -53,6 +53,11 @@ public class TableConfig {
         this.config = config;
     }
 
+    /** Gets the log segment file size of the table. */
+    public MemorySize getLogSegmentSize() {
+        return config.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE);
+    }
+
     /** Gets the replication factor of the table. */
     public int getReplicationFactor() {
         return config.get(ConfigOptions.TABLE_REPLICATION_FACTOR);

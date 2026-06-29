@@ -20,17 +20,18 @@ package org.apache.fluss.server.log;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.FlussException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SchemaNotExistException;
-import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.TabletManagerBase;
+import org.apache.fluss.server.config.ResolvedTableConfig;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.storage.LocalDiskManager;
@@ -264,16 +265,14 @@ public final class LogManager extends TabletManagerBase {
      * @param dataDir the local data directory chosen for the bucket
      * @param tablePath the table path of the bucket belongs to
      * @param tableBucket the table bucket
-     * @param logFormat the log format
-     * @param tieredLogLocalSegments the number of segments to retain in local for tiered log
+     * @param tableConfig the resolved table config
      * @param isChangelog whether the log is a changelog of primary key table
      */
     public LogTablet getOrCreateLog(
             File dataDir,
             PhysicalTablePath tablePath,
             TableBucket tableBucket,
-            LogFormat logFormat,
-            int tieredLogLocalSegments,
+            TableConfig tableConfig,
             boolean isChangelog)
             throws Exception {
         return inLock(
@@ -291,11 +290,10 @@ public final class LogManager extends TabletManagerBase {
                                     tablePath,
                                     tabletDir,
                                     conf,
+                                    tableConfig,
                                     serverMetricGroup,
                                     0L,
                                     scheduler,
-                                    logFormat,
-                                    tieredLogLocalSegments,
                                     isChangelog,
                                     clock,
                                     true);
@@ -415,11 +413,10 @@ public final class LogManager extends TabletManagerBase {
                         physicalTablePath,
                         tabletDir,
                         conf,
+                        new ResolvedTableConfig(tableInfo.getProperties(), conf),
                         serverMetricGroup,
                         logRecoveryPoint,
                         scheduler,
-                        tableInfo.getTableConfig().getLogFormat(),
-                        tableInfo.getTableConfig().getTieredLogLocalSegments(),
                         tableInfo.hasPrimaryKey(),
                         clock,
                         isCleanShutdown);

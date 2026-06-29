@@ -18,12 +18,15 @@
 package org.apache.fluss.server.log;
 
 import org.apache.fluss.config.ConfigOptions;
-import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogTestBase;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.server.config.ResolvedTableConfig;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.storage.LocalDiskManager;
@@ -173,6 +176,29 @@ final class LogManagerTest extends LogTestBase {
     void testGetNonExistentLog() {
         Optional<LogTablet> log = logManager.getLog(new TableBucket(1001, 1));
         assertThat(log.isPresent()).isFalse();
+    }
+
+    @Test
+    void testTableLogSegmentFileSizeOverridesServerConfig() throws Exception {
+        initTableBuckets(null);
+        MemoryLogRecords records = genMemoryLogRecordsByObject(DATA1);
+        Configuration tableProperties = new Configuration();
+        tableProperties.set(
+                ConfigOptions.LOG_SEGMENT_FILE_SIZE,
+                new MemorySize(records.sizeInBytes() * 2L - 1));
+
+        LogTablet log =
+                logManager.getOrCreateLog(
+                        tempDir,
+                        PhysicalTablePath.of(tablePath1),
+                        tableBucket1,
+                        new ResolvedTableConfig(tableProperties, conf),
+                        false);
+
+        log.appendAsLeader(records);
+        log.appendAsLeader(records);
+
+        assertThat(log.logSegments().size()).isEqualTo(2);
     }
 
     @ParameterizedTest
@@ -400,15 +426,18 @@ final class LogManagerTest extends LogTestBase {
                 PhysicalTablePath.of(
                         tablePath.getDatabaseName(), tablePath.getTableName(), partitionName),
                 tableBucket,
-                LogFormat.ARROW,
-                1,
+                createTableConfig(),
                 false);
     }
 
     private LogTablet createLog(TablePath tablePath, TableBucket tableBucket, File dataDir)
             throws Exception {
         return logManager.getOrCreateLog(
-                dataDir, PhysicalTablePath.of(tablePath), tableBucket, LogFormat.ARROW, 1, false);
+                dataDir, PhysicalTablePath.of(tablePath), tableBucket, createTableConfig(), false);
+    }
+
+    private TableConfig createTableConfig() {
+        return new ResolvedTableConfig(new Configuration(), conf);
     }
 
     private void initTableBuckets(@Nullable String partitionName) {

@@ -23,7 +23,6 @@ import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.TooManyScannersException;
 import org.apache.fluss.memory.TestingMemorySegmentPool;
 import org.apache.fluss.metadata.KvFormat;
-import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
@@ -103,11 +102,10 @@ class ScannerManagerTest {
                         physicalTablePath,
                         logTabletDir,
                         conf,
+                        new TableConfig(conf),
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         0,
                         new FlussScheduler(1),
-                        LogFormat.ARROW,
-                        1,
                         true,
                         org.apache.fluss.utils.clock.SystemClock.getInstance(),
                         true);
