@@ -892,6 +892,17 @@ public abstract class FlinkProcedureITCase {
                                 "Call %s.sys.drop_acl('CLUSTER', 'ALLOW', 'User:bob', 'DESCRIBE', '*')",
                                 CATALOG_NAME))
                 .await();
+        // Try to append a user with the same username as the existing "root" user
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "Call %s.sys.append_cluster_configs('%s', 'root:another-pass')",
+                                                        CATALOG_NAME,
+                                                        ConfigOptions.SERVER_SASL_USERS.key()))
+                                        .await())
+                .hasMessageContaining("duplicate usernames")
+                .hasMessageContaining("root");
     }
 
     @Test
