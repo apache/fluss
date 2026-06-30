@@ -601,8 +601,10 @@ public class DvTableReadableSnapshotRetriever implements AutoCloseable {
     private String getPartitionNameFromBinaryRow(BinaryRow partition) {
         return String.join(
                 ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR,
-                PaimonPartitionUtils.partitionValues(
-                        partition, fileStoreTable.schema().logicalPartitionType()));
+                PaimonConversions.toFlussPartitionValues(
+                        partition,
+                        PaimonConversions.toFlussRowType(
+                                fileStoreTable.schema().logicalPartitionType())));
     }
 
     @Override

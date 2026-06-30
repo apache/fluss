@@ -18,8 +18,6 @@
 
 package org.apache.fluss.lake.paimon.utils;
 
-import org.apache.fluss.row.TimestampLtz;
-import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.utils.PartitionUtils;
 
@@ -37,8 +35,8 @@ import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Test for {@link PaimonPartitionUtils}. */
-class PaimonPartitionUtilsTest {
+/** Test for partition value conversion in {@link PaimonConversions}. */
+class PaimonConversionsTest {
 
     /** Each type's lake-side string must equal the Fluss-side name ({@code convertValueOfType}). */
     @Test
@@ -72,12 +70,12 @@ class PaimonPartitionUtilsTest {
         assertMatches(
                 DataTypes.TIMESTAMP(6),
                 w -> w.writeTimestamp(0, Timestamp.fromEpochMillis(ms, nanos), 6),
-                TimestampNtz.fromMillis(ms, nanos),
+                org.apache.fluss.row.TimestampNtz.fromMillis(ms, nanos),
                 DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE);
         assertMatches(
                 DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE(6),
                 w -> w.writeTimestamp(0, Timestamp.fromEpochMillis(ms, nanos), 6),
-                TimestampLtz.fromEpochMillis(ms, nanos),
+                org.apache.fluss.row.TimestampLtz.fromEpochMillis(ms, nanos),
                 DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE);
     }
 
@@ -88,7 +86,7 @@ class PaimonPartitionUtilsTest {
         writer.writeString(0, BinaryString.fromString("a"));
         writer.complete();
 
-        assertThat(PaimonPartitionUtils.partitionValues(partition, RowType.of(DataTypes.STRING())))
+        assertThat(flussPartitionNames(partition, RowType.of(DataTypes.STRING())))
                 .containsExactly("a");
     }
 
@@ -101,10 +99,34 @@ class PaimonPartitionUtilsTest {
         writer.writeInt(1, 42);
         writer.complete();
 
-        assertThat(
-                        PaimonPartitionUtils.partitionValues(
-                                partition, RowType.of(DataTypes.DATE(), DataTypes.INT())))
+        assertThat(flussPartitionNames(partition, RowType.of(DataTypes.DATE(), DataTypes.INT())))
                 .containsExactly("2024-03-01", "42");
+    }
+
+    @Test
+    void testNestedTypeConversion() {
+        RowType paimon =
+                RowType.of(
+                        DataTypes.ARRAY(DataTypes.INT()),
+                        DataTypes.MAP(DataTypes.STRING(), DataTypes.BIGINT()),
+                        RowType.of(DataTypes.INT(), DataTypes.STRING()));
+        org.apache.fluss.types.RowType fluss = PaimonConversions.toFlussRowType(paimon);
+
+        assertThat(fluss.getTypeAt(0).getTypeRoot()).isEqualTo(DataTypeRoot.ARRAY);
+        assertThat(
+                        ((org.apache.fluss.types.ArrayType) fluss.getTypeAt(0))
+                                .getElementType()
+                                .getTypeRoot())
+                .isEqualTo(DataTypeRoot.INTEGER);
+        assertThat(fluss.getTypeAt(1).getTypeRoot()).isEqualTo(DataTypeRoot.MAP);
+        assertThat(fluss.getTypeAt(2).getTypeRoot()).isEqualTo(DataTypeRoot.ROW);
+    }
+
+    /** Test helper: takes a Paimon partition type and runs the full Paimon -> Fluss conversion. */
+    private static java.util.List<String> flussPartitionNames(
+            BinaryRow partition, RowType paimonPartitionType) {
+        return PaimonConversions.toFlussPartitionValues(
+                partition, PaimonConversions.toFlussRowType(paimonPartitionType));
     }
 
     private static void assertMatches(
@@ -116,7 +138,7 @@ class PaimonPartitionUtilsTest {
         BinaryRowWriter writer = new BinaryRowWriter(partition);
         writeValue.accept(writer);
         writer.complete();
-        assertThat(PaimonPartitionUtils.partitionValues(partition, RowType.of(paimonType)))
+        assertThat(flussPartitionNames(partition, RowType.of(paimonType)))
                 .as("type %s", flussRoot)
                 .containsExactly(PartitionUtils.convertValueOfType(flussValue, flussRoot));
     }

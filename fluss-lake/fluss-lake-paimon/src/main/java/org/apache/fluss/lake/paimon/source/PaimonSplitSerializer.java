@@ -29,16 +29,19 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /** Serializer for paimon split. */
 public class PaimonSplitSerializer implements SimpleVersionedSerializer<PaimonSplit> {
 
     private static final int VERSION_1 = 1;
+    // VERSION_2 additionally persists the partition values.
+    private static final int VERSION_2 = 2;
 
     @Override
     public int getVersion() {
-        return VERSION_1;
+        return VERSION_2;
     }
 
     @Override
@@ -62,10 +65,14 @@ public class PaimonSplitSerializer implements SimpleVersionedSerializer<PaimonSp
         DataSplit dataSplit;
         try {
             dataSplit = InstantiationUtil.deserializeObject(in, getClass().getClassLoader());
-
+            DataInputStream dis = new DataInputStream(in);
+            boolean isBucketUnAware = dis.readBoolean();
             if (version == VERSION_1) {
-                DataInputStream dis = new DataInputStream(in);
-                boolean isBucketUnAware = dis.readBoolean();
+                // VERSION_1 payloads do not contain partition values. Keep them readable, but
+                // don't try to reconstruct partition names from DataSplit because non-string
+                // partition columns require type information that is not present in the payload.
+                return new PaimonSplit(dataSplit, isBucketUnAware, Collections.emptyList());
+            } else if (version == VERSION_2) {
                 int size = dis.readInt();
                 List<String> partition = new ArrayList<>(size);
                 for (int i = 0; i < size; i++) {
