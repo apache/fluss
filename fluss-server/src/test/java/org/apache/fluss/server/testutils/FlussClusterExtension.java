@@ -68,6 +68,7 @@ import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
 
@@ -237,10 +238,6 @@ public final class FlussClusterExtension
             rpcClient.close();
             rpcClient = null;
         }
-        if (tempDir != null) {
-            tempDir.delete();
-            tempDir = null;
-        }
         for (TabletServer tabletServer : tabletServers.values()) {
             tabletServer.close();
         }
@@ -257,6 +254,10 @@ public final class FlussClusterExtension
         if (zooKeeperServer != null) {
             zooKeeperServer.close();
             zooKeeperServer = null;
+        }
+        if (tempDir != null) {
+            FileUtils.deleteDirectoryQuietly(tempDir);
+            tempDir = null;
         }
     }
 
@@ -997,6 +998,14 @@ public final class FlussClusterExtension
             // reduce testing resources
             clusterConf.set(ConfigOptions.NETTY_SERVER_NUM_NETWORK_THREADS, 1);
             clusterConf.set(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS, 3);
+            // Use short cleanup timeouts so that a slow in-flight drop does not block
+            // subsequent drops beyond the test's retry window.
+            clusterConf.set(
+                    ConfigOptions.COORDINATOR_LIFECYCLE_THROTTLER_INFLIGHT_TIMEOUT,
+                    Duration.ofSeconds(2));
+            clusterConf.set(
+                    ConfigOptions.COORDINATOR_LIFECYCLE_THROTTLER_TIMEOUT_CHECK_INTERVAL,
+                    Duration.ofSeconds(1));
         }
 
         /** Sets the number of tablet servers. */

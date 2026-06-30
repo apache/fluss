@@ -32,6 +32,7 @@ import org.apache.fluss.utils.concurrent.ShutdownableThread;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Set;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
@@ -72,6 +73,12 @@ public final class CoordinatorEventManager implements EventManager {
     private volatile int partitionCount;
     private volatile int replicasToDeleteCount;
 
+    /**
+     * Number of buckets currently waiting for the leader-activation ack from the target tablet
+     * server.
+     */
+    private volatile int pendingLeaderActivationCount;
+
     private static final int WINDOW_SIZE = 100;
     private static final long METRICS_UPDATE_INTERVAL_MS = 5000; // 5 seconds
 
@@ -101,6 +108,8 @@ public final class CoordinatorEventManager implements EventManager {
         coordinatorMetricGroup.gauge(MetricNames.PARTITION_COUNT, () -> partitionCount);
         coordinatorMetricGroup.gauge(
                 MetricNames.REPLICAS_TO_DELETE_COUNT, () -> replicasToDeleteCount);
+        coordinatorMetricGroup.gauge(
+                MetricNames.PENDING_LEADER_ACTIVATION_COUNT, () -> pendingLeaderActivationCount);
     }
 
     /** Not thread safety! this method can only be executed in the CoordinatorEventThread. */
@@ -111,11 +120,25 @@ public final class CoordinatorEventManager implements EventManager {
                         context -> {
                             int coordinatorServerCount = context.getLiveCoordinatorServers().size();
                             int tabletServerCount = context.getLiveTabletServers().size();
-                            int tableCount = context.allTables().size();
+                            // Exclude tables that have been queued for deletion (DropTable RPC
+                            // already acked, but completeDeleteTable has not yet removed them
+                            // from tablePathById). We dedup by tableId rather than subtracting
+                            // sizes so the result is robust even if tablesToBeDeleted ever
+                            // drifts out of sync with tablePathById -- it can never go negative
+                            // and only counts ids that are truly still in tablePathById.
+                            Set<Long> allTables = context.allTables().keySet();
+                            int tableCount = allTables.size();
+                            for (Long toDelete : context.getTablesToBeDeleted()) {
+                                if (allTables.contains(toDelete)) {
+                                    tableCount--;
+                                }
+                            }
                             int lakeTableCount = context.getLakeTableCount();
                             int bucketCount = context.bucketLeaderAndIsr().size();
                             int partitionCount = context.getTotalPartitionCount();
                             int offlineBucketCount = context.getOfflineBucketCount();
+                            int pendingLeaderActivationCount =
+                                    context.getPendingLeaderActivationBuckets().size();
 
                             int replicasToDeletes = 0;
                             // for replica in partitions to be deleted
@@ -150,7 +173,8 @@ public final class CoordinatorEventManager implements EventManager {
                                     bucketCount,
                                     partitionCount,
                                     offlineBucketCount,
-                                    replicasToDeletes);
+                                    replicasToDeletes,
+                                    pendingLeaderActivationCount);
                         });
 
         eventProcessor.process(accessContextEvent);
@@ -166,6 +190,7 @@ public final class CoordinatorEventManager implements EventManager {
             this.partitionCount = metricsData.partitionCount;
             this.offlineBucketCount = metricsData.offlineBucketCount;
             this.replicasToDeleteCount = metricsData.replicasToDeleteCount;
+            this.pendingLeaderActivationCount = metricsData.pendingLeaderActivationCount;
         } catch (Exception e) {
             LOG.warn("Failed to update metrics via AccessContextEvent", e);
         }
@@ -298,6 +323,7 @@ public final class CoordinatorEventManager implements EventManager {
         private final int partitionCount;
         private final int offlineBucketCount;
         private final int replicasToDeleteCount;
+        private final int pendingLeaderActivationCount;
 
         public MetricsData(
                 int coordinatorServerCount,
@@ -307,7 +333,8 @@ public final class CoordinatorEventManager implements EventManager {
                 int bucketCount,
                 int partitionCount,
                 int offlineBucketCount,
-                int replicasToDeleteCount) {
+                int replicasToDeleteCount,
+                int pendingLeaderActivationCount) {
             this.coordinatorServerCount = coordinatorServerCount;
             this.tabletServerCount = tabletServerCount;
             this.tableCount = tableCount;
@@ -316,6 +343,7 @@ public final class CoordinatorEventManager implements EventManager {
             this.partitionCount = partitionCount;
             this.offlineBucketCount = offlineBucketCount;
             this.replicasToDeleteCount = replicasToDeleteCount;
+            this.pendingLeaderActivationCount = pendingLeaderActivationCount;
         }
     }
 }

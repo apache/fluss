@@ -25,6 +25,9 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.adapter.CatalogTableAdapter;
+import org.apache.fluss.flink.functions.bitmap.RbAndAggFunction;
+import org.apache.fluss.flink.functions.bitmap.RbBuildAggFunction;
+import org.apache.fluss.flink.functions.bitmap.RbOrAggFunction;
 import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.procedure.ProcedureManager;
 import org.apache.fluss.flink.utils.CatalogExceptionUtils;
@@ -48,11 +51,13 @@ import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogDatabase;
 import org.apache.flink.table.catalog.CatalogDatabaseImpl;
 import org.apache.flink.table.catalog.CatalogFunction;
+import org.apache.flink.table.catalog.CatalogFunctionImpl;
 import org.apache.flink.table.catalog.CatalogMaterializedTable;
 import org.apache.flink.table.catalog.CatalogPartition;
 import org.apache.flink.table.catalog.CatalogPartitionSpec;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.CatalogView;
+import org.apache.flink.table.catalog.FunctionLanguage;
 import org.apache.flink.table.catalog.ObjectPath;
 import org.apache.flink.table.catalog.ResolvedCatalogBaseTable;
 import org.apache.flink.table.catalog.ResolvedCatalogMaterializedTable;
@@ -83,6 +88,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -133,6 +139,16 @@ public class FlinkCatalog extends AbstractCatalog {
     protected final Supplier<Map<String, String>> lakeCatalogPropertiesSupplier;
     protected Connection connection;
     protected Admin admin;
+
+    private static final Map<String, String> BUILTIN_BITMAP_FUNCTIONS;
+
+    static {
+        Map<String, String> map = new HashMap<>();
+        map.put("rb_build_agg", RbBuildAggFunction.class.getName());
+        map.put("rb_or_agg", RbOrAggFunction.class.getName());
+        map.put("rb_and_agg", RbAndAggFunction.class.getName());
+        BUILTIN_BITMAP_FUNCTIONS = Collections.unmodifiableMap(map);
+    }
 
     public FlinkCatalog(
             String name,
@@ -746,19 +762,26 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     @Override
-    public List<String> listFunctions(String s) throws DatabaseNotExistException, CatalogException {
-        return Collections.emptyList();
+    public List<String> listFunctions(String dbName)
+            throws DatabaseNotExistException, CatalogException {
+        return new ArrayList<>(BUILTIN_BITMAP_FUNCTIONS.keySet());
+    }
+
+    @Override
+    public boolean functionExists(ObjectPath objectPath) throws CatalogException {
+        return BUILTIN_BITMAP_FUNCTIONS.containsKey(
+                objectPath.getObjectName().toLowerCase(Locale.ROOT));
     }
 
     @Override
     public CatalogFunction getFunction(ObjectPath functionPath)
             throws FunctionNotExistException, CatalogException {
-        throw new FunctionNotExistException(getName(), functionPath);
-    }
-
-    @Override
-    public boolean functionExists(ObjectPath objectPath) throws CatalogException {
-        return false;
+        String className =
+                BUILTIN_BITMAP_FUNCTIONS.get(functionPath.getObjectName().toLowerCase(Locale.ROOT));
+        if (className == null) {
+            throw new FunctionNotExistException(getName(), functionPath);
+        }
+        return new CatalogFunctionImpl(className, FunctionLanguage.JAVA);
     }
 
     @Override

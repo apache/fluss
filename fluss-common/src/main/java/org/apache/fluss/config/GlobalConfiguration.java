@@ -126,7 +126,7 @@ public class GlobalConfiguration {
                                 "{} configuration property: {}={}",
                                 prefix,
                                 key,
-                                value instanceof Password ? Password.HIDDEN_CONTENT : value));
+                                ConfigurationUtils.hideSensitiveValue(key, value)));
     }
 
     /**

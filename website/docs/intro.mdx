@@ -4,13 +4,20 @@ sidebar_position: 1
 slug: /
 ---
 
+import { useColorMode } from '@docusaurus/theme-common';
+
 # What is Apache Fluss?
 
 **One platform. Streams, tables, and the lakehouse.** Apache Fluss is an open-source streaming storage system for real-time analytics and AI, designed to serve as the real-time data layer of a Lakehouse architecture.
 
 Fluss collapses the message broker, the online key-value store, the stream-processing state backend, and the lakehouse cold store into a single coherent foundation, so the same table can be read at sub-second freshness for analytics, looked up by primary key for features, and tiered into open formats like Apache Iceberg, Apache Paimon, or Lance for historical scans.
 
-![arch](/img/fluss.png)
+{(() => {
+  const { colorMode } = useColorMode();
+  return (
+    <img src={colorMode === 'dark' ? '/img/fluss.png' : '/img/fluss_light_mode.png'} alt="arch" />
+  );
+})()}
 
 It integrates first-class with **Apache Flink** and **Apache Spark**, supports streaming reads and writes with sub-second latency, stores data in a columnar layout for projection and predicate pushdown, and offers two table types (append-only **Log Tables** and updatable **PrimaryKey Tables**) to cover both event-stream and database-style workloads.
 

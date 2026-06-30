@@ -76,6 +76,10 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
  * An auto partition manager which will trigger auto partition for the tables in cluster
  * periodically. It'll use a {@link ScheduledExecutorService} to schedule the auto partition which
  * will trigger auto partition for them.
+ *
+ * <p>TODO: migrate the jittered partition-creation throttling logic into {@link
+ * TableLifecycleThrottler} so that partition creation and deletion share the same lifecycle gate.
+ * Tracked by https://github.com/apache/fluss/issues/3457.
  */
 public class AutoPartitionManager implements AutoCloseable {
 
@@ -187,6 +191,34 @@ public class AutoPartitionManager implements AutoCloseable {
                     "Removed auto partition table [{}] (id={}) from scheduler",
                     tableInfo.getTablePath(),
                     tableInfo.getTableId());
+        }
+    }
+
+    /**
+     * Handles a table's auto-partition strategy change after table properties are updated.
+     *
+     * @param newTableInfo the updated table information
+     * @param oldStrategy the old auto partition strategy
+     * @param newStrategy the updated auto partition strategy
+     */
+    public void handleAutoPartitionStrategyChange(
+            TableInfo newTableInfo,
+            AutoPartitionStrategy oldStrategy,
+            AutoPartitionStrategy newStrategy) {
+        checkNotClosed();
+        long tableId = newTableInfo.getTableId();
+        boolean oldAutoPartitionEnabled = oldStrategy.isAutoPartitionEnabled();
+        boolean newAutoPartitionEnabled = newStrategy.isAutoPartitionEnabled();
+
+        if (!oldAutoPartitionEnabled && newAutoPartitionEnabled) {
+            LOG.info("Table {} auto partition enabled from false to true.", tableId);
+            addAutoPartitionTable(newTableInfo, true);
+        } else if (oldAutoPartitionEnabled && !newAutoPartitionEnabled) {
+            LOG.info("Table {} auto partition enabled from true to false.", tableId);
+            removeAutoPartitionTable(tableId);
+        } else if (newAutoPartitionEnabled) {
+            LOG.info("Table {} auto partition strategy changed.", tableId);
+            updateAutoPartitionTables(newTableInfo);
         }
     }
 
@@ -315,6 +347,12 @@ public class AutoPartitionManager implements AutoCloseable {
             }
 
             TableInfo tableInfo = autoPartitionTables.get(tableId);
+            if (tableInfo == null) {
+                LOG.debug(
+                        "Skipping auto partitioning for table id {} as it is not registered.",
+                        tableId);
+                continue;
+            }
             TablePath tablePath = tableInfo.getTablePath();
             TreeMap<String, Set<String>> currentPartitions =
                     partitionsByTable.computeIfAbsent(
@@ -344,7 +382,7 @@ public class AutoPartitionManager implements AutoCloseable {
             dropPartitions(
                     tablePath,
                     tableInfo.getPartitionKeys(),
-                    createPartitionInstant,
+                    now,
                     tableInfo.getTableConfig().getAutoPartitionStrategy(),
                     currentPartitions);
             createPartitions(tableInfo, createPartitionInstant, currentPartitions);

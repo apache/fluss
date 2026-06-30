@@ -25,6 +25,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
+import org.apache.fluss.server.coordinator.event.ResumeDropEvent;
 import org.apache.fluss.server.coordinator.event.TestingEventManager;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaStateMachine;
 import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine;
@@ -38,6 +39,7 @@ import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.utils.clock.SystemClock;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -84,6 +86,7 @@ class TableManagerTest {
 
     private CoordinatorContext coordinatorContext;
     private TableManager tableManager;
+    private TableLifecycleThrottler lifecycleThrottler;
     private TestingEventManager testingEventManager;
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
 
@@ -106,6 +109,9 @@ class TableManagerTest {
     void afterEach() {
         if (tableManager != null) {
             tableManager.shutdown();
+        }
+        if (lifecycleThrottler != null) {
+            lifecycleThrottler.close();
         }
     }
 
@@ -134,6 +140,9 @@ class TableManagerTest {
                         zookeeperClient,
                         new Configuration(),
                         new LakeCatalogDynamicLoader(new Configuration(), null, true));
+        lifecycleThrottler =
+                new TableLifecycleThrottler(
+                        testingEventManager, SystemClock.getInstance(), new Configuration());
         tableManager =
                 new TableManager(
                         metadataManager,
@@ -141,7 +150,8 @@ class TableManagerTest {
                         replicaStateMachine,
                         tableBucketStateMachine,
                         new RemoteStorageCleaner(conf, ioExecutor),
-                        ioExecutor);
+                        ioExecutor,
+                        lifecycleThrottler);
         tableManager.startup();
 
         coordinatorContext.setLiveTabletServers(
@@ -261,6 +271,9 @@ class TableManagerTest {
 
         // start table manager, should resume table deletion
         tableManager.startup();
+        // TableLifecycleThrottler defers resume actions to the coordinator event thread by
+        // enqueuing ResumeDropEvent; the unit test has no real event loop so dispatch them inline.
+        dispatchResumeDropEvents();
 
         checkReplicaDelete(tableId, null, assignment);
     }
@@ -411,5 +424,24 @@ class TableManagerTest {
             }
         }
         return deleteReplicaResponseReceivedEvent;
+    }
+
+    /**
+     * Drives every {@link ResumeDropEvent} currently in the testing event manager. Mirrors the
+     * dispatch logic of {@code CoordinatorEventProcessor#process(CoordinatorEvent)} so unit tests
+     * can trigger the deferred resume reconciliation without spinning up the real event loop.
+     */
+    private void dispatchResumeDropEvents() {
+        for (CoordinatorEvent event : testingEventManager.getEvents()) {
+            if (event instanceof ResumeDropEvent) {
+                ResumeDropEvent resumeEvent = (ResumeDropEvent) event;
+                if (resumeEvent.getPartitionId() == null) {
+                    tableManager.onDeleteTable(resumeEvent.getTableId());
+                } else {
+                    tableManager.onDeletePartition(
+                            resumeEvent.getTableId(), resumeEvent.getPartitionId());
+                }
+            }
+        }
     }
 }

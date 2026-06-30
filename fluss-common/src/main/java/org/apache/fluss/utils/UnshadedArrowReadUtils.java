@@ -54,7 +54,9 @@ public final class UnshadedArrowReadUtils {
     public static Schema toArrowSchema(RowType rowType) {
         org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Schema shadedSchema =
                 ArrowUtils.toArrowSchema(rowType);
-        return Schema.deserializeMessage(ByteBuffer.wrap(shadedSchema.serializeAsMessage()));
+        // Use toByteArray()/deserialize() instead of serializeAsMessage()/deserializeMessage()
+        // for compatibility with Arrow 12.x (used by Spark 3.4/3.5)
+        return Schema.deserialize(ByteBuffer.wrap(shadedSchema.toByteArray()));
     }
 
     public static void loadArrowBatch(

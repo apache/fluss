@@ -36,9 +36,16 @@ class TieringSplitStateTest {
 
         // verify conversion between TieringSnapshotSplitState and TieringSnapshotSplit
         TieringSnapshotSplit tieringSnapshotSplit =
-                new TieringSnapshotSplit(tablePath, tableBucket, "partition1", 0L, 200L, 10);
+                new TieringSnapshotSplit(
+                        tablePath, tableBucket, "partition1", 0L, 200L, 10, 0, 1000L);
+        tieringSnapshotSplit.skipCurrentRound();
         TieringSplitState tieringSnapshotSplitState = new TieringSplitState(tieringSnapshotSplit);
-        assertThat(tieringSnapshotSplitState.toSourceSplit()).isEqualTo(tieringSnapshotSplit);
+        TieringSnapshotSplit restoredSplit =
+                (TieringSnapshotSplit) tieringSnapshotSplitState.toSourceSplit();
+        assertThat(restoredSplit).isEqualTo(tieringSnapshotSplit);
+        assertThat(restoredSplit.shouldSkipCurrentRound()).isTrue();
+        assertThat(restoredSplit.getSplitIndex()).isZero();
+        assertThat(restoredSplit.getTieringRoundTimestamp()).isEqualTo(1000L);
     }
 
     @Test
@@ -48,8 +55,13 @@ class TieringSplitStateTest {
 
         // verify conversion between TieringLogSplitState and TieringLogSplit
         TieringLogSplit tieringLogSplit =
-                new TieringLogSplit(tablePath, tableBucket, "partition1", 100L, 200L, 20);
+                new TieringLogSplit(tablePath, tableBucket, "partition1", 100L, 200L, 20, 1, 2000L);
+        tieringLogSplit.skipCurrentRound();
         TieringSplitState tieringLogSplitState = new TieringSplitState(tieringLogSplit);
-        assertThat(tieringLogSplitState.toSourceSplit()).isEqualTo(tieringLogSplit);
+        TieringLogSplit restoredSplit = (TieringLogSplit) tieringLogSplitState.toSourceSplit();
+        assertThat(restoredSplit).isEqualTo(tieringLogSplit);
+        assertThat(restoredSplit.shouldSkipCurrentRound()).isTrue();
+        assertThat(restoredSplit.getSplitIndex()).isEqualTo(1);
+        assertThat(restoredSplit.getTieringRoundTimestamp()).isEqualTo(2000L);
     }
 }

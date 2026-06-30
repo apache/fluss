@@ -31,9 +31,28 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 
 /** Shared utilities for Fluss type and Pojo type. */
 public class FlussTypeToPojoTypeConverter {
+
+    /**
+     * Builds a map of enum name to enum constant for the given enum class.
+     *
+     * @param enumClass the enum class
+     * @return an immutable map from enum constant name to enum constant
+     */
+    static Map<String, Object> buildEnumConstantsMap(Class<?> enumClass) {
+        Map<String, Object> map = new HashMap<>();
+        for (Object constant : enumClass.getEnumConstants()) {
+            map.put(((Enum<?>) constant).name(), constant);
+        }
+        return Collections.unmodifiableMap(map);
+    }
+
     /**
      * Converts a text value (CHAR/STRING) read from an InternalRow into the target Java type
      * declared by the POJO property.
@@ -45,12 +64,18 @@ public class FlussTypeToPojoTypeConverter {
      * @param fieldName The field name
      * @param pojoType The pojo type
      * @param s The BinaryString read from the row
+     * @param enumConstantsMap (optional) Pre-built enum constants map for enum types; ignored for
+     *     non-enum types
      * @return Converted Java value (String or Character)
      * @throws IllegalArgumentException if the target type is unsupported or constraints are
      *     violated
      */
     static Object convertTextValue(
-            DataType fieldType, String fieldName, Class<?> pojoType, BinaryString s) {
+            DataType fieldType,
+            String fieldName,
+            Class<?> pojoType,
+            BinaryString s,
+            Map<String, Object> enumConstantsMap) {
         if (s == null) {
             return null;
         }
@@ -74,6 +99,17 @@ public class FlussTypeToPojoTypeConverter {
                         ConverterCommons.charLengthExceptionMessage(fieldName, v.length()));
             }
             return v.charAt(0);
+        } else if (pojoType.isEnum()) {
+            Map<String, Object> enumMap =
+                    enumConstantsMap != null ? enumConstantsMap : buildEnumConstantsMap(pojoType);
+            Object enumConstant = enumMap.get(v);
+            if (enumConstant == null) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Could not parse value for enum %s. Expected one of: %s",
+                                pojoType, Arrays.toString(pojoType.getEnumConstants())));
+            }
+            return enumConstant;
         }
         throw new IllegalArgumentException(
                 String.format(

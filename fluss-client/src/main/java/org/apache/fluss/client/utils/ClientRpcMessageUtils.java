@@ -17,14 +17,18 @@
 
 package org.apache.fluss.client.utils;
 
+import org.apache.fluss.client.admin.ClusterHealth;
+import org.apache.fluss.client.admin.ClusterHealthStatus;
 import org.apache.fluss.client.admin.OffsetSpec;
 import org.apache.fluss.client.admin.ProducerOffsetsResult;
 import org.apache.fluss.client.lookup.LookupBatch;
 import org.apache.fluss.client.lookup.PrefixLookupBatch;
 import org.apache.fluss.client.metadata.AcquireKvSnapshotLeaseResult;
+import org.apache.fluss.client.metadata.ActiveKvSnapshots;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
+import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
 import org.apache.fluss.client.write.KvWriteBatch;
 import org.apache.fluss.client.write.ReadyWriteBatch;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
@@ -51,6 +55,7 @@ import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CreatePartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionRequest;
+import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
 import org.apache.fluss.rpc.messages.GetKvSnapshotMetadataResponse;
 import org.apache.fluss.rpc.messages.GetLakeSnapshotResponse;
@@ -58,9 +63,11 @@ import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsResponse;
 import org.apache.fluss.rpc.messages.GetTableStatsRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
+import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
+import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.PbAddColumn;
@@ -84,6 +91,7 @@ import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
 import org.apache.fluss.rpc.messages.PbRebalancePlanForBucket;
 import org.apache.fluss.rpc.messages.PbRebalanceProgressForBucket;
 import org.apache.fluss.rpc.messages.PbRebalanceProgressForTable;
+import org.apache.fluss.rpc.messages.PbRemoteLogManifestEntry;
 import org.apache.fluss.rpc.messages.PbRemotePathAndLocalFile;
 import org.apache.fluss.rpc.messages.PbRenameColumn;
 import org.apache.fluss.rpc.messages.PbTableBucket;
@@ -103,6 +111,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -533,6 +542,34 @@ public class ClientRpcMessageUtils {
         return request;
     }
 
+    public static List<RemoteLogManifestInfo> toRemoteLogManifestInfos(
+            ListRemoteLogManifestsResponse response) {
+        List<RemoteLogManifestInfo> result = new ArrayList<>(response.getManifestsCount());
+        for (PbRemoteLogManifestEntry entry : response.getManifestsList()) {
+            PbTableBucket pb = entry.getTableBucket();
+            Long partitionId = pb.hasPartitionId() ? pb.getPartitionId() : null;
+            TableBucket tableBucket =
+                    new TableBucket(pb.getTableId(), partitionId, pb.getBucketId());
+            result.add(
+                    new RemoteLogManifestInfo(
+                            tableBucket,
+                            entry.getRemoteLogManifestPath(),
+                            entry.getRemoteLogEndOffset()));
+        }
+        return result;
+    }
+
+    public static ActiveKvSnapshots toActiveKvSnapshots(ListKvSnapshotsResponse response) {
+        Map<Integer, Set<Long>> snapshotIdsByBucket = new HashMap<>();
+        for (PbKvSnapshot snapshot : response.getActiveSnapshotsList()) {
+            snapshotIdsByBucket
+                    .computeIfAbsent(snapshot.getBucketId(), k -> new HashSet<>())
+                    .add(snapshot.getSnapshotId());
+        }
+        Long partitionId = response.hasPartitionId() ? response.getPartitionId() : null;
+        return new ActiveKvSnapshots(response.getTableId(), partitionId, snapshotIdsByBucket);
+    }
+
     public static Optional<RebalanceProgress> toRebalanceProgress(
             ListRebalanceProgressResponse response) {
         if (!response.hasRebalanceId()) {
@@ -828,5 +865,27 @@ public class ClientRpcMessageUtils {
                                 })
                         .collect(Collectors.toList());
         return new GetTableStatsRequest().setTableId(tableId).addAllBucketsReqs(pbBuckets);
+    }
+
+    public static ClusterHealth toClusterHealth(GetClusterHealthResponse resp) {
+        return new ClusterHealth(
+                resp.getNumReplicas(),
+                resp.getInSyncReplicas(),
+                resp.getNumLeaderReplicas(),
+                resp.getActiveLeaderReplicas(),
+                toClusterHealthStatus(resp.getStatus()));
+    }
+
+    private static ClusterHealthStatus toClusterHealthStatus(int pbStatus) {
+        switch (pbStatus) {
+            case 0:
+                return ClusterHealthStatus.GREEN;
+            case 1:
+                return ClusterHealthStatus.YELLOW;
+            case 2:
+                return ClusterHealthStatus.RED;
+            default:
+                return ClusterHealthStatus.UNKNOWN;
+        }
     }
 }

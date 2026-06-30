@@ -312,7 +312,8 @@ class TableBucketStateMachineTest {
                                 zookeeperClient,
                                 new Configuration(),
                                 new LakeCatalogDynamicLoader(new Configuration(), null, true)),
-                        kvSnapshotLeaseManager);
+                        kvSnapshotLeaseManager,
+                        SystemClock.getInstance());
         CoordinatorEventManager eventManager =
                 new CoordinatorEventManager(
                         coordinatorEventProcessor, TestingMetricGroups.COORDINATOR_METRICS);

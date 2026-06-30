@@ -149,7 +149,10 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                     assertThat(logFetcher.getCompletedFetchesSize()).isEqualTo(2);
                 });
         ScanRecords records = logFetcher.collectFetch();
-        assertThat(records.buckets().size()).isEqualTo(1);
+        // Both polled buckets are exposed; tb1 was polled but produced no records.
+        TableBucket tb1 = new TableBucket(tableId, bucketId1);
+        assertThat(records.buckets()).containsExactlyInAnyOrder(tb0, tb1);
+        assertThat(records.records(tb1)).isEmpty();
         List<ScanRecord> scanRecords = records.records(tb0);
         assertThat(scanRecords.stream().map(ScanRecord::getRow).collect(Collectors.toList()))
                 .isEqualTo(expectedRows);
@@ -195,7 +198,8 @@ public class LogFetcherITCase extends ClientToServerITCaseBase {
                     assertThat(newSchemaLogFetcher.getCompletedFetchesSize()).isEqualTo(2);
                 });
         records = newSchemaLogFetcher.collectFetch();
-        assertThat(records.buckets().size()).isEqualTo(1);
+        assertThat(records.buckets()).containsExactlyInAnyOrder(tb0, tb1);
+        assertThat(records.records(tb1)).isEmpty();
         assertThat(records.records(tb0)).hasSize(20);
         scanRecords = records.records(tb0);
         assertThat(scanRecords.stream().map(ScanRecord::getRow).collect(Collectors.toList()))

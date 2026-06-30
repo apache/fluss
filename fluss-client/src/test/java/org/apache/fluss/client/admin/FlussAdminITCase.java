@@ -2413,4 +2413,55 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .isInstanceOf(NetworkException.class)
                 .hasMessageContaining("connection timed out");
     }
+
+    @Test
+    void testClusterHealthDuringRollingUpgrade() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "health_test_table");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(DEFAULT_SCHEMA).distributedBy(3, "id").build();
+        long tableId = createTable(tablePath, tableDescriptor, true);
+        waitAllReplicasReady(tableId, 3);
+
+        // Phase 1: Cluster is healthy — status should be GREEN.
+        ClusterHealth health = admin.getClusterHealth().get();
+        assertThat(health.getStatus()).isEqualTo(ClusterHealthStatus.GREEN);
+        assertThat(health.getNumReplicas()).isEqualTo(health.getInSyncReplicas());
+        assertThat(health.getNumLeaderReplicas()).isEqualTo(health.getActiveLeaderReplicas());
+
+        // Phase 2: Stop one tablet server (simulate server crash during rolling upgrade).
+        int stoppedServerId = 0;
+        FLUSS_CLUSTER_EXTENSION.stopTabletServer(stoppedServerId);
+        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(2);
+
+        for (int bucket = 0; bucket < 3; bucket++) {
+            TableBucket tb = new TableBucket(tableId, bucket);
+            FLUSS_CLUSTER_EXTENSION.waitUntilReplicaShrinkFromIsr(tb, stoppedServerId);
+        }
+
+        // Status should not be GREEN (YELLOW or RED depending on leader placement).
+        ClusterHealth duringDown = admin.getClusterHealth().get();
+        assertThat(duringDown.getStatus()).isNotEqualTo(ClusterHealthStatus.GREEN);
+        assertThat(duringDown.getInSyncReplicas()).isLessThan(duringDown.getNumReplicas());
+
+        // Phase 3: Restart the server.
+        FLUSS_CLUSTER_EXTENSION.startTabletServer(stoppedServerId);
+        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(3);
+
+        // Phase 4: Wait for recovery — status should return to GREEN.
+        for (int bucket = 0; bucket < 3; bucket++) {
+            TableBucket tb = new TableBucket(tableId, bucket);
+            FLUSS_CLUSTER_EXTENSION.waitUntilReplicaExpandToIsr(tb, stoppedServerId);
+        }
+
+        waitUntil(
+                () -> admin.getClusterHealth().get().getStatus() == ClusterHealthStatus.GREEN,
+                Duration.ofMinutes(1),
+                "Cluster should return to GREEN after server restart");
+
+        ClusterHealth afterRecovery = admin.getClusterHealth().get();
+        assertThat(afterRecovery.getStatus()).isEqualTo(ClusterHealthStatus.GREEN);
+        assertThat(afterRecovery.getNumReplicas()).isEqualTo(afterRecovery.getInSyncReplicas());
+        assertThat(afterRecovery.getNumLeaderReplicas())
+                .isEqualTo(afterRecovery.getActiveLeaderReplicas());
+    }
 }
