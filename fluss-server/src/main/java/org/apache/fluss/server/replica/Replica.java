@@ -603,6 +603,9 @@ public final class Replica {
                         logTablet.getLakeMaxTimestamp() < 0L
                                 ? -1
                                 : logTablet.localMaxTimestamp() - logTablet.getLakeMaxTimestamp());
+        lakeTieringMetricGroup.gauge(
+                MetricNames.LAKE_PENDING_RECORDS_LAG,
+                () -> logTablet.getPendingRecordsLag(clock.milliseconds()));
     }
 
     private void onBecomeNewFollower(int standbyReplica) {
