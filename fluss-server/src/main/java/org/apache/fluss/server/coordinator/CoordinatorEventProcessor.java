@@ -1907,7 +1907,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         completedSnapshotStore.add(completedSnapshot);
                         coordinatorEventManager.put(
                                 new NotifyKvSnapshotOffsetEvent(
-                                        tb, completedSnapshot.getLogOffset()));
+                                        tb,
+                                        completedSnapshot.getLogOffset(),
+                                        completedSnapshot.getSnapshotID()));
                         callback.complete(new CommitKvSnapshotResponse());
                     } catch (Exception e) {
                         callback.completeExceptionally(e);
@@ -1917,7 +1919,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
     private void processNotifyKvSnapshotOffsetEvent(NotifyKvSnapshotOffsetEvent event) {
         TableBucket tb = event.getTableBucket();
-        long logOffset = event.getLogOffset();
         coordinatorRequestBatch.newBatch();
         coordinatorContext
                 .getBucketLeaderAndIsr(tb)
@@ -1928,7 +1929,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                                 coordinatorContext.getFollowers(
                                                         tb, leaderAndIsr.leader()),
                                                 tb,
-                                                logOffset));
+                                                event.getLogOffset(),
+                                                event.getSnapshotId()));
         coordinatorRequestBatch.sendNotifyKvSnapshotOffsetRequest(
                 coordinatorContext.getCoordinatorEpoch());
     }
