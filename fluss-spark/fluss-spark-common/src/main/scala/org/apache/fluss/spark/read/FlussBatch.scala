@@ -25,6 +25,7 @@ import org.apache.fluss.client.table.scanner.log.LogScanner
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.metadata.{PartitionInfo, TableBucket, TableInfo, TablePath}
 import org.apache.fluss.predicate.Predicate
+import org.apache.fluss.spark.SparkFlussConf
 import org.apache.fluss.spark.utils.SparkPartitionPredicate
 
 import org.apache.spark.sql.connector.read.{Batch, InputPartition, PartitionReaderFactory}
@@ -129,26 +130,58 @@ class FlussAppendBatch(
   }
 
   override def planInputPartitions(): Array[InputPartition] = {
-    val bucketOffsetsRetrieverImpl = new BucketOffsetsRetrieverImpl(admin, tablePath)
+    val maxRecordsPerPartition: Option[Long] = {
+      val value = flussConfig.getLong(SparkFlussConf.SCAN_MAX_RECORDS_PER_PARTITION, 0)
+      if (value > 0) Some(value) else None
+    }
+
+    val bucketOffsetsRetrieverImpl = maxRecordsPerPartition match {
+      case Some(_) => new BucketOffsetsRetrieverImpl(admin, tablePath, true)
+      case _ => new BucketOffsetsRetrieverImpl(admin, tablePath)
+    }
     val buckets = (0 until tableInfo.getNumBuckets).toSeq
+
+    def splitOffsetRange(
+        tableBucket: TableBucket,
+        startOffset: Long,
+        stopOffset: Long,
+        maxRecords: Long): Seq[InputPartition] = {
+      if (
+        startOffset < 0 || stopOffset <= startOffset || stopOffset <= (startOffset + maxRecords)
+      ) {
+        return Seq(FlussAppendInputPartition(tableBucket, startOffset, stopOffset))
+      }
+      val rangeSize = stopOffset - startOffset
+      val numSplits = ((rangeSize + maxRecords - 1) / maxRecords).toInt
+      val step = (rangeSize + numSplits - 1) / numSplits
+
+      Iterator
+        .from(0)
+        .take(numSplits)
+        .map(i => startOffset + i * step)
+        .map {
+          from => FlussAppendInputPartition(tableBucket, from, math.min(from + step, stopOffset))
+        }
+        .toSeq
+    }
 
     def createPartitions(
         partitionId: Option[Long],
         startBucketOffsets: Map[Integer, Long],
         stoppingBucketOffsets: Map[Integer, Long]): Array[InputPartition] = {
-      buckets.map {
+      buckets.flatMap {
         bucketId =>
-          val (startBucketOffset, stoppingBucketOffset) =
+          val (startOffset, stopOffset) =
             (startBucketOffsets(bucketId), stoppingBucketOffsets(bucketId))
-          partitionId match {
-            case Some(partitionId) =>
-              val tableBucket = new TableBucket(tableInfo.getTableId, partitionId, bucketId)
-              FlussAppendInputPartition(tableBucket, startBucketOffset, stoppingBucketOffset)
-                .asInstanceOf[InputPartition]
-            case None =>
-              val tableBucket = new TableBucket(tableInfo.getTableId, bucketId)
-              FlussAppendInputPartition(tableBucket, startBucketOffset, stoppingBucketOffset)
-                .asInstanceOf[InputPartition]
+          val tableBucket = partitionId match {
+            case Some(pid) => new TableBucket(tableInfo.getTableId, pid, bucketId)
+            case None => new TableBucket(tableInfo.getTableId, bucketId)
+          }
+          maxRecordsPerPartition match {
+            case Some(maxRecs) =>
+              splitOffsetRange(tableBucket, startOffset, stopOffset, maxRecs)
+            case _ =>
+              Seq(FlussAppendInputPartition(tableBucket, startOffset, stopOffset))
           }
       }.toArray
     }

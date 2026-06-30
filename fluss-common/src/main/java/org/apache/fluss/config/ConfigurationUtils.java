@@ -17,6 +17,7 @@
 
 package org.apache.fluss.config;
 
+import org.apache.fluss.utils.CollectionUtils;
 import org.apache.fluss.utils.TimeUtils;
 
 import javax.annotation.Nonnull;
@@ -38,6 +39,37 @@ import static org.apache.fluss.config.StructuredOptionsSplitter.escapeWithSingle
 
 /** Utility class for {@link Configuration} related helper functions. */
 public class ConfigurationUtils {
+
+    private static final String[] SENSITIVE_KEY_PARTS = {
+        "password",
+        "secret",
+        "fs.azure.account.key",
+        "apikey",
+        "api-key",
+        "auth-params",
+        "service-key",
+        "token",
+        "basic-auth",
+        "jaas.config",
+        "http-headers",
+        "private.key",
+        "private-key",
+        "access.key",
+        "access-key",
+        "access_key",
+        "accesskey"
+    };
+
+    // Exact allowlist for non-secret options that match broad sensitive key parts.
+    private static final Set<String> NON_SENSITIVE_KEYS =
+            Arrays.stream(
+                            new String[] {
+                                ConfigOptions.FILESYSTEM_SECURITY_TOKEN_RENEWAL_RETRY_BACKOFF.key(),
+                                ConfigOptions.FILESYSTEM_SECURITY_TOKEN_RENEWAL_TIME_RATIO.key()
+                            })
+                    .map(key -> key.toLowerCase(Locale.ROOT))
+                    .collect(Collectors.toSet());
+
     // --------------------------------------------------------------------------------------------
     //  Type conversion
     // --------------------------------------------------------------------------------------------
@@ -79,6 +111,47 @@ public class ConfigurationUtils {
         }
 
         throw new IllegalArgumentException("Unsupported type: " + clazz);
+    }
+
+    /**
+     * Returns a log-safe representation for a configuration value.
+     *
+     * @param key configuration key
+     * @param value configuration value
+     * @return {@link Password#HIDDEN_CONTENT} for sensitive values, otherwise the original value
+     */
+    public static Object hideSensitiveValue(String key, Object value) {
+        if (value == null) {
+            return null;
+        }
+        return value instanceof Password || isSensitiveKey(key) ? Password.HIDDEN_CONTENT : value;
+    }
+
+    /**
+     * Returns a copy of the given configuration map with sensitive values hidden.
+     *
+     * @param values configuration key/value pairs
+     * @return a new map containing log-safe values
+     */
+    public static Map<String, String> hideSensitiveValues(Map<String, String> values) {
+        Map<String, String> hiddenValues =
+                CollectionUtils.newHashMapWithExpectedSize(values.size());
+        values.forEach(
+                (key, value) -> hiddenValues.put(key, (String) hideSensitiveValue(key, value)));
+        return hiddenValues;
+    }
+
+    static boolean isSensitiveKey(String key) {
+        String lowerKey = key.toLowerCase(Locale.ROOT);
+        if (NON_SENSITIVE_KEYS.contains(lowerKey)) {
+            return false;
+        }
+        for (String sensitiveKeyPart : SENSITIVE_KEY_PARTS) {
+            if (lowerKey.contains(sensitiveKeyPart)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @SuppressWarnings("unchecked")

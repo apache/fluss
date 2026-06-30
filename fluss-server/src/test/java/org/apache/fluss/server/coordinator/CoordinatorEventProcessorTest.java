@@ -763,6 +763,229 @@ class CoordinatorEventProcessorTest {
     }
 
     @Test
+    void testDropPartitionRoutedThroughCleanupManager() throws Exception {
+        TablePath tablePath = TablePath.of(defaultDatabase, "test_drop_partition_via_cleanup");
+        initCoordinatorChannel();
+        TableDescriptor partitionedTableDescriptor = getPartitionedTable();
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, partitionedTableDescriptor, null, false);
+
+        int nBuckets = 3;
+        int replicationFactor = 3;
+        Map<Integer, BucketAssignment> assignments =
+                generateAssignment(
+                                nBuckets,
+                                replicationFactor,
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                })
+                        .getBucketAssignments();
+        PartitionAssignment partitionAssignment = new PartitionAssignment(tableId, assignments);
+        Tuple2<PartitionIdName, PartitionIdName> partitionIdAndNameTuple2 =
+                preparePartitionAssignment(tablePath, tableId, partitionAssignment);
+
+        long partition1Id = partitionIdAndNameTuple2.f0.partitionId;
+        String partition1Name = partitionIdAndNameTuple2.f0.partitionName;
+        long partition2Id = partitionIdAndNameTuple2.f1.partitionId;
+
+        verifyPartitionCreated(
+                new TablePartition(tableId, partition1Id),
+                partitionAssignment,
+                nBuckets,
+                replicationFactor);
+        verifyPartitionCreated(
+                new TablePartition(tableId, partition2Id),
+                partitionAssignment,
+                nBuckets,
+                replicationFactor);
+
+        // Drop partition1 via ZK (simulates the watcher path).
+        zookeeperClient.deletePartition(tablePath, partition1Name);
+
+        // Verify the drop entered the lifecycle throttler and partition is fully deleted.
+        TableLifecycleThrottler throttler = eventProcessor.getLifecycleThrottler();
+        verifyPartitionDropped(tableId, partition1Id);
+
+        // After completion, the lifecycle throttler should have released tracking.
+        assertThat(throttler.getInflightCount()).isZero();
+        assertThat(throttler.getPendingDropCount()).isZero();
+
+        // Partition2 should remain online.
+        verifyPartitionCreated(
+                new TablePartition(tableId, partition2Id),
+                partitionAssignment,
+                nBuckets,
+                replicationFactor);
+    }
+
+    @Test
+    void testDropPartitionedTableRoutedThroughCleanupManager() throws Exception {
+        TablePath tablePath = TablePath.of(defaultDatabase, "test_drop_table_via_cleanup");
+        initCoordinatorChannel();
+        TableDescriptor partitionedTableDescriptor = getPartitionedTable();
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, partitionedTableDescriptor, null, false);
+
+        int nBuckets = 3;
+        int replicationFactor = 3;
+        Map<Integer, BucketAssignment> assignments =
+                generateAssignment(
+                                nBuckets,
+                                replicationFactor,
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                })
+                        .getBucketAssignments();
+        PartitionAssignment partitionAssignment = new PartitionAssignment(tableId, assignments);
+        Tuple2<PartitionIdName, PartitionIdName> partitionIdAndNameTuple2 =
+                preparePartitionAssignment(tablePath, tableId, partitionAssignment);
+
+        long partition1Id = partitionIdAndNameTuple2.f0.partitionId;
+        long partition2Id = partitionIdAndNameTuple2.f1.partitionId;
+
+        verifyPartitionCreated(
+                new TablePartition(tableId, partition1Id),
+                partitionAssignment,
+                nBuckets,
+                replicationFactor);
+        verifyPartitionCreated(
+                new TablePartition(tableId, partition2Id),
+                partitionAssignment,
+                nBuckets,
+                replicationFactor);
+
+        // Drop the entire table (triggers NODE_DELETED for partitions + table via watcher).
+        metadataManager.dropTable(tablePath, false);
+
+        // Verify the drops entered the lifecycle throttler.
+        TableLifecycleThrottler cleanupManager = eventProcessor.getLifecycleThrottler();
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(
+                                        cleanupManager.getInflightCount() > 0
+                                                || (!zookeeperClient
+                                                                .getPartitionAssignment(
+                                                                        partition1Id)
+                                                                .isPresent()
+                                                        && !zookeeperClient
+                                                                .getPartitionAssignment(
+                                                                        partition2Id)
+                                                                .isPresent()))
+                                .isTrue());
+
+        // Verify both partitions and the table are fully deleted.
+        verifyPartitionDropped(tableId, partition1Id);
+        verifyPartitionDropped(tableId, partition2Id);
+        verifyTableDropped(tableId);
+
+        // Lifecycle throttler returns to idle state after all completions propagate.
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    assertThat(cleanupManager.getInflightCount()).isZero();
+                    assertThat(cleanupManager.getPendingDropCount()).isZero();
+                });
+    }
+
+    @Test
+    void testDropPartitionedTableWithNoPartitionsClearsTableState() throws Exception {
+        TablePath tablePath =
+                TablePath.of(defaultDatabase, "test_drop_partitioned_table_no_partitions");
+        initCoordinatorChannel();
+
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, getPartitionedTable(), null, false);
+        retryVerifyContext(ctx -> assertThat(ctx.getTablePathById(tableId)).isNotNull());
+
+        metadataManager.dropTable(tablePath, false);
+
+        // The fix at the tail of processDropTable explicitly calls resumeDeletions(), which
+        // sees vacuous-true (getAllReplicasForTable returns empty) and runs
+        // completeDeleteTable -> removeTable, evicting the table from both tablesToBeDeleted
+        // and tablePathById.
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getTablePathById(tableId)).isNull();
+                    assertThat(ctx.getTablesToBeDeleted()).doesNotContain(tableId);
+                    assertThat(ctx.allTables()).doesNotContainKey(tableId);
+                });
+    }
+
+    @Test
+    void testStartupResumesDropPartitionThroughCleanupManager() throws Exception {
+        TablePath tablePath = TablePath.of(defaultDatabase, "test_startup_resume_via_cleanup");
+        initCoordinatorChannel();
+        TableDescriptor partitionedTableDescriptor = getPartitionedTable();
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, partitionedTableDescriptor, null, false);
+
+        int nBuckets = 3;
+        int replicationFactor = 3;
+        Map<Integer, BucketAssignment> assignments =
+                generateAssignment(
+                                nBuckets,
+                                replicationFactor,
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                })
+                        .getBucketAssignments();
+        PartitionAssignment partitionAssignment = new PartitionAssignment(tableId, assignments);
+        Tuple2<PartitionIdName, PartitionIdName> partitionIdAndNameTuple2 =
+                preparePartitionAssignment(tablePath, tableId, partitionAssignment);
+
+        long partition1Id = partitionIdAndNameTuple2.f0.partitionId;
+        String partition2Name = partitionIdAndNameTuple2.f1.partitionName;
+        long partition2Id = partitionIdAndNameTuple2.f1.partitionId;
+
+        verifyPartitionCreated(
+                new TablePartition(tableId, partition1Id),
+                partitionAssignment,
+                nBuckets,
+                replicationFactor);
+        verifyPartitionCreated(
+                new TablePartition(tableId, partition2Id),
+                partitionAssignment,
+                nBuckets,
+                replicationFactor);
+
+        // Shutdown the event processor, then delete partition2 in ZK while it's down.
+        eventProcessor.shutdown();
+        zookeeperClient.deletePartition(tablePath, partition2Name);
+
+        // Restart the event processor. During startup, the stale partition2 should be
+        // detected and routed through the cleanup manager.
+        eventProcessor = buildCoordinatorEventProcessor();
+        initCoordinatorChannel();
+        eventProcessor.startup();
+
+        // Verify partition2 is fully deleted (routed through lifecycle throttler on startup).
+        TableLifecycleThrottler cleanupManager = eventProcessor.getLifecycleThrottler();
+        verifyPartitionDropped(tableId, partition2Id);
+
+        // Partition1 should remain online.
+        verifyPartitionCreated(
+                new TablePartition(tableId, partition1Id),
+                partitionAssignment,
+                nBuckets,
+                replicationFactor);
+
+        // Lifecycle throttler returns to idle.
+        assertThat(cleanupManager.getInflightCount()).isZero();
+        assertThat(cleanupManager.getPendingDropCount()).isZero();
+    }
+
+    @Test
     void testNotifyOffsetsWithShrinkISR(@TempDir Path tempDir) throws Exception {
         initCoordinatorChannel(Collections.singleton(ApiKeys.UPDATE_METADATA));
         TablePath t1 = TablePath.of(defaultDatabase, "test_notify_with_shrink_isr");
@@ -1409,7 +1632,8 @@ class CoordinatorEventProcessorTest {
                 conf,
                 Executors.newFixedThreadPool(1, new ExecutorThreadFactory("test-coordinator-io")),
                 metadataManager,
-                kvSnapshotLeaseManager);
+                kvSnapshotLeaseManager,
+                SystemClock.getInstance());
     }
 
     private void initCoordinatorChannel() throws Exception {

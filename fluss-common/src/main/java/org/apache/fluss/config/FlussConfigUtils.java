@@ -23,6 +23,7 @@ import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.fs.FsPath;
 
 import java.lang.reflect.Field;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -48,8 +49,11 @@ public class FlussConfigUtils {
                 Arrays.asList(
                         ConfigOptions.TABLE_DATALAKE_ENABLED.key(),
                         ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(),
+                        ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(),
                         ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.key(),
+                        ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(),
                         ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION.key(),
+                        ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.key(),
                         ConfigOptions.TABLE_STATISTICS_COLUMNS.key(),
                         ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key());
     }
@@ -236,6 +240,22 @@ public class FlussConfigUtils {
                     String.format(
                             "Invalid configuration for %s, it must be greater than or equal %d.",
                             option.key(), minValue));
+        }
+    }
+
+    public static void validateClientConfigs(Configuration conf) {
+        validMinValue(conf, ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS, 1);
+        validMinDuration(conf, ConfigOptions.CLIENT_CONNECT_TIMEOUT, 1);
+    }
+
+    private static void validMinDuration(
+            Configuration conf, ConfigOption<Duration> option, long minMillis) {
+        long millis = conf.get(option).toMillis();
+        if (millis < minMillis) {
+            throw new IllegalConfigurationException(
+                    String.format(
+                            "Invalid configuration for %s, it must be greater than or equal %d ms.",
+                            option.key(), minMillis));
         }
     }
 }

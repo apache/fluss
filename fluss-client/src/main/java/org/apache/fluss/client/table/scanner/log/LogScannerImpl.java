@@ -141,7 +141,11 @@ public class LogScannerImpl implements LogScanner {
 
     @Override
     public ScanRecords poll(Duration timeout) {
-        return doPoll(timeout, this::pollForFetches, ScanRecords::isEmpty, () -> ScanRecords.EMPTY);
+        return doPoll(
+                timeout,
+                this::pollForFetches,
+                scanRecords -> scanRecords.buckets().isEmpty(),
+                () -> ScanRecords.EMPTY);
     }
 
     /**
@@ -250,7 +254,8 @@ public class LogScannerImpl implements LogScanner {
 
     private ScanRecords pollForFetches() {
         ScanRecords scanRecords = logFetcher.collectFetch();
-        if (!scanRecords.isEmpty()) {
+        // Check buckets() (includes progress-only buckets).
+        if (!scanRecords.buckets().isEmpty()) {
             return scanRecords;
         }
 

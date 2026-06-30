@@ -65,7 +65,7 @@ abstract class AbstractLogFetchCollector<T, R> {
     /**
      * Return the fetched log records, empty the record buffer and update the consumed position.
      *
-     * <p>NOTE: returning empty records guarantees the consumed position are NOT updated.
+     * <p>NOTE: empty record lists may still advance the consumed position.
      *
      * @return The fetched records per partition
      * @throws FetchException If there is OffsetOutOfRange error in fetchResponse and the
@@ -73,6 +73,7 @@ abstract class AbstractLogFetchCollector<T, R> {
      */
     public R collectFetch(final LogFetchBuffer logFetchBuffer) {
         Map<TableBucket, List<T>> fetched = new HashMap<>();
+        Map<TableBucket, Long> consumedUpToOffsets = new HashMap<>();
         int recordsRemaining = maxPollRecords;
 
         try {
@@ -108,8 +109,11 @@ abstract class AbstractLogFetchCollector<T, R> {
                     logFetchBuffer.poll();
                 } else {
                     List<T> records = fetchRecords(nextInLineFetch, recordsRemaining);
+                    TableBucket tableBucket = nextInLineFetch.tableBucket;
+                    // Always record the advanced next fetch offset for this bucket, even when
+                    // the materialized record list is empty.
+                    consumedUpToOffsets.put(tableBucket, nextInLineFetch.nextFetchOffset());
                     if (!records.isEmpty()) {
-                        TableBucket tableBucket = nextInLineFetch.tableBucket;
                         List<T> currentRecords = fetched.get(tableBucket);
                         if (currentRecords == null) {
                             fetched.put(tableBucket, records);
@@ -126,6 +130,8 @@ abstract class AbstractLogFetchCollector<T, R> {
                         }
 
                         recordsRemaining -= recordCount(records);
+                    } else {
+                        fetched.putIfAbsent(tableBucket, Collections.emptyList());
                     }
                 }
             }
@@ -140,7 +146,7 @@ abstract class AbstractLogFetchCollector<T, R> {
             throw e;
         }
 
-        return toResult(fetched);
+        return toResult(fetched, consumedUpToOffsets);
     }
 
     /** Initialize a {@link CompletedFetch} object. */
@@ -293,7 +299,8 @@ abstract class AbstractLogFetchCollector<T, R> {
 
     protected abstract int recordCount(List<T> fetchedRecords);
 
-    protected abstract R toResult(Map<TableBucket, List<T>> fetchedRecords);
+    protected abstract R toResult(
+            Map<TableBucket, List<T>> fetchedRecords, Map<TableBucket, Long> consumedUpToOffsets);
 
     /**
      * Release resources held by fetched records on failure. The default implementation is a no-op,

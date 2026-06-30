@@ -107,14 +107,14 @@ public class S3DelegationTokenProvider {
             } else {
                 LOG.info(
                         "Obtaining session credentials via GetSessionToken with access key: {}",
-                        accessKey);
+                        S3TokenLogUtils.maskAccessKey(accessKey));
                 GetSessionTokenResult result = stsClient.getSessionToken();
                 credentials = result.getCredentials();
             }
 
             LOG.info(
                     "Session credentials obtained successfully with access key: {} expiration: {}",
-                    credentials.getAccessKeyId(),
+                    S3TokenLogUtils.maskAccessKey(credentials.getAccessKeyId()),
                     credentials.getExpiration());
 
             return new ObtainedSecurityToken(

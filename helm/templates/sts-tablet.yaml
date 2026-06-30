@@ -25,6 +25,8 @@ metadata:
 spec:
   serviceName: tablet-server-hs
   replicas: {{ .Values.tablet.numberOfReplicas }}
+  updateStrategy:
+    type: RollingUpdate
   selector:
     matchLabels:
       {{- include "fluss.selectorLabels" . | nindent 6 }}
@@ -119,7 +121,7 @@ spec:
               echo "bind.listeners: ${BIND_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
               echo "advertised.listeners: ${ADVERTISED_LISTENERS}" >> $FLUSS_HOME/conf/server.yaml && \
 
-              bin/tablet-server.sh start-foreground
+              exec bin/tablet-server.sh start-foreground
           livenessProbe:
             failureThreshold: 100
             timeoutSeconds: 1
@@ -128,12 +130,28 @@ spec:
             tcpSocket:
               port: {{ .Values.listeners.client.port }}
           readinessProbe:
-            failureThreshold: 100
-            timeoutSeconds: 1
-            initialDelaySeconds: 10
-            periodSeconds: 3
-            tcpSocket:
-              port: {{ .Values.listeners.client.port }}
+            failureThreshold: {{ .Values.tablet.readinessProbe.failureThreshold | default 360 }}
+            timeoutSeconds: {{ .Values.tablet.readinessProbe.timeoutSeconds | default 10 }}
+            initialDelaySeconds: {{ .Values.tablet.readinessProbe.initialDelaySeconds | default 15 }}
+            periodSeconds: {{ .Values.tablet.readinessProbe.periodSeconds | default 5 }}
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  export FLUSS_SERVER_ID=${POD_NAME##*-}
+                  export READINESS_TIMEOUT_MS={{ .Values.tablet.readinessProbe.rpcTimeoutMs | default 5000 }}
+                  export READINESS_TCP_PORT={{ .Values.listeners.client.port }}
+                  # bind.listeners binds the tablet's CLIENT endpoint to ${POD_IP},
+                  # not 0.0.0.0, so we must probe the pod's own IP instead of
+                  # 127.0.0.1. The local tablet then forwards getClusterHealth
+                  # to coordinator via the internal listener.
+                  export READINESS_TCP_HOST=${POD_IP}
+                  export READINESS_HEALTH_CHECK_TIMEOUT_SECONDS={{ .Values.tablet.readinessProbe.healthCheckTimeoutSeconds | default 1200 }}
+                  {{- with .Values.tablet.readinessProbe.healthCheckAuth }}
+                  export READINESS_HEALTH_CHECK_AUTH={{ . | quote }}
+                  {{- end }}
+                  exec $FLUSS_HOME/bin/readiness-check.sh
           resources:
             {{- toYaml .Values.resources.tabletServer | nindent 12 }}
           volumeMounts:

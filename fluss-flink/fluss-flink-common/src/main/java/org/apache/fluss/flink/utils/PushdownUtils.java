@@ -31,6 +31,7 @@ import org.apache.fluss.exception.UnsupportedVersionException;
 import org.apache.fluss.flink.source.lookup.FlinkLookupFunction;
 import org.apache.fluss.flink.source.lookup.LookupNormalizer;
 import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metadata.TableStats;
@@ -329,6 +330,16 @@ public class PushdownUtils {
             }
 
             return flinkRows;
+        } catch (Exception e) {
+            throw new FlussRuntimeException(e);
+        }
+    }
+
+    public static boolean partitionExists(
+            TablePath tablePath, Configuration flussConfig, PartitionSpec partitionSpec) {
+        try (Connection connection = ConnectionFactory.createConnection(flussConfig);
+                Admin flussAdmin = connection.getAdmin()) {
+            return !flussAdmin.listPartitionInfos(tablePath, partitionSpec).get().isEmpty();
         } catch (Exception e) {
             throw new FlussRuntimeException(e);
         }

@@ -24,6 +24,7 @@ import org.apache.fluss.utils.AbstractIterator;
 import org.apache.fluss.utils.IOUtils;
 
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 
 import java.util.Collections;
 import java.util.Iterator;
@@ -43,8 +44,18 @@ public class ArrowScanRecords implements Iterable<ArrowBatchData>, AutoCloseable
 
     private final Map<TableBucket, List<ArrowBatchData>> records;
 
+    /** The exclusive upper bound of consumed offsets per polled bucket in this round. */
+    private final Map<TableBucket, Long> consumedUpToOffsets;
+
     public ArrowScanRecords(Map<TableBucket, List<ArrowBatchData>> records) {
+        this(records, Collections.emptyMap());
+    }
+
+    public ArrowScanRecords(
+            Map<TableBucket, List<ArrowBatchData>> records,
+            Map<TableBucket, Long> consumedUpToOffsets) {
         this.records = records;
+        this.consumedUpToOffsets = consumedUpToOffsets;
     }
 
     /** Get just the Arrow batches for the given bucket. */
@@ -56,9 +67,21 @@ public class ArrowScanRecords implements Iterable<ArrowBatchData>, AutoCloseable
         return Collections.unmodifiableList(recs);
     }
 
-    /** Returns the buckets that contain Arrow batches. */
+    /** Returns the buckets that were polled in this round. */
     public Set<TableBucket> buckets() {
         return Collections.unmodifiableSet(records.keySet());
+    }
+
+    /**
+     * Get the exclusive upper bound of offsets consumed for the given bucket in this poll round.
+     *
+     * @param bucket the bucket to query
+     * @return the exclusive upper bound offset, or {@code null} if the bucket was not polled in
+     *     this round
+     */
+    @Nullable
+    public Long consumedUpToOffset(TableBucket bucket) {
+        return consumedUpToOffsets.get(bucket);
     }
 
     /** Returns the total number of rows in all batches. */

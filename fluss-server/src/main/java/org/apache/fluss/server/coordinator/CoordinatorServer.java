@@ -336,7 +336,8 @@ public class CoordinatorServer extends ServerBase {
                             conf,
                             ioExecutor,
                             metadataManager,
-                            kvSnapshotLeaseManager);
+                            kvSnapshotLeaseManager,
+                            clock);
             coordinatorEventProcessor.startup();
 
             createDefaultDatabase();

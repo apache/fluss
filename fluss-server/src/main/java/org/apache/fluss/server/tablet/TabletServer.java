@@ -315,7 +315,9 @@ public class TabletServer extends ServerBase {
                             authorizer,
                             dynamicConfigManager,
                             ioExecutor,
-                            scannerManager);
+                            scannerManager,
+                            coordinatorGateway,
+                            interListenerName);
 
             RequestsMetrics requestsMetrics =
                     RequestsMetrics.createTabletServerRequestMetrics(tabletServerMetricGroup);
