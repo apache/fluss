@@ -31,6 +31,7 @@ import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
+import org.apache.fluss.exception.StorageBackpressureException;
 import org.apache.fluss.exception.StorageException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.exception.UnsupportedVersionException;
@@ -158,6 +159,7 @@ public class ReplicaManager implements ServerReconfigurable {
     private static final Logger LOG = LoggerFactory.getLogger(ReplicaManager.class);
 
     public static final String HIGH_WATERMARK_CHECKPOINT_FILE_NAME = "high-watermark-checkpoint";
+
     private final Configuration conf;
     private final Scheduler scheduler;
     private final LogManager logManager;
@@ -840,9 +842,11 @@ public class ReplicaManager implements ServerReconfigurable {
                 // the original key bytes are wrapped in KeyRecordBatch, then during putRecordsToKv
                 // they are decoded to rows and immediately re-encoded back to key bytes, causing
                 // redundant encode/decode overhead.
+                // Use acks=-1 so the callback fires only after async flush completes and
+                // HW advances, ensuring inserted data is visible in RocksDB for re-lookup.
                 putRecordsToKv(
                         timeoutMs,
-                        requiredAcks,
+                        -1,
                         produceEntryData,
                         schema.getPrimaryKeyIndexes(),
                         MergeMode.DEFAULT,
@@ -1355,6 +1359,9 @@ public class ReplicaManager implements ServerReconfigurable {
                         tb,
                         appendInfo.firstOffset(),
                         appendInfo.lastOffset());
+                // The pressure field is left at its default (0f) here and refreshed once,
+                // right before the response goes out, by either maybeAddDelayedWrite (acks != -1)
+                // or DelayedWrite#onComplete (acks == -1) so the client sees the freshest L0 state.
                 putResultForBucketMap.put(
                         tb, new PutKvResultForBucket(tb, appendInfo.lastOffset() + 1));
 
@@ -1365,7 +1372,16 @@ public class ReplicaManager implements ServerReconfigurable {
                 tableMetrics.incLogBytesIn(appendInfo.validBytes());
                 tableMetrics.incLogMessageIn(appendInfo.numMessages());
             } catch (Exception e) {
-                if (isUnexpectedException(e)) {
+                if (e instanceof StorageBackpressureException) {
+                    // Fluss application-layer write rejection (L0 headroom or flush budget
+                    // exceeded). This is a designed backpressure signal, not a server failure.
+                    // Increment the backpressure rejection counter; do NOT increment
+                    // failedPutKvRequests or log at ERROR level.
+                    if (tableMetrics != null) {
+                        tableMetrics.incKvBackpressureRejectedRequests();
+                    }
+                    LOG.debug("Write rejected by KV backpressure for table bucket {}", tb);
+                } else if (isUnexpectedException(e)) {
                     LOG.error("Error put records to local kv on replica {}", tb, e);
                     // NOTE: Failed put requests metric is not incremented for known exceptions
                     // since it is supposed to indicate un-expected failure of a server in
@@ -1609,7 +1625,8 @@ public class ReplicaManager implements ServerReconfigurable {
     private boolean isUnexpectedException(Exception e) {
         return !(e instanceof UnknownTableOrBucketException
                 || e instanceof NotLeaderOrFollowerException
-                || e instanceof LogOffsetOutOfRangeException);
+                || e instanceof LogOffsetOutOfRangeException
+                || e instanceof StorageBackpressureException);
     }
 
     /**
@@ -1696,6 +1713,21 @@ public class ReplicaManager implements ServerReconfigurable {
                             .map(DelayedTableBucketKey::new)
                             .collect(Collectors.toList()));
         } else {
+            // Immediate-response path (acks != -1): refresh KV pressure right before the
+            // response goes out, mirroring DelayedWrite#onComplete on the acks == -1 path.
+            writeResults.forEach(
+                    (tb, r) -> {
+                        if (r instanceof PutKvResultForBucket && !r.failed()) {
+                            try {
+                                ((PutKvResultForBucket) r)
+                                        .setPressure(
+                                                getReplicaOrException(tb)
+                                                        .samplePressureForCompletion());
+                            } catch (Exception ignore) {
+                                // leader moved or replica gone, leave default 0f
+                            }
+                        }
+                    });
             responseCallback.accept(new ArrayList<>(writeResults.values()));
         }
     }

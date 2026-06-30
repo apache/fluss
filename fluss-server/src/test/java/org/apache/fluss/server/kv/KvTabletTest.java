@@ -138,7 +138,13 @@ class KvTabletTest {
     }
 
     @AfterEach
-    void afterEach() {
+    void afterEach() throws Exception {
+        if (kvTablet != null) {
+            kvTablet.close();
+        }
+        if (logTablet != null) {
+            logTablet.close();
+        }
         if (executor != null) {
             executor.shutdown();
         }

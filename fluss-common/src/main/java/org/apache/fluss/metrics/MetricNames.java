@@ -182,6 +182,28 @@ public class MetricNames {
     public static final String ROCKSDB_COMPACTION_TIME_MICROS_MAX =
             "rocksdbCompactionTimeMicrosMax";
 
+    // --------------------------------------------------------------------------------------------
+    // KV backpressure metrics (table-level)
+    // --------------------------------------------------------------------------------------------
+    /**
+     * Maximum normalized backpressure value across all buckets of this table, in {@code [0, 1]}.
+     * Reflects how close the hottest bucket is to the storage engine's hard-rejection trigger.
+     */
+    public static final String KV_BACKPRESSURE_MAX_PRESSURE = "kvBackpressureMaxPressure";
+
+    /**
+     * Number of buckets of this table currently under backpressure (i.e. pressure {@code > 0}).
+     * Reflects how broadly backpressure has spread across the table.
+     */
+    public static final String KV_BACKPRESSURE_AFFECTED_BUCKETS = "kvBackpressureAffectedBuckets";
+
+    /**
+     * Total number of write requests rejected with {@code StorageBackpressureException} on this
+     * table since process start. The rate of this counter reflects how often the storage engine
+     * crosses its hard-rejection trigger.
+     */
+    public static final String KV_BACKPRESSURE_REJECTIONS_TOTAL = "kvBackpressureRejectionsTotal";
+
     // Table-level RocksDB metrics (aggregated from all buckets of a table, Sum aggregation)
     /** Total bytes read across all buckets of this table (Sum aggregation). */
     public static final String ROCKSDB_BYTES_READ_TOTAL = "rocksdbBytesReadTotal";

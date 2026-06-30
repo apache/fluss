@@ -34,6 +34,8 @@ import org.rocksdb.RocksDBException;
 import org.rocksdb.RocksIterator;
 import org.rocksdb.Statistics;
 import org.rocksdb.WriteOptions;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -43,6 +45,11 @@ import java.util.List;
 
 /** A wrapper for the operation of {@link org.rocksdb.RocksDB}. */
 public class RocksDBKv implements AutoCloseable {
+
+    private static final Logger LOG = LoggerFactory.getLogger(RocksDBKv.class);
+
+    /** RocksDB property name for the number of SST files at level 0 (column-family scoped). */
+    private static final String NUM_FILES_AT_LEVEL0 = "rocksdb.num-files-at-level0";
 
     /** The container of RocksDB option factory and predefined options. */
     private final RocksDBResourceContainer optionsContainer;
@@ -70,6 +77,30 @@ public class RocksDBKv implements AutoCloseable {
     /** RocksDB Statistics for metrics collection. */
     private final @Nullable Statistics statistics;
 
+    /** L0 file count at which RocksDB starts throttling writes. Read from ColumnFamilyOptions. */
+    private final int level0SlowdownWritesTrigger;
+
+    /**
+     * Maximum number of L0 files that could be produced between a gate check and the actual
+     * completion of all pending memtable flushes. Derived from {@code maxWriteBufferNumber}: at
+     * most 1 file from the flush triggered by this write, plus up to {@code maxWriteBufferNumber -
+     * 1} immutable memtables already queued for flush that have not yet materialized as L0 SSTs.
+     * The gate predicate uses this as the headroom to guarantee RocksDB's slowdown trigger is never
+     * reached.
+     */
+    private final int maxPendingFlushL0Files;
+
+    /** RocksDB memtable size in bytes. Used to compute the flush budget for the write path. */
+    private final long writeBufferSize;
+
+    /**
+     * L0 file count at which Fluss starts emitting proactive backpressure signals (piggybacked on
+     * PutKv responses) so clients can throttle before the storage engine blocks writes. Strictly
+     * below {@link #level0SlowdownWritesTrigger}; when {@code >=} the RocksDB L0 slowdown trigger,
+     * proactive backpressure is treated as misconfigured and disabled.
+     */
+    private final int flussL0SlowdownTrigger;
+
     // mark whether this kv is already closed and prevent duplicate closing
     private volatile boolean closed = false;
 
@@ -78,13 +109,21 @@ public class RocksDBKv implements AutoCloseable {
             RocksDB db,
             ResourceGuard rocksDBResourceGuard,
             ColumnFamilyHandle defaultColumnFamilyHandle,
-            @Nullable Statistics statistics) {
+            @Nullable Statistics statistics,
+            int level0SlowdownWritesTrigger,
+            int maxWriteBufferNumber,
+            long writeBufferSize,
+            int flussL0SlowdownTrigger) {
         this.optionsContainer = optionsContainer;
         this.db = db;
         this.rocksDBResourceGuard = rocksDBResourceGuard;
         this.writeOptions = optionsContainer.getWriteOptions();
         this.defaultColumnFamilyHandle = defaultColumnFamilyHandle;
         this.statistics = statistics;
+        this.level0SlowdownWritesTrigger = level0SlowdownWritesTrigger;
+        this.maxPendingFlushL0Files = maxWriteBufferNumber;
+        this.writeBufferSize = writeBufferSize;
+        this.flussL0SlowdownTrigger = flussL0SlowdownTrigger;
     }
 
     public ResourceGuard getResourceGuard() {
@@ -229,5 +268,116 @@ public class RocksDBKv implements AutoCloseable {
 
     public ColumnFamilyHandle getDefaultColumnFamilyHandle() {
         return defaultColumnFamilyHandle;
+    }
+
+    /**
+     * Returns whether executing one more flush could push L0 file count to or beyond the storage
+     * engine's slowdown trigger, accounting for pending memtable flushes that have not yet
+     * materialized as L0 SSTs.
+     *
+     * <p>Used exclusively by the <b>flush path</b> ({@code KvTablet#flush}). The write path uses
+     * {@link #wouldExceedFlushBudget(long)} which additionally accounts for buffer accumulation.
+     *
+     * <p>The headroom ({@link #maxPendingFlushL0Files}) is derived from {@code
+     * maxWriteBufferNumber}: 1 file from this flush + up to {@code maxWriteBufferNumber - 1}
+     * immutable memtables already queued. This guarantees the slowdown trigger is never reached
+     * regardless of timing between the gate check and background flush completion.
+     */
+    public boolean wouldExceedSlowdownTriggerOnFlush() {
+        if (level0SlowdownWritesTrigger <= 0) {
+            return false;
+        }
+        return currentL0FileCount() + maxPendingFlushL0Files >= level0SlowdownWritesTrigger;
+    }
+
+    /**
+     * Returns whether accepting more writes would exceed the safe flush budget. Combines two checks
+     * with a single L0 read:
+     *
+     * <ol>
+     *   <li><b>L0 gate</b>: {@code currentL0 + maxPendingFlushL0Files >= slowdownTrigger}
+     *   <li><b>Buffer budget</b>: {@code pendingBufferBytes >= remainingL0Slots * writeBufferSize}
+     * </ol>
+     *
+     * <p>This guarantees that no flush of the accumulated pre-write buffer can trigger RocksDB's
+     * {@code level0_slowdown_writes_trigger}, regardless of how many memtable switches the
+     * WriteBatch induces.
+     */
+    public boolean wouldExceedFlushBudget(long pendingBufferBytes) {
+        if (level0SlowdownWritesTrigger <= 0) {
+            return false;
+        }
+        long l0 = currentL0FileCount();
+        long remainingSlots = (long) level0SlowdownWritesTrigger - l0 - maxPendingFlushL0Files - 1;
+        if (remainingSlots <= 0) {
+            return true;
+        }
+        if (writeBufferSize <= 0) {
+            return false;
+        }
+        return pendingBufferBytes >= remainingSlots * writeBufferSize;
+    }
+
+    /**
+     * Returns the current normalized backpressure pressure in {@code [0, 1)} for piggyback on write
+     * responses. Mapping:
+     *
+     * <ul>
+     *   <li>{@code l0 < flussL0SlowdownTrigger}: returns {@code 0}.
+     *   <li>{@code flussL0SlowdownTrigger <= l0 < level0SlowdownWritesTrigger}: returns {@code (l0
+     *       - flussL0SlowdownTrigger) / (level0SlowdownWritesTrigger - flussL0SlowdownTrigger)}.
+     *   <li>{@code l0 >= level0SlowdownWritesTrigger}: clamped to a value strictly below 1.
+     * </ul>
+     *
+     * <p>Never throws; hard rejection is the responsibility of {@link
+     * #wouldExceedSlowdownTriggerOnFlush()} at the write/flush gates.
+     */
+    public float currentPressure() {
+        if (level0SlowdownWritesTrigger <= flussL0SlowdownTrigger) {
+            return 0f;
+        }
+        long l0Files = currentL0FileCount();
+        if (l0Files < flussL0SlowdownTrigger) {
+            return 0f;
+        }
+        int window = level0SlowdownWritesTrigger - flussL0SlowdownTrigger;
+        long offset = Math.min(l0Files - flussL0SlowdownTrigger, (long) window - 1);
+        return (float) offset / window;
+    }
+
+    /**
+     * Reads the current L0 file count via {@link RocksDB#getProperty(ColumnFamilyHandle, String)}.
+     *
+     * <p>Note: {@code rocksdb.num-files-at-level<N>} is a parametric <em>string</em> property in
+     * RocksDB, not registered as an int property. {@code getLongProperty} (which maps to C++ {@code
+     * GetIntProperty}) returns NotFound for it. We therefore use the string accessor and parse the
+     * result. Returns {@code 0} when the property is unavailable so the caller treats it as "no
+     * pressure".
+     *
+     * <p>The native call is fenced by {@link #rocksDBResourceGuard} so that {@link #close()} blocks
+     * until any in-flight pressure sampling completes; touching the RocksDB native handle after
+     * disposal would otherwise SIGABRT the JVM. When the guard is already closed, returns {@code 0}
+     * so callers degrade to "no pressure" instead of failing the request.
+     */
+    private long currentL0FileCount() {
+        final ResourceGuard.Lease lease;
+        try {
+            lease = rocksDBResourceGuard.acquireResource();
+        } catch (IOException acquireFailed) {
+            // RocksDB is already closed (or being closed); treat as no pressure.
+            return 0L;
+        }
+        try {
+            String value = db.getProperty(defaultColumnFamilyHandle, NUM_FILES_AT_LEVEL0);
+            if (value == null || value.isEmpty()) {
+                return 0L;
+            }
+            return Long.parseLong(value);
+        } catch (RocksDBException e) {
+            LOG.warn("Failed to query L0 file count for backpressure", e);
+            return 0L;
+        } finally {
+            lease.close();
+        }
     }
 }

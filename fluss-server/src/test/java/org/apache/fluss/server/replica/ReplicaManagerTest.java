@@ -99,6 +99,7 @@ import javax.annotation.Nullable;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -157,6 +158,7 @@ import static org.apache.fluss.testutils.DataTestUtils.genKvRecords;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.DataTestUtils.getKeyValuePairs;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -638,6 +640,9 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 5));
 
+        // Wait for async flush so HW advances before reading CDC log.
+        waitForFlush(tb);
+
         // 2. get the cdc-log of this batch (data1).
         List<Tuple2<ChangeType, Object[]>> expectedLogForData1 =
                 Arrays.asList(
@@ -726,6 +731,9 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 8));
 
+        // Wait for async flush so HW advances.
+        waitForFlush(tb);
+
         // 6. get the cdc-log of this batch (data2).
         List<Tuple2<ChangeType, Object[]>> expectedLogForData2 =
                 Arrays.asList(
@@ -789,6 +797,9 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 18));
 
+        // Wait for async flush so HW advances before reading CDC log.
+        waitForFlush(tb);
+
         // 2. get the cdc-log of these batches.
         CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future1 =
                 new CompletableFuture<>();
@@ -851,6 +862,9 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 future1::complete);
         assertThat(future1.get()).containsOnly(new PutKvResultForBucket(tb, 8));
 
+        // Wait for async flush to complete so data is visible in RocksDB.
+        waitForFlush(tb);
+
         // second lookup key in table, key = 1, value = 1, "a1".
         Object[] value1 = DATA_1_WITH_KEY_AND_VALUE.get(3).f1;
         byte[] value1Bytes =
@@ -891,6 +905,10 @@ class ReplicaManagerTest extends ReplicaTestBase {
 
         List<byte[]> inserted = lookupWithInsert(tb, Arrays.asList(key100, key200)).lookupValues();
         assertThat(inserted).hasSize(2).allMatch(Objects::nonNull);
+
+        // Wait for async flush so data is visible via plain lookup.
+        waitForFlush(tb);
+
         verifyLookup(tb, key100, inserted.get(0));
         verifyLookup(tb, key200, inserted.get(1));
 
@@ -916,6 +934,10 @@ class ReplicaManagerTest extends ReplicaTestBase {
         List<byte[]> mixed = lookupWithInsert(tb, Arrays.asList(key100, key300)).lookupValues();
         assertThat(mixed.get(0)).isEqualTo(inserted.get(0)); // existing
         assertThat(mixed.get(1)).isNotNull(); // newly inserted
+
+        // Wait for async flush so key300 is visible via plain lookup.
+        waitForFlush(tb);
+
         verifyLookup(tb, key300, mixed.get(1));
 
         // Verify that only one new log record was created for key300
@@ -965,6 +987,9 @@ class ReplicaManagerTest extends ReplicaTestBase {
 
         InternalRow row3 = valueDecoder.decodeValue(mixed.get(1)).row;
         assertThat(row3.getLong(2)).isEqualTo(3L); // continues sequence
+
+        // Wait for async flush so HW advances and log is readable.
+        waitForFlush(tb);
 
         FetchLogResultForBucket logResult = fetchLog(tb, 0L);
         assertThat(logResult.getHighWatermark()).isEqualTo(3L);
@@ -1064,6 +1089,9 @@ class ReplicaManagerTest extends ReplicaTestBase {
         // Values should be 1, 2, 3 (in any order due to concurrency)
         assertThat(autoIncrementValues).containsExactlyInAnyOrder(1L, 2L, 3L);
 
+        // Wait for async flush so HW advances.
+        waitForFlush(tb);
+
         // Verify exactly 3 changelog entries were written (one per unique key)
         FetchLogResultForBucket logResult = fetchLog(tb, 0L);
         // Only the first upsert for a given primary key generates changelog records. Subsequent
@@ -1108,6 +1136,10 @@ class ReplicaManagerTest extends ReplicaTestBase {
 
         byte[] value0 = inserted.get(tb0).lookupValues().get(0);
         byte[] value1 = inserted.get(tb1).lookupValues().get(0);
+
+        // Wait for async flush so data is visible via plain lookup.
+        waitForFlush(tb0);
+        waitForFlush(tb1);
 
         // Verify inserted values via lookup
         verifyLookup(tb0, key0, value0);
@@ -1187,6 +1219,10 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 PUT_KV_VERSION,
                 future::complete);
         assertThat(future.get()).containsOnly(new PutKvResultForBucket(tb, 4));
+
+        // Wait for async flush so data is visible for prefix lookup.
+        waitForFlush(tb);
+
         // second prefix lookup in table, prefix key = (1, "a").
         Object[] prefixKey1 = new Object[] {1, "a"};
         CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(rowType, new int[] {0, 1});
@@ -1268,6 +1304,9 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 PUT_KV_VERSION,
                 future1::complete);
         assertThat(future1.get()).containsOnly(new PutKvResultForBucket(tb, 8));
+
+        // Wait for async flush so data is visible in RocksDB for limit scan.
+        waitForFlush(tb);
 
         // second, limit scan from table with limit
         builder.append(DEFAULT_SCHEMA_ID, compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a1"}));
@@ -2584,5 +2623,19 @@ class ReplicaManagerTest extends ReplicaTestBase {
         assertThat(tableDir).doesNotExist();
         // LogManager should no longer hold the log.
         assertThat(logManager.getLog(tb)).isNotPresent();
+    }
+
+    /**
+     * Wait for the async KV flush to complete and high watermark to advance to at least the current
+     * log end offset. This is needed because the KV flush scheduler runs on background threads.
+     */
+    private void waitForFlush(TableBucket tb) {
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        long expectedOffset = replica.getLocalLogEndOffset();
+        retry(
+                Duration.ofSeconds(10),
+                () ->
+                        assertThat(replica.getLogHighWatermark())
+                                .isGreaterThanOrEqualTo(expectedOffset));
     }
 }

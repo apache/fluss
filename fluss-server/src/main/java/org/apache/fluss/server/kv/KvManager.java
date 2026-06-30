@@ -140,6 +140,8 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
     /** Current shared rate limiter configuration in bytes per second. */
     private volatile long currentSharedRateLimitBytesPerSec;
 
+    private final KvFlushScheduler kvFlushScheduler;
+
     private volatile boolean isShutdown = false;
 
     private KvManager(
@@ -162,6 +164,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         this.sharedRocksDBRateLimiter = createSharedRateLimiter(conf);
         this.currentSharedRateLimitBytesPerSec =
                 conf.get(ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC).getBytes();
+        this.kvFlushScheduler = new KvFlushScheduler(conf);
     }
 
     private static RateLimiter createSharedRateLimiter(Configuration conf) {
@@ -205,6 +208,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
     public void shutdown() {
         LOG.info("Shutting down KvManager");
         isShutdown = true;
+        kvFlushScheduler.close();
         List<KvTablet> kvs = new ArrayList<>(currentKvs.values());
         for (KvTablet kvTablet : kvs) {
             try {
@@ -276,6 +280,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                                     schemaGetter,
                                     tableConfig.getChangelogImage(),
                                     sharedRocksDBRateLimiter,
+                                    kvFlushScheduler,
                                     autoIncrementManager);
                     currentKvs.put(tableBucket, tablet);
 
@@ -394,6 +399,7 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
                         schemaGetter,
                         tableConfig.getChangelogImage(),
                         sharedRocksDBRateLimiter,
+                        kvFlushScheduler,
                         autoIncrementManager);
         if (this.currentKvs.containsKey(tableBucket)) {
             throw new IllegalStateException(

@@ -106,16 +106,37 @@ class FlussSparkTestBase extends QueryTest with SharedSparkSession {
         (0 until table.getTableInfo.getNumBuckets).foreach(i => ls.subscribeFromBeginning(i))
         ls
     }
-    val scanRecords = logScanner.poll(Duration.ofSeconds(1))
-    scanRecords
-      .iterator()
-      .asScala
-      .map(record => (record.getChangeType.shortString(), record.getRow))
-      .toArray
+    // Poll in a loop to accumulate all available records. With async KV flush,
+    // the high watermark may advance in stages, so a single poll may not
+    // return all records that were written in the same client flush() call.
+    // We keep polling until we have received at least some records and then
+    // get an empty poll (indicating no more data), or until the deadline.
+    val result = scala.collection.mutable.ArrayBuffer[(String, InternalRow)]()
+    val deadline = System.currentTimeMillis() + 10000
+    var hasReceivedAny = false
+    var done = false
+    while (!done && System.currentTimeMillis() < deadline) {
+      val scanRecords = logScanner.poll(Duration.ofSeconds(1))
+      val records = scanRecords
+        .iterator()
+        .asScala
+        .map(record => (record.getChangeType.shortString(), record.getRow))
+        .toArray
+      if (records.nonEmpty) {
+        hasReceivedAny = true
+        result ++= records
+      } else if (hasReceivedAny) {
+        // We already received records and now got empty - all caught up.
+        done = true
+      }
+      // else: no records received yet, keep polling (HW may not have advanced)
+    }
+    result.toArray
   }
 
   protected def flussConf: Configuration = {
     val conf = new Configuration
     conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
+    conf
   }
 }
