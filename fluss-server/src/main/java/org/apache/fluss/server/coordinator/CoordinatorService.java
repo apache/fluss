@@ -1050,7 +1050,13 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                 pbPrepareLakeTableRespForTable.setLakeTableOffsetsPath(
                                         fsPath.toString());
                             } catch (Exception e) {
+                                long tableId = bucketOffsets.getTableId();
+                                LOG.warn(
+                                        "Failed to prepare lake table snapshot for table {}.",
+                                        tableId,
+                                        e);
                                 Errors error = ApiError.fromThrowable(e).error();
+                                pbPrepareLakeTableRespForTable.setTableId(tableId);
                                 pbPrepareLakeTableRespForTable.setError(
                                         error.code(), error.message());
                             }
