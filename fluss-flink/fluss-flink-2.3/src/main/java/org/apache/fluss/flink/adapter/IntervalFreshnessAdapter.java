@@ -17,25 +17,30 @@
 
 package org.apache.fluss.flink.adapter;
 
-import org.apache.flink.table.catalog.CatalogMaterializedTable;
+import org.apache.flink.table.catalog.Interval;
 import org.apache.flink.table.catalog.IntervalFreshness;
-import org.apache.flink.table.catalog.ResolvedCatalogMaterializedTable;
-import org.apache.flink.table.catalog.ResolvedSchema;
 
-/**
- * Adapter for {@link ResolvedCatalogMaterializedTable} because the constructor is compatibility in
- * flink 2.2. However, this constructor only used in test.
- *
- * <p>TODO: remove it until <a href="https://issues.apache.org/jira/browse/FLINK-38532">...</a> is
- * fixed.
- */
-public class ResolvedCatalogMaterializedTableAdapter {
+/** An adapter for {@link IntervalFreshness} for flink2.3. */
+public class IntervalFreshnessAdapter {
 
-    public static ResolvedCatalogMaterializedTable create(
-            CatalogMaterializedTable origin,
-            ResolvedSchema resolvedSchema,
-            CatalogMaterializedTable.RefreshMode refreshMode,
-            IntervalFreshness freshness) {
-        return new ResolvedCatalogMaterializedTable(origin, resolvedSchema);
+    public static TimeUnitAdapter timeUnit(String name) {
+        return new TimeUnitAdapter(Interval.TimeUnit.valueOf(name));
+    }
+
+    public static IntervalFreshness of(String interval, TimeUnitAdapter timeUnit) {
+        return IntervalFreshness.of(interval, timeUnit.timeUnit);
+    }
+
+    public static String getTimeUnitName(IntervalFreshness intervalFreshness) {
+        return intervalFreshness.getTimeUnit().name();
+    }
+
+    /** An adapter for {@link Interval.TimeUnit} for flink2.3. */
+    public static class TimeUnitAdapter {
+        private final Interval.TimeUnit timeUnit;
+
+        private TimeUnitAdapter(Interval.TimeUnit timeUnit) {
+            this.timeUnit = timeUnit;
+        }
     }
 }
