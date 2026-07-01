@@ -17,6 +17,8 @@
 
 package org.apache.fluss.flink.tiering.source.split;
 
+import org.apache.fluss.client.tiering.TieringLogSplit;
+import org.apache.fluss.client.tiering.TieringSnapshotSplit;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 
@@ -48,9 +50,10 @@ class TieringSplitSerializerTest {
         TieringSnapshotSplit tieringSplit =
                 new TieringSnapshotSplit(path, bucket, partitionName, 0L, 200L, 10);
 
-        byte[] serialized = serializer.serialize(tieringSplit);
-        TieringSnapshotSplit deserializedSplit =
-                (TieringSnapshotSplit) serializer.deserialize(serializer.getVersion(), serialized);
+        byte[] serialized = serializer.serialize(new FlinkTieringSplit(tieringSplit));
+        FlinkTieringSplit deserializedFlinkSplit =
+                serializer.deserialize(serializer.getVersion(), serialized);
+        TieringSnapshotSplit deserializedSplit = deserializedFlinkSplit.asTieringSnapshotSplit();
         assertThat(deserializedSplit).isEqualTo(tieringSplit);
     }
 
@@ -84,9 +87,10 @@ class TieringSplitSerializerTest {
         TieringLogSplit tieringSplit =
                 new TieringLogSplit(path, bucket, partitionName, 100, 200, 40);
 
-        byte[] serialized = serializer.serialize(tieringSplit);
-        TieringLogSplit deserializedSplit =
-                (TieringLogSplit) serializer.deserialize(serializer.getVersion(), serialized);
+        byte[] serialized = serializer.serialize(new FlinkTieringSplit(tieringSplit));
+        FlinkTieringSplit deserializedFlinkSplit =
+                serializer.deserialize(serializer.getVersion(), serialized);
+        TieringLogSplit deserializedSplit = deserializedFlinkSplit.asTieringLogSplit();
         assertThat(deserializedSplit).isEqualTo(tieringSplit);
     }
 
@@ -114,17 +118,20 @@ class TieringSplitSerializerTest {
         // Test TieringSnapshotSplit with skipCurrentRound set at creation
         TieringSnapshotSplit snapshotSplitWithSkipCurrentRound =
                 new TieringSnapshotSplit(tablePath, tableBucket, null, 0L, 200L, 10, true);
-        byte[] serialized = serializer.serialize(snapshotSplitWithSkipCurrentRound);
+        byte[] serialized =
+                serializer.serialize(new FlinkTieringSplit(snapshotSplitWithSkipCurrentRound));
         TieringSnapshotSplit deserializedSnapshotSplit =
-                (TieringSnapshotSplit) serializer.deserialize(serializer.getVersion(), serialized);
+                serializer
+                        .deserialize(serializer.getVersion(), serialized)
+                        .asTieringSnapshotSplit();
         assertThat(deserializedSnapshotSplit).isEqualTo(snapshotSplitWithSkipCurrentRound);
 
         // Test TieringLogSplit with skipCurrentRound set at creation
         TieringLogSplit logSplitWithSkipCurrentRound =
                 new TieringLogSplit(tablePath, tableBucket, null, 100, 200, 40, true);
-        serialized = serializer.serialize(logSplitWithSkipCurrentRound);
+        serialized = serializer.serialize(new FlinkTieringSplit(logSplitWithSkipCurrentRound));
         TieringLogSplit deserializedLogSplit =
-                (TieringLogSplit) serializer.deserialize(serializer.getVersion(), serialized);
+                serializer.deserialize(serializer.getVersion(), serialized).asTieringLogSplit();
         assertThat(deserializedLogSplit).isEqualTo(logSplitWithSkipCurrentRound);
 
         // Test TieringSnapshotSplit with skipCurrentRound set after creation
@@ -134,9 +141,11 @@ class TieringSplitSerializerTest {
         snapshotSplit.skipCurrentRound();
         assertThat(snapshotSplit.shouldSkipCurrentRound()).isTrue();
 
-        serialized = serializer.serialize(snapshotSplit);
+        serialized = serializer.serialize(new FlinkTieringSplit(snapshotSplit));
         deserializedSnapshotSplit =
-                (TieringSnapshotSplit) serializer.deserialize(serializer.getVersion(), serialized);
+                serializer
+                        .deserialize(serializer.getVersion(), serialized)
+                        .asTieringSnapshotSplit();
         assertThat(deserializedSnapshotSplit).isEqualTo(snapshotSplit);
 
         // Test TieringLogSplit with skipCurrentRound set after creation
@@ -146,9 +155,9 @@ class TieringSplitSerializerTest {
         logSplit.skipCurrentRound();
         assertThat(logSplit.shouldSkipCurrentRound()).isTrue();
 
-        serialized = serializer.serialize(logSplit);
+        serialized = serializer.serialize(new FlinkTieringSplit(logSplit));
         deserializedLogSplit =
-                (TieringLogSplit) serializer.deserialize(serializer.getVersion(), serialized);
+                serializer.deserialize(serializer.getVersion(), serialized).asTieringLogSplit();
         assertThat(deserializedLogSplit).isEqualTo(logSplit);
     }
 
@@ -156,18 +165,20 @@ class TieringSplitSerializerTest {
     void testTieringRoundTimestampSerde() throws Exception {
         TieringSnapshotSplit snapshotSplit =
                 new TieringSnapshotSplit(tablePath, tableBucket, null, 0L, 200L, 10, 0, 1000L);
-        byte[] serialized = serializer.serialize(snapshotSplit);
+        byte[] serialized = serializer.serialize(new FlinkTieringSplit(snapshotSplit));
         TieringSnapshotSplit deserializedSnapshotSplit =
-                (TieringSnapshotSplit) serializer.deserialize(serializer.getVersion(), serialized);
+                serializer
+                        .deserialize(serializer.getVersion(), serialized)
+                        .asTieringSnapshotSplit();
         assertThat(deserializedSnapshotSplit.getSplitIndex()).isZero();
         assertThat(deserializedSnapshotSplit.isFirstSplit()).isTrue();
         assertThat(deserializedSnapshotSplit.getTieringRoundTimestamp()).isEqualTo(1000L);
 
         TieringLogSplit logSplit =
                 new TieringLogSplit(tablePath, tableBucket, null, 100, 200, 40, 2, 2000L);
-        serialized = serializer.serialize(logSplit);
+        serialized = serializer.serialize(new FlinkTieringSplit(logSplit));
         TieringLogSplit deserializedLogSplit =
-                (TieringLogSplit) serializer.deserialize(serializer.getVersion(), serialized);
+                serializer.deserialize(serializer.getVersion(), serialized).asTieringLogSplit();
         assertThat(deserializedLogSplit.getSplitIndex()).isEqualTo(2);
         assertThat(deserializedLogSplit.isFirstSplit()).isFalse();
         assertThat(deserializedLogSplit.getTieringRoundTimestamp()).isEqualTo(2000L);
