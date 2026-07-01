@@ -281,13 +281,21 @@ public final class LogTablet {
     }
 
     /**
+     * Returns the timestamp lag between the latest local log record and the latest tiered lake log
+     * record.
+     */
+    public long getTimestampLag() {
+        return lakeMaxTimestamp < 0L ? -1L : Math.max(0L, localMaxTimestamp() - lakeMaxTimestamp);
+    }
+
+    /**
      * Returns the backlog-aware lag of committed records pending lake tiering in milliseconds.
      *
      * <p>Returns 0 when there are no committed records pending lake tiering or when the pending
      * start time estimate is not initialized yet.
      */
     public long getPendingRecordsLag(long currentTimeMs) {
-        if (estimatedPendingStartTimeMs < 0L) {
+        if (estimatedPendingStartTimeMs < 0L || !hasPendingLakeBacklog()) {
             return 0L;
         }
         return Math.max(0L, currentTimeMs - estimatedPendingStartTimeMs);
@@ -650,10 +658,10 @@ public final class LogTablet {
             clearPendingStartTime();
             return;
         }
-        if (lakeMaxTimestamp < 0L) {
+        long timestampLag = getTimestampLag();
+        if (timestampLag < 0L) {
             return;
         }
-        long timestampLag = Math.max(0L, localMaxTimestamp() - lakeMaxTimestamp);
         long candidatePendingStartTimeMs = Math.max(0L, clock.milliseconds() - timestampLag);
         advancePendingStartTime(candidatePendingStartTimeMs);
     }

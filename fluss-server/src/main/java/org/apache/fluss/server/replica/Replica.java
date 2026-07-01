@@ -598,11 +598,7 @@ public final class Replica {
                     return getLogHighWatermark() - lakeLogEndOffset;
                 });
         lakeTieringMetricGroup.gauge(
-                MetricNames.LOG_LAKE_TIMESTAMP_LAG,
-                () ->
-                        logTablet.getLakeMaxTimestamp() < 0L
-                                ? -1
-                                : logTablet.localMaxTimestamp() - logTablet.getLakeMaxTimestamp());
+                MetricNames.LOG_LAKE_TIMESTAMP_LAG, logTablet::getTimestampLag);
         lakeTieringMetricGroup.gauge(
                 MetricNames.LAKE_PENDING_RECORDS_LAG,
                 () -> logTablet.getPendingRecordsLag(clock.milliseconds()));
