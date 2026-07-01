@@ -49,8 +49,8 @@ CREATE TABLE pk_table (
   amount INT,
   address STRING
 ) TBLPROPERTIES (
-  'primary.key' = 'order_id',
-  'bucket.num' = '1'
+  'primaryKey' = 'order_id',
+  'bucketNum' = '1'
 );
 ```
 
