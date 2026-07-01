@@ -2171,6 +2171,22 @@ public class ConfigOptions {
                             .withDescription(
                                     "The interval of pushing metrics to Prometheus PushGateway.");
 
+    public static final ConfigOption<String> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_USERNAME =
+            key("metrics.reporter.prometheus-push.username")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The username for Basic Auth of the Prometheus PushGateway. "
+                                    + "Leave it unset to disable authentication.");
+
+    public static final ConfigOption<String> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_PASSWORD =
+            key("metrics.reporter.prometheus-push.password")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The password for Basic Auth of the Prometheus PushGateway. "
+                                    + "Only takes effect when username is configured.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for jmx reporter
     // ------------------------------------------------------------------------
