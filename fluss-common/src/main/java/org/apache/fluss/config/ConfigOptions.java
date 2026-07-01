@@ -382,6 +382,21 @@ public class ConfigOptions {
     //  ConfigOptions for Coordinator Server
     // ------------------------------------------------------------------------
     /**
+     * The maximum number of bucket rebalance tasks to activate in one rebalance round.
+     *
+     * <p>The default value {@code 0} disables round limiting and preserves the existing behavior of
+     * registering the whole rebalance plan at once.
+     */
+    public static final ConfigOption<Integer> COORDINATOR_REBALANCE_MAX_BUCKETS_PER_ROUND =
+            key("coordinator.rebalance.max-buckets-per-round")
+                    .intType()
+                    .defaultValue(0)
+                    .withDescription(
+                            "The maximum number of bucket rebalance tasks activated in one rebalance round. "
+                                    + "A positive value splits large rebalance plans into multiple rounds to reduce coordinator and cluster pressure. "
+                                    + "The default value 0 disables round limiting.");
+
+    /**
      * The config parameter defining the network address to connect to for communication with the
      * coordinator server.
      *

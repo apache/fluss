@@ -77,6 +77,16 @@ Available rebalance goals:
 Goals are processed in the order specified. When using `RACK_AWARE`, always place it first to ensure subsequent goals (like `REPLICA_DISTRIBUTION`) respect rack constraints. If `RACK_AWARE` is not the first goal, replica movements may violate rack awareness requirements.
 :::
 
+### Limit Active Bucket Tasks
+
+Large clusters can generate rebalance plans with many bucket movements. To reduce coordinator and TabletServer pressure, configure the maximum number of bucket rebalance tasks that can be activated in one round:
+
+```yaml title="conf/server.yaml"
+coordinator.rebalance.max-buckets-per-round: 100
+```
+
+The default value is `0`, which disables round limiting and preserves the existing behavior of registering the whole rebalance plan at once. When this option is set to a positive value, Fluss persists the full rebalance progress and activates the next round only after all bucket tasks in the current round reach a final state.
+
 ### 3. Monitor Progress
 
 Track the rebalance operation using the returned rebalance ID:

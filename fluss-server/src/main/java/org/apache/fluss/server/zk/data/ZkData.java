@@ -903,6 +903,57 @@ public final class ZkData {
         }
     }
 
+    /**
+     * The znode for round-based rebalance execution metadata. The znode path is:
+     *
+     * <p>/cluster/rebalance/execution
+     */
+    public static final class RebalanceExecutionZNode {
+        public static String path() {
+            return RebalanceZNode.path() + "/execution";
+        }
+
+        public static byte[] encode(RebalanceExecution rebalanceExecution) {
+            return JsonSerdeUtils.writeValueAsBytes(
+                    rebalanceExecution, RebalanceExecutionJsonSerde.INSTANCE);
+        }
+
+        public static RebalanceExecution decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, RebalanceExecutionJsonSerde.INSTANCE);
+        }
+    }
+
+    /**
+     * The znode for all round-based rebalance round tasks. The znode path is:
+     *
+     * <p>/cluster/rebalance/rounds
+     */
+    public static final class RebalanceRoundsZNode {
+        public static String path() {
+            return RebalanceZNode.path() + "/rounds";
+        }
+    }
+
+    /**
+     * The znode for one round-based rebalance round task. The znode path is:
+     *
+     * <p>/cluster/rebalance/rounds/[roundIndex]
+     */
+    public static final class RebalanceRoundZNode {
+        public static String path(int roundIndex) {
+            return RebalanceRoundsZNode.path() + "/" + roundIndex;
+        }
+
+        public static byte[] encode(RebalanceRound rebalanceRound) {
+            return JsonSerdeUtils.writeValueAsBytes(
+                    rebalanceRound, RebalanceRoundJsonSerde.INSTANCE);
+        }
+
+        public static RebalanceRound decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, RebalanceRoundJsonSerde.INSTANCE);
+        }
+    }
+
     // ------------------------------------------------------------------------------------------
     // ZNodes under "/producers/"
     // ------------------------------------------------------------------------------------------
