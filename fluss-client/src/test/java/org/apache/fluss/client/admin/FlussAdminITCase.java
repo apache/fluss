@@ -120,6 +120,7 @@ import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
 import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -569,6 +570,73 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testAlterAggregationTableColumnWithAggFunction() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "alter_aggregation_table_column");
+        Map<String, String> properties = new HashMap<>();
+        properties.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "aggregation");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("value", DataTypes.BIGINT(), AggFunctions.SUM())
+                                        .primaryKey("id")
+                                        .build())
+                        .distributedBy(3, "id")
+                        .properties(properties)
+                        .build();
+        admin.createTable(tablePath, tableDescriptor, false).get();
+
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "new_value",
+                                        DataTypes.BIGINT(),
+                                        "new aggregate column",
+                                        TableChange.ColumnPosition.last(),
+                                        AggFunctions.SUM())),
+                        false)
+                .get();
+
+        SchemaInfo schemaInfo = admin.getTableSchema(tablePath).get();
+        assertThat(schemaInfo.getSchema().getAggFunction("new_value")).hasValue(AggFunctions.SUM());
+
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            upsertWriter.upsert(row(1, 10L, 100L));
+            upsertWriter.upsert(row(1, 20L, 200L));
+            upsertWriter.flush();
+
+            assertThatRow(lookupRow(table.newLookup().createLookuper(), row(1)))
+                    .withSchema(schemaInfo.getSchema().getRowType())
+                    .isEqualTo(row(1, 30L, 300L));
+        }
+    }
+
+    @Test
+    void testAlterNonAggregationTableColumnWithAggFunction() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "alter_non_aggregation_table_column");
+        admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.addColumn(
+                                                                "new_value",
+                                                                DataTypes.BIGINT(),
+                                                                "new aggregate column",
+                                                                TableChange.ColumnPosition.last(),
+                                                                AggFunctions.SUM())),
+                                                false)
+                                        .get())
+                .hasMessageContaining(
+                        "Aggregation function is only supported for aggregation merge engine table");
+    }
+
+    @Test
     void testCreateInvalidDatabaseAndTable() throws Exception {
         assertThatThrownBy(
                         () ->
@@ -675,6 +743,12 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         TableInfo tableInfoAggregate = admin.getTableInfo(tablePathAggregate).join();
         assertThat(tableInfoAggregate.getTableConfig().getDeleteBehavior())
                 .hasValue(DeleteBehavior.IGNORE);
+        assertThat(tableInfoAggregate.getSchema().getAggFunction("count"))
+                .hasValue(AggFunctions.SUM());
+        assertThat(tableInfoAggregate.getProperties().toMap())
+                .doesNotContainKey("fields.count.agg");
+        assertThat(tableInfoAggregate.getCustomProperties().toMap())
+                .doesNotContainKey("fields.count.agg");
 
         // Test 2.6: AGGREGATION merge engine with delete behavior explicitly set to ALLOW - should
         // be allowed
