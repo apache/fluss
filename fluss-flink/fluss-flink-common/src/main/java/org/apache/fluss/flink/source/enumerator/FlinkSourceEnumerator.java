@@ -168,8 +168,31 @@ public class FlinkSourceEnumerator
      * failover restore these splits are directly placed into {@link #pendingSplitAssignment}
      * without re-initialization, preserving the original offset strategy determined at first
      * discovery time (FLIP-288).
+     *
+     * <p>Lifecycle:
+     *
+     * <pre>
+     * ┌───────────────────────────────────┐   ┌───────────────────────────────────┐
+     * │ Fluss splits (periodic discovery) │   │ Lake splits (one-time generation) │
+     * └──────────────┬────────────────────┘   └────────────────┬──────────────────┘
+     *                │                                         │
+     *                ▼                                         ▼
+     *        ┌───────────────————————————————————————————————————┐
+     *        │unassignedSplits,(initialDiscoveryFinished = true) │◄──── addSplitsBack (reader failure)
+     *        └───────┬──────————————————————————————————————————─┘
+     *                │ addSplitToPendingAssignments, copy from unassignedSplits.
+     *                ▼
+     *        ┌────────────────────────┐
+     *        │ pendingSplitAssignment │
+     *        └───────────┬────────────┘
+     *                    │ assignPendingSplits, remove from unassignedSplits and pendingSplitAssignment.
+     *                    ▼
+     *        ┌────────────────────────┐
+     *        │  assignedTableBuckets  │
+     *        └────────────────────────┘
+     * </pre>
      */
-    private final Map<TableBucket, SourceSplitBase> unassignedSplits;
+    private final Collection<SourceSplitBase> unassignedSplits;
 
     private final LeaseContext leaseContext;
 
@@ -457,7 +480,7 @@ public class FlinkSourceEnumerator
         this.checkpointTriggeredBefore = checkpointTriggeredBefore;
         this.splitPerAssignmentBatchSize = splitPerAssignmentBatchSize;
         this.initialDiscoveryFinished = initialDiscoveryFinished;
-        this.unassignedSplits = indexByPartition(unassignedSplits);
+        this.unassignedSplits = new ArrayList<>(unassignedSplits);
     }
 
     @Override
@@ -477,9 +500,8 @@ public class FlinkSourceEnumerator
 
         // Find splits where the start offset has been initialized but not yet assigned to readers.
         // These splits must not be reinitialized to keep offsets consistent with first discovery.
-        final Collection<SourceSplitBase> preinitializedSplits = unassignedSplits.values();
         if (!unassignedSplits.isEmpty()) {
-            addSplitToPendingAssignments(preinitializedSplits);
+            addSplitToPendingAssignments(unassignedSplits);
         }
 
         if (isPartitioned) {
@@ -1029,7 +1051,7 @@ public class FlinkSourceEnumerator
                 return null;
             } else {
                 pendingHybridLakeFlussSplits = generatedSplits;
-                return generatedSplits;
+                return new ArrayList<>(generatedSplits);
             }
         } catch (Exception e) {
             throw new FlinkRuntimeException("Failed to generate hybrid lake fluss splits", e);
@@ -1102,9 +1124,12 @@ public class FlinkSourceEnumerator
         }
 
         initialDiscoveryFinished = true;
-        for (SourceSplitBase split : splits) {
-            unassignedSplits.put(split.getTableBucket(), split);
+        if (pendingHybridLakeFlussSplits != null) {
+            // removed from the pendingHybridLakeFlussSplits since this split already be moved to
+            // unassignedSplits
+            pendingHybridLakeFlussSplits.removeAll(splits);
         }
+        unassignedSplits.addAll(splits);
 
         if (isPartitioned) {
             if (!streaming || scanPartitionDiscoveryIntervalMs <= 0) {
@@ -1154,7 +1179,7 @@ public class FlinkSourceEnumerator
                         split -> {
                             TableBucket tableBucket = split.getTableBucket();
                             assignedTableBuckets.add(tableBucket);
-                            unassignedSplits.remove(tableBucket);
+                            unassignedSplits.remove(split);
 
                             if (isPartitioned) {
                                 long partitionId =
@@ -1168,17 +1193,6 @@ public class FlinkSourceEnumerator
                                 assignedPartitions.put(partitionId, partitionName);
                             }
                         });
-
-                if (pendingHybridLakeFlussSplits != null) {
-                    Set<String> splitIdsToRemove =
-                            pendingAssignmentForReader.stream()
-                                    .map(SourceSplitBase::splitId)
-                                    .collect(Collectors.toSet());
-                    // removed from the pendingHybridLakeFlussSplits
-                    // since this split already be assigned
-                    pendingHybridLakeFlussSplits.removeIf(
-                            split -> splitIdsToRemove.contains(split.splitId()));
-                }
             }
         }
 
@@ -1334,7 +1348,7 @@ public class FlinkSourceEnumerator
     public void addSplitsBack(List<SourceSplitBase> splits, int subtaskId) {
         LOG.debug("Flink Source Enumerator adds splits back: {}", splits);
         for (SourceSplitBase split : splits) {
-            unassignedSplits.put(split.getTableBucket(), split);
+            unassignedSplits.add(split);
             assignedTableBuckets.remove(split.getTableBucket());
             if (isPartitioned) {
                 assignedPartitions.remove(split.getTableBucket().getPartitionId());
@@ -1363,7 +1377,7 @@ public class FlinkSourceEnumerator
                         pendingHybridLakeFlussSplits,
                         leaseContext.getKvSnapshotLeaseId(),
                         initialDiscoveryFinished,
-                        unassignedSplits.values());
+                        unassignedSplits);
         LOG.debug(
                 "Source Checkpoint is {}, initialDiscoveryFinished={}",
                 enumeratorState,
@@ -1488,11 +1502,6 @@ public class FlinkSourceEnumerator
                 }
             }
         }
-    }
-
-    private static Map<TableBucket, SourceSplitBase> indexByPartition(
-            Collection<SourceSplitBase> splits) {
-        return splits.stream().collect(Collectors.toMap(SourceSplitBase::getTableBucket, e -> e));
     }
 
     // --------------- private class ---------------
