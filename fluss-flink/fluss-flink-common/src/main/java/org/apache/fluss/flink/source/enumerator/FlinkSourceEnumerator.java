@@ -485,6 +485,23 @@ public class FlinkSourceEnumerator
 
     @Override
     public void start() {
+        LOG.info(
+                "Starting FlinkSourceEnumerator for table {}: "
+                        + "isPartitioned={}, hasPrimaryKey={}, streaming={}, lakeSource={}, "
+                        + "initialDiscoveryFinished={}, restoredUnassignedSplits={}, "
+                        + "restoredAssignedBuckets={}, restoredPendingLakeSplits={}",
+                tablePath,
+                isPartitioned,
+                hasPrimaryKey,
+                streaming,
+                lakeSource != null,
+                initialDiscoveryFinished,
+                unassignedSplits.size(),
+                assignedTableBuckets.size(),
+                pendingHybridLakeFlussSplits == null
+                        ? "null"
+                        : pendingHybridLakeFlussSplits.size());
+
         // init admin client
         connection = ConnectionFactory.createConnection(flussConf);
         flussAdmin = connection.getAdmin();
@@ -501,6 +518,11 @@ public class FlinkSourceEnumerator
         // Find splits where the start offset has been initialized but not yet assigned to readers.
         // These splits must not be reinitialized to keep offsets consistent with first discovery.
         if (!unassignedSplits.isEmpty()) {
+            LOG.info(
+                    "Restoring {} unassigned splits from checkpoint state "
+                            + "into pendingSplitAssignment for table {}.",
+                    unassignedSplits.size(),
+                    tablePath);
             addSplitToPendingAssignments(unassignedSplits);
         }
 
@@ -602,6 +624,11 @@ public class FlinkSourceEnumerator
         // These splits already have their offsets resolved and will be assigned to readers
         // when they register (via addReader -> assignPendingSplits).
         if (!pendingSplitAssignment.isEmpty()) {
+            LOG.info(
+                    "Skipping split re-initialization for non-partitioned table {}: "
+                            + "{} splits already restored from checkpoint state.",
+                    tablePath,
+                    pendingSplitAssignment.values().stream().mapToInt(List::size).sum());
             noMoreNewSplits = true;
             return;
         }
@@ -812,7 +839,7 @@ public class FlinkSourceEnumerator
 
         if (hasPrimaryKey && startingOffsetsInitializer instanceof SnapshotOffsetsInitializer) {
             // Snapshot mode for PK tables is already safe: it reads the snapshot or falls back
-            // to earliest offsets when no snapshot is available.
+            // to the earliest offsets when no snapshot is available.
             List<Partition> allPartitions = new ArrayList<>();
             allPartitions.addAll(initialPartitions);
             allPartitions.addAll(newPartitions);
@@ -1130,6 +1157,17 @@ public class FlinkSourceEnumerator
             pendingHybridLakeFlussSplits.removeAll(splits);
         }
         unassignedSplits.addAll(splits);
+        LOG.info(
+                "Added {} new splits to unassignedSplits for table {}: "
+                        + "totalUnassigned={}, initialDiscoveryFinished={}, "
+                        + "remainingLakeSplits={}",
+                splits.size(),
+                tablePath,
+                unassignedSplits.size(),
+                initialDiscoveryFinished,
+                pendingHybridLakeFlussSplits == null
+                        ? "null"
+                        : pendingHybridLakeFlussSplits.size());
 
         if (isPartitioned) {
             if (!streaming || scanPartitionDiscoveryIntervalMs <= 0) {
@@ -1346,7 +1384,12 @@ public class FlinkSourceEnumerator
 
     @Override
     public void addSplitsBack(List<SourceSplitBase> splits, int subtaskId) {
-        LOG.debug("Flink Source Enumerator adds splits back: {}", splits);
+        LOG.info(
+                "Adding {} splits back from failed reader {} for table {}: {}",
+                splits.size(),
+                subtaskId,
+                tablePath,
+                splits);
         for (SourceSplitBase split : splits) {
             unassignedSplits.add(split);
             assignedTableBuckets.remove(split.getTableBucket());
@@ -1364,7 +1407,14 @@ public class FlinkSourceEnumerator
 
     @Override
     public void addReader(int subtaskId) {
-        LOG.debug("Adding reader: {} to Flink Source enumerator.", subtaskId);
+        LOG.info(
+                "Adding reader {} to FlinkSourceEnumerator for table {}, "
+                        + "pendingSplitAssignment has {} splits for this reader.",
+                subtaskId,
+                tablePath,
+                pendingSplitAssignment.containsKey(subtaskId)
+                        ? pendingSplitAssignment.get(subtaskId).size()
+                        : 0);
         assignPendingSplits(Collections.singleton(subtaskId));
     }
 
@@ -1379,8 +1429,16 @@ public class FlinkSourceEnumerator
                         initialDiscoveryFinished,
                         unassignedSplits);
         LOG.debug(
-                "Source Checkpoint is {}, initialDiscoveryFinished={}",
-                enumeratorState,
+                "Snapshot state for table {} at checkpoint {}: "
+                        + "assignedBuckets={}, assignedPartitions={}, "
+                        + "unassignedSplits={}, pendingLakeSplits={}, "
+                        + "initialDiscoveryFinished={}",
+                tablePath,
+                checkpointId,
+                assignedTableBuckets.size(),
+                assignedPartitions.size(),
+                unassignedSplits.size(),
+                pendingHybridLakeFlussSplits == null ? "null" : pendingHybridLakeFlussSplits.size(),
                 initialDiscoveryFinished);
         return enumeratorState;
     }
@@ -1448,6 +1506,14 @@ public class FlinkSourceEnumerator
 
     @Override
     public void close() throws IOException {
+        LOG.info(
+                "Closing FlinkSourceEnumerator for table {}: "
+                        + "assignedBuckets={}, unassignedSplits={}, "
+                        + "checkpointTriggeredBefore={}",
+                tablePath,
+                assignedTableBuckets.size(),
+                unassignedSplits.size(),
+                checkpointTriggeredBefore);
         try {
             maybeDropKvSnapshotLease();
 

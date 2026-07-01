@@ -79,8 +79,7 @@ public class FlinkTestBase extends AbstractTestBase {
                                     // waitUntilPartitionsCreated timeout
                                     .set(
                                             ConfigOptions.AUTO_PARTITION_CHECK_INTERVAL,
-                                            Duration.ofSeconds(5)).set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 1.0)
-                    )
+                                            Duration.ofSeconds(5)))
                     .setNumOfTabletServers(3)
                     .build();
 
