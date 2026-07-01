@@ -24,7 +24,6 @@ import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
-import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -229,7 +228,6 @@ public class TabletServiceITCase {
         long tableId =
                 createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
         TableBucket tb = new TableBucket(tableId, 0);
-        SchemaGetter schemaGetter = new TestingSchemaGetter(1, DATA1_SCHEMA);
 
         FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
 
@@ -308,7 +306,7 @@ public class TabletServiceITCase {
                         .fetchLog(newFetchLogRequest(-1, tableId, 0, 10L, new int[] {0}))
                         .get(),
                 DATA1_ROW_TYPE.project(new int[] {0}),
-                schemaGetter,
+                TEST_SCHEMA_GETTER,
                 tableId,
                 0,
                 20L,
@@ -324,7 +322,7 @@ public class TabletServiceITCase {
                         .fetchLog(newFetchLogRequest(-1, tableId, 0, 15L, new int[] {1}))
                         .get(),
                 DATA1_ROW_TYPE.project(new int[] {1}),
-                schemaGetter,
+                TEST_SCHEMA_GETTER,
                 tableId,
                 0,
                 20L,

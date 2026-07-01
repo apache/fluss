@@ -186,6 +186,9 @@ public interface LogRecordBatch {
     /** The read context of a {@link LogRecordBatch} to read records. */
     interface ReadContext {
 
+        /** Gets the table id, or -1 if not available. */
+        long getTableId();
+
         /** Gets the log format of the record batch. */
         LogFormat getLogFormat();
 

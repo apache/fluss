@@ -44,19 +44,16 @@ import java.util.Map;
 @Internal
 abstract class AbstractLogFetchCollector<T, R> {
     protected final Logger log;
-    protected final TablePath tablePath;
     protected final LogScannerStatus logScannerStatus;
     private final int maxPollRecords;
     private final MetadataUpdater metadataUpdater;
 
     protected AbstractLogFetchCollector(
             Logger log,
-            TablePath tablePath,
             LogScannerStatus logScannerStatus,
             Configuration conf,
             MetadataUpdater metadataUpdater) {
         this.log = log;
-        this.tablePath = tablePath;
         this.logScannerStatus = logScannerStatus;
         this.maxPollRecords = conf.getInt(ConfigOptions.CLIENT_SCANNER_LOG_MAX_POLL_RECORDS);
         this.metadataUpdater = metadataUpdater;
@@ -159,7 +156,11 @@ abstract class AbstractLogFetchCollector<T, R> {
             if (error.isSuccess()) {
                 return handleInitializeSuccess(completedFetch);
             } else {
-                handleInitializeErrors(completedFetch, error.error(), error.messageWithFallback());
+                handleInitializeErrors(
+                        completedFetch,
+                        error.error(),
+                        error.messageWithFallback(),
+                        completedFetch.tablePath);
                 return null;
             }
         } finally {
@@ -205,7 +206,7 @@ abstract class AbstractLogFetchCollector<T, R> {
     }
 
     private void handleInitializeErrors(
-            CompletedFetch completedFetch, Errors error, String errorMessage) {
+            CompletedFetch completedFetch, Errors error, String errorMessage, TablePath tablePath) {
         TableBucket tb = completedFetch.tableBucket;
         long fetchOffset = completedFetch.nextFetchOffset();
         if (error == Errors.NOT_LEADER_OR_FOLLOWER

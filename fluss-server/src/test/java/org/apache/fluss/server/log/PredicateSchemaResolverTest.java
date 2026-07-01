@@ -110,7 +110,7 @@ class PredicateSchemaResolverTest {
     @Test
     void testSchemaGetterThrowsInConstructor() {
         // SchemaGetter that throws for the predicate schema ID
-        TestingSchemaGetter schemaGetter = new TestingSchemaGetter();
+        TestingSchemaGetter schemaGetter = new TestingSchemaGetter(SCHEMA_ID_1, ROW_TYPE_V1);
 
         Predicate predicate = new PredicateBuilder(ROW_TYPE_V1).equal(0, 42);
 
