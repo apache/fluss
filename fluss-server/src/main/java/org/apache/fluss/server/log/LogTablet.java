@@ -285,7 +285,7 @@ public final class LogTablet {
      * record.
      */
     public long getTimestampLag() {
-        return lakeMaxTimestamp < 0L ? -1L : Math.max(0L, localMaxTimestamp() - lakeMaxTimestamp);
+        return lakeMaxTimestamp < 0L ? -1L : localMaxTimestamp() - lakeMaxTimestamp;
     }
 
     /**
@@ -662,7 +662,8 @@ public final class LogTablet {
         if (timestampLag < 0L) {
             return;
         }
-        long candidatePendingStartTimeMs = Math.max(0L, clock.milliseconds() - timestampLag);
+        long candidatePendingStartTimeMs =
+                Math.max(0L, clock.milliseconds() - Math.max(0L, timestampLag));
         advancePendingStartTime(candidatePendingStartTimeMs);
     }
 
