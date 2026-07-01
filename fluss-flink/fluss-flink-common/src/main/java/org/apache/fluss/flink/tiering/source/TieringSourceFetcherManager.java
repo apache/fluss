@@ -19,7 +19,7 @@
 package org.apache.fluss.flink.tiering.source;
 
 import org.apache.fluss.flink.adapter.SingleThreadFetcherManagerAdapter;
-import org.apache.fluss.flink.tiering.source.split.TieringSplit;
+import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
@@ -40,14 +40,14 @@ import java.util.function.Supplier;
  */
 public class TieringSourceFetcherManager<WriteResult>
         extends SingleThreadFetcherManagerAdapter<
-                TableBucketWriteResult<WriteResult>, TieringSplit> {
+                TableBucketWriteResult<WriteResult>, FlinkTieringSplit> {
 
     private static final Logger LOG = LoggerFactory.getLogger(TieringSourceFetcherManager.class);
 
     public TieringSourceFetcherManager(
             FutureCompletingBlockingQueue<RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>>
                     elementsQueue,
-            Supplier<SplitReader<TableBucketWriteResult<WriteResult>, TieringSplit>>
+            Supplier<SplitReader<TableBucketWriteResult<WriteResult>, FlinkTieringSplit>>
                     splitReaderSupplier,
             Configuration configuration,
             Consumer<Collection<String>> splitFinishedHook) {
@@ -64,7 +64,7 @@ public class TieringSourceFetcherManager<WriteResult>
                                     enqueueMarkTableReachTieringMaxDurationTask(
                                             splitFetcher, tableId));
         } else {
-            SplitFetcher<TableBucketWriteResult<WriteResult>, TieringSplit> splitFetcher =
+            SplitFetcher<TableBucketWriteResult<WriteResult>, FlinkTieringSplit> splitFetcher =
                     createSplitFetcher();
             LOG.info(
                     "fetchers is empty, enqueue marking tiering max duration for table {}",
@@ -75,7 +75,7 @@ public class TieringSourceFetcherManager<WriteResult>
     }
 
     private void enqueueMarkTableReachTieringMaxDurationTask(
-            SplitFetcher<TableBucketWriteResult<WriteResult>, TieringSplit> splitFetcher,
+            SplitFetcher<TableBucketWriteResult<WriteResult>, FlinkTieringSplit> splitFetcher,
             long reachTieringDeadlineTable) {
         splitFetcher.enqueueTask(
                 new SplitFetcherTask() {
