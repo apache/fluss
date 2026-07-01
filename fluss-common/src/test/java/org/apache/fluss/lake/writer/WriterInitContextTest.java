@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.writer;
 
+import org.apache.fluss.lake.watermark.WatermarkExtractor;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -52,6 +53,12 @@ class WriterInitContextTest {
 
                     @Override
                     public TableInfo tableInfo() {
+                        return null;
+                    }
+
+                    @Nullable
+                    @Override
+                    public WatermarkExtractor watermarkExtractor() {
                         return null;
                     }
                 };

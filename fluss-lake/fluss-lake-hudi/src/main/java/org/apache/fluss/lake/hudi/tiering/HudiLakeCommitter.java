@@ -86,7 +86,8 @@ public class HudiLakeCommitter implements LakeCommitter<HudiWriteResult, HudiCom
     }
 
     @Override
-    public HudiCommittable toCommittable(List<HudiWriteResult> hudiWriteResults) {
+    public HudiCommittable toCommittable(
+            List<HudiWriteResult> hudiWriteResults, @Nullable Long watermark) {
         HudiCommittable.Builder committableBuilder = HudiCommittable.builder();
         for (HudiWriteResult hudiWriteResult : hudiWriteResults) {
             committableBuilder.addWriteStats(hudiWriteResult.getWriteStats());

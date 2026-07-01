@@ -31,6 +31,7 @@ import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
+import org.apache.fluss.lake.writer.LakeWriteResult;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.metadata.DataLakeFormat;
@@ -195,7 +196,7 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
         }
     }
 
-    private static class TestingPaimonWriteResult {
+    private static class TestingPaimonWriteResult implements LakeWriteResult {
         private final int writtenRecords;
 
         public TestingPaimonWriteResult(int writtenRecords) {
@@ -237,7 +238,8 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
 
         @Override
         public TestPaimonCommittable toCommittable(
-                List<TestingPaimonWriteResult> testingPaimonWriteResults) throws IOException {
+                List<TestingPaimonWriteResult> testingPaimonWriteResults, @Nullable Long watermark)
+                throws IOException {
             return new TestPaimonCommittable();
         }
 

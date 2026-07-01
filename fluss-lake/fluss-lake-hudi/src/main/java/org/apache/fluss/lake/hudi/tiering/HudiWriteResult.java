@@ -17,18 +17,19 @@
 
 package org.apache.fluss.lake.hudi.tiering;
 
+import org.apache.fluss.lake.writer.LakeWriteResult;
+
 import org.apache.hudi.client.WriteStatus;
 
 import javax.annotation.Nullable;
 
-import java.io.Serializable;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 /** Write result produced by the Hudi lake writer and consumed by a future Hudi committer. */
-public class HudiWriteResult implements Serializable {
+public class HudiWriteResult implements LakeWriteResult {
 
     private static final long serialVersionUID = 1L;
 

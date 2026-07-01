@@ -27,6 +27,7 @@ import org.apache.fluss.lake.lance.LanceConfig;
 import org.apache.fluss.lake.lance.utils.LanceArrowUtils;
 import org.apache.fluss.lake.lance.utils.LanceDatasetAdapter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
+import org.apache.fluss.lake.watermark.WatermarkExtractor;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.metadata.Schema;
@@ -310,6 +311,12 @@ class LanceTieringTest {
                     @Override
                     public TableInfo tableInfo() {
                         return tableInfo;
+                    }
+
+                    @Nullable
+                    @Override
+                    public WatermarkExtractor watermarkExtractor() {
+                        return null;
                     }
                 });
     }

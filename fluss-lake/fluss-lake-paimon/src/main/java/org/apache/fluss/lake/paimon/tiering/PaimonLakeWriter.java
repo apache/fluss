@@ -21,6 +21,7 @@ import org.apache.fluss.lake.batch.ArrowRecordBatch;
 import org.apache.fluss.lake.batch.RecordBatch;
 import org.apache.fluss.lake.paimon.tiering.append.AppendOnlyWriter;
 import org.apache.fluss.lake.paimon.tiering.mergetree.MergeTreeWriter;
+import org.apache.fluss.lake.watermark.WatermarkExtractor;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.SupportsRecordBatchWrite;
 import org.apache.fluss.lake.writer.WriterInitContext;
@@ -32,6 +33,8 @@ import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.sink.CommitMessage;
+
+import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.Collections;
@@ -45,6 +48,8 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
 
     private final Catalog paimonCatalog;
     private final RecordWriter<?> recordWriter;
+    @Nullable private final WatermarkExtractor watermarkExtractor;
+    @Nullable private Long maxWatermark;
 
     public PaimonLakeWriter(
             PaimonCatalogProvider paimonCatalogProvider, WriterInitContext writerInitContext)
@@ -72,12 +77,17 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
                                 writerInitContext.partition(),
                                 partitionKeys,
                                 flussRowType);
+
+        this.watermarkExtractor = writerInitContext.watermarkExtractor();
     }
 
     @Override
     public void write(LogRecord record) throws IOException {
         try {
             recordWriter.write(record);
+            if (watermarkExtractor != null) {
+                updateMaxWatermark(watermarkExtractor.currentWatermark(record.getRow()));
+            }
         } catch (Exception e) {
             throw new IOException("Failed to write Fluss record to Paimon.", e);
         }
@@ -97,6 +107,9 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
         try {
             ((AppendOnlyWriter) recordWriter)
                     .writeArrowBatch(((ArrowRecordBatch) recordBatch).getArrowBatchData());
+            if (watermarkExtractor != null) {
+                updateMaxWatermark(watermarkExtractor.currentWatermark(recordBatch));
+            }
         } catch (Exception e) {
             throw new IOException("Failed to write Arrow record batch to Paimon.", e);
         }
@@ -110,7 +123,7 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
         } catch (Exception e) {
             throw new IOException("Failed to complete Paimon write.", e);
         }
-        return new PaimonWriteResult(commitMessage);
+        return new PaimonWriteResult(commitMessage, maxWatermark);
     }
 
     @Override
@@ -138,6 +151,12 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
             return table.copy(compactionOptions);
         } catch (Exception e) {
             throw new IOException("Failed to get table " + tablePath + " in Paimon.", e);
+        }
+    }
+
+    private void updateMaxWatermark(@Nullable Long watermark) {
+        if (watermark != null) {
+            maxWatermark = maxWatermark == null ? watermark : Math.max(maxWatermark, watermark);
         }
     }
 }

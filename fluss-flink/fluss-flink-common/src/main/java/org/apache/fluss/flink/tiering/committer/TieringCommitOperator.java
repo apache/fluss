@@ -32,6 +32,7 @@ import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.committer.TieringStats;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
+import org.apache.fluss.lake.writer.LakeWriteResult;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -74,7 +75,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  * <p>Finally, it will also commit the committed lake snapshot to Fluss cluster to make Fluss aware
  * of the tiering progress.
  */
-public class TieringCommitOperator<WriteResult, Committable>
+public class TieringCommitOperator<WriteResult extends LakeWriteResult, Committable>
         extends AbstractStreamOperator<CommittableMessage<Committable>>
         implements OneInputStreamOperator<
                 TableBucketWriteResult<WriteResult>, CommittableMessage<Committable>> {
@@ -232,14 +233,35 @@ public class TieringCommitOperator<WriteResult, Committable>
 
             Map<TableBucket, Long> logEndOffsets = new HashMap<>();
             Map<TableBucket, Long> logMaxTieredTimestamps = new HashMap<>();
+            Long watermark = null;
             for (TableBucketWriteResult<WriteResult> writeResult : nonEmptyResults) {
                 TableBucket tableBucket = writeResult.tableBucket();
                 logEndOffsets.put(tableBucket, writeResult.logEndOffset());
                 logMaxTieredTimestamps.put(tableBucket, writeResult.maxTimestamp());
+                Long writeResultWatermark = writeResult.writeResult().getWatermark();
+                if (writeResultWatermark == null) {
+                    continue;
+                }
+                watermark =
+                        watermark == null
+                                ? writeResultWatermark
+                                : Math.min(watermark, writeResultWatermark);
+            }
+
+            if (nonEmptyResults.size() < committableWriteResults.size()) {
+                // Empty results means some splits has not been processed, possibly caused by forced
+                // completion. Do not update watermark here.
+                if (watermark != null) {
+                    LOG.warn(
+                            "There are some empty write results for {}, do not update watermark. Watermark of non-empty splits is {}.",
+                            tablePath,
+                            watermark);
+                }
+                watermark = null;
             }
 
             // to committable
-            Committable committable = lakeCommitter.toCommittable(writeResults);
+            Committable committable = lakeCommitter.toCommittable(writeResults, watermark);
             // before commit to lake, check fluss not missing any lake snapshot committed by fluss
             LakeSnapshot flussCurrentLakeSnapshot = getLatestLakeSnapshot(tablePath);
             checkFlussNotMissingLakeSnapshot(
