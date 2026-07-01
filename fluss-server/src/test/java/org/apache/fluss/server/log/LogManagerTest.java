@@ -33,6 +33,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
 
@@ -242,6 +243,75 @@ final class LogManagerTest extends LogTestBase {
         assertThat(checkpoints.get(tableBucket2)).isEqualTo(log2.getRecoveryPoint());
 
         newLogManager.shutdown();
+    }
+
+    @Test
+    void testResidualKvAndLogRemovedWhenTableDropped() throws Exception {
+        initTableBuckets(null);
+        // Create the on-disk log dir and a corresponding kv tablet dir.
+        LogTablet log1 = getOrCreateLog(tablePath1, null, tableBucket1);
+        File logDir = log1.getLogDir();
+        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath1);
+        File kvTabletDir = FlussPaths.kvTabletDir(tempDir, physicalTablePath, tableBucket1);
+        assertThat(kvTabletDir.mkdirs()).isTrue();
+        assertThat(logDir).exists();
+        assertThat(kvTabletDir).exists();
+
+        // Drop the table from ZK so that loadLog sees the schema is gone (residual data).
+        logManager.shutdown();
+        logManager = null;
+        zkClient.deleteTable(tablePath1);
+
+        LogManager newLogManager =
+                LogManager.create(
+                        conf,
+                        zkClient,
+                        new FlussScheduler(1),
+                        SystemClock.getInstance(),
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager);
+        newLogManager.startup();
+        logManager = newLogManager;
+
+        // Both the kv and log tablet directories should be removed.
+        assertThat(kvTabletDir).doesNotExist();
+        assertThat(logDir).doesNotExist();
+    }
+
+    @Test
+    void testLogKeptWhenResidualKvDeletionFails() throws Exception {
+        initTableBuckets(null);
+        // Create the on-disk log dir, then place a regular FILE where the kv tablet dir would be,
+        // so FileUtils.deleteDirectory fails (it is not a directory).
+        LogTablet log1 = getOrCreateLog(tablePath1, null, tableBucket1);
+        File logDir = log1.getLogDir();
+        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath1);
+        File kvTabletDir = FlussPaths.kvTabletDir(tempDir, physicalTablePath, tableBucket1);
+        // The table dir already exists (created alongside the log dir); create the kv path as a
+        // regular file so FileUtils.deleteDirectory fails (it is not a directory).
+        assertThat(kvTabletDir.createNewFile()).isTrue();
+        assertThat(kvTabletDir).isFile();
+        assertThat(logDir).exists();
+
+        // Drop the table from ZK so that loadLog sees the schema is gone (residual data).
+        logManager.shutdown();
+        logManager = null;
+        zkClient.deleteTable(tablePath1);
+
+        LogManager newLogManager =
+                LogManager.create(
+                        conf,
+                        zkClient,
+                        new FlussScheduler(1),
+                        SystemClock.getInstance(),
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager);
+        newLogManager.startup();
+        logManager = newLogManager;
+
+        // KV deletion failed, so the log must be kept as an anchor for a later retry.
+        assertThat(logDir).exists();
+        assertThat(kvTabletDir).exists();
     }
 
     @ParameterizedTest
