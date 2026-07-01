@@ -20,13 +20,19 @@ package org.apache.fluss.metrics.prometheus;
 import org.apache.fluss.metrics.Metric;
 import org.apache.fluss.metrics.reporter.ScheduledMetricReporter;
 
+import io.prometheus.client.exporter.HttpConnectionFactory;
 import io.prometheus.client.exporter.PushGateway;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
 import java.io.IOException;
+import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Base64;
 import java.util.Map;
 
 /** {@link ScheduledMetricReporter} that pushes {@link Metric Metrics} to Prometheus PushGateway. */
@@ -46,12 +52,18 @@ public class PrometheusPushGatewayReporter extends AbstractPrometheusReporter
             String jobName,
             Map<String, String> groupingKey,
             final boolean deleteOnShutdown,
-            Duration pushInterval) {
+            Duration pushInterval,
+            @Nullable String username,
+            @Nullable String password) {
         this.pushGateway = new PushGateway(hostUrl);
         this.jobName = jobName;
         this.groupingKey = groupingKey;
         this.deleteOnShutdown = deleteOnShutdown;
         this.pushInterval = pushInterval;
+        if (username != null && !username.isEmpty()) {
+            this.pushGateway.setConnectionFactory(
+                    basicAuthConnectionFactory(username, password == null ? "" : password));
+        }
     }
 
     @Override
@@ -79,5 +91,18 @@ public class PrometheusPushGatewayReporter extends AbstractPrometheusReporter
         } catch (IOException e) {
             LOG.warn("Could not push metrics to PushGateway.", e);
         }
+    }
+
+    private static HttpConnectionFactory basicAuthConnectionFactory(String user, String password) {
+        final String header =
+                "Basic "
+                        + Base64.getEncoder()
+                                .encodeToString(
+                                        (user + ":" + password).getBytes(StandardCharsets.UTF_8));
+        return url -> {
+            HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
+            connection.setRequestProperty("Authorization", header);
+            return connection;
+        };
     }
 }
