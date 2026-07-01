@@ -517,7 +517,10 @@ public class MetadataManager {
             TableInfo tableInfo = tableReg.toTableInfo(tablePath, schemaInfo);
 
             // validate the changes
-            validateAlterTableProperties(tableInfo, tablePropertyChanges.tableKeysToChange());
+            validateAlterTableProperties(
+                    tableInfo,
+                    tablePropertyChanges.tableKeysToChange(),
+                    tablePropertyChanges.customKeysToChange());
 
             TableDescriptor tableDescriptor = tableInfo.toTableDescriptor();
             TableDescriptor newDescriptor =
