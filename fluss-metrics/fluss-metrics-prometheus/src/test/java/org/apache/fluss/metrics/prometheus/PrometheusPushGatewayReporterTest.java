@@ -28,6 +28,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -55,8 +56,14 @@ class PrometheusPushGatewayReporterTest {
                     // capture (possibly null) Authorization header, using empty string as absent
                     String auth = exchange.getRequestHeaders().getFirst("Authorization");
                     receivedAuthHeaders.offer(auth == null ? "" : auth);
-                    // drain request body so client does not block
-                    exchange.getRequestBody().readAllBytes();
+                    // drain request body so client does not block (JDK 8 compatible)
+                    try (InputStream body = exchange.getRequestBody()) {
+                        byte[] buf = new byte[1024];
+                        while (body.read(buf) != -1) {
+                            // discard
+                        }
+                    }
+
                     exchange.sendResponseHeaders(202, -1);
                     exchange.close();
                 });
