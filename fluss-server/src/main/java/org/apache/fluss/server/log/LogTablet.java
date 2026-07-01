@@ -132,6 +132,9 @@ public final class LogTablet {
     private volatile long lakeLogStartOffset = Long.MAX_VALUE;
     private volatile long lakeLogEndOffset = -1L;
     private volatile long lakeMaxTimestamp = -1;
+    // Best-effort estimate under concurrent high-watermark and lake-progress updates.
+    // Metric reads are allowed to observe transient intermediate states.
+    private volatile long estimatedPendingStartTimeMs = -1L;
 
     private LogTablet(
             File dataDir,
@@ -275,6 +278,33 @@ public final class LogTablet {
 
     public long getLakeMaxTimestamp() {
         return lakeMaxTimestamp;
+    }
+
+    /**
+     * Returns the timestamp lag between the latest local log record and the latest tiered lake log
+     * record.
+     */
+    public long getTimestampLag() {
+        return lakeMaxTimestamp < 0L ? -1L : localMaxTimestamp() - lakeMaxTimestamp;
+    }
+
+    /**
+     * Returns the backlog-aware lag of committed records pending lake tiering in milliseconds.
+     *
+     * <p>Returns 0 when there are no committed records pending lake tiering or when the pending
+     * start time estimate is not initialized yet.
+     */
+    public long getPendingRecordsLag(long currentTimeMs) {
+        if (estimatedPendingStartTimeMs < 0L || !hasPendingLakeBacklog()) {
+            return 0L;
+        }
+        return Math.max(0L, currentTimeMs - estimatedPendingStartTimeMs);
+    }
+
+    /** Returns the estimated start time of the current pending lake-tiering backlog for tests. */
+    @VisibleForTesting
+    public long getEstimatedPendingStartTimeMs() {
+        return estimatedPendingStartTimeMs;
     }
 
     public int getWriterIdCount() {
@@ -482,6 +512,7 @@ public final class LogTablet {
         if (newHighWatermark.getMessageOffset() < 0) {
             throw new IllegalArgumentException("High watermark offset should be non-negative");
         }
+        boolean hadPendingRecords = hasPendingLakeBacklog();
         synchronized (lock) {
             if (newHighWatermark.getMessageOffset() < highWatermarkMetadata.getMessageOffset()) {
                 LOG.warn(
@@ -493,6 +524,7 @@ public final class LogTablet {
             highWatermarkMetadata = newHighWatermark;
             // TODO log offset listener to update log offset.
         }
+        onHighWatermarkAdvanced(hadPendingRecords);
         LOG.trace(
                 "Setting high watermark {} for bucket {}",
                 newHighWatermark,
@@ -599,13 +631,61 @@ public final class LogTablet {
     public void updateLakeLogEndOffset(long lakeLogEndOffset) {
         if (lakeLogEndOffset > this.lakeLogEndOffset) {
             this.lakeLogEndOffset = lakeLogEndOffset;
+            if (!hasPendingLakeBacklog()) {
+                clearPendingStartTime();
+            }
         }
     }
 
     public void updateLakeMaxTimestamp(long lakeMaxTimestamp) {
         if (lakeMaxTimestamp > this.lakeMaxTimestamp) {
             this.lakeMaxTimestamp = lakeMaxTimestamp;
+            onLakeProgressUpdated();
         }
+    }
+
+    private void onHighWatermarkAdvanced(boolean hadPendingRecords) {
+        boolean hasPendingRecords = hasPendingLakeBacklog();
+        if (!hasPendingRecords) {
+            clearPendingStartTime();
+        } else if (!hadPendingRecords) {
+            markPendingStartTimeNow();
+        }
+    }
+
+    private void onLakeProgressUpdated() {
+        if (!hasPendingLakeBacklog()) {
+            clearPendingStartTime();
+            return;
+        }
+        long timestampLag = getTimestampLag();
+        if (timestampLag < 0L) {
+            return;
+        }
+        long candidatePendingStartTimeMs =
+                Math.max(0L, clock.milliseconds() - Math.max(0L, timestampLag));
+        advancePendingStartTime(candidatePendingStartTimeMs);
+    }
+
+    private boolean hasPendingLakeBacklog() {
+        long firstPendingOffset =
+                lakeLogEndOffset >= 0L
+                        ? Math.max(lakeLogEndOffset, localLogStartOffset())
+                        : localLogStartOffset();
+        return firstPendingOffset < getHighWatermark();
+    }
+
+    private void clearPendingStartTime() {
+        estimatedPendingStartTimeMs = -1L;
+    }
+
+    private void markPendingStartTimeNow() {
+        estimatedPendingStartTimeMs = clock.milliseconds();
+    }
+
+    private void advancePendingStartTime(long candidatePendingStartTimeMs) {
+        estimatedPendingStartTimeMs =
+                Math.max(estimatedPendingStartTimeMs, candidatePendingStartTimeMs);
     }
 
     public void loadWriterSnapshot(long lastOffset) throws IOException {
