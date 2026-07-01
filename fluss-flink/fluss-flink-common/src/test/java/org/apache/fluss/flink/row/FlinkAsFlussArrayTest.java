@@ -20,6 +20,8 @@ package org.apache.fluss.flink.row;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypes;
@@ -27,13 +29,18 @@ import org.apache.fluss.types.DataTypes;
 import org.apache.flink.table.data.ArrayData;
 import org.apache.flink.table.data.DecimalData;
 import org.apache.flink.table.data.GenericArrayData;
+import org.apache.flink.table.data.GenericMapData;
+import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.data.TimestampData;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class FlinkAsFlussArrayTest {
 
@@ -101,10 +108,105 @@ class FlinkAsFlussArrayTest {
     }
 
     @Test
+    void testToBooleanArray() {
+        ArrayData array = new GenericArrayData(new boolean[] {true, false, true});
+        FlinkAsFlussArray flussArray = new FlinkAsFlussArray(array);
+        assertThat(flussArray.toBooleanArray()).isEqualTo(new boolean[] {true, false, true});
+    }
+
+    @Test
+    void testToByteArray() {
+        ArrayData array = new GenericArrayData(new byte[] {1, 2, 3});
+        FlinkAsFlussArray flussArray = new FlinkAsFlussArray(array);
+        assertThat(flussArray.toByteArray()).isEqualTo(new byte[] {1, 2, 3});
+    }
+
+    @Test
+    void testToShortArray() {
+        ArrayData array = new GenericArrayData(new short[] {10, 20, 30});
+        FlinkAsFlussArray flussArray = new FlinkAsFlussArray(array);
+        assertThat(flussArray.toShortArray()).isEqualTo(new short[] {10, 20, 30});
+    }
+
+    @Test
+    void testToIntArray() {
+        ArrayData array = new GenericArrayData(new int[] {100, 200, 300});
+        FlinkAsFlussArray flussArray = new FlinkAsFlussArray(array);
+        assertThat(flussArray.toIntArray()).isEqualTo(new int[] {100, 200, 300});
+    }
+
+    @Test
+    void testToLongArray() {
+        ArrayData array = new GenericArrayData(new long[] {1000L, 2000L, 3000L});
+        FlinkAsFlussArray flussArray = new FlinkAsFlussArray(array);
+        assertThat(flussArray.toLongArray()).isEqualTo(new long[] {1000L, 2000L, 3000L});
+    }
+
+    @Test
+    void testToFloatArray() {
+        ArrayData array = new GenericArrayData(new float[] {1.1f, 2.2f, 3.3f});
+        FlinkAsFlussArray flussArray = new FlinkAsFlussArray(array);
+        assertThat(flussArray.toFloatArray()).isEqualTo(new float[] {1.1f, 2.2f, 3.3f});
+    }
+
+    @Test
+    void testToDoubleArray() {
+        ArrayData array = new GenericArrayData(new double[] {1.1d, 2.2d, 3.3d});
+        FlinkAsFlussArray flussArray = new FlinkAsFlussArray(array);
+        assertThat(flussArray.toDoubleArray()).isEqualTo(new double[] {1.1d, 2.2d, 3.3d});
+    }
+
+    @Test
+    void testGetChar() {
+        ArrayData array = new GenericArrayData(new Object[] {StringData.fromString("ab")});
+        FlinkAsFlussArray flussArray = new FlinkAsFlussArray(array);
+        BinaryString ch = flussArray.getChar(0, 2);
+        assertThat(ch.toString()).isEqualTo("ab");
+    }
+
+    @Test
+    void testGetMap() {
+        Map<StringData, Integer> mapContent = new HashMap<>();
+        mapContent.put(StringData.fromString("key"), 42);
+        GenericMapData mapData = new GenericMapData(mapContent);
+        ArrayData array = new GenericArrayData(new Object[] {mapData});
+        FlinkAsFlussArray flussArray = new FlinkAsFlussArray(array);
+        InternalMap map = flussArray.getMap(0);
+        assertThat(map.size()).isEqualTo(1);
+    }
+
+    @Test
+    void testGetRow() {
+        GenericRowData rowData = GenericRowData.of(1, StringData.fromString("hello"));
+        ArrayData array = new GenericArrayData(new Object[] {rowData});
+        FlinkAsFlussArray flussArray = new FlinkAsFlussArray(array);
+        InternalRow row = flussArray.getRow(0, 2);
+        assertThat(row.getInt(0)).isEqualTo(1);
+        assertThat(row.getString(1).toString()).isEqualTo("hello");
+    }
+
+    @Test
+    void testGetVariantThrowsOnOlderFlink() {
+        ArrayData array = new GenericArrayData(new Object[] {"dummy"});
+        FlinkAsFlussArray flussArray = new FlinkAsFlussArray(array);
+        assertThatThrownBy(() -> flussArray.getVariant(0))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("Variant type requires Flink 2.1 or later");
+    }
+
+    @Test
     void testToObjectArray() {
         ArrayData array = new GenericArrayData(new Object[] {1, 2, 3});
         FlinkAsFlussArray flussArray = new FlinkAsFlussArray(array);
         Object[] result = flussArray.toObjectArray(DataTypes.INT());
         assertThat(result).containsExactly(1, 2, 3);
+    }
+
+    @Test
+    void testToObjectArrayWithNulls() {
+        ArrayData array = new GenericArrayData(new Object[] {1, null, 3});
+        FlinkAsFlussArray flussArray = new FlinkAsFlussArray(array);
+        Object[] result = flussArray.toObjectArray(DataTypes.INT());
+        assertThat(result).containsExactly(1, null, 3);
     }
 }

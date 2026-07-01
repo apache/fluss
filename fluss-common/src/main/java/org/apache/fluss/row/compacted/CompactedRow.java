@@ -31,6 +31,7 @@ import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.variant.Variant;
 import org.apache.fluss.utils.MurmurHashUtils;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -264,6 +265,11 @@ public class CompactedRow implements BinaryRow {
     @Override
     public InternalRow getRow(int pos, int numFields) {
         return decodedRow().getRow(pos, numFields);
+    }
+
+    @Override
+    public Variant getVariant(int pos) {
+        return decodedRow().getVariant(pos);
     }
 
     @Override

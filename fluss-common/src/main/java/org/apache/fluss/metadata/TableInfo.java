@@ -23,6 +23,7 @@ import org.apache.fluss.config.StatisticsColumnsConfig;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeChecks;
+import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
@@ -69,7 +70,10 @@ public final class TableInfo {
     private final long createdTime;
     private final long modifiedTime;
 
-    private int[] cachedStatsIndexMapping = null;
+    private volatile int[] cachedStatsIndexMapping = null;
+
+    /** Cached indices (into {@link #rowType}) of Variant-type columns. Computed lazily. */
+    private volatile int[] cachedVariantColumnIndices = null;
 
     public TableInfo(
             TablePath tablePath,
@@ -315,6 +319,27 @@ public final class TableInfo {
         // Cache the result
         cachedStatsIndexMapping = mapping;
         return mapping;
+    }
+
+    /**
+     * Returns the column indices (into {@link #getRowType()}) of all Variant-type columns.
+     *
+     * <p>The result is cached after the first call.
+     *
+     * @return an array of zero-based column indices; empty if there are no Variant columns.
+     */
+    public int[] getVariantColumnIndices() {
+        if (cachedVariantColumnIndices != null) {
+            return cachedVariantColumnIndices;
+        }
+        List<Integer> indices = new ArrayList<>();
+        for (int i = 0; i < rowType.getFieldCount(); i++) {
+            if (rowType.getTypeAt(i).getTypeRoot() == DataTypeRoot.VARIANT) {
+                indices.add(i);
+            }
+        }
+        cachedVariantColumnIndices = indices.stream().mapToInt(Integer::intValue).toArray();
+        return cachedVariantColumnIndices;
     }
 
     /**

@@ -25,7 +25,9 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.variant.ShreddingSchema;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
 
@@ -89,7 +91,25 @@ public class ArrowWriterPool implements ArrowWriterProvider {
             int bufferSizeInBytes,
             RowType schema,
             ArrowCompressionInfo compressionInfo) {
-        final String writerKey = tableId + "-" + schemaId + "-" + compressionInfo.toString();
+        return getOrCreateWriter(
+                tableId, schemaId, bufferSizeInBytes, schema, compressionInfo, null);
+    }
+
+    @Override
+    public ArrowWriter getOrCreateWriter(
+            long tableId,
+            int schemaId,
+            int bufferSizeInBytes,
+            RowType schema,
+            ArrowCompressionInfo compressionInfo,
+            @Nullable Map<String, ShreddingSchema> shreddingSchemas) {
+        final String writerKey =
+                tableId
+                        + "-"
+                        + schemaId
+                        + "-"
+                        + compressionInfo.toString()
+                        + (shreddingSchemas != null ? "-" + shreddingSchemas.hashCode() : "");
         return inLock(
                 lock,
                 () -> {
@@ -112,7 +132,8 @@ public class ArrowWriterPool implements ArrowWriterProvider {
                                         allocator,
                                         this,
                                         compressionInfo,
-                                        compressionRatioEstimator),
+                                        compressionRatioEstimator,
+                                        shreddingSchemas),
                                 bufferSizeInBytes);
                     }
                 });

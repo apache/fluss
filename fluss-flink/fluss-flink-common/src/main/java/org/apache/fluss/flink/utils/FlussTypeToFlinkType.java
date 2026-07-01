@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.utils;
 
+import org.apache.fluss.flink.adapter.VariantAdapter;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.BigIntType;
 import org.apache.fluss.types.BinaryType;
@@ -38,15 +39,21 @@ import org.apache.fluss.types.StringType;
 import org.apache.fluss.types.TimeType;
 import org.apache.fluss.types.TimestampType;
 import org.apache.fluss.types.TinyIntType;
+import org.apache.fluss.types.VariantType;
 
 import org.apache.flink.table.api.DataTypes;
+import org.apache.flink.table.types.AtomicDataType;
 import org.apache.flink.table.types.DataType;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /** Convert Fluss's {@link org.apache.fluss.types.DataType} to Flink's {@link DataType}. */
 class FlussTypeToFlinkType implements DataTypeVisitor<DataType> {
+
+    private static final Logger LOG = LoggerFactory.getLogger(FlussTypeToFlinkType.class);
 
     static final FlussTypeToFlinkType INSTANCE = new FlussTypeToFlinkType();
 
@@ -166,6 +173,12 @@ class FlussTypeToFlinkType implements DataTypeVisitor<DataType> {
             dataFields.add(dataTypeField);
         }
         return withNullability(DataTypes.ROW(dataFields), rowType.isNullable());
+    }
+
+    @Override
+    public DataType visit(VariantType variantType) {
+        // Use VariantAdapter instead of reflection to create Flink's VariantType.
+        return new AtomicDataType(VariantAdapter.flinkVariantType(variantType.isNullable()));
     }
 
     private DataType withNullability(DataType flinkType, boolean nullable) {

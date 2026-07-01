@@ -253,6 +253,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
                         context.getOutputProjectedRow(schemaId),
                         context.getVectorSchemaRoot(schemaId),
                         context.getBufferAllocator(),
+                        context.getFlatColumnSpecs(schemaId),
                         timestamp);
             case INDEXED:
                 return rowRecordIterator(
@@ -385,6 +386,9 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             @Nullable ProjectedRow outputProjection,
             VectorSchemaRoot root,
             BufferAllocator allocator,
+            @Nullable
+                    java.util.List<org.apache.fluss.row.arrow.vectors.FlatColumnSpec>
+                            flatColumnSpecs,
             long timestamp) {
         boolean isAppendOnly = isAppendOnly();
         int recordsDataOffset = recordsDataOffset();
@@ -395,7 +399,14 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             int arrowLength = sizeInBytes() - recordsDataOffset;
             ArrowReader reader =
                     ArrowUtils.createArrowReader(
-                            segment, arrowOffset, arrowLength, root, allocator, rowType);
+                            segment,
+                            arrowOffset,
+                            arrowLength,
+                            root,
+                            allocator,
+                            rowType,
+                            null,
+                            flatColumnSpecs);
             return new ArrowLogRecordIterator(root, reader, timestamp, outputProjection) {
                 @Override
                 protected ChangeType getChangeType(int rowId) {
@@ -412,7 +423,14 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             int arrowLength = sizeInBytes() - recordsDataOffset - changeTypeVector.sizeInBytes();
             ArrowReader reader =
                     ArrowUtils.createArrowReader(
-                            segment, arrowOffset, arrowLength, root, allocator, rowType);
+                            segment,
+                            arrowOffset,
+                            arrowLength,
+                            root,
+                            allocator,
+                            rowType,
+                            null,
+                            flatColumnSpecs);
             return new ArrowLogRecordIterator(root, reader, timestamp, outputProjection) {
                 @Override
                 protected ChangeType getChangeType(int rowId) {
@@ -477,6 +495,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             // Clear old buffers before the next batch load to avoid temporary
             // duplication of buffers (old + new) during loadFieldBuffers.
             root.clear();
+            reader.close();
         }
     }
 

@@ -233,5 +233,18 @@ public interface LogRecordBatch {
          */
         @Nullable
         ProjectedRow getOutputProjectedRow(int schemaId);
+
+        /**
+         * Returns the flat column layout the {@link org.apache.fluss.row.arrow.ArrowReader} should
+         * expose for the given schema id, or {@code null} when no Variant sub-field flattening is
+         * configured. When non-null, each entry maps either to a physical Arrow column or to a
+         * typed sub-field of a shredded Variant column. This is only consumed by {@link
+         * org.apache.fluss.metadata.LogFormat#ARROW} batches.
+         */
+        @Nullable
+        default java.util.List<org.apache.fluss.row.arrow.vectors.FlatColumnSpec>
+                getFlatColumnSpecs(int schemaId) {
+            return null;
+        }
     }
 }

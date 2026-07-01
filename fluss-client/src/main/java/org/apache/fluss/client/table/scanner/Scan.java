@@ -27,6 +27,7 @@ import org.apache.fluss.predicate.Predicate;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -48,11 +49,40 @@ public interface Scan {
     Scan project(@Nullable int[] projectedColumns);
 
     /**
-     * Returns a new scan from this that will read the given data columns.
+     * Returns a new scan from this that will read the given data columns. Supports Variant
+     * sub-field projection using the syntax {@code "variant_col:sub_field"}, for example:
      *
-     * @param projectedColumnNames the selected column names
+     * <pre>{@code
+     * // Project column "id" and sub-fields "name", "age" from Variant column "data"
+     * scan.project("id", "data:name", "data:age");
+     * }</pre>
+     *
+     * <p>When a Variant column is referenced with sub-field syntax, the physical Variant column is
+     * automatically included in the server-side projection, but the rows returned by {@link
+     * LogScanner} are flattened in the user-supplied order. Untyped sub-fields are exposed as raw
+     * {@code VARIANT} values; typed sub-fields can use {@code "column:subfield::TYPE"} and are
+     * exposed as scalar columns.
+     *
+     * <p>The first implementation supports only top-level Variant sub-fields on ARROW log scanners.
+     * Batch / KV scan paths reject sub-field projections until they have a dedicated flattening
+     * path. Server-side pruning removes non-requested {@code typed_value} children for shredded
+     * fields, while residual {@code metadata/value} remains available for fallback correctness.
+     *
+     * @param projectedColumnNames the selected column names, optionally with variant sub-field
+     *     syntax {@code "column:subfield"}
      */
     Scan project(List<String> projectedColumnNames);
+
+    /**
+     * Returns a new scan from this that will read the given data columns by name. This is a
+     * convenience overload of {@link #project(List)}.
+     *
+     * @param projectedColumnNames the selected column names, optionally with variant sub-field
+     *     syntax {@code "column:subfield"}
+     */
+    default Scan project(String... projectedColumnNames) {
+        return project(Arrays.asList(projectedColumnNames));
+    }
 
     /**
      * Returns a new scan from this that will read the given limited row number.

@@ -27,6 +27,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.variant.Variant;
 import org.apache.fluss.utils.types.Tuple2;
 
 import java.util.Arrays;
@@ -264,6 +265,39 @@ public final class TestData {
                     .build();
 
     // ---------------------------- data3 table info end ------------------------------
+
+    // ------------------- variant data and related table info begin ----------------------
+    public static final RowType VARIANT_ROW_TYPE =
+            DataTypes.ROW(
+                    new DataField("id", DataTypes.INT()),
+                    new DataField("data", DataTypes.VARIANT()));
+
+    public static final Schema VARIANT_SCHEMA =
+            Schema.newBuilder()
+                    .column("id", DataTypes.INT())
+                    .withComment("id is primary column")
+                    .column("data", DataTypes.VARIANT())
+                    .withComment("data is variant column")
+                    .build();
+
+    public static final long VARIANT_TABLE_ID = 150006L;
+    public static final TablePath VARIANT_TABLE_PATH =
+            TablePath.of("test_db_1", "test_variant_table");
+    public static final PhysicalTablePath VARIANT_PHYSICAL_TABLE_PATH =
+            PhysicalTablePath.of(VARIANT_TABLE_PATH);
+    public static final TableDescriptor VARIANT_TABLE_DESCRIPTOR =
+            TableDescriptor.builder().schema(VARIANT_SCHEMA).distributedBy(3).build();
+
+    public static final List<Object[]> VARIANT_DATA =
+            Arrays.asList(
+                    new Object[] {
+                        1, Variant.fromJson("{\"name\":\"Alice\",\"age\":25,\"city\":\"NYC\"}")
+                    },
+                    new Object[] {2, Variant.fromJson("{\"name\":\"Bob\",\"age\":30}")},
+                    new Object[] {
+                        3, Variant.fromJson("{\"name\":\"Carol\",\"age\":35,\"extra\":true}")
+                    });
+    // ------------------- variant data and related table info end ------------------------
 
     // ------------------- Statistics test data and schemas begin ----------------------
     // Schema with mixed types for comprehensive statistics testing

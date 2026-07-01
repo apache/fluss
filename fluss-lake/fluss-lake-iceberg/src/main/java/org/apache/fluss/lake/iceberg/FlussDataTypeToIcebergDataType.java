@@ -38,6 +38,7 @@ import org.apache.fluss.types.StringType;
 import org.apache.fluss.types.TimeType;
 import org.apache.fluss.types.TimestampType;
 import org.apache.fluss.types.TinyIntType;
+import org.apache.fluss.types.VariantType;
 
 import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types;
@@ -207,5 +208,15 @@ public class FlussDataTypeToIcebergDataType implements DataTypeVisitor<Type> {
         }
 
         return Types.StructType.of(fields);
+    }
+
+    @Override
+    public Type visit(VariantType variantType) {
+        // TODO: Iceberg 2.8+ supports Variant type (VariantType.get()). When Fluss upgrades
+        //  to Iceberg 2.8+, this can be mapped to Iceberg's VariantType to enable tiering
+        //  of Variant columns to Iceberg tables. Currently, tables with Variant columns
+        //  cannot be tiered to Iceberg and must be handled by other lake formats (e.g., Paimon)
+        //  or wait for the Iceberg upgrade.
+        throw new UnsupportedOperationException("Variant type is not supported in Iceberg.");
     }
 }

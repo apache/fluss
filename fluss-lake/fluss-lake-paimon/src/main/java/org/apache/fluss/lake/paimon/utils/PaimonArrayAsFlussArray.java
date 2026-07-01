@@ -24,6 +24,7 @@ import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.types.variant.Variant;
 
 import org.apache.paimon.data.Timestamp;
 
@@ -147,6 +148,11 @@ public class PaimonArrayAsFlussArray implements InternalArray {
     @Override
     public InternalRow getRow(int pos, int numFields) {
         return new PaimonRowAsFlussRow(paimonArray.getRow(pos, numFields));
+    }
+
+    @Override
+    public Variant getVariant(int pos) {
+        throw new UnsupportedOperationException("Variant type is not supported in Paimon.");
     }
 
     @Override

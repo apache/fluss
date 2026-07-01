@@ -897,6 +897,21 @@ message PbFetchLogReqForTable {
   // the schema against which the predicate was compiled.
   optional PbPredicate filter_predicate = 5;
   optional int32 filter_schema_id = 6;
+  // Variant sub-field projection hints. Each entry specifies the sub-fields
+  // to project within a Variant column. Empty means no sub-field projection.
+  repeated PbVariantFieldProjection variant_field_projections = 7;
+}
+
+// Specifies which sub-fields within a Variant column should be projected.
+message PbVariantFieldProjection {
+  // Optional for forward compatibility. V1 clients set it to the table's
+  // top-level Variant column index; V1 servers ignore entries without
+  // column_index so a follow-up version may add column_id and prefer it when
+  // available.
+  optional int32 column_index = 1;
+  // Top-level Variant field names to retain. Nested paths are reserved for a
+  // future path-aware projection protocol.
+  repeated string field_names = 2;
 }
 
 message PbFetchLogReqForBucket {

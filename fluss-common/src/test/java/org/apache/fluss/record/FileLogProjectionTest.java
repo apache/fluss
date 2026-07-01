@@ -19,11 +19,24 @@ package org.apache.fluss.record;
 
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.SchemaNotExistException;
+import org.apache.fluss.memory.ManagedPagedOutputView;
+import org.apache.fluss.memory.TestingMemorySegmentPool;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.arrow.ArrowWriter;
+import org.apache.fluss.row.arrow.ArrowWriterPool;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
+import org.apache.fluss.testutils.DataTestUtils;
+import org.apache.fluss.types.DataField;
+import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.variant.ShreddedField;
+import org.apache.fluss.types.variant.ShreddingSchema;
+import org.apache.fluss.types.variant.Variant;
 import org.apache.fluss.utils.CloseableIterator;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -39,7 +52,10 @@ import java.io.File;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Stream;
 
@@ -194,18 +210,22 @@ class FileLogProjectionTest {
                             new Object[] {"i"},
                             new Object[] {"j"});
 
-            assertThatThrownBy(
-                            () ->
-                                    doProjection(
-                                            1L,
-                                            2,
-                                            projection,
-                                            records,
-                                            new int[] {0, 2},
-                                            records.sizeInBytes()))
-                    .isInstanceOf(InvalidColumnProjectionException.class)
-                    .hasMessage(
-                            "Projected fields [0, 2] is out of bound for schema with 2 fields.");
+            // Schema evolution: [0, 2] is valid against the latest schema (3 fields).
+            // For old data (schemaId=1, 2 fields), createProjectionInfo filters [0, 2]
+            // to [0]. In production, LogRecordReadContext applies the same filtering
+            // on the client side.
+            projection.setCurrentProjection(
+                    1L, testingSchemaGetter, DEFAULT_COMPRESSION, new int[] {0, 2});
+            LogRecords projected =
+                    projection.project(
+                            records.channel(), 0, records.sizeInBytes(), records.sizeInBytes());
+            assertThat(projected.sizeInBytes()).isGreaterThan(0);
+            // Verify the cached projection info has filtered positions for old schema
+            FileLogProjection.ProjectionInfo info =
+                    cache.getProjectionInfo(1L, (short) 1, new int[] {0, 2});
+            assertThat(info).isNotNull();
+            assertThat(info.selectedFieldPositions).isEqualTo(new int[] {0});
+            assertThat(info.nodesProjection.stream().toArray()).isEqualTo(new int[] {0});
         }
     }
 
@@ -981,6 +1001,415 @@ class FileLogProjectionTest {
                     }
                 }
             }
+        }
+    }
+
+    // --------------------------------------------------------------------------------------------
+    // Shredding schema projection tests
+    // --------------------------------------------------------------------------------------------
+
+    private static final RowType VARIANT_ROW_TYPE =
+            DataTypes.ROW(
+                    new DataField("id", DataTypes.INT()),
+                    new DataField("data", DataTypes.VARIANT()));
+
+    private static final Schema VARIANT_SCHEMA =
+            Schema.newBuilder()
+                    .column("id", DataTypes.INT())
+                    .column("data", DataTypes.VARIANT())
+                    .build();
+
+    private static final short VARIANT_SCHEMA_ID = 3;
+
+    private static ShreddingSchema defaultShreddingSchema() {
+        return new ShreddingSchema(
+                "data",
+                Arrays.asList(
+                        new ShreddedField("name", DataTypes.STRING()),
+                        new ShreddedField("age", DataTypes.INT())));
+    }
+
+    private static List<Object[]> variantTestData() {
+        return Arrays.asList(
+                new Object[] {
+                    1, Variant.fromJson("{\"name\":\"Alice\",\"age\":25,\"city\":\"NYC\"}")
+                },
+                new Object[] {2, Variant.fromJson("{\"name\":\"Bob\",\"age\":30}")},
+                new Object[] {
+                    3, Variant.fromJson("{\"name\":\"Carol\",\"age\":35,\"extra\":true}")
+                });
+    }
+
+    @SafeVarargs
+    private final FileLogRecords createShreddedFileLogRecords(
+            short schemaId,
+            byte recordBatchMagic,
+            RowType rowType,
+            Map<String, ShreddingSchema> shreddingSchemas,
+            List<Object[]>... inputs)
+            throws Exception {
+        FileLogRecords fileLogRecords =
+                FileLogRecords.open(new File(tempDir, UUID.randomUUID() + ".log"));
+        long offsetBase = 0L;
+        for (List<Object[]> input : inputs) {
+            try (BufferAllocator allocator = new RootAllocator(Integer.MAX_VALUE);
+                    ArrowWriterPool provider = new ArrowWriterPool(allocator)) {
+                ArrowWriter writer =
+                        provider.getOrCreateWriter(
+                                1L,
+                                schemaId,
+                                Integer.MAX_VALUE,
+                                rowType,
+                                DEFAULT_COMPRESSION,
+                                shreddingSchemas);
+                MemoryLogRecordsArrowBuilder builder =
+                        MemoryLogRecordsArrowBuilder.builder(
+                                offsetBase,
+                                recordBatchMagic,
+                                schemaId,
+                                writer,
+                                new ManagedPagedOutputView(
+                                        new TestingMemorySegmentPool(10 * 1024)));
+                for (Object[] objs : input) {
+                    builder.append(ChangeType.APPEND_ONLY, DataTestUtils.row(rowType, objs));
+                }
+                builder.close();
+                MemoryLogRecords memoryLogRecords =
+                        MemoryLogRecords.pointToBytesView(builder.build());
+                ((DefaultLogRecordBatch) memoryLogRecords.batches().iterator().next())
+                        .setCommitTimestamp(System.currentTimeMillis());
+                memoryLogRecords.ensureValid(recordBatchMagic);
+                fileLogRecords.append(memoryLogRecords);
+                offsetBase += input.size();
+            }
+        }
+        fileLogRecords.flush();
+        return fileLogRecords;
+    }
+
+    /** Read projected records and extract field values. Supports INT, STRING, and VARIANT types. */
+    private List<Object[]> doShreddedProjection(
+            long tableId,
+            int schemaId,
+            TestingSchemaGetter schemaGetter,
+            FileLogProjection projection,
+            FileLogRecords fileLogRecords,
+            int[] projectedFields,
+            int fetchMaxBytes)
+            throws Exception {
+        return doShreddedProjection(
+                tableId,
+                schemaId,
+                schemaGetter,
+                projection,
+                fileLogRecords,
+                projectedFields,
+                null,
+                fetchMaxBytes);
+    }
+
+    private List<Object[]> doShreddedProjection(
+            long tableId,
+            int schemaId,
+            TestingSchemaGetter schemaGetter,
+            FileLogProjection projection,
+            FileLogRecords fileLogRecords,
+            int[] projectedFields,
+            Map<Integer, List<String>> variantFieldProjection,
+            int fetchMaxBytes)
+            throws Exception {
+        projection.setCurrentProjection(
+                tableId,
+                schemaGetter,
+                DEFAULT_COMPRESSION,
+                projectedFields,
+                variantFieldProjection);
+        LogRecords project =
+                projection.project(
+                        fileLogRecords.channel(), 0, fileLogRecords.sizeInBytes(), fetchMaxBytes);
+        RowType rowType = schemaGetter.getSchema(schemaId).getRowType();
+        RowType projectedType = rowType.project(projectedFields);
+        List<Object[]> results = new ArrayList<>();
+        try (LogRecordReadContext context =
+                createArrowReadContext(projectedType, schemaId, schemaGetter, true)) {
+            for (LogRecordBatch batch : project.batches()) {
+                try (CloseableIterator<LogRecord> records = batch.records(context)) {
+                    while (records.hasNext()) {
+                        LogRecord record = records.next();
+                        InternalRow row = record.getRow();
+                        Object[] objs = new Object[projectedFields.length];
+                        for (int i = 0; i < projectedFields.length; i++) {
+                            if (row.isNullAt(i)) {
+                                objs[i] = null;
+                                continue;
+                            }
+                            switch (projectedType.getTypeAt(i).getTypeRoot()) {
+                                case INTEGER:
+                                    objs[i] = row.getInt(i);
+                                    break;
+                                case STRING:
+                                    objs[i] = row.getString(i).toString();
+                                    break;
+                                case VARIANT:
+                                    objs[i] = row.getVariant(i);
+                                    break;
+                                default:
+                                    throw new IllegalArgumentException(
+                                            "Unsupported type: " + projectedType.getTypeAt(i));
+                            }
+                        }
+                        results.add(objs);
+                    }
+                }
+            }
+        }
+        return results;
+    }
+
+    private static void assertVariantField(
+            Variant variant, String fieldName, Object expectedValue) {
+        Variant field = variant.getFieldByName(fieldName);
+        assertThat(field).as("field '" + fieldName + "' should exist").isNotNull();
+        if (expectedValue instanceof String) {
+            assertThat(field.getString()).isEqualTo(expectedValue);
+        } else if (expectedValue instanceof Integer) {
+            assertThat(field.getInt()).isEqualTo((int) expectedValue);
+        } else if (expectedValue instanceof Long) {
+            assertThat(field.getLong()).isEqualTo((long) expectedValue);
+        } else if (expectedValue instanceof Boolean) {
+            assertThat(field.getBoolean()).isEqualTo((boolean) expectedValue);
+        } else {
+            fail("Unsupported expectedValue type: " + expectedValue.getClass());
+        }
+    }
+
+    @Test
+    void testShreddedProjectionVariantSubFields() throws Exception {
+        Map<String, ShreddingSchema> shreddingSchemas =
+                Collections.singletonMap(
+                        "data",
+                        new ShreddingSchema(
+                                "data",
+                                Arrays.asList(
+                                        new ShreddedField("name", DataTypes.STRING()),
+                                        new ShreddedField("city", DataTypes.STRING()),
+                                        new ShreddedField("score", DataTypes.BIGINT()))));
+        TestingSchemaGetter schemaGetter =
+                new TestingSchemaGetter(new SchemaInfo(VARIANT_SCHEMA, VARIANT_SCHEMA_ID));
+        List<Object[]> input =
+                Arrays.asList(
+                        new Object[] {
+                            1,
+                            Variant.fromJson("{\"name\":\"Alice\",\"city\":\"NYC\",\"score\":10}")
+                        },
+                        new Object[] {
+                            2, Variant.fromJson("{\"name\":\"Bob\",\"city\":\"LA\",\"score\":20}")
+                        });
+
+        try (FileLogRecords records =
+                createShreddedFileLogRecords(
+                        VARIANT_SCHEMA_ID,
+                        LOG_MAGIC_VALUE_V1,
+                        VARIANT_ROW_TYPE,
+                        shreddingSchemas,
+                        input)) {
+            FileLogProjection projection = new FileLogProjection(new ProjectionPushdownCache());
+            List<Object[]> fullResults =
+                    doShreddedProjection(
+                            1L,
+                            VARIANT_SCHEMA_ID,
+                            schemaGetter,
+                            projection,
+                            records,
+                            new int[] {0, 1},
+                            records.sizeInBytes());
+            assertVariantField((Variant) fullResults.get(0)[1], "city", "NYC");
+            assertVariantField((Variant) fullResults.get(0)[1], "score", 10L);
+
+            List<Object[]> results =
+                    doShreddedProjection(
+                            1L,
+                            VARIANT_SCHEMA_ID,
+                            schemaGetter,
+                            projection,
+                            records,
+                            new int[] {0, 1},
+                            Collections.singletonMap(1, Arrays.asList("name", "city")),
+                            records.sizeInBytes());
+
+            assertThat(results).hasSize(2);
+            assertThat(results.get(0)[0]).isEqualTo(1);
+            assertVariantField((Variant) results.get(0)[1], "name", "Alice");
+            assertVariantField((Variant) results.get(0)[1], "city", "NYC");
+            assertThat(((Variant) results.get(0)[1]).getFieldByName("score")).isNull();
+            assertThat(results.get(1)[0]).isEqualTo(2);
+            assertVariantField((Variant) results.get(1)[1], "name", "Bob");
+            assertVariantField((Variant) results.get(1)[1], "city", "LA");
+            assertThat(((Variant) results.get(1)[1]).getFieldByName("score")).isNull();
+        }
+    }
+
+    @Test
+    void testShreddedProjectionAllColumns() throws Exception {
+        Map<String, ShreddingSchema> shreddingSchemas =
+                Collections.singletonMap("data", defaultShreddingSchema());
+        TestingSchemaGetter schemaGetter =
+                new TestingSchemaGetter(new SchemaInfo(VARIANT_SCHEMA, VARIANT_SCHEMA_ID));
+
+        try (FileLogRecords records =
+                createShreddedFileLogRecords(
+                        VARIANT_SCHEMA_ID,
+                        LOG_MAGIC_VALUE_V1,
+                        VARIANT_ROW_TYPE,
+                        shreddingSchemas,
+                        variantTestData())) {
+            FileLogProjection projection = new FileLogProjection(new ProjectionPushdownCache());
+            List<Object[]> results =
+                    doShreddedProjection(
+                            1L,
+                            VARIANT_SCHEMA_ID,
+                            schemaGetter,
+                            projection,
+                            records,
+                            new int[] {0, 1},
+                            records.sizeInBytes());
+            assertThat(results).hasSize(3);
+            // Row 0: id=1, data={name:Alice, age:25, city:NYC}
+            assertThat(results.get(0)[0]).isEqualTo(1);
+            Variant v0 = (Variant) results.get(0)[1];
+            assertVariantField(v0, "name", "Alice");
+            assertVariantField(v0, "age", 25);
+            assertVariantField(v0, "city", "NYC");
+            // Row 1: id=2, data={name:Bob, age:30}
+            assertThat(results.get(1)[0]).isEqualTo(2);
+            Variant v1 = (Variant) results.get(1)[1];
+            assertVariantField(v1, "name", "Bob");
+            assertVariantField(v1, "age", 30);
+            // Row 2: id=3, data={name:Carol, age:35, extra:true}
+            assertThat(results.get(2)[0]).isEqualTo(3);
+            Variant v2 = (Variant) results.get(2)[1];
+            assertVariantField(v2, "name", "Carol");
+            assertVariantField(v2, "age", 35);
+            assertVariantField(v2, "extra", true);
+        }
+    }
+
+    @Test
+    void testShreddedProjectionVariantOnly() throws Exception {
+        Map<String, ShreddingSchema> shreddingSchemas =
+                Collections.singletonMap("data", defaultShreddingSchema());
+        TestingSchemaGetter schemaGetter =
+                new TestingSchemaGetter(new SchemaInfo(VARIANT_SCHEMA, VARIANT_SCHEMA_ID));
+
+        try (FileLogRecords records =
+                createShreddedFileLogRecords(
+                        VARIANT_SCHEMA_ID,
+                        LOG_MAGIC_VALUE_V1,
+                        VARIANT_ROW_TYPE,
+                        shreddingSchemas,
+                        variantTestData())) {
+            FileLogProjection projection = new FileLogProjection(new ProjectionPushdownCache());
+            // Project only variant column [1]
+            List<Object[]> results =
+                    doShreddedProjection(
+                            1L,
+                            VARIANT_SCHEMA_ID,
+                            schemaGetter,
+                            projection,
+                            records,
+                            new int[] {1},
+                            records.sizeInBytes());
+            assertThat(results).hasSize(3);
+            // Verify variant values are intact after projection
+            Variant v0 = (Variant) results.get(0)[0];
+            assertVariantField(v0, "name", "Alice");
+            assertVariantField(v0, "age", 25);
+            assertVariantField(v0, "city", "NYC");
+
+            Variant v1 = (Variant) results.get(1)[0];
+            assertVariantField(v1, "name", "Bob");
+            assertVariantField(v1, "age", 30);
+
+            Variant v2 = (Variant) results.get(2)[0];
+            assertVariantField(v2, "name", "Carol");
+            assertVariantField(v2, "age", 35);
+            assertVariantField(v2, "extra", true);
+        }
+    }
+
+    @Test
+    void testShreddedProjectionNonVariantOnly() throws Exception {
+        Map<String, ShreddingSchema> shreddingSchemas =
+                Collections.singletonMap("data", defaultShreddingSchema());
+        TestingSchemaGetter schemaGetter =
+                new TestingSchemaGetter(new SchemaInfo(VARIANT_SCHEMA, VARIANT_SCHEMA_ID));
+
+        try (FileLogRecords records =
+                createShreddedFileLogRecords(
+                        VARIANT_SCHEMA_ID,
+                        LOG_MAGIC_VALUE_V1,
+                        VARIANT_ROW_TYPE,
+                        shreddingSchemas,
+                        variantTestData())) {
+            FileLogProjection projection = new FileLogProjection(new ProjectionPushdownCache());
+            // Project only non-variant column [0] (id: INT)
+            // Schema prefix should NOT be included since projected field has no typed_value
+            List<Object[]> results =
+                    doShreddedProjection(
+                            1L,
+                            VARIANT_SCHEMA_ID,
+                            schemaGetter,
+                            projection,
+                            records,
+                            new int[] {0},
+                            records.sizeInBytes());
+            assertThat(results).hasSize(3);
+            assertThat(results.get(0)[0]).isEqualTo(1);
+            assertThat(results.get(1)[0]).isEqualTo(2);
+            assertThat(results.get(2)[0]).isEqualTo(3);
+        }
+    }
+
+    @Test
+    void testShreddedProjectionMultipleBatches() throws Exception {
+        Map<String, ShreddingSchema> shreddingSchemas =
+                Collections.singletonMap("data", defaultShreddingSchema());
+        TestingSchemaGetter schemaGetter =
+                new TestingSchemaGetter(new SchemaInfo(VARIANT_SCHEMA, VARIANT_SCHEMA_ID));
+
+        List<Object[]> batch1 =
+                Arrays.asList(
+                        new Object[] {1, Variant.fromJson("{\"name\":\"Alice\",\"age\":25}")},
+                        new Object[] {2, Variant.fromJson("{\"name\":\"Bob\",\"age\":30}")});
+        List<Object[]> batch2 =
+                Collections.singletonList(
+                        new Object[] {3, Variant.fromJson("{\"name\":\"Carol\",\"age\":35}")});
+
+        try (FileLogRecords records =
+                createShreddedFileLogRecords(
+                        VARIANT_SCHEMA_ID,
+                        LOG_MAGIC_VALUE_V1,
+                        VARIANT_ROW_TYPE,
+                        shreddingSchemas,
+                        batch1,
+                        batch2)) {
+            FileLogProjection projection = new FileLogProjection(new ProjectionPushdownCache());
+            List<Object[]> results =
+                    doShreddedProjection(
+                            1L,
+                            VARIANT_SCHEMA_ID,
+                            schemaGetter,
+                            projection,
+                            records,
+                            new int[] {0, 1},
+                            records.sizeInBytes());
+            assertThat(results).hasSize(3);
+            assertThat(results.get(0)[0]).isEqualTo(1);
+            assertVariantField((Variant) results.get(0)[1], "name", "Alice");
+            assertThat(results.get(1)[0]).isEqualTo(2);
+            assertVariantField((Variant) results.get(1)[1], "name", "Bob");
+            assertThat(results.get(2)[0]).isEqualTo(3);
+            assertVariantField((Variant) results.get(2)[1], "name", "Carol");
         }
     }
 }
