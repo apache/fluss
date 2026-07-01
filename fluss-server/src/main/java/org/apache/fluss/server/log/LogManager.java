@@ -63,6 +63,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
@@ -104,6 +105,7 @@ public final class LogManager extends TabletManagerBase {
     private final Map<TableBucket, LogTablet> currentLogs = new ConcurrentHashMap<>();
 
     private volatile Map<File, OffsetCheckpointFile> recoveryPointCheckpoints;
+    private volatile ScheduledFuture<?> recoveryPointCheckpointTask;
     private boolean loadLogsCompletedFlag = false;
 
     private LogManager(
@@ -146,7 +148,17 @@ public final class LogManager extends TabletManagerBase {
     public void startup() {
         loadAllLogs();
 
-        // TODO add more scheduler, like log-flusher etc.
+        long checkpointIntervalMs =
+                conf.get(ConfigOptions.LOG_FLUSH_OFFSET_CHECKPOINT_INTERVAL).toMillis();
+        LOG.info(
+                "Starting log recovery point checkpoint with a period of {} ms.",
+                checkpointIntervalMs);
+        recoveryPointCheckpointTask =
+                scheduler.schedule(
+                        "fluss-recovery-point-checkpoint",
+                        this::checkpointRecoveryOffsets,
+                        checkpointIntervalMs,
+                        checkpointIntervalMs);
     }
 
     private void initializeCheckpointMaps() throws IOException {
@@ -447,6 +459,10 @@ public final class LogManager extends TabletManagerBase {
     /** Close all the logs. */
     public void shutdown() {
         LOG.info("Shutting down LogManager.");
+        if (recoveryPointCheckpointTask != null) {
+            recoveryPointCheckpointTask.cancel(false);
+            recoveryPointCheckpointTask = null;
+        }
 
         Map<File, List<LogTablet>> logsByDataDir = new LinkedHashMap<>();
         for (File dataDir : dataDirs) {
@@ -614,6 +630,13 @@ public final class LogManager extends TabletManagerBase {
                 currentLogs.values().stream()
                         .filter(log -> log.getDataDir().equals(dataDir))
                         .collect(Collectors.toList()));
+    }
+
+    @VisibleForTesting
+    void checkpointRecoveryOffsets() {
+        for (File dataDir : dataDirs) {
+            checkpointRecoveryOffsets(dataDir);
+        }
     }
 
     private void checkpointRecoveryOffsets(File dataDir, List<LogTablet> logs) {

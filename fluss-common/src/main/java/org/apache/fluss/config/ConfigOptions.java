@@ -829,6 +829,15 @@ public class ConfigOptions {
                                     + "we would fsync after every message; if it were 5 we would fsync after every "
                                     + "five messages.");
 
+    public static final ConfigOption<Duration> LOG_FLUSH_OFFSET_CHECKPOINT_INTERVAL =
+            key("log.flush.offset.checkpoint-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(60))
+                    .withDescription(
+                            "The frequency with which we update the persistent record of the last "
+                                    + "flush which acts as the log recovery point. The default "
+                                    + "setting is 60 seconds.");
+
     public static final ConfigOption<Duration> LOG_REPLICA_HIGH_WATERMARK_CHECKPOINT_INTERVAL =
             key("log.replica.high-watermark.checkpoint-interval")
                     .durationType()
