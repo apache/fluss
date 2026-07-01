@@ -22,12 +22,13 @@ import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.client.tiering.TieringSplit;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
-import org.apache.fluss.flink.tiering.source.split.TieringSplit;
+import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
 import org.apache.fluss.lake.committer.TieringStats;
@@ -95,17 +96,17 @@ import static org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnum
  * </ul>
  */
 public class TieringSourceEnumerator
-        implements SplitEnumerator<TieringSplit, TieringSourceEnumeratorState> {
+        implements SplitEnumerator<FlinkTieringSplit, TieringSourceEnumeratorState> {
 
     private static final Logger LOG = LoggerFactory.getLogger(TieringSourceEnumerator.class);
 
     private final Configuration flussConf;
-    private final SplitEnumeratorContext<TieringSplit> context;
+    private final SplitEnumeratorContext<FlinkTieringSplit> context;
     private final LakeTieringFactory<?, ?> lakeTieringFactory;
     private final ScheduledExecutorService timerService;
     private final SplitEnumeratorMetricGroup enumeratorMetricGroup;
     private final long pollTieringTableIntervalMs;
-    private final List<TieringSplit> pendingSplits;
+    private final List<FlinkTieringSplit> pendingSplits;
     private final Set<Integer> readersAwaitingSplit;
 
     private final Map<Long, Long> tieringTableEpochs;
@@ -127,7 +128,7 @@ public class TieringSourceEnumerator
 
     public TieringSourceEnumerator(
             Configuration flussConf,
-            SplitEnumeratorContext<TieringSplit> context,
+            SplitEnumeratorContext<FlinkTieringSplit> context,
             LakeTieringFactory<?, ?> lakeTieringFactory,
             long pollTieringTableIntervalMs) {
         this.flussConf = flussConf;
@@ -210,7 +211,7 @@ public class TieringSourceEnumerator
     }
 
     @Override
-    public void addSplitsBack(List<TieringSplit> splits, int subtaskId) {
+    public void addSplitsBack(List<FlinkTieringSplit> splits, int subtaskId) {
         readersAwaitingSplit.add(subtaskId);
         pendingSplits.addAll(splits);
         assignSplits();
@@ -338,7 +339,7 @@ public class TieringSourceEnumerator
             LOG.info("Table {}-{} reached max duration. Force completing.", tablePath, tableId);
             tieringReachMaxDurationsTables.add(tableId);
 
-            for (TieringSplit tieringSplit : pendingSplits) {
+            for (FlinkTieringSplit tieringSplit : pendingSplits) {
                 if (tieringSplit.getTableBucket().getTableId() == tableId) {
                     // mark this tiering split to skip the current round since the tiering for
                     // this table has timed out, so the tiering source reader can skip them directly
@@ -383,7 +384,7 @@ public class TieringSourceEnumerator
                     continue;
                 }
                 if (!pendingSplits.isEmpty()) {
-                    TieringSplit tieringSplit = pendingSplits.remove(0);
+                    FlinkTieringSplit tieringSplit = pendingSplits.remove(0);
                     context.assignSplit(tieringSplit, nextAwaitingReader);
                     LOG.info("Assigning split {} to readers {}", tieringSplit, nextAwaitingReader);
                     readersAwaitingSplit.remove(nextAwaitingReader);
@@ -462,20 +463,20 @@ public class TieringSourceEnumerator
             // shuffle tiering split to avoid splits tiering skew
             // after introduce tiering max duration
             Collections.shuffle(tieringSplits);
-            tieringSplits = populateTieringRoundMetadata(tieringSplits);
+            List<FlinkTieringSplit> flinkSplits = populateTieringRoundMetadata(tieringSplits);
             LOG.info(
                     "Generate Tiering {} splits for table {} with cost {}ms.",
-                    tieringSplits.size(),
+                    flinkSplits.size(),
                     tieringTable.f2,
                     System.currentTimeMillis() - start);
-            if (tieringSplits.isEmpty()) {
+            if (flinkSplits.isEmpty()) {
                 LOG.info(
                         "Generate Tiering splits for table {} is empty, no need to tier data.",
                         tieringTable.f2.getTableName());
                 tieringTableEpochs.remove(tieringTable.f0);
                 finishedTables.put(tieringTable.f0, TieringFinishInfo.from(tieringTable.f1));
             } else {
-                pendingSplits.addAll(tieringSplits);
+                pendingSplits.addAll(flinkSplits);
 
                 timerService.schedule(
                         () ->
@@ -497,18 +498,19 @@ public class TieringSourceEnumerator
         }
     }
 
-    private List<TieringSplit> populateTieringRoundMetadata(List<TieringSplit> tieringSplits) {
+    private List<FlinkTieringSplit> populateTieringRoundMetadata(List<TieringSplit> tieringSplits) {
         int numberOfSplits = tieringSplits.size();
         if (numberOfSplits == 0) {
             return Collections.emptyList();
         }
         long tieringRoundTimestamp = System.currentTimeMillis();
-        List<TieringSplit> splitsWithMetadata = new ArrayList<>(numberOfSplits);
+        List<FlinkTieringSplit> splitsWithMetadata = new ArrayList<>(numberOfSplits);
         for (int splitIndex = 0; splitIndex < numberOfSplits; splitIndex++) {
             splitsWithMetadata.add(
-                    tieringSplits
-                            .get(splitIndex)
-                            .copy(numberOfSplits, splitIndex, tieringRoundTimestamp));
+                    new FlinkTieringSplit(
+                            tieringSplits
+                                    .get(splitIndex)
+                                    .copy(numberOfSplits, splitIndex, tieringRoundTimestamp)));
         }
         return splitsWithMetadata;
     }
