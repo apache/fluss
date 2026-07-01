@@ -575,6 +575,11 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Histogram</td>
     </tr>
      <tr>
+      <td>preWriteBufferSizeBytes</td>
+      <td>The total key-value payload bytes currently buffered in the kv pre-write buffer.</td>
+      <td>Gauge</td>
+    </tr>
+     <tr>
       <td>preWriteBufferTruncateAsDuplicatedPerSecond</td>
       <td>The number of kv pre-write buffer truncate due to the batch duplicated per second.</td>
       <td>Meter</td>

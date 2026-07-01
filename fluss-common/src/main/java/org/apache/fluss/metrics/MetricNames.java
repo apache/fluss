@@ -151,6 +151,7 @@ public class MetricNames {
     // for kv tablet
     public static final String KV_FLUSH_RATE = "kvFlushPerSecond";
     public static final String KV_FLUSH_LATENCY_MS = "kvFlushLatencyMs";
+    public static final String KV_PRE_WRITE_BUFFER_SIZE_BYTES = "preWriteBufferSizeBytes";
     public static final String KV_PRE_WRITE_BUFFER_TRUNCATE_AS_DUPLICATED_RATE =
             "preWriteBufferTruncateAsDuplicatedPerSecond";
     public static final String KV_PRE_WRITE_BUFFER_TRUNCATE_AS_ERROR_RATE =
