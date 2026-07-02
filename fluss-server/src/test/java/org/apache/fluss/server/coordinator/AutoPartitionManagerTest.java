@@ -394,6 +394,89 @@ class AutoPartitionManagerTest {
     }
 
     @Test
+    void testDayFormatWithDashes() throws Exception {
+        ZonedDateTime startTime =
+                LocalDateTime.parse("2024-09-10T00:00:00").atZone(ZoneId.systemDefault());
+        ManualClock clock = new ManualClock(startTime.toInstant().toEpochMilli());
+        ManuallyTriggeredScheduledExecutorService periodicExecutor =
+                new ManuallyTriggeredScheduledExecutorService();
+
+        AutoPartitionManager autoPartitionManager =
+                new AutoPartitionManager(
+                        new TestingServerMetadataCache(3),
+                        new MetadataManager(
+                                zookeeperClient,
+                                new Configuration(),
+                                new LakeCatalogDynamicLoader(new Configuration(), null, true)),
+                        remoteDirDynamicLoader,
+                        new Configuration(),
+                        clock,
+                        periodicExecutor);
+        autoPartitionManager.start();
+
+        TableInfo table =
+                createPartitionedTable(2, 4, AutoPartitionTimeUnit.DAY, false, "yyyy-MM-dd");
+        TablePath tablePath = table.getTablePath();
+        autoPartitionManager.addAutoPartitionTable(table, true);
+        periodicExecutor.triggerNonPeriodicScheduledTask();
+
+        Map<String, PartitionRegistration> partitions =
+                zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder("2024-09-10", "2024-09-11", "2024-09-12", "2024-09-13");
+
+        int replicaFactor = table.getTableConfig().getReplicationFactor();
+        Map<Integer, BucketAssignment> bucketAssignments =
+                generateAssignment(
+                                table.getNumBuckets(),
+                                replicaFactor,
+                                new TabletServerInfo[] {
+                                    new TabletServerInfo(0, "rack0"),
+                                    new TabletServerInfo(1, "rack1"),
+                                    new TabletServerInfo(2, "rack2")
+                                })
+                        .getBucketAssignments();
+        PartitionAssignment partitionAssignment =
+                new PartitionAssignment(table.getTableId(), bucketAssignments);
+        metadataManager.createPartition(
+                tablePath,
+                table.getTableId(),
+                remoteDataDir,
+                partitionAssignment,
+                fromPartitionName(table.getPartitionKeys(), "2024-09-15"),
+                false);
+        autoPartitionManager.addPartition(table.getTableId(), "2024-09-15");
+
+        metadataManager.dropPartition(
+                tablePath, fromPartitionName(table.getPartitionKeys(), "2024-09-10"), false);
+        autoPartitionManager.removePartition(table.getTableId(), "2024-09-10");
+
+        clock.advanceTime(Duration.ofDays(3).plus(Duration.ofHours(23)));
+        periodicExecutor.triggerPeriodicScheduledTasks();
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder(
+                        "2024-09-11",
+                        "2024-09-12",
+                        "2024-09-13",
+                        "2024-09-14",
+                        "2024-09-15",
+                        "2024-09-16");
+
+        clock.advanceTime(Duration.ofDays(2));
+        periodicExecutor.triggerPeriodicScheduledTasks();
+        partitions = zookeeperClient.getPartitionRegistrations(tablePath);
+        assertThat(partitions.keySet())
+                .containsExactlyInAnyOrder(
+                        "2024-09-13",
+                        "2024-09-14",
+                        "2024-09-15",
+                        "2024-09-16",
+                        "2024-09-17",
+                        "2024-09-18");
+    }
+
+    @Test
     void testMaxPartitions() throws Exception {
         int expectPartitionNumber = 10;
         Configuration config = new Configuration();
@@ -974,7 +1057,7 @@ class AutoPartitionManagerTest {
             int partitionRetentionNum, int partitionPreCreateNum, AutoPartitionTimeUnit timeUnit)
             throws Exception {
         return createPartitionedTable(
-                partitionRetentionNum, partitionPreCreateNum, timeUnit, false);
+                partitionRetentionNum, partitionPreCreateNum, timeUnit, false, null);
     }
 
     private TableInfo createPartitionedTable(
@@ -982,6 +1065,21 @@ class AutoPartitionManagerTest {
             int partitionPreCreateNum,
             AutoPartitionTimeUnit timeUnit,
             boolean multiplePartitionKeys)
+            throws Exception {
+        return createPartitionedTable(
+                partitionRetentionNum,
+                partitionPreCreateNum,
+                timeUnit,
+                multiplePartitionKeys,
+                null);
+    }
+
+    private TableInfo createPartitionedTable(
+            int partitionRetentionNum,
+            int partitionPreCreateNum,
+            AutoPartitionTimeUnit timeUnit,
+            boolean multiplePartitionKeys,
+            String dayFormat)
             throws Exception {
         long tableId = 1;
         TablePath tablePath =
@@ -1018,6 +1116,9 @@ class AutoPartitionManagerTest {
                         .property(
                                 ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION,
                                 partitionRetentionNum)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_DAY_FORMAT,
+                                dayFormat == null ? "yyyyMMdd" : dayFormat)
                         .property(
                                 ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE,
                                 multiplePartitionKeys ? 0 : partitionPreCreateNum)

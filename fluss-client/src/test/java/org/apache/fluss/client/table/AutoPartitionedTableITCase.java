@@ -383,6 +383,72 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testWriteToDashedDayPartitionShouldCreateAndValidateStringKey() throws Exception {
+        clientConf.set(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED, true);
+        TablePath tablePath = TablePath.of("test_db_1", "test_write_dashed_day_partition_string");
+        createDayPartitionedTable(tablePath, DataTypes.STRING(), true);
+        Map<String, Long> partitionIdByNames =
+                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
+        assertThat(partitionIdByNames.keySet())
+                .allMatch(partition -> partition.matches("\\d{4}-\\d{2}-\\d{2}"));
+
+        Table table = conn.getTable(tablePath);
+        UpsertWriter upsertWriter = table.newUpsert().createWriter();
+        String todayPartition = LocalDate.now().toString();
+        upsertWriter.upsert(row(1, "a", todayPartition));
+        upsertWriter.flush();
+
+        List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
+        assertThat(
+                        partitionInfos.stream()
+                                .map(PartitionInfo::getPartitionName)
+                                .collect(Collectors.toList()))
+                .contains(todayPartition)
+                .allMatch(partition -> partition.matches("\\d{4}-\\d{2}-\\d{2}"));
+
+        assertThatThrownBy(
+                        () ->
+                                upsertWriter.upsert(
+                                        row(
+                                                2,
+                                                "b",
+                                                LocalDate.now()
+                                                        .format(
+                                                                DateTimeFormatter.ofPattern(
+                                                                        "yyyyMMdd")))))
+                .rootCause()
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining("yyyy-MM-dd")
+                .hasMessageContaining("DAY");
+    }
+
+    @Test
+    void testWriteToDashedDayPartitionShouldCreateAndValidateDateKey() throws Exception {
+        clientConf.set(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED, true);
+        TablePath tablePath = TablePath.of("test_db_1", "test_write_dashed_day_partition_date");
+        createDayPartitionedTable(tablePath, DataTypes.DATE(), false);
+        Map<String, Long> partitionIdByNames =
+                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
+        assertThat(partitionIdByNames.keySet())
+                .allMatch(partition -> partition.matches("\\d{4}-\\d{2}-\\d{2}"));
+
+        Table table = conn.getTable(tablePath);
+        AppendWriter appendWriter = table.newAppend().createWriter();
+        LocalDate today = LocalDate.now();
+        int todayEpochDay = (int) today.toEpochDay();
+        appendWriter.append(row(1, "a", todayEpochDay));
+        appendWriter.flush();
+
+        List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
+        assertThat(
+                        partitionInfos.stream()
+                                .map(PartitionInfo::getPartitionName)
+                                .collect(Collectors.toList()))
+                .contains(today.toString())
+                .allMatch(partition -> partition.matches("\\d{4}-\\d{2}-\\d{2}"));
+    }
+
+    @Test
     void testWriteToInvalidPartitionShouldThrowException() throws Exception {
         // Enable dynamic partition creation so the writer attempts to create the partition.
         clientConf.set(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED, true);
@@ -439,6 +505,40 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
                         .property(
                                 ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
                                 AutoPartitionTimeUnit.YEAR)
+                        .build();
+        createTable(tablePath, partitionTableDescriptor, false);
+        return schema;
+    }
+
+    private Schema createDayPartitionedTable(
+            TablePath tablePath,
+            org.apache.fluss.types.DataType partitionType,
+            boolean isPrimaryTable)
+            throws Exception {
+        Schema.Builder schemaBuilder =
+                Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .withComment("a is first column")
+                        .column("b", DataTypes.STRING())
+                        .withComment("b is second column")
+                        .column("c", partitionType)
+                        .withComment("c is third column");
+
+        if (isPrimaryTable) {
+            schemaBuilder.primaryKey("a", "c");
+        }
+
+        Schema schema = schemaBuilder.build();
+
+        TableDescriptor partitionTableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .partitionedBy("c")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.DAY)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_DAY_FORMAT, "yyyy-MM-dd")
                         .build();
         createTable(tablePath, partitionTableDescriptor, false);
         return schema;

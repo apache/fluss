@@ -1,0 +1,48 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.fluss.config;
+
+import org.apache.fluss.exception.InvalidConfigException;
+
+/** Supported formats for auto-partition DAY partition values. */
+public enum AutoPartitionDayFormat {
+    YYYYMMDD("yyyyMMdd"),
+    YYYY_MM_DD("yyyy-MM-dd");
+
+    private final String pattern;
+
+    AutoPartitionDayFormat(String pattern) {
+        this.pattern = pattern;
+    }
+
+    public String pattern() {
+        return pattern;
+    }
+
+    public static AutoPartitionDayFormat fromPattern(String pattern) {
+        for (AutoPartitionDayFormat dayFormat : values()) {
+            if (dayFormat.pattern.equals(pattern)) {
+                return dayFormat;
+            }
+        }
+        throw new InvalidConfigException(
+                String.format(
+                        "Unsupported value '%s' for auto partition DAY format. Supported values are '%s' and '%s'.",
+                        pattern, YYYYMMDD.pattern, YYYY_MM_DD.pattern));
+    }
+}

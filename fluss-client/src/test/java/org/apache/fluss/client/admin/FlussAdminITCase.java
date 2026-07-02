@@ -38,6 +38,7 @@ import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidPartitionException;
@@ -1377,6 +1378,163 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         String.valueOf(currentYear - 2),
                         String.valueOf(currentYear - 1),
                         String.valueOf(currentYear)));
+    }
+
+    @Test
+    void testInvalidDayFormatOptionForAutoPartitionedTable() throws Exception {
+        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+
+        TableDescriptor nonDayTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("pt", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("pt")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.MONTH)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_DAY_FORMAT, "yyyy-MM-dd")
+                        .build();
+        assertThatThrownBy(
+                        () ->
+                                admin.createTable(
+                                                TablePath.of(
+                                                        dbName,
+                                                        "test_invalid_auto_partition_day_format_non_day"),
+                                                nonDayTable,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_AUTO_PARTITION_DAY_FORMAT.key())
+                .hasMessageContaining(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key());
+
+        TableDescriptor disabledAutoPartitionTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("pt", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("pt")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_DAY_FORMAT, "yyyy-MM-dd")
+                        .build();
+        assertThatThrownBy(
+                        () ->
+                                admin.createTable(
+                                                TablePath.of(
+                                                        dbName,
+                                                        "test_invalid_auto_partition_day_format_disabled"),
+                                                disabledAutoPartitionTable,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_AUTO_PARTITION_DAY_FORMAT.key())
+                .hasMessageContaining(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key());
+
+        TableDescriptor datePartitionKeyWithCompactDayFormat =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("pt", DataTypes.DATE())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("pt")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.DAY)
+                        .build();
+        assertThatThrownBy(
+                        () ->
+                                admin.createTable(
+                                                TablePath.of(
+                                                        dbName,
+                                                        "test_invalid_auto_partition_day_format_date_key"),
+                                                datePartitionKeyWithCompactDayFormat,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_AUTO_PARTITION_DAY_FORMAT.key())
+                .hasMessageContaining("yyyy-MM-dd")
+                .hasMessageContaining("DATE");
+
+        TableDescriptor validDashedDayFormatTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("pt", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("pt")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.DAY)
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_DAY_FORMAT, "yyyy-MM-dd")
+                        .build();
+        TablePath tablePath = TablePath.of(dbName, "test_invalid_auto_partition_day_format_alter");
+        admin.createTable(tablePath, validDashedDayFormatTable, false).get();
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.set(
+                                                                ConfigOptions
+                                                                        .TABLE_AUTO_PARTITION_DAY_FORMAT
+                                                                        .key(),
+                                                                "yyyyMMdd")),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_AUTO_PARTITION_DAY_FORMAT.key());
+
+        TableDescriptor disabledDateDayTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("pt", DataTypes.DATE())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("pt")
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.DAY)
+                        .build();
+        TablePath disabledDateDayTablePath =
+                TablePath.of(dbName, "test_invalid_auto_partition_day_format_enable");
+        admin.createTable(disabledDateDayTablePath, disabledDateDayTable, false).get();
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                disabledDateDayTablePath,
+                                                Collections.singletonList(
+                                                        TableChange.set(
+                                                                ConfigOptions
+                                                                        .TABLE_AUTO_PARTITION_ENABLED
+                                                                        .key(),
+                                                                "true")),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(ConfigOptions.TABLE_AUTO_PARTITION_DAY_FORMAT.key())
+                .hasMessageContaining("yyyy-MM-dd")
+                .hasMessageContaining("DATE");
     }
 
     @Test

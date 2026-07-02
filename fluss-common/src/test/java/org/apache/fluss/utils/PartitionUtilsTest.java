@@ -17,8 +17,10 @@
 
 package org.apache.fluss.utils;
 
+import org.apache.fluss.config.AutoPartitionDayFormat;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -31,6 +33,7 @@ import org.apache.fluss.types.DataTypeRoot;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
@@ -44,6 +47,7 @@ import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.utils.PartitionUtils.convertValueOfType;
 import static org.apache.fluss.utils.PartitionUtils.generateAutoPartition;
 import static org.apache.fluss.utils.PartitionUtils.parseValueOfType;
+import static org.apache.fluss.utils.PartitionUtils.validateAutoPartitionTime;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionValues;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -102,6 +106,17 @@ class PartitionUtilsTest {
     }
 
     @Test
+    void testAutoPartitionStrategyUsesConfiguredDayFormat() {
+        Configuration conf = new Configuration();
+        assertThat(AutoPartitionStrategy.from(conf).dayFormat())
+                .isEqualTo(AutoPartitionDayFormat.YYYYMMDD);
+
+        conf.setString(ConfigOptions.TABLE_AUTO_PARTITION_DAY_FORMAT, "yyyy-MM-dd");
+        assertThat(AutoPartitionStrategy.from(conf).dayFormat())
+                .isEqualTo(AutoPartitionDayFormat.YYYY_MM_DD);
+    }
+
+    @Test
     void testGenerateAutoPartitionName() {
         LocalDateTime localDateTime = LocalDateTime.of(2024, 11, 11, 11, 11);
         ZoneId zoneId = ZoneId.of("UTC-8");
@@ -131,10 +146,27 @@ class PartitionUtilsTest {
         // for day
         testGenerateAutoPartitionName(
                 zonedDateTime,
+                AutoPartitionStrategy.from(new Configuration()),
                 AutoPartitionTimeUnit.DAY,
                 new int[] {-1, 0, 1, 2, 3, 20},
                 new String[] {
                     "20241110", "20241111", "20241112", "20241113", "20241114", "20241201"
+                });
+
+        Configuration dashedDayConf = new Configuration();
+        dashedDayConf.setString(ConfigOptions.TABLE_AUTO_PARTITION_DAY_FORMAT, "yyyy-MM-dd");
+        testGenerateAutoPartitionName(
+                zonedDateTime,
+                AutoPartitionStrategy.from(dashedDayConf),
+                AutoPartitionTimeUnit.DAY,
+                new int[] {-1, 0, 1, 2, 3, 20},
+                new String[] {
+                    "2024-11-10",
+                    "2024-11-11",
+                    "2024-11-12",
+                    "2024-11-13",
+                    "2024-11-14",
+                    "2024-12-01"
                 });
 
         // for hour
@@ -158,15 +190,100 @@ class PartitionUtilsTest {
             AutoPartitionTimeUnit autoPartitionTimeUnit,
             int[] offsets,
             String[] expected) {
+        testGenerateAutoPartitionName(
+                zonedDateTime,
+                AutoPartitionStrategy.from(new Configuration()),
+                autoPartitionTimeUnit,
+                offsets,
+                expected);
+    }
+
+    void testGenerateAutoPartitionName(
+            ZonedDateTime zonedDateTime,
+            AutoPartitionStrategy autoPartitionStrategy,
+            AutoPartitionTimeUnit autoPartitionTimeUnit,
+            int[] offsets,
+            String[] expected) {
         for (int i = 0; i < offsets.length; i++) {
             ResolvedPartitionSpec resolvedPartitionSpec =
                     generateAutoPartition(
                             Collections.singletonList("dt"),
                             zonedDateTime,
                             offsets[i],
-                            autoPartitionTimeUnit);
+                            autoPartitionTimeUnit,
+                            autoPartitionStrategy);
             assertThat(resolvedPartitionSpec.getPartitionName()).isEqualTo(expected[i]);
         }
+    }
+
+    @Test
+    void testValidateAutoPartitionTimeWithConfiguredDayFormat() {
+        Configuration dashedDayConf = new Configuration();
+        dashedDayConf.setBoolean(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true);
+        dashedDayConf.set(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.DAY);
+        dashedDayConf.setString(ConfigOptions.TABLE_AUTO_PARTITION_DAY_FORMAT, "yyyy-MM-dd");
+        AutoPartitionStrategy dashedDayStrategy = AutoPartitionStrategy.from(dashedDayConf);
+
+        LocalDate today = LocalDate.now();
+
+        assertThatNoException()
+                .isThrownBy(
+                        () ->
+                                validateAutoPartitionTime(
+                                        new PartitionSpec(
+                                                Collections.singletonMap("dt", today.toString())),
+                                        Collections.singletonList("dt"),
+                                        dashedDayStrategy));
+
+        assertThatThrownBy(
+                        () ->
+                                validateAutoPartitionTime(
+                                        new PartitionSpec(
+                                                Collections.singletonMap(
+                                                        "dt",
+                                                        today.format(
+                                                                java.time.format.DateTimeFormatter
+                                                                        .ofPattern("yyyyMMdd")))),
+                                        Collections.singletonList("dt"),
+                                        dashedDayStrategy))
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining("yyyy-MM-dd")
+                .hasMessageContaining("DAY");
+    }
+
+    @Test
+    void testValidateAutoPartitionTimeRetentionBoundaryWithConfiguredDayFormat() {
+        Configuration dashedDayConf = new Configuration();
+        dashedDayConf.setBoolean(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true);
+        dashedDayConf.set(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.DAY);
+        dashedDayConf.setString(ConfigOptions.TABLE_AUTO_PARTITION_DAY_FORMAT, "yyyy-MM-dd");
+        AutoPartitionStrategy dashedDayStrategy = AutoPartitionStrategy.from(dashedDayConf);
+
+        LocalDate today = LocalDate.now();
+        LocalDate earliestRetained = today.minusDays(7);
+        LocalDate outOfDate = today.minusDays(8);
+
+        assertThatNoException()
+                .isThrownBy(
+                        () ->
+                                validateAutoPartitionTime(
+                                        new PartitionSpec(
+                                                Collections.singletonMap(
+                                                        "dt", earliestRetained.toString())),
+                                        Collections.singletonList("dt"),
+                                        dashedDayStrategy));
+
+        assertThatThrownBy(
+                        () ->
+                                validateAutoPartitionTime(
+                                        new PartitionSpec(
+                                                Collections.singletonMap(
+                                                        "dt", outOfDate.toString())),
+                                        Collections.singletonList("dt"),
+                                        dashedDayStrategy))
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining(outOfDate.toString())
+                .hasMessageContaining(earliestRetained.toString());
     }
 
     @Test

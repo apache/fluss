@@ -19,6 +19,7 @@ package org.apache.fluss.utils;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -132,19 +133,25 @@ public class PartitionUtils {
                         : partitionKeys.get(0);
         String partitionTime = partitionSpec.getSpecMap().get(autoPartitionKey);
         AutoPartitionTimeUnit timeUnit = autoPartitionStrategy.timeUnit();
-        if (partitionTime == null || !isValidPartitionTime(partitionTime, timeUnit)) {
+        if (partitionTime == null
+                || !isValidPartitionTime(partitionTime, timeUnit, autoPartitionStrategy)) {
             throw new InvalidPartitionException(
                     String.format(
                             "Partition value '%s' does not match the expected format '%s' "
                                     + "for auto-partition time unit '%s'.",
-                            partitionTime, getPartitionTimeFormat(timeUnit), timeUnit));
+                            partitionTime,
+                            getPartitionTimeFormat(timeUnit, autoPartitionStrategy),
+                            timeUnit));
         }
         ZonedDateTime currentZonedDateTime =
                 ZonedDateTime.ofInstant(Instant.now(), autoPartitionStrategy.timeZone().toZoneId());
         // Get the earliest partition time that needs to be retained.
         String lastRetainPartitionTime =
                 generateAutoPartitionTime(
-                        currentZonedDateTime, -autoPartitionStrategy.numToRetain(), timeUnit);
+                        currentZonedDateTime,
+                        -autoPartitionStrategy.numToRetain(),
+                        timeUnit,
+                        autoPartitionStrategy);
         if (lastRetainPartitionTime.compareTo(partitionTime) > 0) {
             throw new InvalidPartitionException(
                     String.format(
@@ -171,13 +178,37 @@ public class PartitionUtils {
             ZonedDateTime current,
             int offset,
             AutoPartitionTimeUnit timeUnit) {
-        String autoPartitionFieldSpec = generateAutoPartitionTime(current, offset, timeUnit);
+        return generateAutoPartition(
+                partitionKeys,
+                current,
+                offset,
+                timeUnit,
+                AutoPartitionStrategy.from(new Configuration()));
+    }
+
+    public static ResolvedPartitionSpec generateAutoPartition(
+            List<String> partitionKeys,
+            ZonedDateTime current,
+            int offset,
+            AutoPartitionTimeUnit timeUnit,
+            AutoPartitionStrategy autoPartitionStrategy) {
+        String autoPartitionFieldSpec =
+                generateAutoPartitionTime(current, offset, timeUnit, autoPartitionStrategy);
 
         return ResolvedPartitionSpec.fromPartitionName(partitionKeys, autoPartitionFieldSpec);
     }
 
     public static String generateAutoPartitionTime(
             ZonedDateTime current, int offset, AutoPartitionTimeUnit timeUnit) {
+        return generateAutoPartitionTime(
+                current, offset, timeUnit, AutoPartitionStrategy.from(new Configuration()));
+    }
+
+    public static String generateAutoPartitionTime(
+            ZonedDateTime current,
+            int offset,
+            AutoPartitionTimeUnit timeUnit,
+            AutoPartitionStrategy autoPartitionStrategy) {
         String autoPartitionFieldSpec;
         switch (timeUnit) {
             case YEAR:
@@ -191,7 +222,10 @@ public class PartitionUtils {
                 autoPartitionFieldSpec = getFormattedTime(current.plusMonths(offset), MONTH_FORMAT);
                 break;
             case DAY:
-                autoPartitionFieldSpec = getFormattedTime(current.plusDays(offset), DAY_FORMAT);
+                autoPartitionFieldSpec =
+                        getFormattedTime(
+                                current.plusDays(offset),
+                                getPartitionTimeFormat(timeUnit, autoPartitionStrategy));
                 break;
             case HOUR:
                 autoPartitionFieldSpec = getFormattedTime(current.plusHours(offset), HOUR_FORMAT);
@@ -203,7 +237,8 @@ public class PartitionUtils {
     }
 
     /** Returns the time string format pattern for the given time unit. */
-    private static String getPartitionTimeFormat(AutoPartitionTimeUnit timeUnit) {
+    private static String getPartitionTimeFormat(
+            AutoPartitionTimeUnit timeUnit, AutoPartitionStrategy autoPartitionStrategy) {
         switch (timeUnit) {
             case YEAR:
                 return YEAR_FORMAT;
@@ -212,7 +247,7 @@ public class PartitionUtils {
             case MONTH:
                 return MONTH_FORMAT;
             case DAY:
-                return DAY_FORMAT;
+                return autoPartitionStrategy.dayFormat().pattern();
             case HOUR:
                 return HOUR_FORMAT;
             default:
@@ -223,9 +258,13 @@ public class PartitionUtils {
     /**
      * Returns true if the given time string matches the format expected for the given time unit.
      */
-    private static boolean isValidPartitionTime(String time, AutoPartitionTimeUnit timeUnit) {
+    private static boolean isValidPartitionTime(
+            String time,
+            AutoPartitionTimeUnit timeUnit,
+            AutoPartitionStrategy autoPartitionStrategy) {
         try {
-            DateTimeFormatter.ofPattern(getPartitionTimeFormat(timeUnit)).parse(time);
+            DateTimeFormatter.ofPattern(getPartitionTimeFormat(timeUnit, autoPartitionStrategy))
+                    .parse(time);
             return true;
         } catch (DateTimeParseException e) {
             return false;

@@ -1581,13 +1581,22 @@ public class ConfigOptions {
                                     + "If the value is `HOUR`, the partition format for "
                                     + "auto created is yyyyMMddHH. "
                                     + "If the value is `DAY`, the partition format for "
-                                    + "auto created is yyyyMMdd. "
+                                    + "auto created is yyyyMMdd by default. "
                                     + "If the value is `MONTH`, the partition format for "
                                     + "auto created is yyyyMM. "
                                     + "If the value is `QUARTER`, the partition format for "
                                     + "auto created is yyyyQ. "
                                     + "If the value is `YEAR`, the partition format for "
                                     + "auto created is yyyy.");
+
+    public static final ConfigOption<String> TABLE_AUTO_PARTITION_DAY_FORMAT =
+            key("table.auto-partition.day-format")
+                    .stringType()
+                    .defaultValue("yyyyMMdd")
+                    .withDescription(
+                            "The format for DAY auto created partitions. "
+                                    + "Supported values are `yyyyMMdd` and `yyyy-MM-dd`. "
+                                    + "This option only applies when `table.auto-partition.time-unit` is `DAY`.");
 
     public static final ConfigOption<String> TABLE_AUTO_PARTITION_TIMEZONE =
             key("table.auto-partition.time-zone")
