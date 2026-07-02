@@ -176,14 +176,9 @@ public class WriterClient {
 
             TableInfo tableInfo = record.getTableInfo();
             PhysicalTablePath physicalTablePath = record.getPhysicalTablePath();
-            // Skip on non-partitioned tables: the callee returns immediately when
-            // partitionName is null, but the expensive AutoPartitionStrategy argument
-            // would still be evaluated per record without this guard.
+            // Skip the call entirely on non-partitioned tables; there is no partition to create.
             if (tableInfo.isPartitioned()) {
-                dynamicPartitionCreator.checkAndCreatePartitionAsync(
-                        physicalTablePath,
-                        tableInfo.getPartitionKeys(),
-                        tableInfo.getTableConfig().getAutoPartitionStrategy());
+                dynamicPartitionCreator.checkAndCreatePartitionAsync(physicalTablePath, tableInfo);
             }
 
             // maybe create bucket assigner.

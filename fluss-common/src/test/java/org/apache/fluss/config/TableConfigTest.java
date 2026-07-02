@@ -44,13 +44,4 @@ class TableConfigTest {
         TableConfig tableConfig3 = new TableConfig(conf);
         assertThat(tableConfig3.getDeleteBehavior()).hasValue(DeleteBehavior.IGNORE);
     }
-
-    @Test
-    void testAutoPartitionStrategyIsCached() {
-        TableConfig tableConfig = new TableConfig(new Configuration());
-
-        // the strategy is memoized, so repeated calls return the same instance
-        assertThat(tableConfig.getAutoPartitionStrategy())
-                .isSameAs(tableConfig.getAutoPartitionStrategy());
-    }
 }
