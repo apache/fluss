@@ -72,12 +72,11 @@ public class FlussSourceEnumeratorStateSerializer
     private static final int VERSION_1 = 1;
     private static final int VERSION_2 = 2;
     private static final int VERSION_3 = 3;
-    private static final int VERSION_4 = 4;
 
     private static final ThreadLocal<DataOutputSerializer> SERIALIZER_CACHE =
             ThreadLocal.withInitial(() -> new DataOutputSerializer(64));
 
-    private static final int CURRENT_VERSION = VERSION_4;
+    private static final int CURRENT_VERSION = VERSION_3;
 
     public FlussSourceEnumeratorStateSerializer(LakeSource<LakeSplit> lakeSource) {
         this.lakeSource = lakeSource;
@@ -175,11 +174,22 @@ public class FlussSourceEnumeratorStateSerializer
         return result;
     }
 
+    /** Produces a real V2 payload: assignedBuckets + partitions + hybridSplits + leaseId. */
+    @VisibleForTesting
+    protected byte[] serializeV2(SourceEnumeratorState state) throws IOException {
+        final DataOutputSerializer out = SERIALIZER_CACHE.get();
+        serializeAssignBucketAndPartitions(
+                out, state.getAssignedBuckets(), state.getAssignedPartitions());
+        serializeRemainingHybridLakeFlussSplits(out, state);
+        serializeLeaseId(out, state);
+        final byte[] result = out.getCopyOfBuffer();
+        out.clear();
+        return result;
+    }
+
     @Override
     public SourceEnumeratorState deserialize(int version, byte[] serialized) throws IOException {
         switch (version) {
-            case VERSION_4:
-                return deserializeV4(serialized);
             case VERSION_3:
                 return deserializeV3(serialized);
             case VERSION_2:
@@ -252,35 +262,6 @@ public class FlussSourceEnumeratorStateSerializer
     }
 
     private SourceEnumeratorState deserializeV3(byte[] serialized) throws IOException {
-        DataInputDeserializer in = new DataInputDeserializer(serialized);
-        Tuple2<Set<TableBucket>, Map<Long, String>> assignBucketAndPartitions =
-                deserializeAssignBucketAndPartitions(in);
-        List<SourceSplitBase> remainingHybridLakeFlussSplits =
-                deserializeRemainingHybridLakeFlussSplits(in);
-
-        // deserialize lease context
-        LeaseContext leaseContext = deserializeLeaseId(in);
-
-        // deserialize initial discovery finished flag
-        boolean initialDiscoveryFinished = in.readBoolean();
-
-        // skip initial partition IDs if present (backward compatibility with older V3 format)
-        if (in.available() > 0) {
-            int initialPartitionIdsSize = in.readInt();
-            for (int i = 0; i < initialPartitionIdsSize; i++) {
-                in.readLong();
-            }
-        }
-
-        return new SourceEnumeratorState(
-                assignBucketAndPartitions.f0,
-                assignBucketAndPartitions.f1,
-                remainingHybridLakeFlussSplits,
-                leaseContext.getKvSnapshotLeaseId(),
-                initialDiscoveryFinished);
-    }
-
-    private SourceEnumeratorState deserializeV4(byte[] serialized) throws IOException {
         DataInputDeserializer in = new DataInputDeserializer(serialized);
         Tuple2<Set<TableBucket>, Map<Long, String>> assignBucketAndPartitions =
                 deserializeAssignBucketAndPartitions(in);

@@ -1154,6 +1154,122 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         }
     }
 
+    /**
+     * Regression test: verifies that when a partition is dropped after splits are restored into
+     * {@code unassignedSplits}, the stale splits are removed from both {@code unassignedSplits} and
+     * {@code pendingSplitAssignment}. Without this fix, stale splits would survive in checkpoint
+     * state and be assigned to readers for a deleted partition after failover.
+     */
+    @Test
+    void testDroppedPartitionSplitsRemovedFromUnassignedSplits() throws Throwable {
+        int numSubtasks = 3;
+        long tableId =
+                createTable(DEFAULT_TABLE_PATH, DEFAULT_AUTO_PARTITIONED_LOG_TABLE_DESCRIPTOR);
+        ZooKeeperClient zooKeeperClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        Map<Long, String> partitions = waitUntilPartitions(zooKeeperClient, DEFAULT_TABLE_PATH);
+
+        // Pick one partition to simulate as "dropped after checkpoint"
+        Map.Entry<Long, String> partitionToDrop = partitions.entrySet().iterator().next();
+        long droppedPartitionId = partitionToDrop.getKey();
+        String droppedPartitionName = partitionToDrop.getValue();
+
+        // Mock unassigned splits as if they were restored from a previous checkpoint.
+        // These splits include one for the partition that will be dropped.
+        List<SourceSplitBase> unassignedSplits = new ArrayList<>();
+        for (Map.Entry<Long, String> entry : partitions.entrySet()) {
+            for (int bucket = 0; bucket < DEFAULT_BUCKET_NUM; bucket++) {
+                unassignedSplits.add(
+                        new LogSplit(
+                                new TableBucket(tableId, entry.getKey(), bucket),
+                                entry.getValue(),
+                                EARLIEST_OFFSET));
+            }
+        }
+
+        // Drop the partition before restoring the enumerator
+        dropPartitions(
+                zooKeeperClient, DEFAULT_TABLE_PATH, Collections.singleton(droppedPartitionName));
+
+        // Restore enumerator with mock unassigned splits (simulating failover recovery)
+        try (MockSplitEnumeratorContext<SourceSplitBase> context =
+                        new MockSplitEnumeratorContext<>(numSubtasks);
+                MockWorkExecutor workExecutor = new MockWorkExecutor(context);
+                FlinkSourceEnumerator enumerator =
+                        new FlinkSourceEnumerator(
+                                DEFAULT_TABLE_PATH,
+                                flussConf,
+                                false,
+                                true,
+                                context,
+                                Collections.emptySet(),
+                                Collections.emptyMap(),
+                                null,
+                                OffsetsInitializer.earliest(),
+                                DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                                Integer.MAX_VALUE,
+                                streaming,
+                                null,
+                                null,
+                                workExecutor,
+                                LeaseContext.DEFAULT,
+                                false,
+                                true,
+                                unassignedSplits)) {
+
+            enumerator.start();
+
+            // Partition discovery detects the dropped partition and calls handlePartitionsRemoved
+            runPeriodicPartitionDiscovery(workExecutor);
+
+            // Verify unassignedSplits no longer contains splits for the dropped partition
+            SourceEnumeratorState state = enumerator.snapshotState(1L);
+            List<SourceSplitBase> staleSplits =
+                    state.getUnassignedSplits().stream()
+                            .filter(
+                                    split ->
+                                            Objects.equals(
+                                                    split.getTableBucket().getPartitionId(),
+                                                    droppedPartitionId))
+                            .collect(Collectors.toList());
+            assertThat(staleSplits)
+                    .as(
+                            "Splits for dropped partition should be removed from "
+                                    + "unassignedSplits to prevent stale assignment after failover")
+                    .isEmpty();
+
+            // Verify pendingSplitAssignment is also cleaned
+            long stalePendingSplits =
+                    enumerator.getPendingSplitAssignment().values().stream()
+                            .flatMap(List::stream)
+                            .filter(
+                                    split ->
+                                            Objects.equals(
+                                                    split.getTableBucket().getPartitionId(),
+                                                    droppedPartitionId))
+                            .count();
+            assertThat(stalePendingSplits)
+                    .as(
+                            "Splits for dropped partition should be removed from pendingSplitAssignment")
+                    .isZero();
+
+            // Register readers and verify no stale splits are assigned
+            for (int i = 0; i < numSubtasks; i++) {
+                registerReader(context, enumerator, i);
+            }
+            List<SourceSplitBase> allAssigned =
+                    getReadersAssignments(context).values().stream()
+                            .flatMap(List::stream)
+                            .collect(Collectors.toList());
+            assertThat(allAssigned)
+                    .as("No assigned split should belong to the dropped partition")
+                    .noneMatch(
+                            split ->
+                                    Objects.equals(
+                                            split.getTableBucket().getPartitionId(),
+                                            droppedPartitionId));
+        }
+    }
+
     // ---------------------
     private void registerReader(
             MockSplitEnumeratorContext<SourceSplitBase> context,

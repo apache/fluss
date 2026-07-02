@@ -157,8 +157,9 @@ public class FlinkSourceEnumerator
 
     /**
      * The offsets initializer used for partitions discovered after the initial startup. Following
-     * FLIP-288 semantics, newly discovered partitions always start from earliest to prevent data
-     * loss.
+     * FLIP-288(<a
+     * href="https://cwiki.apache.org/confluence/spaces/FLINK/pages/350784113/FLIP-529+Connections+in+Flink+SQL+and+TableAPI">...</a>)
+     * semantics, newly discovered partitions always start from earliest to prevent data loss.
      */
     private final OffsetsInitializer newDiscoveryOffsetsInitializer;
 
@@ -1106,34 +1107,54 @@ public class FlinkSourceEnumerator
         pendingSplitAssignment.forEach(
                 (reader, splits) ->
                         splits.removeIf(
-                                split -> {
-                                    // Never remove LakeSnapshotSplit, because during union reads,
-                                    // data from the lake must still be read even if the partition
-                                    // has already expired in Fluss.
-                                    if (split instanceof LakeSnapshotSplit) {
-                                        return false;
-                                    }
+                                split ->
+                                        shouldRemoveForDroppedPartition(
+                                                split, removedPartitionsMap)));
 
-                                    // Similar to LakeSnapshotSplit, if it contains any lake split,
-                                    // never remove it; otherwise, it can be removed when the Fluss
-                                    // partition expires.
-                                    if (split instanceof LakeSnapshotAndFlussLogSplit) {
-                                        LakeSnapshotAndFlussLogSplit hybridSplit =
-                                                (LakeSnapshotAndFlussLogSplit) split;
-                                        if (!hybridSplit.isLakeSplitFinished()) {
-                                            return false;
-                                        }
-                                    }
+        // remove from unassignedSplits to prevent stale splits from being checkpointed
+        // and restored after failover for a deleted partition
+        unassignedSplits.removeIf(
+                split -> shouldRemoveForDroppedPartition(split, removedPartitionsMap));
 
-                                    return removedPartitionsMap.containsKey(
-                                            split.getTableBucket().getPartitionId());
-                                }));
+        // remove from pendingHybridLakeFlussSplits as well
+        if (pendingHybridLakeFlussSplits != null) {
+            pendingHybridLakeFlussSplits.removeIf(
+                    split -> shouldRemoveForDroppedPartition(split, removedPartitionsMap));
+        }
 
         // send partition removed event to all readers
         PartitionsRemovedEvent event = new PartitionsRemovedEvent(removedPartitionsMap);
         for (int readerId : context.registeredReaders().keySet()) {
             context.sendEventToSourceReader(readerId, event);
         }
+    }
+
+    /**
+     * Determines whether a split should be removed when its partition is dropped.
+     *
+     * <p>Lake-related splits are preserved because lake data must still be read even if the
+     * partition has expired in Fluss (union reads scenario).
+     */
+    private static boolean shouldRemoveForDroppedPartition(
+            SourceSplitBase split, Map<Long, String> removedPartitionsMap) {
+        // Never remove LakeSnapshotSplit, because during union reads,
+        // data from the lake must still be read even if the partition
+        // has already expired in Fluss.
+        if (split instanceof LakeSnapshotSplit) {
+            return false;
+        }
+
+        // Similar to LakeSnapshotSplit, if it contains any lake split,
+        // never remove it; otherwise, it can be removed when the Fluss
+        // partition expires.
+        if (split instanceof LakeSnapshotAndFlussLogSplit) {
+            LakeSnapshotAndFlussLogSplit hybridSplit = (LakeSnapshotAndFlussLogSplit) split;
+            if (!hybridSplit.isLakeSplitFinished()) {
+                return false;
+            }
+        }
+
+        return removedPartitionsMap.containsKey(split.getTableBucket().getPartitionId());
     }
 
     private void handleSplitsAdd(List<SourceSplitBase> splits, Throwable t) {

@@ -46,18 +46,10 @@ public class SourceEnumeratorState {
     // lease context for restore.
     private final String leaseId;
 
-    /**
-     * Whether the initial partition discovery has been completed. Following FLIP-288, partitions
-     * discovered after the initial startup always use earliest offsets to prevent data loss.
-     */
+    /** Whether the initial partition discovery has been completed. */
     private final boolean initialDiscoveryFinished;
 
-    /**
-     * Splits that have been initialized (offsets resolved) but not yet assigned to readers.
-     * Following Kafka's FLIP-288 pattern, these are persisted in checkpoint state so that on
-     * restore they can be directly assigned without re-initialization, preserving the original
-     * offset strategy.
-     */
+    /** Splits that have been initialized (offsets resolved) but not yet assigned to readers. */
     private final Collection<SourceSplitBase> unassignedSplits;
 
     public SourceEnumeratorState(
@@ -70,7 +62,7 @@ public class SourceEnumeratorState {
                 assignedPartitions,
                 remainingHybridLakeFlussSplits,
                 leaseId,
-                false,
+                true,
                 Collections.emptyList());
     }
 
