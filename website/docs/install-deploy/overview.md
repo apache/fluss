@@ -129,6 +129,8 @@ We have listed them in the table below the figure.
             <td>
                <li>[JMX](maintenance/observability/metric-reporters.md#jmx)</li>
                <li>[Prometheus](maintenance/observability/metric-reporters.md#prometheus)</li>
+               <li>[PrometheusPushGateway](maintenance/observability/metric-reporters.md#prometheuspushgateway)</li>
+               <li>[InfluxDB](maintenance/observability/metric-reporters.md#influxdb)</li>
             </td>
         </tr>
     </tbody>
