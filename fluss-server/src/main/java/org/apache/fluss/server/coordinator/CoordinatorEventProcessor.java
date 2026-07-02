@@ -831,6 +831,12 @@ public class CoordinatorEventProcessor implements EventProcessor {
         boolean toDisableDataLake =
                 oldTableInfo.getTableConfig().isDataLakeEnabled()
                         && !newTableInfo.getTableConfig().isDataLakeEnabled();
+        boolean lakeTablePathChanged =
+                !Objects.equals(oldTableInfo.getLakeTablePath(), newTableInfo.getLakeTablePath());
+
+        if (lakeTablePathChanged) {
+            clearLakeTableProgress(oldTableInfo, newTableInfo);
+        }
 
         if (toEnableDataLake) {
             // if the table is lake table, we need to add it to lake table tiering manager
@@ -887,6 +893,22 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     onlineBuckets.size(),
                     tableId);
             tableBucketStateMachine.handleStateChange(onlineBuckets, OnlineBucket);
+        }
+    }
+
+    private void clearLakeTableProgress(TableInfo oldTableInfo, TableInfo newTableInfo) {
+        try {
+            lakeTableHelper.clearLakeTableProgress(newTableInfo.getTableId());
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    "Failed to clear lake table progress for table "
+                            + newTableInfo.getTablePath()
+                            + " after lake table path changed from "
+                            + oldTableInfo.getLakeTablePath()
+                            + " to "
+                            + newTableInfo.getLakeTablePath()
+                            + ".",
+                    e);
         }
     }
 
