@@ -20,12 +20,13 @@ package org.apache.fluss.flink.tiering.source;
 
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.tiering.TieringLogSplit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.tiering.TestingLakeTieringFactory;
 import org.apache.fluss.flink.tiering.TestingWriteResult;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
-import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
+import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
@@ -78,7 +79,7 @@ class TieringSourceReaderTest extends FlinkTestBase {
                 TieringLogSplit split =
                         new TieringLogSplit(
                                 tablePath, new TableBucket(tableId, 0), null, EARLIEST_OFFSET, 100);
-                reader.addSplits(Collections.singletonList(split));
+                reader.addSplits(Collections.singletonList(new FlinkTieringSplit(split)));
 
                 // send TieringReachMaxDurationEvent
                 TieringReachMaxDurationEvent event = new TieringReachMaxDurationEvent(tableId);
@@ -113,7 +114,7 @@ class TieringSourceReaderTest extends FlinkTestBase {
                                 // tiering won't be finished if no tiering reach max duration logic
                                 100L);
 
-                reader.addSplits(Collections.singletonList(split));
+                reader.addSplits(Collections.singletonList(new FlinkTieringSplit(split)));
 
                 // wait to run one round of tiering to do some tiering
                 FutureCompletingBlockingQueue<
@@ -157,7 +158,7 @@ class TieringSourceReaderTest extends FlinkTestBase {
                                 EARLIEST_OFFSET,
                                 100L);
                 split.skipCurrentRound();
-                reader.addSplits(Collections.singletonList(split));
+                reader.addSplits(Collections.singletonList(new FlinkTieringSplit(split)));
                 // should skip tiering for this split
                 retry(
                         Duration.ofMinutes(1),

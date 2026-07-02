@@ -23,14 +23,14 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.TableWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.client.tiering.TieringLogSplit;
+import org.apache.fluss.client.tiering.TieringSnapshotSplit;
 import org.apache.fluss.client.write.HashBucketAssigner;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.flink.tiering.TestingLakeTieringFactory;
 import org.apache.fluss.flink.tiering.TestingWriteResult;
 import org.apache.fluss.flink.tiering.source.metrics.TieringMetrics;
-import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
-import org.apache.fluss.flink.tiering.source.split.TieringSnapshotSplit;
-import org.apache.fluss.flink.tiering.source.split.TieringSplit;
+import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
@@ -79,7 +79,7 @@ class TieringSplitReaderTest extends FlinkTestBase {
                 TieringSplitReader<TestingWriteResult> tieringSplitReader =
                         createTieringReader(connection)) {
             // test empty splits
-            SplitsAddition<TieringSplit> splitsAddition =
+            SplitsAddition<FlinkTieringSplit> splitsAddition =
                     new SplitsAddition<>(
                             Arrays.asList(
                                     createLogSplit(tablePath, tableId, 0, EARLIEST_OFFSET, 0),
@@ -146,14 +146,14 @@ class TieringSplitReaderTest extends FlinkTestBase {
             Map<TableBucket, List<InternalRow>> secondRows = putRows(tableId, tablePath, 10);
             Map<TableBucket, Integer> expectedRowCount = new HashMap<>();
             Set<String> expectFinishTieringSplits = new HashSet<>();
-            List<TieringSplit> logSplits = new ArrayList<>();
+            List<FlinkTieringSplit> logSplits = new ArrayList<>();
             for (int bucket = 0; bucket < 3; bucket++) {
                 TableBucket tableBucket = new TableBucket(tableId, bucket);
                 long startingOffset = firstRows.get(tableBucket).size();
                 // -U, +U
                 long stoppingOffset = startingOffset + secondRows.get(tableBucket).size() * 2L;
                 expectedRowCount.put(tableBucket, secondRows.get(tableBucket).size() * 2);
-                TieringLogSplit tieringLogSplit =
+                FlinkTieringSplit tieringLogSplit =
                         createLogSplit(tablePath, tableId, bucket, startingOffset, stoppingOffset);
                 logSplits.add(tieringLogSplit);
                 expectFinishTieringSplits.add(tieringLogSplit.splitId());
@@ -182,14 +182,14 @@ class TieringSplitReaderTest extends FlinkTestBase {
             FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tablePath1);
 
             // first add snapshot split of bucket 0, bucket 1 of table id 0
-            SplitsAddition<TieringSplit> splitsAddition =
+            SplitsAddition<FlinkTieringSplit> splitsAddition =
                     new SplitsAddition<>(
                             Arrays.asList(
                                     createSnapshotSplit(tablePath0, tableId0, 0, 0),
                                     createSnapshotSplit(tablePath0, tableId0, 1, 0)));
             Set<String> table0Splits =
                     splitsAddition.splits().stream()
-                            .map(TieringSplit::splitId)
+                            .map(FlinkTieringSplit::splitId)
                             .collect(Collectors.toSet());
             tieringSplitReader.handleSplitsChanges(splitsAddition);
 
@@ -213,7 +213,7 @@ class TieringSplitReaderTest extends FlinkTestBase {
             tieringSplitReader.handleSplitsChanges(splitsAddition);
             Set<String> table1Splits =
                     splitsAddition.splits().stream()
-                            .map(TieringSplit::splitId)
+                            .map(FlinkTieringSplit::splitId)
                             .collect(Collectors.toSet());
 
             // add bucket2 of table id 0
@@ -228,7 +228,7 @@ class TieringSplitReaderTest extends FlinkTestBase {
                                             table0Rows.get(new TableBucket(tableId0, 2)).size())));
             table0Splits.addAll(
                     splitsAddition.splits().stream()
-                            .map(TieringSplit::splitId)
+                            .map(FlinkTieringSplit::splitId)
                             .collect(Collectors.toSet()));
             tieringSplitReader.handleSplitsChanges(splitsAddition);
 
@@ -276,7 +276,7 @@ class TieringSplitReaderTest extends FlinkTestBase {
                                             table2Rows.get(new TableBucket(tableId2, 2)).size())));
             Set<String> table2Splits =
                     splitsAddition.splits().stream()
-                            .map(TieringSplit::splitId)
+                            .map(FlinkTieringSplit::splitId)
                             .collect(Collectors.toSet());
             tieringSplitReader.handleSplitsChanges(splitsAddition);
             Map<TableBucket, Integer> expectedRowCount =
@@ -325,7 +325,8 @@ class TieringSplitReaderTest extends FlinkTestBase {
             // The custom factory fails if complete() is called on a writer that never received any
             // record, which captures the regression this test covers.
             tieringSplitReader.handleSplitsChanges(
-                    new SplitsAddition<TieringSplit>(Collections.singletonList(tieringLogSplit)));
+                    new SplitsAddition<>(
+                            Collections.singletonList(new FlinkTieringSplit(tieringLogSplit))));
 
             RecordsWithSplitIds<TableBucketWriteResult<TestingWriteResult>> result =
                     tieringSplitReader.fetch();
@@ -368,7 +369,7 @@ class TieringSplitReaderTest extends FlinkTestBase {
         }
 
         // Build log splits whose stoppingOffset equals the leader's current logEndOffset.
-        List<TieringSplit> logSplits = new ArrayList<>();
+        List<FlinkTieringSplit> logSplits = new ArrayList<>();
         Set<String> splitIds = new HashSet<>();
         long totalLogEndOffset = 0L;
         for (int bucket = 0; bucket < DEFAULT_BUCKET_NUM; bucket++) {
@@ -379,7 +380,7 @@ class TieringSplitReaderTest extends FlinkTestBase {
             if (stoppingOffset <= 0) {
                 continue;
             }
-            TieringLogSplit split =
+            FlinkTieringSplit split =
                     createLogSplit(tablePath, tableId, bucket, EARLIEST_OFFSET, stoppingOffset);
             logSplits.add(split);
             splitIds.add(split.splitId());
@@ -497,20 +498,23 @@ class TieringSplitReaderTest extends FlinkTestBase {
         }
     }
 
-    private TieringLogSplit createLogSplit(
+    private FlinkTieringSplit createLogSplit(
             TablePath tablePath,
             long tableId,
             int bucket,
             long startingOffset,
             long stoppingOffset) {
         TableBucket tableBucket = new TableBucket(tableId, bucket);
-        return new TieringLogSplit(tablePath, tableBucket, null, startingOffset, stoppingOffset, 3);
+        return new FlinkTieringSplit(
+                new TieringLogSplit(
+                        tablePath, tableBucket, null, startingOffset, stoppingOffset, 3));
     }
 
-    private TieringSnapshotSplit createSnapshotSplit(
+    private FlinkTieringSplit createSnapshotSplit(
             TablePath tablePath, long tableId, int bucket, long snapshotId) {
         TableBucket tableBucket = new TableBucket(tableId, bucket);
-        return new TieringSnapshotSplit(tablePath, tableBucket, null, snapshotId, 10, 3);
+        return new FlinkTieringSplit(
+                new TieringSnapshotSplit(tablePath, tableBucket, null, snapshotId, 10, 3));
     }
 
     private Map<TableBucket, List<InternalRow>> putRows(long tableId, TablePath tablePath, int rows)
