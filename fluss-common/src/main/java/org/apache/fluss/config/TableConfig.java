@@ -95,6 +95,11 @@ public class TableConfig {
         return config.get(ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS);
     }
 
+    /** Whether remote log segment upload is enabled for the log table. */
+    public boolean isLogRemoteCopyEnabled() {
+        return config.get(ConfigOptions.TABLE_LOG_REMOTE_COPY_ENABLED);
+    }
+
     /** Whether the data lake is enabled. */
     public boolean isDataLakeEnabled() {
         return config.get(ConfigOptions.TABLE_DATALAKE_ENABLED);

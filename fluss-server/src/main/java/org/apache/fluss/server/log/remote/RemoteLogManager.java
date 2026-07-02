@@ -145,7 +145,7 @@ public class RemoteLogManager implements Closeable {
 
     /** Register the replica to the remote log manager. */
     public void registerReplica(Replica replica) throws Exception {
-        if (remoteDisabled()) {
+        if (remoteDisabled() || !replica.isLogRemoteCopyEnabled()) {
             return;
         }
         TableBucket tableBucket = replica.getTableBucket();
