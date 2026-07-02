@@ -1079,7 +1079,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // server to acknowledge the leader change before proceeding to the next migration.
         for (NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket :
                 notifyLeaderAndIsrResultForBuckets) {
-            tryToCompleteRebalanceTask(notifyLeaderAndIsrResultForBucket.getTableBucket());
+            tryToCompleteRebalanceTask(notifyLeaderAndIsrResultForBucket, serverId);
         }
     }
 
@@ -1491,7 +1491,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     /** try to finish rebalance tasks after receive notify leader and isr response. */
-    private void tryToCompleteRebalanceTask(TableBucket tableBucket) {
+    private void tryToCompleteRebalanceTask(
+            NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket,
+            int responseServerId) {
+        TableBucket tableBucket = notifyLeaderAndIsrResultForBucket.getTableBucket();
         RebalancePlanForBucket planForBucket =
                 rebalanceManager.getRebalancePlanForBucket(tableBucket);
         if (planForBucket != null) {
@@ -1502,21 +1505,17 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 if (planForBucket.isLeaderChanged() && !reassignment.isBeingReassigned()) {
                     LeaderAndIsr leaderAndIsr = zooKeeperClient.getLeaderAndIsr(tableBucket).get();
                     int currentLeader = leaderAndIsr.leader();
-                    if (currentLeader == planForBucket.getNewLeader()) {
+                    if (canCompleteLeaderOnlyRebalanceTask(
+                            notifyLeaderAndIsrResultForBucket,
+                            responseServerId,
+                            planForBucket,
+                            currentLeader)) {
                         // leader action finish.
                         rebalanceManager.finishRebalanceTask(
                                 tableBucket, RebalanceStatus.COMPLETED);
                     }
-                } else {
-                    boolean isReassignmentComplete =
-                            isReassignmentComplete(tableBucket, reassignment);
-                    if (isReassignmentComplete) {
-                        LOG.info(
-                                "Target replicas {} have all caught up with the leader for reassigning bucket {}",
-                                reassignment.getTargetReplicas(),
-                                tableBucket);
-                        onBucketReassignment(tableBucket, reassignment, true);
-                    }
+                } else if (notifyLeaderAndIsrResultForBucket.succeeded()) {
+                    tryToCompleteReassignmentTask(tableBucket, reassignment);
                 }
             } catch (Exception e) {
                 LOG.error(
@@ -1524,6 +1523,49 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 rebalanceManager.finishRebalanceTask(tableBucket, RebalanceStatus.FAILED);
             }
         }
+    }
+
+    private void tryToCompleteRebalanceTaskOnLeaderAndIsrChange(TableBucket tableBucket) {
+        RebalancePlanForBucket planForBucket =
+                rebalanceManager.getRebalancePlanForBucket(tableBucket);
+        if (planForBucket != null) {
+            ReplicaReassignment reassignment =
+                    ReplicaReassignment.build(
+                            planForBucket.getOriginReplicas(), planForBucket.getNewReplicas());
+            if (planForBucket.isLeaderChanged() && !reassignment.isBeingReassigned()) {
+                return;
+            }
+            try {
+                tryToCompleteReassignmentTask(tableBucket, reassignment);
+            } catch (Exception e) {
+                LOG.error(
+                        "Failed to complete the reassignment for table bucket {}", tableBucket, e);
+                rebalanceManager.finishRebalanceTask(tableBucket, RebalanceStatus.FAILED);
+            }
+        }
+    }
+
+    private void tryToCompleteReassignmentTask(
+            TableBucket tableBucket, ReplicaReassignment reassignment) throws Exception {
+        boolean isReassignmentComplete = isReassignmentComplete(tableBucket, reassignment);
+        if (isReassignmentComplete) {
+            LOG.info(
+                    "Target replicas {} have all caught up with the leader for reassigning bucket {}",
+                    reassignment.getTargetReplicas(),
+                    tableBucket);
+            onBucketReassignment(tableBucket, reassignment, true);
+        }
+    }
+
+    @VisibleForTesting
+    static boolean canCompleteLeaderOnlyRebalanceTask(
+            NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket,
+            int responseServerId,
+            RebalancePlanForBucket planForBucket,
+            int currentLeader) {
+        return notifyLeaderAndIsrResultForBucket.succeeded()
+                && responseServerId == planForBucket.getNewLeader()
+                && currentLeader == planForBucket.getNewLeader();
     }
 
     /**
@@ -1817,7 +1859,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         newLeaderAndIsrList.forEach(coordinatorContext::putBucketLeaderAndIsr);
 
         // First, try to judge whether the bucket is in rebalance task when isr change.
-        newLeaderAndIsrList.keySet().forEach(this::tryToCompleteRebalanceTask);
+        newLeaderAndIsrList.keySet().forEach(this::tryToCompleteRebalanceTaskOnLeaderAndIsrChange);
 
         // TODO update metadata for all alive tablet servers.
 
