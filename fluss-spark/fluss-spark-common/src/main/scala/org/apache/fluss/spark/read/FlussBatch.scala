@@ -29,11 +29,10 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap
 import scala.collection.JavaConverters._
 
 /**
- * Base class for planner-backed batch scans. The planner (constructed at ScanBuilder-time) owns
- * the Fluss client Connection/Admin lifecycle and produces the [[InputPartition]]s; the Batch is
- * a thin adapter that hands the plan to Spark and dispatches [[createReaderFactory]] based on
- * whether the planner is unioning with a lake snapshot (lake-union) or reading Fluss only
- * (log-only).
+ * Base class for planner-backed batch scans. The planner (constructed at ScanBuilder-time) owns the
+ * Fluss client Connection/Admin lifecycle and produces the [[InputPartition]]s; the Batch is a thin
+ * adapter that hands the plan to Spark and dispatches [[createReaderFactory]] based on whether the
+ * planner is unioning with a lake snapshot (lake-union) or reading Fluss only (log-only).
  */
 abstract class FlussBatch(
     tablePath: TablePath,

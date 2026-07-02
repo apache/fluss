@@ -48,11 +48,11 @@ import scala.collection.mutable
  * `plan()`:
  *   - Lake-union branch (snapshot present): unions lake splits with a Fluss log-tail (append) or
  *     kv+log-tail (upsert).
- *   - Log-only branch (snapshot absent): the plan is derived exclusively from Fluss metadata —
- *     the full Fluss log (append) or Fluss kv snapshots + log tail (upsert).
+ *   - Log-only branch (snapshot absent): the plan is derived exclusively from Fluss metadata — the
+ *     full Fluss log (append) or Fluss kv snapshots + log tail (upsert).
  *
- * The probe is snapshot-isolated: it is performed exactly once per planner instance (i.e. once
- * per Spark scan build). There is no runtime fallback path — presence/absence is decided
+ * The probe is snapshot-isolated: it is performed exactly once per planner instance (i.e. once per
+ * Spark scan build). There is no runtime fallback path — presence/absence is decided
  * deterministically at construction and `plan()` picks a branch accordingly.
  */
 sealed trait SplitPlanner extends AutoCloseable {
@@ -74,8 +74,8 @@ sealed trait SplitPlanner extends AutoCloseable {
   /**
    * Server-side batch filter to attach to the Fluss log-tail reader. Only ARROW-formatted log
    * tables accept a server filter; other formats must return None to avoid a server-side reject.
-   * Upsert planners always return None because the reader must reconcile the full log tail with
-   * kv snapshots.
+   * Upsert planners always return None because the reader must reconcile the full log tail with kv
+   * snapshots.
    */
   def logTailPredicate: Option[FlussPredicate]
 }
@@ -90,9 +90,9 @@ sealed trait UpsertSplitPlanner extends SplitPlanner
  * Base implementation: owns the shared Fluss client Connection + Admin so concrete planners can
  * issue metadata requests. [[close]] tears down the whole chain.
  *
- * Also centralizes the lake-snapshot probe: if data lake is enabled at the table level, try
- * loading the readable snapshot; treat [[LakeTableSnapshotNotExistException]] as "no snapshot",
- * all other exceptions propagate.
+ * Also centralizes the lake-snapshot probe: if data lake is enabled at the table level, try loading
+ * the readable snapshot; treat [[LakeTableSnapshotNotExistException]] as "no snapshot", all other
+ * exceptions propagate.
  */
 abstract class AbstractSplitPlanner(
     override val tablePath: TablePath,
@@ -110,9 +110,9 @@ abstract class AbstractSplitPlanner(
   protected def stoppingOffsetsInitializer: OffsetsInitializer
 
   /**
-   * Probes the readable lake snapshot exactly once. Absent = data-lake disabled at the table
-   * level, OR the readable snapshot admin call reported no snapshot; Present = snapshot to union
-   * with the Fluss tail. Other exceptions propagate.
+   * Probes the readable lake snapshot exactly once. Absent = data-lake disabled at the table level,
+   * OR the readable snapshot admin call reported no snapshot; Present = snapshot to union with the
+   * Fluss tail. Other exceptions propagate.
    */
   protected def probeLakeSnapshot(): Option[LakeSnapshot] = {
     if (!tableInfo.getTableConfig.isDataLakeEnabled) {
@@ -154,26 +154,26 @@ abstract class AbstractSplitPlanner(
 }
 
 /**
- * Single append (log-table) planner. Probes a readable lake snapshot at construction; if
- * present, the plan is a union of lake splits and the Fluss log-tail (from each bucket's
- * snapshotLogOffset to committed). If absent, the plan is a pure Fluss log scan from earliest
- * to committed (SCAN_START_UP_MODE deliberately ignored — see class scaladoc note below).
+ * Single append (log-table) planner. Probes a readable lake snapshot at construction; if present,
+ * the plan is a union of lake splits and the Fluss log-tail (from each bucket's snapshotLogOffset
+ * to committed). If absent, the plan is a pure Fluss log scan from earliest to committed
+ * (SCAN_START_UP_MODE deliberately ignored — see class scaladoc note below).
  *
  * Batch semantics note: start offset is hardcoded to [[OffsetsInitializer.full]] instead of
- * consuming the user-facing SCAN_START_UP_MODE. Rationale — batch reads semantically mean "the
- * full table". Letting SCAN_START_UP_MODE (a streaming concept) also gate batch planning creates
- * two problems: (a) the same config key would carry different semantics on append vs upsert
- * tables (KV snapshot has no partial-read semantics), which is confusing; (b) with mode=latest
- * and no writes since planning time, start==stop==tail — an empty range that trips the
- * reader-side `Invalid offset range` guard. Symmetric "batch = earliest → committed" closes both
- * concerns and keeps append/upsert planners aligned. Time-range batch reads should be expressed
- * via predicate pushdown on the timestamp column, not startup mode.
+ * consuming the user-facing SCAN_START_UP_MODE. Rationale — batch reads semantically mean "the full
+ * table". Letting SCAN_START_UP_MODE (a streaming concept) also gate batch planning creates two
+ * problems: (a) the same config key would carry different semantics on append vs upsert tables (KV
+ * snapshot has no partial-read semantics), which is confusing; (b) with mode=latest and no writes
+ * since planning time, start==stop==tail — an empty range that trips the reader-side
+ * `Invalid offset range` guard. Symmetric "batch = earliest → committed" closes both concerns and
+ * keeps append/upsert planners aligned. Time-range batch reads should be expressed via predicate
+ * pushdown on the timestamp column, not startup mode.
  *
- * `OffsetsInitializer.full()` is chosen over `OffsetsInitializer.earliest()` intentionally: for
- * a log table the two are semantically equivalent (see OffsetsInitializer.full javadoc), but
- * full() resolves each bucket's start offset to a concrete numeric value via RPC, whereas
- * earliest() returns the `LogScanner.EARLIEST_OFFSET` (-2) sentinel — the split-by-max-records
- * logic below requires concrete numeric bounds to compute range partitions.
+ * `OffsetsInitializer.full()` is chosen over `OffsetsInitializer.earliest()` intentionally: for a
+ * log table the two are semantically equivalent (see OffsetsInitializer.full javadoc), but full()
+ * resolves each bucket's start offset to a concrete numeric value via RPC, whereas earliest()
+ * returns the `LogScanner.EARLIEST_OFFSET` (-2) sentinel — the split-by-max-records logic below
+ * requires concrete numeric bounds to compute range partitions.
  */
 class AppendPlanner(
     override val tablePath: TablePath,
@@ -289,7 +289,10 @@ class AppendPlanner(
         }
         .flatMap {
           case (partitionId, startBucketOffsets, stoppingBucketOffsets) =>
-            createPartitions(Some(partitionId), startBucketOffsets.toMap, stoppingBucketOffsets.toMap)
+            createPartitions(
+              Some(partitionId),
+              startBucketOffsets.toMap,
+              stoppingBucketOffsets.toMap)
         }
         .toArray
     } else {
@@ -497,11 +500,10 @@ class AppendPlanner(
 /**
  * Single upsert (primary-key table) planner. Probes a readable lake snapshot at construction; if
  * present, the plan is a union of lake splits and per-bucket Fluss (kv-snapshot + log-tail)
- * partitions. If absent, the plan is a pure Fluss upsert scan derived from kv snapshots + log
- * tail.
+ * partitions. If absent, the plan is a pure Fluss upsert scan derived from kv snapshots + log tail.
  *
- * Startup-mode gating has been removed: a batch upsert scan is always full-table regardless of
- * the user-facing SCAN_START_UP_MODE setting — same rationale as [[AppendPlanner]].
+ * Startup-mode gating has been removed: a batch upsert scan is always full-table regardless of the
+ * user-facing SCAN_START_UP_MODE setting — same rationale as [[AppendPlanner]].
  */
 class UpsertPlanner(
     override val tablePath: TablePath,
@@ -610,7 +612,10 @@ class UpsertPlanner(
     if (tableInfo.isPartitioned) {
       planLakePartitionedTable(lakeSplits.asScala.toSeq, tableBucketsOffset, bucketOffsetsRetriever)
     } else {
-      planLakeNonPartitionedTable(lakeSplits.asScala.toSeq, tableBucketsOffset, bucketOffsetsRetriever)
+      planLakeNonPartitionedTable(
+        lakeSplits.asScala.toSeq,
+        tableBucketsOffset,
+        bucketOffsetsRetriever)
     }
   }
 

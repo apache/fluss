@@ -70,15 +70,14 @@ trait FlussSupportsPushDownPartitionFilters
 }
 
 /**
- * Data-predicate push-down. Pushes non-partition predicates as a server-side batch filter only
- * when the table is a log table (no primary key) with ARROW log format — the only combination
- * the Fluss server-side filter currently supports.
+ * Data-predicate push-down. Pushes non-partition predicates as a server-side batch filter only when
+ * the table is a log table (no primary key) with ARROW log format — the only combination the Fluss
+ * server-side filter currently supports.
  *
  * Lake-union vs log-only routing does NOT influence pushdown here: the readable lake snapshot is
- * probed inside the concrete [[SplitPlanner]] at construction, not at pushdown time. Lake and
- * Fluss are expected to support the same set of predicates (partition + ARROW/non-PK data
- * predicates); any further pushdown to the LakeSource happens inside the planner and is
- * transparent to Spark.
+ * probed inside the concrete [[SplitPlanner]] at construction, not at pushdown time. Lake and Fluss
+ * are expected to support the same set of predicates (partition + ARROW/non-PK data predicates);
+ * any further pushdown to the LakeSource happens inside the planner and is transparent to Spark.
  */
 trait FlussSupportsPushDownV2Filters extends FlussSupportsPushDownPartitionFilters {
 
@@ -137,9 +136,9 @@ class FlussAppendScanBuilder(
 }
 
 /**
- * Fluss Upsert (primary-key table) Scan Builder. The concrete [[UpsertPlanner]] is materialized
- * in [[build]] once pushdown/prune state is settled. The planner probes the readable lake
- * snapshot itself at construction.
+ * Fluss Upsert (primary-key table) Scan Builder. The concrete [[UpsertPlanner]] is materialized in
+ * [[build]] once pushdown/prune state is settled. The planner probes the readable lake snapshot
+ * itself at construction.
  */
 class FlussUpsertScanBuilder(
     val tablePath: TablePath,

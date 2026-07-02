@@ -70,9 +70,9 @@ trait FlussScan extends Scan {
 }
 
 /**
- * Fluss Append (log-table) scan. Whether the underlying batch reads from Fluss only or unions
- * Fluss with a lake snapshot is determined by the [[AppendSplitPlanner]] instance passed in from
- * the ScanBuilder. Description reflects the planner category.
+ * Fluss Append (log-table) scan. Whether the underlying batch reads from Fluss only or unions Fluss
+ * with a lake snapshot is determined by the [[AppendSplitPlanner]] instance passed in from the
+ * ScanBuilder. Description reflects the planner category.
  */
 case class FlussAppendScan(
     tablePath: TablePath,
@@ -115,8 +115,8 @@ case class FlussAppendScan(
 
 /**
  * Fluss Upsert (primary-key table) scan. Whether the underlying batch reads from Fluss only or
- * unions Fluss with a lake snapshot is determined by the [[UpsertSplitPlanner]] instance passed
- * in from the ScanBuilder.
+ * unions Fluss with a lake snapshot is determined by the [[UpsertSplitPlanner]] instance passed in
+ * from the ScanBuilder.
  */
 case class FlussUpsertScan(
     tablePath: TablePath,
