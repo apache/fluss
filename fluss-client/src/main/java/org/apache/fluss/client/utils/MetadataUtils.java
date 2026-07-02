@@ -291,6 +291,10 @@ public class MetadataUtils {
             for (int i = 0; i < replicas.length; i++) {
                 replicas[i] = pbBucketMetadata.getReplicaIdAt(i);
             }
+            int[] isr = new int[pbBucketMetadata.getIsrsCount()];
+            for (int i = 0; i < isr.length; i++) {
+                isr[i] = pbBucketMetadata.getIsrAt(i);
+            }
             Integer leader = null;
             if (pbBucketMetadata.hasLeaderId()) {
                 leader = pbBucketMetadata.getLeaderId();
@@ -298,7 +302,7 @@ public class MetadataUtils {
             PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath, partitionName);
 
             BucketLocation bucketLocation =
-                    new BucketLocation(physicalTablePath, tableBucket, leader, replicas);
+                    new BucketLocation(physicalTablePath, tableBucket, leader, replicas, isr);
             bucketLocations.add(bucketLocation);
         }
         return bucketLocations;

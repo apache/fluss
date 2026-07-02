@@ -869,8 +869,8 @@ message PbBucketMetadata {
   // optional as some time the leader may not elected yet
   optional int32 leader_id = 2;
   repeated int32 replica_id = 3 [packed = true];
-  // TODO: Add isr here.
   optional int32 leader_epoch = 4;
+  repeated int32 isr = 5 [packed = true];
 }
 
 message PbProduceLogReqForBucket {
