@@ -54,14 +54,20 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * <ul>
  *   <li><b>Version 0:</b> Initial version. Remaining hybrid lake splits are only (de)serialized if
  *       the {@code lakeSource} is non-null.
- *   <li><b>Version 1 (Current):</b> Decouples split serialization from the {@code lakeSource}
- *       presence. It always attempts to (de)serialize the splits, using an internal boolean flag to
- *       indicate presence. This ensures state consistency regardless of the current runtime
- *       configuration.
+ *   <li><b>Version 1:</b> Decouples split serialization from the {@code lakeSource} presence. It
+ *       always attempts to (de)serialize the splits, using an internal boolean flag to indicate
+ *       presence. This ensures state consistency regardless of the current runtime configuration.
+ *   <li><b>Version 2:</b> Adds lease ID (UTF string) after the hybrid lake splits section to
+ *       support KV snapshot lease management.
+ *   <li><b>Version 3 (Current):</b> Adds {@code initialDiscoveryFinished} boolean flag after the
+ *       lease ID, and appends {@code unassignedSplits} collection. The flag tracks whether the
+ *       first partition discovery round has completed (FLIP-288 offset semantics); the unassigned
+ *       splits are persisted so they survive failover without re-initialization.
  * </ul>
  *
  * <p><b>Compatibility Note:</b> This serializer is designed for backward compatibility. It can
- * deserialize states from Version 0, but always produces Version 1 during serialization.
+ * deserialize states from all previous versions, but always produces the current version during
+ * serialization.
  */
 public class FlussSourceEnumeratorStateSerializer
         implements SimpleVersionedSerializer<SourceEnumeratorState> {
@@ -104,7 +110,7 @@ public class FlussSourceEnumeratorStateSerializer
         // write initial discovery finished flag (VERSION_3+)
         out.writeBoolean(state.isInitialDiscoveryFinished());
 
-        // write unassigned splits (VERSION_4)
+        // write unassigned splits (VERSION_3+)
         serializeUnassignedSplits(out, state.getUnassignedSplits());
 
         final byte[] result = out.getCopyOfBuffer();

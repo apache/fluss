@@ -157,8 +157,8 @@ public class FlinkSourceEnumerator
 
     /**
      * The offsets initializer used for partitions discovered after the initial startup. Following
-     * FLIP-288(<a
-     * href="https://cwiki.apache.org/confluence/spaces/FLINK/pages/350784113/FLIP-529+Connections+in+Flink+SQL+and+TableAPI">...</a>)
+     * <a
+     * href="https://cwiki.apache.org/confluence/spaces/FLINK/pages/240881147/FLIP-288+Enable+Dynamic+Partition+Discovery+by+Default+in+Kafka+Source">FLIP-288</a>)
      * semantics, newly discovered partitions always start from earliest to prevent data loss.
      */
     private final OffsetsInitializer newDiscoveryOffsetsInitializer;
