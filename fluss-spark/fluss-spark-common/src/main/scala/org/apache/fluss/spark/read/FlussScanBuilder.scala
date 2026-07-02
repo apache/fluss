@@ -20,12 +20,15 @@ package org.apache.fluss.spark.read
 import org.apache.fluss.config.{Configuration => FlussConfiguration}
 import org.apache.fluss.metadata.{LogFormat, TableInfo, TablePath}
 import org.apache.fluss.predicate.{Predicate => FlussPredicate}
+import org.apache.fluss.spark.read.lake.FlussLakeUtils
 import org.apache.fluss.spark.utils.{SparkPartitionPredicate, SparkPredicateConverter}
 
 import org.apache.spark.sql.connector.expressions.filter.Predicate
 import org.apache.spark.sql.connector.read.{Scan, ScanBuilder, SupportsPushDownLimit, SupportsPushDownRequiredColumns, SupportsPushDownV2Filters}
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
+
+import java.util.{Collections, IdentityHashMap, Set => JSet}
 
 import scala.collection.JavaConverters._
 
@@ -70,14 +73,14 @@ trait FlussSupportsPushDownPartitionFilters
 }
 
 /**
- * Data-predicate push-down. Pushes non-partition predicates as a server-side batch filter only when
- * the table is a log table (no primary key) with ARROW log format — the only combination the Fluss
- * server-side filter currently supports.
+ * Data-predicate push-down. Two branches:
+ *   1. Non-PK log tables with ARROW format: converts predicates to server-side batch filters.
+ *   2. Lake-enabled tables (including PK tables): probes the lake source for which predicates it
+ *      accepts, reports those back to Spark, and passes the accepted predicate to the planner which
+ *      applies it on the lake-union path.
  *
- * Lake-union vs log-only routing does NOT influence pushdown here: the readable lake snapshot is
- * probed inside the concrete [[SplitPlanner]] at construction, not at pushdown time. Lake and Fluss
- * are expected to support the same set of predicates (partition + ARROW/non-PK data predicates);
- * any further pushdown to the LakeSource happens inside the planner and is transparent to Spark.
+ * This consolidates the former `FlussSupportsPushDownV2Filters` (branch 1) and
+ * `FlussLakeSupportsPushDownV2Filters` (branch 2) into a single trait.
  */
 trait FlussSupportsPushDownV2Filters extends FlussSupportsPushDownPartitionFilters {
 
@@ -93,6 +96,27 @@ trait FlussSupportsPushDownV2Filters extends FlussSupportsPushDownPartitionFilte
         SparkPredicateConverter.convertPredicates(tableInfo.getRowType, nonPartition.toSeq)
       pushedPredicate = predicate
       acceptedPredicates = accepted.toArray
+    } else if (tableInfo.getTableConfig.isDataLakeEnabled) {
+      // Lake-enabled tables: probe the lake source for which predicates it accepts. All predicates
+      // (including partition) are offered because the lake source handles both partition pruning
+      // and data filtering internally. This recovers the former FlussLakeSupportsPushDownV2Filters
+      // behavior that was split into a separate trait before consolidation.
+      val pairs =
+        SparkPredicateConverter.convertPerPredicate(tableInfo.getRowType, predicates.toSeq)
+      if (pairs.nonEmpty) {
+        val lakeSource = FlussLakeUtils.createLakeSource(
+          flussConfig.toMap,
+          tableInfo.getProperties.toMap,
+          tablePath)
+        val result = FlussLakeUtils.applyLakeFilters(lakeSource, pairs.map(_._2).asJava)
+        val acceptedSet: JSet[FlussPredicate] =
+          Collections.newSetFromMap(new IdentityHashMap[FlussPredicate, java.lang.Boolean]())
+        acceptedSet.addAll(result.acceptedPredicates())
+        val (acceptedSpark, acceptedFluss) =
+          pairs.collect { case (sp, fp) if acceptedSet.contains(fp) => (sp, fp) }.unzip
+        pushedPredicate = SparkPredicateConverter.combineAnd(acceptedFluss)
+        acceptedPredicates = acceptedSpark.toArray
+      }
     }
     nonPartition
   }
