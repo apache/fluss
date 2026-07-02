@@ -630,7 +630,7 @@ public class FlinkSourceEnumerator
                             + "{} splits already restored from checkpoint state.",
                     tablePath,
                     pendingSplitAssignment.values().stream().mapToInt(List::size).sum());
-            noMoreNewSplits = true;
+            initialDiscoveryFinished = true;
             return;
         }
 
@@ -1059,7 +1059,7 @@ public class FlinkSourceEnumerator
         // without re-generating.
         if (pendingHybridLakeFlussSplits != null) {
             LOG.info("Still have pending lake fluss splits, shouldn't list splits again.");
-            return pendingHybridLakeFlussSplits;
+            return new ArrayList<>(pendingHybridLakeFlussSplits);
         }
         try {
             LakeSplitGenerator lakeSplitGenerator =

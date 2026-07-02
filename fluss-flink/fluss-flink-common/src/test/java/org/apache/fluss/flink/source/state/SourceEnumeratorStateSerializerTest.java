@@ -229,9 +229,19 @@ class SourceEnumeratorStateSerializerTest {
         assignedPartitions.put(1L, "partition1");
         assignedPartitions.put(2L, "partition2");
 
+        List<SourceSplitBase> unassignedSplits = new ArrayList<>();
+        unassignedSplits.add(new LogSplit(new TableBucket(1, 0), null, 100L));
+        unassignedSplits.add(new LogSplit(new TableBucket(1, 5L, 1), "p5", 200L));
+        unassignedSplits.add(new HybridSnapshotLogSplit(new TableBucket(1, 2), null, 300L, 50L));
+
         SourceEnumeratorState sourceEnumeratorState =
                 new SourceEnumeratorState(
-                        assignedBuckets, assignedPartitions, null, "testLeaseId", true);
+                        assignedBuckets,
+                        assignedPartitions,
+                        null,
+                        "testLeaseId",
+                        true,
+                        unassignedSplits);
 
         byte[] serialized = serializer.serialize(sourceEnumeratorState);
         SourceEnumeratorState deserialized =
@@ -239,6 +249,7 @@ class SourceEnumeratorStateSerializerTest {
 
         assertThat(deserialized).isEqualTo(sourceEnumeratorState);
         assertThat(deserialized.isInitialDiscoveryFinished()).isTrue();
+        assertThat(deserialized.getUnassignedSplits()).containsExactlyElementsOf(unassignedSplits);
     }
 
     @Test
