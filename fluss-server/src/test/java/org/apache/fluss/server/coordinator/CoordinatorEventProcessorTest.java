@@ -46,12 +46,16 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
+import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.ApiKeys;
+import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
+import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
+import org.apache.fluss.server.coordinator.event.RetryOfflineLeaderEvent;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
 import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.coordinator.statemachine.BucketState;
@@ -59,6 +63,7 @@ import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.entity.AdjustIsrResultForBucket;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
+import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
@@ -109,6 +114,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -1113,6 +1119,228 @@ class CoordinatorEventProcessorTest {
     }
 
     @Test
+    void testDiskWriteLockedNotifyLeaderResponseMarksReplicaOffline() throws Exception {
+        initCoordinatorChannel();
+        TablePath tablePath =
+                TablePath.of(defaultDatabase, "disk_write_locked_notify_leader_response");
+        int nBuckets = 3;
+        int replicationFactor = 3;
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        nBuckets,
+                        replicationFactor,
+                        new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        });
+        long tableId =
+                metadataManager.createTable(
+                        tablePath, remoteDataDir, TEST_TABLE, tableAssignment, false);
+        verifyTableCreated(tableId, tableAssignment, nBuckets, replicationFactor);
+
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        int leader =
+                tableAssignment.getBucketAssignment(tableBucket.getBucket()).getReplicas().get(0);
+        TableBucketReplica tableBucketReplica = new TableBucketReplica(tableBucket, leader);
+
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new NotifyLeaderAndIsrResponseReceivedEvent(
+                                Collections.singletonList(
+                                        new NotifyLeaderAndIsrResultForBucket(
+                                                tableBucket,
+                                                new ApiError(
+                                                        Errors.DISK_WRITE_LOCKED,
+                                                        "disk write locked"))),
+                                leader));
+
+        fromCtx(
+                ctx -> {
+                    assertThat(ctx.getReplicaState(tableBucketReplica)).isEqualTo(OfflineReplica);
+                    assertThat(ctx.isReplicaOnline(leader, tableBucket)).isFalse();
+                    return null;
+                });
+    }
+
+    @Test
+    void testRetryOfflineLeaderEventRetriesOfflineReplicaOnLiveServer() throws Exception {
+        initCoordinatorChannel();
+        TablePath tablePath = TablePath.of(defaultDatabase, "retry_offline_leader_on_live_server");
+        int nBuckets = 3;
+        int replicationFactor = 1;
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        nBuckets,
+                        replicationFactor,
+                        new TabletServerInfo[] {new TabletServerInfo(0, "rack0")});
+        long tableId =
+                metadataManager.createTable(
+                        tablePath,
+                        remoteDataDir,
+                        TEST_TABLE.withReplicationFactor(replicationFactor),
+                        tableAssignment,
+                        false);
+        verifyTableCreated(tableId, tableAssignment, nBuckets, replicationFactor);
+
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        int leader =
+                tableAssignment.getBucketAssignment(tableBucket.getBucket()).getReplicas().get(0);
+        TableBucketReplica tableBucketReplica = new TableBucketReplica(tableBucket, leader);
+
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new NotifyLeaderAndIsrResponseReceivedEvent(
+                                Collections.singletonList(
+                                        new NotifyLeaderAndIsrResultForBucket(
+                                                tableBucket,
+                                                new ApiError(
+                                                        Errors.DISK_WRITE_LOCKED,
+                                                        "disk write locked"))),
+                                leader));
+
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getReplicaState(tableBucketReplica)).isEqualTo(OfflineReplica);
+                    assertThat(ctx.getBucketState(tableBucket)).isEqualTo(OfflineBucket);
+                    assertThat(ctx.isReplicaOnline(leader, tableBucket)).isFalse();
+                });
+
+        eventProcessor.getCoordinatorEventManager().put(new RetryOfflineLeaderEvent());
+
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.isReplicaOnline(leader, tableBucket)).isTrue();
+                    assertThat(ctx.getReplicaState(tableBucketReplica)).isEqualTo(OnlineReplica);
+                    assertThat(ctx.getBucketState(tableBucket)).isEqualTo(OnlineBucket);
+                    assertThat(ctx.getBucketLeaderAndIsr(tableBucket).get().leader())
+                            .isEqualTo(leader);
+                });
+    }
+
+    @Test
+    void testRetryOfflineLeaderEventKeepsReplicaOfflineWhenRetryStillFails() throws Exception {
+        initCoordinatorChannel();
+        TablePath tablePath = TablePath.of(defaultDatabase, "retry_offline_leader_still_fails");
+        int nBuckets = 3;
+        int replicationFactor = 1;
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        nBuckets,
+                        replicationFactor,
+                        new TabletServerInfo[] {new TabletServerInfo(0, "rack0")});
+        long tableId =
+                metadataManager.createTable(
+                        tablePath,
+                        remoteDataDir,
+                        TEST_TABLE.withReplicationFactor(replicationFactor),
+                        tableAssignment,
+                        false);
+        verifyTableCreated(tableId, tableAssignment, nBuckets, replicationFactor);
+
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        int leader =
+                tableAssignment.getBucketAssignment(tableBucket.getBucket()).getReplicas().get(0);
+        TableBucketReplica tableBucketReplica = new TableBucketReplica(tableBucket, leader);
+
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new NotifyLeaderAndIsrResponseReceivedEvent(
+                                Collections.singletonList(
+                                        new NotifyLeaderAndIsrResultForBucket(
+                                                tableBucket,
+                                                new ApiError(
+                                                        Errors.DISK_WRITE_LOCKED,
+                                                        "disk write locked"))),
+                                leader));
+
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getReplicaState(tableBucketReplica)).isEqualTo(OfflineReplica);
+                    assertThat(ctx.isReplicaOnline(leader, tableBucket)).isFalse();
+                });
+
+        CountingFailingNotifyGateway failingGateway = new CountingFailingNotifyGateway();
+        testCoordinatorChannelManager.setGateways(Collections.singletonMap(leader, failingGateway));
+
+        eventProcessor.getCoordinatorEventManager().put(new RetryOfflineLeaderEvent());
+
+        retry(
+                Duration.ofMinutes(1),
+                () -> assertThat(failingGateway.getNotifyLeaderAndIsrCount()).isGreaterThan(0));
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getReplicaState(tableBucketReplica)).isEqualTo(OfflineReplica);
+                    assertThat(ctx.getBucketState(tableBucket)).isEqualTo(OfflineBucket);
+                    assertThat(ctx.isReplicaOnline(leader, tableBucket)).isFalse();
+                });
+    }
+
+    @Test
+    void testRetryOfflineLeaderEventSkipsDeletedBucket() throws Exception {
+        initCoordinatorChannel();
+        TablePath tablePath = TablePath.of(defaultDatabase, "retry_offline_leader_deleted_bucket");
+        int nBuckets = 3;
+        int replicationFactor = 1;
+        TableAssignment tableAssignment =
+                generateAssignment(
+                        nBuckets,
+                        replicationFactor,
+                        new TabletServerInfo[] {new TabletServerInfo(0, "rack0")});
+        long tableId =
+                metadataManager.createTable(
+                        tablePath,
+                        remoteDataDir,
+                        TEST_TABLE.withReplicationFactor(replicationFactor),
+                        tableAssignment,
+                        false);
+        verifyTableCreated(tableId, tableAssignment, nBuckets, replicationFactor);
+
+        TableBucket tableBucket = new TableBucket(tableId, 0);
+        int leader =
+                tableAssignment.getBucketAssignment(tableBucket.getBucket()).getReplicas().get(0);
+        TableBucketReplica tableBucketReplica = new TableBucketReplica(tableBucket, leader);
+
+        eventProcessor
+                .getCoordinatorEventManager()
+                .put(
+                        new NotifyLeaderAndIsrResponseReceivedEvent(
+                                Collections.singletonList(
+                                        new NotifyLeaderAndIsrResultForBucket(
+                                                tableBucket,
+                                                new ApiError(
+                                                        Errors.DISK_WRITE_LOCKED,
+                                                        "disk write locked"))),
+                                leader));
+
+        retryVerifyContext(
+                ctx -> {
+                    assertThat(ctx.getReplicaState(tableBucketReplica)).isEqualTo(OfflineReplica);
+                    assertThat(ctx.isReplicaOnline(leader, tableBucket)).isFalse();
+                });
+
+        fromCtx(
+                ctx -> {
+                    ctx.queueTableDeletion(Collections.singleton(tableId));
+                    return null;
+                });
+
+        eventProcessor.getCoordinatorEventManager().put(new RetryOfflineLeaderEvent());
+
+        fromCtx(
+                ctx -> {
+                    assertThat(ctx.getReplicaState(tableBucketReplica)).isEqualTo(OfflineReplica);
+                    assertThat(ctx.isReplicaOnline(leader, tableBucket)).isFalse();
+                    assertThat(ctx.offlineReplicasOnLiveTabletServers())
+                            .contains(tableBucketReplica);
+                    return null;
+                });
+    }
+
+    @Test
     void testSchemaChange() throws Exception {
         // make sure all request to gateway should be successful
         initCoordinatorChannel();
@@ -1604,6 +1832,7 @@ class CoordinatorEventProcessorTest {
     private CoordinatorEventProcessor buildCoordinatorEventProcessor() {
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        conf.set(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_INTERVAL, Duration.ofDays(1));
         return new CoordinatorEventProcessor(
                 zookeeperClient,
                 serverMetadataCache,
@@ -1999,6 +2228,25 @@ class CoordinatorEventProcessorTest {
             }
         }
         return count;
+    }
+
+    private static class CountingFailingNotifyGateway extends TestTabletServerGateway {
+        private final AtomicInteger notifyLeaderAndIsrCount = new AtomicInteger();
+
+        CountingFailingNotifyGateway() {
+            super(true, Collections.emptySet());
+        }
+
+        int getNotifyLeaderAndIsrCount() {
+            return notifyLeaderAndIsrCount.get();
+        }
+
+        @Override
+        public CompletableFuture<NotifyLeaderAndIsrResponse> notifyLeaderAndIsr(
+                NotifyLeaderAndIsrRequest request) {
+            notifyLeaderAndIsrCount.incrementAndGet();
+            return super.notifyLeaderAndIsr(request);
+        }
     }
 
     /**
