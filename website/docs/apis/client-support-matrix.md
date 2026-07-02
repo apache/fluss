@@ -30,7 +30,7 @@ These data operations are available under TableAppend, TableScan, TableUpsert an
 | Primary Key  | Batch Scan (Snapshot)      | ✔️                                  |             |               |            |
 
 :::tip
-For more details, see [Table Overview](/table-design/overview.md).
+For more details, see [Table Overview](/table-design/overview.mdx).
 :::
 
 ## Data Types
@@ -110,5 +110,5 @@ Admin operations are available under FlussAdmin interface.
 | Paimon  | ✔️                                  |             |               |            |
 
 :::tip
-For more details, see [Streaming Lakehouse](/streaming-lakehouse/overview.md).
+For more details, see [Streaming Lakehouse](/streaming-lakehouse/overview.mdx).
 :::
