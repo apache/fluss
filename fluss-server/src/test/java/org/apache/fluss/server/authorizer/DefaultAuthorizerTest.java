@@ -224,6 +224,30 @@ public class DefaultAuthorizerTest {
     }
 
     @Test
+    void testIgnoreCase() throws Exception {
+        Session normalUserSession = createSession("user1", "192.168.1.1");
+        Session superUserSession = createSession("user", "ROOT", "192.168.1.1");
+        assertThat(authorizer.isAuthorized(normalUserSession, READ, Resource.database("database1")))
+                .isFalse();
+        assertThat(authorizer.isAuthorized(superUserSession, READ, Resource.database("database1")))
+                .isFalse();
+        Configuration ignoreCaseConfiguration = new Configuration(configuration);
+        ignoreCaseConfiguration.setBoolean(ConfigOptions.SECURITY_ACL_PRINCIPAL_IGNORE_CASE, true);
+        try (Authorizer ignoreCaseAuthorizer =
+                AuthorizerLoader.createAuthorizer(ignoreCaseConfiguration, zooKeeperClient, null)) {
+            assertThat(ignoreCaseAuthorizer).isNotNull();
+            assertThat(
+                            ignoreCaseAuthorizer.isAuthorized(
+                                    normalUserSession, READ, Resource.database("database1")))
+                    .isFalse();
+            assertThat(
+                            ignoreCaseAuthorizer.isAuthorized(
+                                    superUserSession, READ, Resource.database("database1")))
+                    .isTrue();
+        }
+    }
+
+    @Test
     void testAclWithOperationAll() throws Exception {
         Session session = createSession("user1", "192.168.1.1");
         List<Action> actions =
@@ -664,12 +688,16 @@ public class DefaultAuthorizerTest {
     }
 
     private Session createSession(String username, String host) throws Exception {
+        return createSession("USER", username, host);
+    }
+
+    private Session createSession(String userType, String username, String host) throws Exception {
         return new Session(
                 (byte) 1,
                 "FLUSS",
                 false,
                 InetAddress.getByName(host),
-                new FlussPrincipal(username, "USER"));
+                new FlussPrincipal(username, userType));
     }
 
     private AclBinding createAclBinding(

@@ -18,6 +18,8 @@
 package org.apache.fluss.server;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.config.ConfigOption;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
@@ -66,7 +68,7 @@ public class DynamicConfigManager {
         try {
             configChangeListener.start();
             Map<String, String> entityConfigs = zooKeeperClient.fetchEntityConfig();
-            dynamicServerConfig.updateDynamicConfig(entityConfigs, true);
+            dynamicServerConfig.initializeDynamicConfig(entityConfigs, true);
         } catch (Exception e) {
             LOG.error("Failed to update dynamic configs from zookeeper", e);
         }
@@ -145,6 +147,53 @@ public class DynamicConfigManager {
                         case DELETE:
                             configsProps.remove(configPropName);
                             break;
+                        case APPEND:
+                            validateListType(configPropName);
+                            String existingAppend;
+                            if (configsProps.containsKey(configPropName)) {
+                                existingAppend = configsProps.get(configPropName);
+                            } else {
+                                // Fall back to static config
+                                existingAppend =
+                                        dynamicServerConfig
+                                                .getInitialServerConfigs()
+                                                .get(configPropName);
+                            }
+                            if (existingAppend == null || existingAppend.isEmpty()) {
+                                configsProps.put(configPropName, configPropValue);
+                            } else {
+                                configsProps.put(
+                                        configPropName, existingAppend + "," + configPropValue);
+                            }
+                            break;
+                        case SUBTRACT:
+                            validateListType(configPropName);
+                            String existingSubtract;
+                            if (configsProps.containsKey(configPropName)) {
+                                existingSubtract = configsProps.get(configPropName);
+                            } else {
+                                // Fall back to static config
+                                existingSubtract =
+                                        dynamicServerConfig
+                                                .getInitialServerConfigs()
+                                                .get(configPropName);
+                            }
+                            if (existingSubtract != null && !existingSubtract.isEmpty()) {
+                                List<String> items = new ArrayList<>();
+                                for (String item : existingSubtract.split(",")) {
+                                    String trimmed = item.trim();
+                                    if (!trimmed.isEmpty()) {
+                                        items.add(trimmed);
+                                    }
+                                }
+                                items.removeIf(v -> v.equals(configPropValue));
+                                if (items.isEmpty()) {
+                                    configsProps.put(configPropName, null);
+                                } else {
+                                    configsProps.put(configPropName, String.join(",", items));
+                                }
+                            }
+                            break;
                         default:
                             throw new ConfigException(
                                     "Unsupported config operation type " + alterConfigOp.opType());
@@ -158,6 +207,17 @@ public class DynamicConfigManager {
 
         // Apply to zookeeper only after verification.
         zooKeeperClient.upsertServerEntityConfig(configsProps);
+    }
+
+    private static void validateListType(String configKey) {
+        ConfigOption<?> configOption = ConfigOptions.getConfigOption(configKey);
+        if (configOption == null || !configOption.isList()) {
+            throw new ConfigException(
+                    String.format(
+                            "APPEND/SUBTRACT operations are only supported for list-typed config keys, "
+                                    + "but '%s' is not a list type.",
+                            configKey));
+        }
     }
 
     private class ConfigChangedNotificationHandler
