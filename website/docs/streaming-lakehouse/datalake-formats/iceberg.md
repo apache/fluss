@@ -445,7 +445,7 @@ To read the full dataset, which includes both Fluss (fresh) and Iceberg (histori
 
 **Table type support:**
 - **Log tables**: Supported in both batch and streaming mode.
-- **Primary key tables**: Support is in progress and not yet available.
+- **Primary key tables**: Supported in both batch and streaming mode. Updates tiered to Iceberg are written as equality deletes.
 
 ```sql title="Batch mode"
 SET 'execution.runtime-mode' = 'batch';
