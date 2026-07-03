@@ -76,6 +76,10 @@ public class PaimonLakeSource implements LakeSource<PaimonSplit> {
     public FilterPushDownResult withFilters(List<Predicate> predicates) {
         List<Predicate> unConsumedPredicates = new ArrayList<>();
         List<Predicate> consumedPredicates = new ArrayList<>();
+        if (predicates.isEmpty()) {
+            predicate = null;
+            return FilterPushDownResult.of(consumedPredicates, unConsumedPredicates);
+        }
         List<org.apache.paimon.predicate.Predicate> converted = new ArrayList<>();
         RowType rowType = getRowType(tablePath);
         for (Predicate predicate : predicates) {
@@ -88,9 +92,7 @@ public class PaimonLakeSource implements LakeSource<PaimonSplit> {
                 unConsumedPredicates.add(predicate);
             }
         }
-        if (!converted.isEmpty()) {
-            predicate = PredicateBuilder.and(converted);
-        }
+        predicate = converted.isEmpty() ? null : PredicateBuilder.and(converted);
         return FilterPushDownResult.of(consumedPredicates, unConsumedPredicates);
     }
 

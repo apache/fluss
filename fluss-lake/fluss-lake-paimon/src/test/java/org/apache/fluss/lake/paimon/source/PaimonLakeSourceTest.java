@@ -164,6 +164,68 @@ class PaimonLakeSourceTest extends PaimonSourceTestBase {
                 .isEqualTo(allFilters.toString());
     }
 
+    @Test
+    void testUnacceptedFiltersClearPreviousAcceptedFilters() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_clear_previous_filters");
+        createTable(tablePath, SCHEMA);
+
+        List<InternalRow> rows = new ArrayList<>();
+        for (int i = 1; i <= 4; i++) {
+            rows.add(
+                    GenericRow.of(
+                            i,
+                            BinaryString.fromString("name" + i),
+                            0,
+                            (long) i,
+                            Timestamp.fromEpochMillis(System.currentTimeMillis())));
+        }
+        writeRecord(tablePath, rows);
+
+        Predicate acceptedFilter = FLUSS_BUILDER.greaterOrEqual(0, 3);
+        Predicate nonConvertibleFilter =
+                new LeafPredicate(
+                        new UnSupportFilterFunction(),
+                        DataTypes.INT(),
+                        0,
+                        "f1",
+                        Collections.emptyList());
+
+        LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        LakeSource.FilterPushDownResult filterPushDownResult =
+                lakeSource.withFilters(Collections.singletonList(acceptedFilter));
+        assertThat(filterPushDownResult.acceptedPredicates())
+                .containsExactlyInAnyOrder(acceptedFilter);
+        assertThat(readRows(lakeSource, 1).toString()).isEqualTo("[+I[3, name3], +I[4, name4]]");
+
+        filterPushDownResult =
+                lakeSource.withFilters(Collections.singletonList(nonConvertibleFilter));
+        assertThat(filterPushDownResult.acceptedPredicates()).isEmpty();
+        assertThat(filterPushDownResult.remainingPredicates())
+                .containsExactly(nonConvertibleFilter);
+
+        assertThat(readRows(lakeSource, 1).toString())
+                .isEqualTo("[+I[1, name1], +I[2, name2], +I[3, name3], +I[4, name4]]");
+    }
+
+    private List<Row> readRows(LakeSource<PaimonSplit> lakeSource, long snapshotId)
+            throws Exception {
+        List<Row> actual = new ArrayList<>();
+        org.apache.fluss.row.InternalRow.FieldGetter[] fieldGetters =
+                org.apache.fluss.row.InternalRow.createFieldGetters(
+                        RowType.of(new IntType(), new StringType()));
+        for (PaimonSplit paimonSplit : lakeSource.createPlanner(() -> snapshotId).plan()) {
+            RecordReader recordReader = lakeSource.createRecordReader(() -> paimonSplit);
+            try (CloseableIterator<LogRecord> iterator = recordReader.read()) {
+                actual.addAll(
+                        convertToFlinkRow(
+                                fieldGetters,
+                                TransformingCloseableIterator.transform(
+                                        iterator, LogRecord::getRow)));
+            }
+        }
+        return actual;
+    }
+
     private static class UnSupportFilterFunction extends LeafFunction {
 
         @Override

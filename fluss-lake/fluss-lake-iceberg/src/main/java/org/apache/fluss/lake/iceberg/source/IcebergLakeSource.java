@@ -70,6 +70,10 @@ public class IcebergLakeSource implements LakeSource<IcebergSplit> {
     public FilterPushDownResult withFilters(List<Predicate> predicates) {
         List<Predicate> unConsumedPredicates = new ArrayList<>();
         List<Predicate> consumedPredicates = new ArrayList<>();
+        if (predicates.isEmpty()) {
+            filter = null;
+            return FilterPushDownResult.of(consumedPredicates, unConsumedPredicates);
+        }
         List<Expression> converted = new ArrayList<>();
         Schema schema = getSchema(tablePath);
         for (Predicate predicate : predicates) {
@@ -82,9 +86,7 @@ public class IcebergLakeSource implements LakeSource<IcebergSplit> {
                 unConsumedPredicates.add(predicate);
             }
         }
-        if (!converted.isEmpty()) {
-            filter = converted.stream().reduce(Expressions::and).orElse(null);
-        }
+        filter = converted.stream().reduce(Expressions::and).orElse(null);
         return FilterPushDownResult.of(consumedPredicates, unConsumedPredicates);
     }
 
