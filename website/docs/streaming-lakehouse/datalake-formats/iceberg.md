@@ -441,23 +441,33 @@ You need to place the JARs required by Iceberg to read data into `${FLINK_HOME}/
 
 ##### Union Read
 
-To read the full dataset, which includes both Fluss (fresh) and Iceberg (historical) data, simply query the table without any suffix. The following example illustrates this:
+To read the full dataset, which includes both Fluss (fresh) and Iceberg (historical) data, simply query the table without any suffix.
 
-```sql
--- Set execution mode to streaming or batch, here just take batch as an example
+**Table type support:**
+- **Log tables**: Supported in both batch and streaming mode.
+- **Primary key tables**: Support is in progress and not yet available.
+
+```sql title="Batch mode"
 SET 'execution.runtime-mode' = 'batch';
 
 -- Query will union data from Fluss and Iceberg
-select SUM(visit_count) from fluss_access_log;
+SELECT SUM(visit_count) FROM fluss_access_log;
+
+-- Aggregations work across both data sources
+SELECT COUNT(*), SUM(visit_count) FROM fluss_access_log;
+
+-- Predicates are applied across both Fluss and Iceberg data
+SELECT * FROM fluss_access_log WHERE visit_date >= '2024-01-01';
 ```
 
-It supports both batch and streaming modes, utilizing Iceberg for historical data and Fluss for fresh data:
+```sql title="Streaming mode"
+SET 'execution.runtime-mode' = 'streaming';
 
-- **Batch mode** (only log table)
+-- Reads the latest Iceberg snapshot first, then continues from Fluss
+SELECT * FROM fluss_access_log;
+```
 
-- **Streaming mode** (primary key table and log table)
-
-  Flink first reads the latest Iceberg snapshot (tiered via tiering service), then switches to Fluss starting from the log offset matching that snapshot. This design minimizes Fluss storage requirements (reducing costs) while using Iceberg as a complete historical archive.
+Flink first reads the latest Iceberg snapshot (tiered via tiering service), then switches to Fluss starting from the log offset matching that snapshot. This design minimizes Fluss storage requirements (reducing costs) while using Iceberg as a complete historical archive.
 
 Key behavior for data retention:
 - **Expired Fluss log data** (controlled by `table.log.ttl`) remains accessible via Iceberg if previously tiered
