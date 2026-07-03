@@ -61,7 +61,7 @@ defmodule Fluss.Native do
     do: :erlang.nif_error(:nif_not_loaded)
 
   # Schema / TableDescriptor
-  def table_descriptor_new(_schema, _bucket_count, _properties),
+  def table_descriptor_new(_schema, _options),
     do: :erlang.nif_error(:nif_not_loaded)
 
   # Table

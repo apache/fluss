@@ -19,6 +19,7 @@ use crate::atoms::to_nif_err;
 use fluss::error::Error;
 use fluss::metadata::{self, DataTypes, Schema, TableDescriptor};
 use rustler::{NifStruct, NifTaggedEnum, ResourceArc};
+use std::collections::HashMap;
 
 pub struct TableDescriptorResource {
     pub inner: TableDescriptor,
@@ -129,11 +130,21 @@ impl NifSchema {
     }
 }
 
+#[derive(NifStruct)]
+#[module = "Fluss.TableDescriptor.Options"]
+pub struct NifTableOptions {
+    pub bucket_count: Option<i32>,
+    pub bucket_keys: Vec<String>,
+    pub partition_keys: Vec<String>,
+    pub properties: HashMap<String, String>,
+    pub custom_properties: HashMap<String, String>,
+    pub comment: Option<String>,
+}
+
 #[rustler::nif]
 fn table_descriptor_new(
     schema: NifSchema,
-    bucket_count: Option<i32>,
-    properties: Vec<(String, String)>,
+    opts: NifTableOptions,
 ) -> Result<ResourceArc<TableDescriptorResource>, rustler::Error> {
     let mut schema_builder = Schema::builder();
     for (name, dt) in &schema.columns {
@@ -142,14 +153,18 @@ fn table_descriptor_new(
     if !schema.primary_key.is_empty() {
         schema_builder = schema_builder.primary_key(schema.primary_key);
     }
+
     let built_schema = schema_builder.build().map_err(to_nif_err)?;
 
-    let mut builder = TableDescriptor::builder().schema(built_schema);
-    if let Some(count) = bucket_count {
-        builder = builder.distributed_by(Some(count), vec![]);
-    }
-    for (key, value) in properties {
-        builder = builder.property(&key, &value);
+    let mut builder = TableDescriptor::builder()
+        .schema(built_schema)
+        .properties(opts.properties)
+        .custom_properties(opts.custom_properties)
+        .partitioned_by(opts.partition_keys)
+        .distributed_by(opts.bucket_count, opts.bucket_keys);
+
+    if let Some(comment) = opts.comment {
+        builder = builder.comment(comment);
     }
     let descriptor = builder.build().map_err(to_nif_err)?;
     Ok(ResourceArc::new(TableDescriptorResource {

@@ -400,4 +400,69 @@ defmodule Fluss.Integration.AdminTest do
                Fluss.Admin.get_table_schema(admin, @database, table)
     end
   end
+
+  describe "create_table/5 with descriptor options" do
+    test "round-trips comment and custom_properties", %{admin: admin} do
+      table = "fluss_table_#{:rand.uniform(100_000)}"
+
+      schema =
+        Fluss.Schema.new()
+        |> Fluss.Schema.column("id", :int)
+        |> Fluss.Schema.column("name", :string)
+
+      descriptor =
+        Fluss.TableDescriptor.new!(schema,
+          comment: "events table",
+          custom_properties: %{"owner" => "data-platform"}
+        )
+
+      :ok = Fluss.Admin.create_table(admin, @database, table, descriptor, true)
+      on_exit(fn -> Fluss.Admin.drop_table(admin, @database, table, true) end)
+
+      assert {:ok, info} = Fluss.Admin.get_table_info(admin, @database, table)
+      assert info.comment == "events table"
+      assert info.custom_properties == %{"owner" => "data-platform"}
+    end
+
+    test "round-trips explicit bucket_keys on a primary-key table", %{admin: admin} do
+      table = "fluss_table_#{:rand.uniform(100_000)}"
+
+      schema =
+        Fluss.Schema.new()
+        |> Fluss.Schema.column("id", :int)
+        |> Fluss.Schema.column("region", :string)
+        |> Fluss.Schema.primary_key(["id", "region"])
+
+      descriptor = Fluss.TableDescriptor.new!(schema, bucket_count: 3, bucket_keys: ["id"])
+
+      :ok = Fluss.Admin.create_table(admin, @database, table, descriptor, true)
+      on_exit(fn -> Fluss.Admin.drop_table(admin, @database, table, true) end)
+
+      assert {:ok, info} = Fluss.Admin.get_table_info(admin, @database, table)
+      assert info.num_buckets == 3
+      assert info.bucket_keys == ["id"]
+      # An explicit, non-default bucket key (the default would be the full PK).
+      assert info.is_default_bucket_key == false
+    end
+
+    test "round-trips partition_keys and reports the table as partitioned", %{admin: admin} do
+      table = "fluss_table_#{:rand.uniform(100_000)}"
+
+      # Partition keys must be a subset of the primary key for PK tables.
+      schema =
+        Fluss.Schema.new()
+        |> Fluss.Schema.column("id", :int)
+        |> Fluss.Schema.column("dt", :string)
+        |> Fluss.Schema.primary_key(["id", "dt"])
+
+      descriptor = Fluss.TableDescriptor.new!(schema, partition_keys: ["dt"], bucket_count: 2)
+
+      :ok = Fluss.Admin.create_table(admin, @database, table, descriptor, true)
+      on_exit(fn -> Fluss.Admin.drop_table(admin, @database, table, true) end)
+
+      assert {:ok, info} = Fluss.Admin.get_table_info(admin, @database, table)
+      assert info.is_partitioned == true
+      assert info.partition_keys == ["dt"]
+    end
+  end
 end
