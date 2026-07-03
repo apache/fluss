@@ -43,6 +43,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.flink.configuration.CoreOptions.TMP_DIRS;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
+import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_IO_TMP_DIR;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_MODE;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP;
@@ -202,12 +203,24 @@ public class FlinkConnectorOptionsUtils {
     public static String getClientScannerIoTmpDir(
             Configuration flussConf, org.apache.flink.configuration.Configuration flinkConfig) {
         if (!flussConf.contains(CLIENT_SCANNER_IO_TMP_DIR)) {
-            if (flinkConfig.contains(TMP_DIRS)) {
-                // pass flink io tmp dir to fluss client.
-                return new File(flinkConfig.get(CoreOptions.TMP_DIRS), "/fluss").getAbsolutePath();
-            }
+            return getFlinkIoTmpDir(flinkConfig);
         }
         return flussConf.getString(CLIENT_SCANNER_IO_TMP_DIR);
+    }
+
+    public static String getFlinkIoTmpDir(
+            org.apache.flink.configuration.Configuration flinkConfig) {
+        if (flinkConfig.contains(TMP_DIRS)) {
+            return new File(flinkConfig.get(CoreOptions.TMP_DIRS), "/fluss").getAbsolutePath();
+        }
+        return System.getProperty("java.io.tmpdir") + "/fluss";
+    }
+
+    public static String getLakeTieringIoTmpDir(
+            Configuration flussConf, org.apache.flink.configuration.Configuration flinkConfig) {
+        return flussConf
+                .getOptional(LAKE_TIERING_IO_TMP_DIR)
+                .orElseGet(() -> getFlinkIoTmpDir(flinkConfig));
     }
 
     /** Fluss startup options. * */

@@ -33,6 +33,7 @@ public class TieringWriterInitContext implements WriterInitContext {
     private final TableInfo tableInfo;
     private final int splitIndex;
     private final long tieringRoundTimestamp;
+    @Nullable private final String ioTmpDir;
 
     public TieringWriterInitContext(
             TablePath tablePath,
@@ -45,7 +46,8 @@ public class TieringWriterInitContext implements WriterInitContext {
                 partition,
                 tableInfo,
                 UNKNOWN_SPLIT_INDEX,
-                UNKNOWN_TIERING_ROUND_TIMESTAMP);
+                UNKNOWN_TIERING_ROUND_TIMESTAMP,
+                null);
     }
 
     public TieringWriterInitContext(
@@ -55,12 +57,24 @@ public class TieringWriterInitContext implements WriterInitContext {
             TableInfo tableInfo,
             int splitIndex,
             long tieringRoundTimestamp) {
+        this(tablePath, tableBucket, partition, tableInfo, splitIndex, tieringRoundTimestamp, null);
+    }
+
+    public TieringWriterInitContext(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            @Nullable String partition,
+            TableInfo tableInfo,
+            int splitIndex,
+            long tieringRoundTimestamp,
+            @Nullable String ioTmpDir) {
         this.tablePath = tablePath;
         this.tableBucket = tableBucket;
         this.partition = partition;
         this.tableInfo = tableInfo;
         this.splitIndex = splitIndex;
         this.tieringRoundTimestamp = tieringRoundTimestamp;
+        this.ioTmpDir = ioTmpDir;
     }
 
     @Override
@@ -92,5 +106,11 @@ public class TieringWriterInitContext implements WriterInitContext {
     @Override
     public long tieringRoundTimestamp() {
         return tieringRoundTimestamp;
+    }
+
+    @Nullable
+    @Override
+    public String ioTmpDir() {
+        return ioTmpDir;
     }
 }

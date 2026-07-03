@@ -94,4 +94,15 @@ public interface WriterInitContext {
     default long tieringRoundTimestamp() {
         return UNKNOWN_TIERING_ROUND_TIMESTAMP;
     }
+
+    /**
+     * Returns the local directory for temporary IO files, or null if the lake writer should use its
+     * own default.
+     *
+     * @return the local temporary IO directory, or null
+     */
+    @Nullable
+    default String ioTmpDir() {
+        return null;
+    }
 }

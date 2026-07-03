@@ -71,7 +71,8 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, Supports
                                 writerInitContext.tableBucket(),
                                 writerInitContext.partition(),
                                 partitionKeys,
-                                flussRowType);
+                                flussRowType,
+                                writerInitContext.ioTmpDir());
     }
 
     @Override

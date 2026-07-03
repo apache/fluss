@@ -120,13 +120,20 @@ public class TieringSplitReader<WriteResult>
 
     private final TieringMetrics tieringMetrics;
     private final boolean unshadedArrowAvailable;
+    @Nullable private final String ioTmpDir;
 
     public TieringSplitReader(
             Connection connection,
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
             ClassLoader userClassLoader,
             TieringMetrics tieringMetrics) {
-        this(connection, lakeTieringFactory, userClassLoader, DEFAULT_POLL_TIMEOUT, tieringMetrics);
+        this(
+                connection,
+                lakeTieringFactory,
+                userClassLoader,
+                DEFAULT_POLL_TIMEOUT,
+                tieringMetrics,
+                null);
     }
 
     @VisibleForTesting
@@ -136,6 +143,17 @@ public class TieringSplitReader<WriteResult>
             ClassLoader userClassLoader,
             Duration pollTimeout,
             TieringMetrics tieringMetrics) {
+        this(connection, lakeTieringFactory, userClassLoader, pollTimeout, tieringMetrics, null);
+    }
+
+    @VisibleForTesting
+    protected TieringSplitReader(
+            Connection connection,
+            LakeTieringFactory<WriteResult, ?> lakeTieringFactory,
+            ClassLoader userClassLoader,
+            Duration pollTimeout,
+            TieringMetrics tieringMetrics,
+            @Nullable String ioTmpDir) {
         this.lakeTieringFactory = lakeTieringFactory;
         // owned by TieringSourceReader
         this.connection = connection;
@@ -151,6 +169,7 @@ public class TieringSplitReader<WriteResult>
         this.pollTimeout = pollTimeout;
         this.tieringMetrics = tieringMetrics;
         this.unshadedArrowAvailable = checkUnshadedArrowAvailable(userClassLoader);
+        this.ioTmpDir = ioTmpDir;
     }
 
     @Override
@@ -607,7 +626,8 @@ public class TieringSplitReader<WriteResult>
                                     partitionName,
                                     currentTable.getTableInfo(),
                                     splitIndex,
-                                    tieringRoundTimestamp));
+                                    tieringRoundTimestamp,
+                                    ioTmpDir));
             lakeWriters.put(bucket, lakeWriter);
         }
         return lakeWriter;

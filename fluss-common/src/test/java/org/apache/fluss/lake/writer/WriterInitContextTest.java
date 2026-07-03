@@ -59,5 +59,6 @@ class WriterInitContextTest {
         assertThat(context.splitIndex()).isEqualTo(WriterInitContext.UNKNOWN_SPLIT_INDEX);
         assertThat(context.tieringRoundTimestamp())
                 .isEqualTo(WriterInitContext.UNKNOWN_TIERING_ROUND_TIMESTAMP);
+        assertThat(context.ioTmpDir()).isNull();
     }
 }

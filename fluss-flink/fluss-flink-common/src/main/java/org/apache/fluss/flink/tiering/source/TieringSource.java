@@ -47,6 +47,7 @@ import java.nio.charset.StandardCharsets;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
 import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.getClientScannerIoTmpDir;
+import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.getLakeTieringIoTmpDir;
 
 /**
  * The flink source implementation for tiering data from Fluss to downstream lake.
@@ -117,7 +118,11 @@ public class TieringSource<WriteResult>
                 getClientScannerIoTmpDir(flussConf, sourceReaderContext.getConfiguration()));
         Connection connection = ConnectionFactory.createConnection(flussConf);
         return new TieringSourceReader<>(
-                elementsQueue, sourceReaderContext, connection, lakeTieringFactory);
+                elementsQueue,
+                sourceReaderContext,
+                connection,
+                lakeTieringFactory,
+                getLakeTieringIoTmpDir(flussConf, sourceReaderContext.getConfiguration()));
     }
 
     /** This follows the operator uid hash generation logic of flink {@link StreamGraphHasherV2}. */

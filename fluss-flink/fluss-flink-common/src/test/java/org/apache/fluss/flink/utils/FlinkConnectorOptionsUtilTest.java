@@ -27,6 +27,7 @@ import java.util.TimeZone;
 
 import static org.apache.flink.configuration.CoreOptions.TMP_DIRS;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
+import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_IO_TMP_DIR;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP;
 import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.parseTimestamp;
@@ -102,6 +103,36 @@ class FlinkConnectorOptionsUtilTest {
         // contains TMP_DIRS.
         assertThat(
                         FlinkConnectorOptionsUtils.getClientScannerIoTmpDir(
+                                new Configuration(), flinkConfig))
+                .isEqualTo("/flink_tmp_dir/fluss");
+    }
+
+    @Test
+    void testGetFlinkIoTmpDir() {
+        org.apache.flink.configuration.Configuration flinkConfig =
+                new org.apache.flink.configuration.Configuration().set(TMP_DIRS, "/flink_tmp_dir");
+        String property = System.getProperty("java.io.tmpdir");
+
+        assertThat(FlinkConnectorOptionsUtils.getFlinkIoTmpDir(flinkConfig))
+                .isEqualTo("/flink_tmp_dir/fluss");
+        assertThat(
+                        FlinkConnectorOptionsUtils.getFlinkIoTmpDir(
+                                new org.apache.flink.configuration.Configuration()))
+                .isEqualTo(property + "/fluss");
+    }
+
+    @Test
+    void testGetLakeTieringIoTmpDir() {
+        org.apache.flink.configuration.Configuration flinkConfig =
+                new org.apache.flink.configuration.Configuration().set(TMP_DIRS, "/flink_tmp_dir");
+
+        assertThat(
+                        FlinkConnectorOptionsUtils.getLakeTieringIoTmpDir(
+                                new Configuration().set(LAKE_TIERING_IO_TMP_DIR, "/tiering_tmp"),
+                                flinkConfig))
+                .isEqualTo("/tiering_tmp");
+        assertThat(
+                        FlinkConnectorOptionsUtils.getLakeTieringIoTmpDir(
                                 new Configuration(), flinkConfig))
                 .isEqualTo("/flink_tmp_dir/fluss");
     }
