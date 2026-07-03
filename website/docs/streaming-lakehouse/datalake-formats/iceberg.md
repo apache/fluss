@@ -473,6 +473,24 @@ Key behavior for data retention:
 - **Expired Fluss log data** (controlled by `table.log.ttl`) remains accessible via Iceberg if previously tiered
 - **Cleaned-up partitions** in partitioned tables (controlled by `table.auto-partition.num-retention`) remain accessible via Iceberg if previously tiered
 
+#### Lake-Only Read
+
+To query only the data already tiered to Iceberg, add the `$lake` suffix to the table name:
+
+```sql title="Lake-only read"
+-- Reads only the data tiered to Iceberg, not the fresh data still in Fluss
+SELECT * FROM fluss_access_log$lake;
+```
+
+Data becomes visible through `$lake` as soon as the tiering service commits it: each tiering round produces one Iceberg snapshot, and the commit is readable immediately once it succeeds — there's no separate flush or refresh step.
+
+You can also query Iceberg's system tables through the `$lake$<system-table>` suffix, for example to inspect commit history via the `snapshots` table:
+
+```sql title="Read Iceberg snapshots metadata"
+-- Each row corresponds to one tiering commit
+SELECT committed_at, snapshot_id, operation, summary FROM fluss_access_log$lake$snapshots;
+```
+
 ### Reading with Other Engines
 
 Since data tiered to Iceberg from Fluss is stored as standard Iceberg tables, you can use any Iceberg-compatible engine. Below is an example using [StarRocks](https://docs.starrocks.io/docs/data_source/catalog/iceberg/iceberg_catalog/):
