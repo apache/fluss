@@ -74,6 +74,7 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
+import static org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.common.ZKConfig.JUTE_MAXBUFFER;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -739,6 +740,25 @@ class ZooKeeperClientTest {
                     .isEqualTo("ZookeeperClient");
             assertThat(clientConfig.getProperty(ZKClientConfig.ZK_SASL_CLIENT_USERNAME))
                     .isEqualTo("zookeeper2");
+        }
+    }
+
+    @Test
+    void testZookeeperMaxBufferSizeWithoutConfigPath() throws Exception {
+        final Configuration config = new Configuration();
+        config.setString(
+                ConfigOptions.ZOOKEEPER_ADDRESS,
+                ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getConnectString());
+        config.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+        config.set(ConfigOptions.ZOOKEEPER_MAX_BUFFER_SIZE, 2 * 1024 * 1024);
+
+        try (ZooKeeperClient zookeeperClient =
+                        ZooKeeperUtils.startZookeeperClient(config, NOPErrorHandler.INSTANCE);
+                CuratorFramework curatorClient = zookeeperClient.getCuratorClient();
+                CuratorZookeeperClient curatorZookeeperClient = curatorClient.getZookeeperClient();
+                ZooKeeper zooKeeper = curatorZookeeperClient.getZooKeeper()) {
+            ZKClientConfig clientConfig = zooKeeper.getClientConfig();
+            assertThat(clientConfig.getProperty(JUTE_MAXBUFFER)).isEqualTo("2097152");
         }
     }
 
