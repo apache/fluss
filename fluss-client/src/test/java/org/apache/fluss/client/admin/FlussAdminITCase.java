@@ -83,6 +83,7 @@ import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
+import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.types.DataTypeChecks;
@@ -1902,6 +1903,43 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .cause()
                 .isInstanceOf(TooManyBucketsException.class)
                 .hasMessageContaining("exceeds the maximum limit");
+    }
+
+    @Test
+    public void testDefaultBucketLimitForNonPartitionedTable() throws Exception {
+        assertThat(ConfigOptions.MAX_BUCKET_NUM.defaultValue()).isEqualTo(20000);
+
+        FlussClusterExtension defaultLimitCluster =
+                FlussClusterExtension.builder().setNumOfTabletServers(1).build();
+        defaultLimitCluster.start();
+
+        try (Connection connection =
+                        ConnectionFactory.createConnection(defaultLimitCluster.getClientConfig());
+                Admin defaultLimitAdmin = connection.getAdmin()) {
+            String dbName = "test_default_bucket_limit_db";
+            TablePath tablePath = TablePath.of(dbName, "test_too_many_buckets_by_default");
+            TableDescriptor nonPartitionedTable =
+                    TableDescriptor.builder()
+                            .schema(
+                                    Schema.newBuilder()
+                                            .column("id", DataTypes.STRING())
+                                            .column("name", DataTypes.STRING())
+                                            .build())
+                            .distributedBy(30000, "id")
+                            .build();
+
+            defaultLimitAdmin.createDatabase(dbName, DatabaseDescriptor.EMPTY, false).get();
+            assertThatThrownBy(
+                            () ->
+                                    defaultLimitAdmin
+                                            .createTable(tablePath, nonPartitionedTable, false)
+                                            .get())
+                    .cause()
+                    .isInstanceOf(TooManyBucketsException.class)
+                    .hasMessageContaining("Bucket count 30000 exceeds the maximum limit 20000.");
+        } finally {
+            defaultLimitCluster.close();
+        }
     }
 
     /** Test that creating a table with system columns throws InvalidTableException. */

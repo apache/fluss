@@ -290,10 +290,12 @@ public class ConfigOptions {
     public static final ConfigOption<Integer> MAX_BUCKET_NUM =
             key("max.bucket.num")
                     .intType()
-                    .defaultValue(128000)
+                    .defaultValue(20000)
                     .withDescription(
-                            "The maximum number of buckets that can be created for a table."
-                                    + "The default value is 128000");
+                            "The maximum number of buckets that can be created for a table. "
+                                    + "The default value is 20000. "
+                                    + "This default is capped to reduce the risk that the table assignment znode exceeds "
+                                    + "ZooKeeper's packet size limit.");
 
     /**
      * The network address and port the server binds to for accepting connections.
