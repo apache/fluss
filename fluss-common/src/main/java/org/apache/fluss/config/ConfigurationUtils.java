@@ -67,6 +67,10 @@ public class ConfigurationUtils {
         } else if (String.class.equals(clazz)) {
             return (T) convertToString(rawValue);
         } else if (Password.class.equals(clazz)) {
+            if (rawValue instanceof Password) {
+                return (T) rawValue;
+            }
+
             return (T) new Password(convertToString(rawValue));
         } else if (clazz.isEnum()) {
             return (T) convertToEnum(rawValue, (Class<? extends Enum<?>>) clazz);

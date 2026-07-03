@@ -19,6 +19,7 @@ package org.apache.fluss.metrics.prometheus;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.Password;
 import org.apache.fluss.metrics.reporter.MetricReporter;
 import org.apache.fluss.metrics.reporter.MetricReporterPlugin;
 import org.apache.fluss.utils.StringUtils;
@@ -59,7 +60,8 @@ public class PrometheusPushGatewayReporterPlugin implements MetricReporterPlugin
                 config.get(METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_RANDOM_JOB_NAME_SUFFIX);
         Duration pushInterval = config.get(METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_PUSH_INTERVAL);
         String username = config.get(METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_USERNAME);
-        String password = config.get(METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_PASSWORD);
+        Password passwordOption = config.get(METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_PASSWORD);
+        String password = passwordOption == null ? null : passwordOption.value();
         String jobName = configuredJobName;
         if (randomSuffix) {
             jobName = configuredJobName + new Random().nextLong();

@@ -19,6 +19,7 @@ package org.apache.fluss.metrics.prometheus;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.Password;
 import org.apache.fluss.metrics.reporter.MetricReporter;
 
 import com.sun.net.httpserver.HttpExchange;
@@ -157,7 +158,9 @@ class PrometheusPushGatewayReporterTest {
                 ConfigOptions.METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_JOB_NAME, "plugin-job");
         config.setString(
                 ConfigOptions.METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_USERNAME, "plugUser");
-        config.setString(ConfigOptions.METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_PASSWORD, "plugPwd");
+        config.set(
+                ConfigOptions.METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_PASSWORD,
+                new Password("plugPwd"));
         config.setString(
                 ConfigOptions.METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_GROUPING_KEY, "k1=v1");
 

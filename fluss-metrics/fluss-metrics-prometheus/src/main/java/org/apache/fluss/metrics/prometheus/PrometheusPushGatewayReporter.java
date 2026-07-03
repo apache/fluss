@@ -19,6 +19,7 @@ package org.apache.fluss.metrics.prometheus;
 
 import org.apache.fluss.metrics.Metric;
 import org.apache.fluss.metrics.reporter.ScheduledMetricReporter;
+import org.apache.fluss.utils.StringUtils;
 
 import io.prometheus.client.exporter.HttpConnectionFactory;
 import io.prometheus.client.exporter.PushGateway;
@@ -60,7 +61,7 @@ public class PrometheusPushGatewayReporter extends AbstractPrometheusReporter
         this.groupingKey = groupingKey;
         this.deleteOnShutdown = deleteOnShutdown;
         this.pushInterval = pushInterval;
-        if (username != null && !username.isEmpty()) {
+        if (!StringUtils.isNullOrWhitespaceOnly(username)) {
             this.pushGateway.setConnectionFactory(
                     basicAuthConnectionFactory(username, password == null ? "" : password));
         }
