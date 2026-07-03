@@ -21,6 +21,7 @@ import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.record.BinaryValue;
+import org.apache.fluss.server.kv.TargetColumns;
 import org.apache.fluss.server.kv.partialupdate.PartialUpdater;
 import org.apache.fluss.server.kv.partialupdate.PartialUpdaterCache;
 
@@ -28,7 +29,11 @@ import javax.annotation.Nullable;
 
 /**
  * The default row merger of primary key table that always retains the latest row and supports
- * configure target merge columns to do partial update.
+ * configuring target merge columns for partial update.
+ *
+ * <p>If {@link RowMerger#configureTargetColumns(int[], short, Schema)} receives target indexes that
+ * cover every field of the latest schema (same semantic as a full-row write), this merger keeps
+ * using plain merge semantics instead of wrapping a partial updater.
  */
 public class DefaultRowMerger implements RowMerger {
 
@@ -46,7 +51,7 @@ public class DefaultRowMerger implements RowMerger {
 
     @Nullable
     @Override
-    public BinaryValue merge(BinaryValue oldValue, BinaryValue newValue) {
+    public BinaryValue merge(@Nullable BinaryValue oldValue, BinaryValue newValue) {
         // always retain the new row (latest row)
         return newValue;
     }
@@ -66,7 +71,8 @@ public class DefaultRowMerger implements RowMerger {
     @Override
     public RowMerger configureTargetColumns(
             @Nullable int[] targetColumns, short latestShemaId, Schema latestSchema) {
-        if (targetColumns == null) {
+        if (targetColumns == null
+                || TargetColumns.specifiesAllSchemaFieldIndexes(latestSchema, targetColumns)) {
             return this;
         } else {
             // this also sanity checks the validity of the partial update
@@ -98,7 +104,7 @@ public class DefaultRowMerger implements RowMerger {
 
         @Nullable
         @Override
-        public BinaryValue merge(BinaryValue oldValue, BinaryValue newValue) {
+        public BinaryValue merge(@Nullable BinaryValue oldValue, BinaryValue newValue) {
             return partialUpdater.updateRow(oldValue, newValue);
         }
 

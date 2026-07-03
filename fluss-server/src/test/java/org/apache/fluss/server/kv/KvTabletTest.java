@@ -57,6 +57,9 @@ import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.KvEntry;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Value;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
+import org.apache.fluss.server.kv.scan.OpenScanResult;
+import org.apache.fluss.server.kv.scan.ScannerContext;
+import org.apache.fluss.server.kv.snapshot.TabletState;
 import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogTablet;
@@ -168,6 +171,7 @@ class KvTabletTest {
                 LogTestUtils.makeRandomLogTabletDir(
                         tempLogDir, tablePath.getDatabaseName(), tableId, tablePath.getTableName());
         return LogTablet.create(
+                tempLogDir,
                 tablePath,
                 logTabletDir,
                 conf,
@@ -460,6 +464,50 @@ class KvTabletTest {
                                         new Object[] {3, null},
                                         new Object[] {3, "31"}),
                                 (short) 2));
+        checkEqual(actualLogRecords, expectedLogs, rowType);
+    }
+
+    @Test
+    void testPartialUpdateFirstInsertThenUpdate() throws Exception {
+        initLogTabletAndKvTablet(DATA2_SCHEMA, new HashMap<>());
+        RowType rowType = DATA2_SCHEMA.getRowType();
+        KvRecordTestUtils.KvRecordFactory data2kvRecordFactory =
+                KvRecordTestUtils.KvRecordFactory.of(rowType);
+
+        // First insert: partial update columns a and b, column c should be null
+        KvRecordBatch batch1 =
+                kvRecordBatchFactory.ofRecords(
+                        data2kvRecordFactory.ofRecord(
+                                "k1".getBytes(), new Object[] {1, "v1", "ignored"}));
+        kvTablet.putAsLeader(batch1, new int[] {0, 1});
+        long endOffset = logTablet.localLogEndOffset();
+
+        // Verify first insert stored correctly with null for non-target column
+        assertThat(kvTablet.getKvPreWriteBuffer().get(Key.of("k1".getBytes())))
+                .isEqualTo(valueOf(compactedRow(rowType, new Object[] {1, "v1", null})));
+
+        // Second update: partial update columns a and c, column b should retain "v1"
+        KvRecordBatch batch2 =
+                kvRecordBatchFactory.ofRecords(
+                        data2kvRecordFactory.ofRecord(
+                                "k1".getBytes(), new Object[] {1, "ignored2", "c1"}));
+        kvTablet.putAsLeader(batch2, new int[] {0, 2});
+
+        // Verify: b should retain "v1" from first insert, c should be updated to "c1"
+        assertThat(kvTablet.getKvPreWriteBuffer().get(Key.of("k1".getBytes())))
+                .isEqualTo(valueOf(compactedRow(rowType, new Object[] {1, "v1", "c1"})));
+
+        // Verify CDC log for the second update
+        LogRecords actualLogRecords = readLogRecords(endOffset);
+        List<MemoryLogRecords> expectedLogs =
+                Collections.singletonList(
+                        logRecords(
+                                rowType,
+                                endOffset,
+                                Arrays.asList(ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER),
+                                Arrays.asList(
+                                        new Object[] {1, "v1", null},
+                                        new Object[] {1, "v1", "c1"})));
         checkEqual(actualLogRecords, expectedLogs, rowType);
     }
 
@@ -1393,7 +1441,13 @@ class KvTabletTest {
             LogTablet logTablet, long startOffset, @Nullable FileLogProjection projection)
             throws Exception {
         return logTablet
-                .read(startOffset, Integer.MAX_VALUE, FetchIsolation.LOG_END, false, projection)
+                .read(
+                        startOffset,
+                        Integer.MAX_VALUE,
+                        FetchIsolation.LOG_END,
+                        false,
+                        projection,
+                        null)
                 .getRecords();
     }
 
@@ -1806,5 +1860,174 @@ class KvTabletTest {
         assertThat(kvTablet.getRowCount()).isEqualTo(12);
 
         kvTablet.close();
+    }
+
+    @Test
+    void testFlushDoesNotRegressFlushedLogOffset() throws Exception {
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
+
+        List<KvRecord> inserts = new ArrayList<>();
+        for (int i = 1; i <= 5; i++) {
+            inserts.add(kvRecordFactory.ofRecord("key" + i, new Object[] {i, "val" + i}));
+        }
+        kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(inserts), null);
+
+        List<KvRecord> deletes = new ArrayList<>();
+        for (int i = 1; i <= 2; i++) {
+            deletes.add(kvRecordFactory.ofRecord("key" + i, null));
+        }
+        kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(deletes), null);
+
+        long highOffset = logTablet.localLogEndOffset();
+        kvTablet.flush(highOffset, NOPErrorHandler.INSTANCE);
+        TabletState stateAfterHighFlush = kvTablet.getTabletState();
+        assertThat(stateAfterHighFlush.getFlushedLogOffset()).isEqualTo(highOffset);
+        assertThat(stateAfterHighFlush.getRowCount()).isEqualTo(3L);
+        assertThat(kvTablet.getRowCount()).isEqualTo(3);
+
+        long lowOffset = highOffset - 2;
+        kvTablet.flush(lowOffset, NOPErrorHandler.INSTANCE);
+        TabletState stateAfterLowFlush = kvTablet.getTabletState();
+
+        assertThat(stateAfterLowFlush.getFlushedLogOffset()).isEqualTo(highOffset);
+        assertThat(stateAfterLowFlush.getRowCount()).isEqualTo(3L);
+        assertThat(kvTablet.getRowCount()).isEqualTo(3);
+
+        kvTablet.close();
+    }
+
+    @Test
+    void testOpenScan_emptyBucket_returnsNullContext() throws Exception {
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
+        OpenScanResult result = kvTablet.openScan("scanner-empty", -1L, 0L);
+        assertThat(result).isNotNull();
+        assertThat(result.getContext()).isNull();
+        assertThat(result.getLogOffset()).isGreaterThanOrEqualTo(0L);
+    }
+
+    @Test
+    void testOpenScan_returnsAllRows() throws Exception {
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
+
+        int numRows = 5;
+        List<KvRecord> rows = new ArrayList<>();
+        for (int i = 0; i < numRows; i++) {
+            rows.add(
+                    kvRecordFactory.ofRecord(
+                            String.valueOf(i).getBytes(), new Object[] {i, "v" + i}));
+        }
+        kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(rows), null);
+        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+
+        OpenScanResult result = kvTablet.openScan("scanner-all", -1L, 0L);
+        ScannerContext context = result.getContext();
+        assertThat(context).isNotNull();
+        assertThat(result.getLogOffset()).isEqualTo(context.getLogOffset());
+
+        int count = 0;
+        while (context.isValid()) {
+            assertThat(context.currentValue()).isNotNull();
+            context.advance();
+            count++;
+        }
+        context.close();
+
+        assertThat(count).isEqualTo(numRows);
+    }
+
+    /** Snapshot isolation: rows written after openScan must not appear in the scan. */
+    @Test
+    void testOpenScan_snapshotIsolation() throws Exception {
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
+
+        List<KvRecord> initialRows =
+                Arrays.asList(
+                        kvRecordFactory.ofRecord("0".getBytes(), new Object[] {0, "v0"}),
+                        kvRecordFactory.ofRecord("1".getBytes(), new Object[] {1, "v1"}),
+                        kvRecordFactory.ofRecord("2".getBytes(), new Object[] {2, "v2"}));
+        kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(initialRows), null);
+        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+
+        ScannerContext context = kvTablet.openScan("scanner-snap", -1L, 0L).getContext();
+        assertThat(context).isNotNull();
+
+        List<KvRecord> lateRows =
+                Arrays.asList(
+                        kvRecordFactory.ofRecord("3".getBytes(), new Object[] {3, "v3"}),
+                        kvRecordFactory.ofRecord("4".getBytes(), new Object[] {4, "v4"}));
+        kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(lateRows), null);
+        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+
+        int count = 0;
+        while (context.isValid()) {
+            context.advance();
+            count++;
+        }
+        context.close();
+
+        assertThat(count).isEqualTo(3);
+    }
+
+    @Test
+    void testOpenScan_withLimit() throws Exception {
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
+
+        int numRows = 5;
+        List<KvRecord> rows = new ArrayList<>();
+        for (int i = 0; i < numRows; i++) {
+            rows.add(
+                    kvRecordFactory.ofRecord(
+                            String.valueOf(i).getBytes(), new Object[] {i, "v" + i}));
+        }
+        kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(rows), null);
+        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+
+        long limit = 3L;
+        ScannerContext context = kvTablet.openScan("scanner-limit", limit, 0L).getContext();
+        assertThat(context).isNotNull();
+
+        int count = 0;
+        while (context.isValid()) {
+            context.advance();
+            count++;
+        }
+        context.close();
+
+        assertThat(count).isEqualTo((int) limit);
+    }
+
+    @Test
+    void testOpenScan_multipleSessionsIndependent() throws Exception {
+        initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
+
+        List<KvRecord> rows =
+                Arrays.asList(
+                        kvRecordFactory.ofRecord("0".getBytes(), new Object[] {0, "v0"}),
+                        kvRecordFactory.ofRecord("1".getBytes(), new Object[] {1, "v1"}),
+                        kvRecordFactory.ofRecord("2".getBytes(), new Object[] {2, "v2"}));
+        kvTablet.putAsLeader(kvRecordBatchFactory.ofRecords(rows), null);
+        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+
+        ScannerContext ctx1 = kvTablet.openScan("scanner-a", -1L, 0L).getContext();
+        ScannerContext ctx2 = kvTablet.openScan("scanner-b", -1L, 0L).getContext();
+        assertThat(ctx1).isNotNull();
+        assertThat(ctx2).isNotNull();
+
+        int count1 = 0;
+        while (ctx1.isValid()) {
+            ctx1.advance();
+            count1++;
+        }
+        ctx1.close();
+
+        int count2 = 0;
+        while (ctx2.isValid()) {
+            ctx2.advance();
+            count2++;
+        }
+        ctx2.close();
+
+        assertThat(count1).isEqualTo(3);
+        assertThat(count2).isEqualTo(3);
     }
 }

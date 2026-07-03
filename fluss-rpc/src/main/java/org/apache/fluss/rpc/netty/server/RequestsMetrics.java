@@ -85,6 +85,11 @@ public class RequestsMetrics {
         requestMetricGroup.gauge(name, gauge);
     }
 
+    /** Create a gauge metric in a child group of the request metric group. */
+    <T, G extends Gauge<T>> void gauge(String groupKey, String groupValue, String name, G gauge) {
+        requestMetricGroup.addGroup(groupKey, groupValue).gauge(name, gauge);
+    }
+
     /** Add a metric group for given request name. */
     private void addMetrics(MetricGroup parentMetricGroup, String requestName) {
         metricsByRequest.put(

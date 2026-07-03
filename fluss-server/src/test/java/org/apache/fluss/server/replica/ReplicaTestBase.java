@@ -37,6 +37,7 @@ import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.KvManager;
+import org.apache.fluss.server.kv.scan.ScannerManager;
 import org.apache.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
@@ -53,6 +54,8 @@ import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metrics.group.BucketMetricGroup;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
+import org.apache.fluss.server.storage.LocalDiskManager;
+import org.apache.fluss.server.testutils.ServerTestTags;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
@@ -69,6 +72,7 @@ import org.apache.fluss.utils.function.ThrowingRunnable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.TestInfo;
 import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -110,6 +114,7 @@ import static org.apache.fluss.record.TestData.DATA3_SCHEMA_PK_AUTO_INC;
 import static org.apache.fluss.record.TestData.DATA3_TABLE_DESCRIPTOR_PK_AUTO_INC;
 import static org.apache.fluss.record.TestData.DATA3_TABLE_ID_PK_AUTO_INC;
 import static org.apache.fluss.record.TestData.DATA3_TABLE_PATH_PK_AUTO_INC;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.replica.ReplicaManager.HIGH_WATERMARK_CHECKPOINT_FILE_NAME;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
@@ -123,6 +128,7 @@ import static org.apache.fluss.utils.FlussPaths.remoteLogTabletDir;
  * function managed by {@link ReplicaManager}.
  */
 public class ReplicaTestBase {
+
     @RegisterExtension
     public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
             new AllCallbackWrapper<>(new ZooKeeperExtension());
@@ -136,9 +142,11 @@ public class ReplicaTestBase {
 
     protected @TempDir File tempDir;
     protected ManualClock manualClock;
+    protected LocalDiskManager localDiskManager;
     protected LogManager logManager;
     protected KvManager kvManager;
     protected ReplicaManager replicaManager;
+    protected ScannerManager scannerManager;
     protected RpcClient rpcClient;
     protected Configuration conf;
     protected TabletServerMetadataCache serverMetadataCache;
@@ -167,9 +175,18 @@ public class ReplicaTestBase {
     }
 
     @BeforeEach
-    public void setup() throws Exception {
+    public void setup(TestInfo testInfo) throws Exception {
         conf = getServerConf();
-        conf.setString(ConfigOptions.DATA_DIR, tempDir.getAbsolutePath());
+        conf.set(ConfigOptions.TABLET_SERVER_ID, TABLET_SERVER_ID);
+        if (testInfo != null && testInfo.getTags().contains(ServerTestTags.JBOD_MULTI_DIR_TAG)) {
+            conf.set(
+                    ConfigOptions.DATA_DIRS,
+                    Arrays.asList(
+                            new File(tempDir, "data-1").getAbsolutePath(),
+                            new File(tempDir, "data-2").getAbsolutePath()));
+        } else {
+            conf.setString(ConfigOptions.DATA_DIR, tempDir.getAbsolutePath());
+        }
         conf.setString(ConfigOptions.COORDINATOR_HOST, "localhost");
         conf.set(ConfigOptions.REMOTE_DATA_DIR, tempDir.getAbsolutePath() + "/remote_data_dir");
         conf.set(ConfigOptions.SERVER_IO_POOL_SIZE, 2);
@@ -187,18 +204,24 @@ public class ReplicaTestBase {
         ioExecutor = Executors.newSingleThreadExecutor();
 
         manualClock = new ManualClock(System.currentTimeMillis());
+        localDiskManager = LocalDiskManager.create(conf);
         logManager =
                 LogManager.create(
                         conf,
                         zkClient,
                         scheduler,
                         manualClock,
-                        TestingMetricGroups.TABLET_SERVER_METRICS);
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager);
         logManager.startup();
 
         kvManager =
                 KvManager.create(
-                        conf, zkClient, logManager, TestingMetricGroups.TABLET_SERVER_METRICS);
+                        conf,
+                        zkClient,
+                        logManager,
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager);
         kvManager.startup();
 
         serverMetadataCache =
@@ -209,7 +232,7 @@ public class ReplicaTestBase {
                                 new LakeCatalogDynamicLoader(new Configuration(), null, true)));
         initMetadataCache(serverMetadataCache);
 
-        rpcClient = RpcClient.create(conf, TestingClientMetricGroup.newInstance(), false);
+        rpcClient = RpcClient.create(conf, TestingClientMetricGroup.newInstance());
 
         snapshotReporter = new TestingCompletedKvSnapshotCommitter();
 
@@ -223,6 +246,10 @@ public class ReplicaTestBase {
         // We will register all tables in TestData in zk client previously.
         registerTableInZkClient();
     }
+
+    // Kept for subclasses that still define @BeforeEach setup() and call super.setup().
+    // The actual initialization already happens in setup(TestInfo).
+    protected void setup() throws Exception {}
 
     private void initMetadataCache(TabletServerMetadataCache metadataCache) {
         metadataCache.updateClusterMetadata(
@@ -259,22 +286,27 @@ public class ReplicaTestBase {
                 TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(3).build();
         zkClient.registerTable(
                 DATA1_TABLE_PATH,
-                TableRegistration.newTable(DATA1_TABLE_ID, data1NonPkTableDescriptor));
+                TableRegistration.newTable(
+                        DATA1_TABLE_ID, DEFAULT_REMOTE_DATA_DIR, data1NonPkTableDescriptor));
         zkClient.registerFirstSchema(DATA1_TABLE_PATH, DATA1_SCHEMA);
         zkClient.registerTable(
                 DATA1_TABLE_PATH_PK,
-                TableRegistration.newTable(DATA1_TABLE_ID_PK, DATA1_TABLE_DESCRIPTOR_PK));
+                TableRegistration.newTable(
+                        DATA1_TABLE_ID_PK, DEFAULT_REMOTE_DATA_DIR, DATA1_TABLE_DESCRIPTOR_PK));
         zkClient.registerFirstSchema(DATA1_TABLE_PATH_PK, DATA1_SCHEMA_PK);
 
         zkClient.registerTable(
                 DATA2_TABLE_PATH,
-                TableRegistration.newTable(DATA2_TABLE_ID, DATA2_TABLE_DESCRIPTOR));
+                TableRegistration.newTable(
+                        DATA2_TABLE_ID, DEFAULT_REMOTE_DATA_DIR, DATA2_TABLE_DESCRIPTOR));
         zkClient.registerFirstSchema(DATA2_TABLE_PATH, DATA2_SCHEMA);
 
         zkClient.registerTable(
                 DATA3_TABLE_PATH_PK_AUTO_INC,
                 TableRegistration.newTable(
-                        DATA3_TABLE_ID_PK_AUTO_INC, DATA3_TABLE_DESCRIPTOR_PK_AUTO_INC));
+                        DATA3_TABLE_ID_PK_AUTO_INC,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        DATA3_TABLE_DESCRIPTOR_PK_AUTO_INC));
         zkClient.registerFirstSchema(DATA3_TABLE_PATH_PK_AUTO_INC, DATA3_SCHEMA_PK_AUTO_INC);
     }
 
@@ -293,13 +325,18 @@ public class ReplicaTestBase {
         if (zkClient.tableExist(tablePath)) {
             zkClient.deleteTable(tablePath);
         }
-        zkClient.registerTable(tablePath, TableRegistration.newTable(tableId, tableDescriptor));
+        zkClient.registerTable(
+                tablePath,
+                TableRegistration.newTable(tableId, DEFAULT_REMOTE_DATA_DIR, tableDescriptor));
         zkClient.registerFirstSchema(tablePath, schema);
         return tableId;
     }
 
     protected ReplicaManager buildReplicaManager(CoordinatorGateway coordinatorGateway)
             throws Exception {
+        if (scannerManager == null) {
+            scannerManager = new ScannerManager(conf, scheduler);
+        }
         return new ReplicaManager(
                 conf,
                 scheduler,
@@ -315,8 +352,10 @@ public class ReplicaTestBase {
                 TestingMetricGroups.TABLET_SERVER_METRICS,
                 TestingMetricGroups.USER_METRICS,
                 remoteLogManager,
+                scannerManager,
                 manualClock,
-                ioExecutor);
+                ioExecutor,
+                localDiskManager);
     }
 
     @AfterEach
@@ -343,12 +382,20 @@ public class ReplicaTestBase {
             replicaManager.shutdown();
         }
 
+        if (scannerManager != null) {
+            scannerManager.close();
+        }
+
         if (rpcClient != null) {
             rpcClient.close();
         }
 
         if (scheduler != null) {
             scheduler.shutdown();
+        }
+
+        if (localDiskManager != null) {
+            localDiskManager.close();
         }
 
         if (ioExecutor != null) {
@@ -388,6 +435,7 @@ public class ReplicaTestBase {
                                         TABLET_SERVER_ID,
                                         INITIAL_LEADER_EPOCH,
                                         isr,
+                                        Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))));
     }
@@ -429,6 +477,7 @@ public class ReplicaTestBase {
                                         TABLET_SERVER_ID,
                                         leaderEpoch,
                                         isr,
+                                        Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         // use leader epoch as bucket epoch
                                         leaderEpoch))));
@@ -471,17 +520,18 @@ public class ReplicaTestBase {
                         .getServerMetricGroup()
                         .addTableBucketMetricGroup(physicalTablePath, tableBucket, isPkTable);
         return new Replica(
+                localDiskManager.selectDataDirForNewBucket(isPkTable),
                 physicalTablePath,
                 tableBucket,
                 logManager,
                 isPkTable ? kvManager : null,
                 conf.get(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME).toMillis(),
-                conf.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER),
+                () -> conf.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER),
                 TABLET_SERVER_ID,
                 new OffsetCheckpointFile.LazyOffsetCheckpoints(
                         new OffsetCheckpointFile(
                                 new File(
-                                        conf.getString(ConfigOptions.DATA_DIR),
+                                        localDiskManager.dataDirs().get(0),
                                         HIGH_WATERMARK_CHECKPOINT_FILE_NAME))),
                 replicaManager.getDelayedWriteManager(),
                 replicaManager.getDelayedFetchLogManager(),
@@ -491,7 +541,9 @@ public class ReplicaTestBase {
                 NOPErrorHandler.INSTANCE,
                 metricGroup,
                 DATA1_TABLE_INFO,
-                manualClock);
+                manualClock,
+                remoteLogManager,
+                scannerManager);
     }
 
     private void initRemoteLogEnv() throws Exception {
@@ -502,6 +554,8 @@ public class ReplicaTestBase {
                         conf,
                         zkClient,
                         testCoordinatorGateway,
+                        localDiskManager,
+                        logManager,
                         remoteLogStorage,
                         remoteLogTaskScheduler,
                         manualClock);

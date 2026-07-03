@@ -30,6 +30,7 @@ import org.apache.flink.types.Row;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
+import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.schema.Schema;
@@ -39,6 +40,7 @@ import org.apache.paimon.table.sink.BatchTableWrite;
 import org.apache.paimon.table.sink.BatchWriteBuilder;
 import org.apache.paimon.table.sink.CommitMessage;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
@@ -70,6 +72,12 @@ class PaimonSourceTestBase {
                 CatalogFactory.createCatalog(
                         CatalogContext.create(Options.fromMap(configuration.toMap())));
         initPaimonPrivilege();
+    }
+
+    @BeforeEach
+    void dropDefaultTable() throws Exception {
+        Identifier tableId = Identifier.create(DEFAULT_DB, DEFAULT_TABLE);
+        paimonCatalog.dropTable(tableId, true);
     }
 
     // Test for paimon privilege table

@@ -19,7 +19,9 @@ package org.apache.fluss.flink.source;
 
 import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.source.deserializer.ChangelogDeserializationSchema;
+import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -56,6 +58,7 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
     private final boolean streaming;
     private final FlinkConnectorOptionsUtils.StartupOptions startupOptions;
     private final long scanPartitionDiscoveryIntervalMs;
+    private final int splitPerAssignmentBatchSize;
     private final Map<String, String> tableOptions;
 
     // Projection pushdown
@@ -80,6 +83,28 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
             FlinkConnectorOptionsUtils.StartupOptions startupOptions,
             long scanPartitionDiscoveryIntervalMs,
             Map<String, String> tableOptions) {
+        this(
+                tablePath,
+                flussConfig,
+                changelogOutputType,
+                partitionKeyIndexes,
+                streaming,
+                startupOptions,
+                scanPartitionDiscoveryIntervalMs,
+                FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.defaultValue(),
+                tableOptions);
+    }
+
+    public ChangelogFlinkTableSource(
+            TablePath tablePath,
+            Configuration flussConfig,
+            org.apache.flink.table.types.logical.RowType changelogOutputType,
+            int[] partitionKeyIndexes,
+            boolean streaming,
+            FlinkConnectorOptionsUtils.StartupOptions startupOptions,
+            long scanPartitionDiscoveryIntervalMs,
+            int splitPerAssignmentBatchSize,
+            Map<String, String> tableOptions) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         // The changelogOutputType already includes metadata columns from FlinkCatalog
@@ -88,6 +113,7 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
         this.streaming = streaming;
         this.startupOptions = startupOptions;
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
+        this.splitPerAssignmentBatchSize = splitPerAssignmentBatchSize;
         this.tableOptions = tableOptions;
 
         // Extract data columns by filtering out metadata columns by name
@@ -162,12 +188,14 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
                         isPartitioned(),
                         flussRowType,
                         projectedFields,
+                        null,
                         offsetsInitializer,
                         scanPartitionDiscoveryIntervalMs,
+                        splitPerAssignmentBatchSize,
                         new ChangelogDeserializationSchema(),
                         streaming,
                         partitionFilters,
-                        null); // Lake source not supported
+                        LeaseContext.DEFAULT); // Lake source not supported
 
         return SourceProvider.of(source);
     }
@@ -183,6 +211,7 @@ public class ChangelogFlinkTableSource implements ScanTableSource {
                         streaming,
                         startupOptions,
                         scanPartitionDiscoveryIntervalMs,
+                        splitPerAssignmentBatchSize,
                         tableOptions);
         copy.producedDataType = producedDataType;
         copy.projectedFields = projectedFields;

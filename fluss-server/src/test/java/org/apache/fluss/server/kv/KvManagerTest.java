@@ -36,6 +36,7 @@ import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
+import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
@@ -91,6 +92,7 @@ final class KvManagerTest {
     private TableBucket tableBucket1;
     private TableBucket tableBucket2;
 
+    private LocalDiskManager localDiskManager;
     private LogManager logManager;
     private KvManager kvManager;
     private Configuration conf;
@@ -107,33 +109,42 @@ final class KvManagerTest {
     void setup() throws Exception {
         conf = new Configuration();
         conf.setString(ConfigOptions.DATA_DIR, tempDir.getAbsolutePath());
+        conf.set(ConfigOptions.TABLET_SERVER_ID, 1);
 
         String dbName = "db1";
         tablePath1 = TablePath.of(dbName, "t1");
         tablePath2 = TablePath.of(dbName, "t2");
 
         // we need a log manager for kv manager
-
+        localDiskManager = LocalDiskManager.create(conf);
         logManager =
                 LogManager.create(
                         conf,
                         zkClient,
                         new FlussScheduler(1),
                         SystemClock.getInstance(),
-                        TestingMetricGroups.TABLET_SERVER_METRICS);
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager);
         kvManager =
                 KvManager.create(
-                        conf, zkClient, logManager, TestingMetricGroups.TABLET_SERVER_METRICS);
+                        conf,
+                        zkClient,
+                        logManager,
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager);
         kvManager.startup();
     }
 
     @AfterEach
-    void tearDown() {
+    void tearDown() throws Exception {
         if (kvManager != null) {
             kvManager.shutdown();
         }
         if (logManager != null) {
             logManager.shutdown();
+        }
+        if (localDiskManager != null) {
+            localDiskManager.close();
         }
     }
 
@@ -185,7 +196,11 @@ final class KvManagerTest {
         kvManager.shutdown();
         kvManager =
                 KvManager.create(
-                        conf, zkClient, logManager, TestingMetricGroups.TABLET_SERVER_METRICS);
+                        conf,
+                        zkClient,
+                        logManager,
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager);
         kvManager.startup();
         kv1 = getOrCreateKv(tablePath1, partitionName, tableBucket1);
         kv2 = getOrCreateKv(tablePath2, partitionName, tableBucket2);
@@ -230,7 +245,11 @@ final class KvManagerTest {
         testingSchemaGetter.updateLatestSchemaInfo(new SchemaInfo(DATA2_SCHEMA, newSchemaId));
         kvManager =
                 KvManager.create(
-                        conf, zkClient, logManager, TestingMetricGroups.TABLET_SERVER_METRICS);
+                        conf,
+                        zkClient,
+                        logManager,
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager);
         kvManager.startup();
 
         // insert again after restart.
@@ -351,7 +370,8 @@ final class KvManagerTest {
                 PhysicalTablePath.of(
                         tablePath.getDatabaseName(), tablePath.getTableName(), partitionName);
         LogTablet logTablet =
-                logManager.getOrCreateLog(physicalTablePath, tableBucket, LogFormat.ARROW, 1, true);
+                logManager.getOrCreateLog(
+                        tempDir, physicalTablePath, tableBucket, LogFormat.ARROW, 1, true);
         return kvManager.getOrCreateKv(
                 physicalTablePath,
                 tableBucket,

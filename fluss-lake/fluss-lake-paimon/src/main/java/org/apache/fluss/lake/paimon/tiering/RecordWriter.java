@@ -17,8 +17,13 @@
 
 package org.apache.fluss.lake.paimon.tiering;
 
+import org.apache.fluss.lake.paimon.source.FlussRowAsPaimonRow;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.types.DataTypeRoot;
+import org.apache.fluss.utils.PartitionUtils;
 
 import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.table.sink.CommitMessage;
@@ -38,7 +43,7 @@ public abstract class RecordWriter<T> implements AutoCloseable {
     protected final RowType tableRowType;
     protected final int bucket;
     protected final List<String> partitionKeys;
-    @Nullable protected BinaryRow partition;
+    protected final BinaryRow partition;
     protected final FlussRecordAsPaimonRow flussRecordAsPaimonRow;
 
     public RecordWriter(
@@ -46,14 +51,18 @@ public abstract class RecordWriter<T> implements AutoCloseable {
             RowType tableRowType,
             TableBucket tableBucket,
             @Nullable String partition,
-            List<String> partitionKeys) {
+            List<String> partitionKeys,
+            org.apache.fluss.types.RowType flussRowType) {
         this.tableWrite = tableWrite;
         this.tableRowType = tableRowType;
         this.bucket = tableBucket.getBucket();
         this.partitionKeys = partitionKeys;
-        // set partition to EMPTY_ROW in advance for non-partitioned table
         if (partition == null || partitionKeys.isEmpty()) {
+            // non-partitioned table
             this.partition = BinaryRow.EMPTY_ROW;
+        } else {
+            // eagerly resolve BinaryRow partition from partition name string
+            this.partition = resolvePartition(partition, partitionKeys, flussRowType);
         }
         this.flussRecordAsPaimonRow =
                 new FlussRecordAsPaimonRow(tableBucket.getBucket(), tableRowType);
@@ -72,5 +81,39 @@ public abstract class RecordWriter<T> implements AutoCloseable {
 
     public void close() throws Exception {
         tableWrite.close();
+    }
+
+    /**
+     * Resolves a Paimon {@link BinaryRow} partition from the partition name string by parsing each
+     * partition value to its typed Fluss representation, constructing a synthetic row, and
+     * delegating to Paimon's partition extraction.
+     */
+    private BinaryRow resolvePartition(
+            String partitionName,
+            List<String> partitionKeys,
+            org.apache.fluss.types.RowType flussRowType) {
+        ResolvedPartitionSpec spec =
+                ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName);
+        List<String> partitionValues = spec.getPartitionValues();
+
+        // Build a GenericRow with partition column values at their correct positions.
+        // The row field count must match the Paimon RowType (business columns + system columns)
+        // so that FlussRowAsPaimonRow aligns with the Paimon schema.
+        GenericRow partitionRow = new GenericRow(tableRowType.getFieldCount());
+
+        for (int i = 0; i < partitionKeys.size(); i++) {
+            String partitionKey = partitionKeys.get(i);
+            int fieldIndex = flussRowType.getFieldIndex(partitionKey);
+            checkState(
+                    fieldIndex >= 0,
+                    "Partition key '%s' not found in Fluss row type.",
+                    partitionKey);
+            DataTypeRoot typeRoot = flussRowType.getTypeAt(fieldIndex).getTypeRoot();
+            Object typedValue = PartitionUtils.parseValueOfType(partitionValues.get(i), typeRoot);
+            partitionRow.setField(fieldIndex, typedValue);
+        }
+
+        FlussRowAsPaimonRow paimonRow = new FlussRowAsPaimonRow(partitionRow, tableRowType);
+        return tableWrite.getPartition(paimonRow);
     }
 }

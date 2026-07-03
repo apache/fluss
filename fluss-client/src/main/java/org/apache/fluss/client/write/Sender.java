@@ -167,6 +167,8 @@ public class Sender implements Runnable {
             }
         }
 
+        destroyResources();
+
         // TODO if force close failed, add logic to abort incomplete batches.
         LOG.debug("Shutdown of Fluss write sender I/O thread has completed.");
     }
@@ -297,7 +299,7 @@ public class Sender implements Runnable {
     private void maybeAbortBatches(Exception exception) {
         if (accumulator.hasIncomplete()) {
             LOG.error("Aborting write batches due to fatal error", exception);
-            accumulator.abortBatches(exception);
+            accumulator.abortAllBatches(exception);
         }
     }
 
@@ -532,7 +534,27 @@ public class Sender implements Runnable {
             ReadyWriteBatch readyWriteBatch, ApiError error) {
         Set<PhysicalTablePath> invalidMetadataTables = new HashSet<>();
         WriteBatch writeBatch = readyWriteBatch.writeBatch();
-        if (canRetry(readyWriteBatch, error.error())) {
+        if (error.error() == Errors.DUPLICATE_SEQUENCE_EXCEPTION) {
+            // If we have received a duplicate batch sequence error, it means that the batch
+            // sequence has advanced beyond the sequence of the current batch.
+            // The only thing we can do is to return success to the user.
+            completeBatch(readyWriteBatch);
+        } else if (error.error() == Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION
+                && idempotenceManager.idempotenceEnabled()
+                && idempotenceManager.isAlreadyCommitted(
+                        writeBatch, readyWriteBatch.tableBucket())) {
+            // The batch received OUT_OF_ORDER_SEQUENCE_EXCEPTION but its sequence is already
+            // <= lastAckedBatchSequence, which means it was successfully written on the server
+            // but the response was lost. Complete it as success to avoid infinite retry loop.
+            LOG.warn(
+                    "Batch for table-bucket {} with sequence {} received "
+                            + "OUT_OF_ORDER_SEQUENCE_EXCEPTION but has already been committed "
+                            + "(lastAckedBatchSequence={}). Treating as success due to lost response.",
+                    readyWriteBatch.tableBucket(),
+                    writeBatch.batchSequence(),
+                    idempotenceManager.lastAckedBatchSequence(readyWriteBatch.tableBucket()));
+            completeBatch(readyWriteBatch);
+        } else if (canRetry(readyWriteBatch, error.error())) {
             // if batch failed because of retrievable exception, we need to retry send all those
             // batches.
             LOG.warn(
@@ -575,11 +597,6 @@ public class Sender implements Runnable {
                 }
                 invalidMetadataTables.add(writeBatch.physicalTablePath());
             }
-        } else if (error.error() == Errors.DUPLICATE_SEQUENCE_EXCEPTION) {
-            // If we have received a duplicate batch sequence error, it means that the batch
-            // sequence has advanced beyond the sequence of the current batch.
-            // The only thing we can do is to return success to the user.
-            completeBatch(readyWriteBatch);
         } else {
             LOG.warn(
                     "Get error write response on table bucket {}, fail. Error: {}",
@@ -627,5 +644,19 @@ public class Sender implements Runnable {
         // breaking from the sender loop. Otherwise, we may miss some callbacks when shutting down.
         accumulator.close();
         running = false;
+    }
+
+    /**
+     * Releases all resources held by the accumulator (Arrow writer pool, buffer allocator, etc.).
+     *
+     * <p>In production, this is called at the end of {@link #run()} after both the main loop and
+     * the shutdown drain loop have completed, so no further drain operations will touch the Arrow
+     * allocator.
+     *
+     * <p>This method is idempotent: repeated calls are harmless because the underlying {@link
+     * RecordAccumulator#destroyResources()} tolerates multiple invocations.
+     */
+    void destroyResources() {
+        accumulator.destroyResources();
     }
 }

@@ -10,6 +10,26 @@ sidebar_position: 1
 [Apache Paimon](https://paimon.apache.org/) innovatively combines a lake format with an LSM (Log-Structured Merge-tree) structure, bringing efficient updates into the lake architecture. 
 To integrate Fluss with Paimon, you must enable lakehouse storage and configure Paimon as the lakehouse storage. For more details, see [Deploying Streaming Lakehouse](../../install-deploy/deploying-streaming-lakehouse.md).
 
+## Dependencies
+
+Apache Fluss publishes the Paimon lake connector to Maven Central:
+
+| Artifact | Jar |
+|----------|-----|
+| Fluss Paimon lake connector | [fluss-lake-paimon-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-lake-paimon/$FLUSS_VERSION$/fluss-lake-paimon-$FLUSS_VERSION$.jar) |
+
+Maven coordinates:
+
+```xml
+<dependency>
+  <groupId>org.apache.fluss</groupId>
+  <artifactId>fluss-lake-paimon</artifactId>
+  <version>$FLUSS_VERSION$</version>
+</dependency>
+```
+
+Verify downloaded JARs against the [KEYS file](https://downloads.apache.org/incubator/fluss/KEYS) using the [verification instructions](/downloads#verifying-downloads).
+
 ## Version Compatibility
 
 | Use Case        | Required/Tested Versions                           |
@@ -104,7 +124,7 @@ For further information, refer to Paimon's [SQL Query documentation](https://pai
 #### Union Read of Data in Fluss and Paimon
 
 ##### Prerequisites
-Download the [fluss-lake-paimon-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-paimon/$FLUSS_VERSION$/fluss-lake-paimon-$FLUSS_VERSION$.jar) and [paimon-bundle-$PAIMON_VERSION$.jar](https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-bundle/$PAIMON_VERSION$/paimon-bundle-$PAIMON_VERSION$.jar), and place it into `${FLINK_HOME}/lib`.
+Download the [fluss-lake-paimon-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-lake-paimon/$FLUSS_VERSION$/fluss-lake-paimon-$FLUSS_VERSION$.jar) and [paimon-bundle-$PAIMON_VERSION$.jar](https://repo.maven.apache.org/maven2/org/apache/paimon/paimon-bundle/$PAIMON_VERSION$/paimon-bundle-$PAIMON_VERSION$.jar), and place it into `${FLINK_HOME}/lib`.
 
 ##### Union Read
 To read the full dataset, which includes both Fluss (fresh) and Paimon (historical) data, simply query the table without any suffix. The following example illustrates this:

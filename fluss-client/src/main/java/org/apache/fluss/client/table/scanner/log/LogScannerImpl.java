@@ -17,17 +17,20 @@
 
 package org.apache.fluss.client.table.scanner.log;
 
+import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.ScannerMetricGroup;
 import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
-import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.client.table.scanner.Scan;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.WakeupException;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.Projection;
@@ -41,10 +44,9 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.ConcurrentModificationException;
-import java.util.List;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 /**
  * The default impl of {@link LogScanner}.
@@ -58,24 +60,27 @@ import java.util.concurrent.atomic.AtomicLong;
 @PublicEvolving
 public class LogScannerImpl implements LogScanner {
     private static final Logger LOG = LoggerFactory.getLogger(LogScannerImpl.class);
-
     private static final long NO_CURRENT_THREAD = -1L;
+
     private final TablePath tablePath;
     private final LogScannerStatus logScannerStatus;
     private final MetadataUpdater metadataUpdater;
     private final LogFetcher logFetcher;
     private final long tableId;
     private final boolean isPartitionedTable;
-
-    private volatile boolean closed = false;
+    private final boolean isArrowLogFormat;
+    private final boolean isLogTable;
+    private final boolean hasProjection;
+    // metrics
+    private final ScannerMetricGroup scannerMetricGroup;
 
     // currentThread holds the threadId of the current thread accessing FlussLogScanner
     // and is used to prevent multithreaded access
     private final AtomicLong currentThread = new AtomicLong(NO_CURRENT_THREAD);
     // refCount is used to allow reentrant access by the thread who has acquired currentThread.
     private final AtomicInteger refCount = new AtomicInteger(0);
-    // metrics
-    private final ScannerMetricGroup scannerMetricGroup;
+
+    private volatile boolean closed = false;
 
     public LogScannerImpl(
             Configuration conf,
@@ -84,10 +89,14 @@ public class LogScannerImpl implements LogScanner {
             ClientMetricGroup clientMetricGroup,
             RemoteFileDownloader remoteFileDownloader,
             @Nullable int[] projectedFields,
-            SchemaGetter schemaGetter) {
+            SchemaGetter schemaGetter,
+            @Nullable Predicate recordBatchFilter) {
         this.tablePath = tableInfo.getTablePath();
         this.tableId = tableInfo.getTableId();
         this.isPartitionedTable = tableInfo.isPartitioned();
+        this.isArrowLogFormat = tableInfo.getTableConfig().getLogFormat() == LogFormat.ARROW;
+        this.isLogTable = !tableInfo.hasPrimaryKey();
+        this.hasProjection = projectedFields != null;
         // add this table to metadata updater.
         metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
         this.logScannerStatus = new LogScannerStatus();
@@ -98,6 +107,7 @@ public class LogScannerImpl implements LogScanner {
                 new LogFetcher(
                         tableInfo,
                         projection,
+                        recordBatchFilter,
                         logScannerStatus,
                         conf,
                         metadataUpdater,
@@ -131,43 +141,38 @@ public class LogScannerImpl implements LogScanner {
 
     @Override
     public ScanRecords poll(Duration timeout) {
-        acquireAndEnsureOpen();
-        try {
-            if (!logScannerStatus.prepareToPoll()) {
-                throw new IllegalStateException("LogScanner is not subscribed any buckets.");
-            }
+        return doPoll(
+                timeout,
+                this::pollForFetches,
+                scanRecords -> scanRecords.buckets().isEmpty(),
+                () -> ScanRecords.EMPTY);
+    }
 
-            scannerMetricGroup.recordPollStart(System.currentTimeMillis());
-            long timeoutNanos = timeout.toNanos();
-            long startNanos = System.nanoTime();
-            do {
-                Map<TableBucket, List<ScanRecord>> fetchRecords = pollForFetches();
-                if (fetchRecords.isEmpty()) {
-                    try {
-                        if (!logFetcher.awaitNotEmpty(startNanos + timeoutNanos)) {
-                            // logFetcher waits for the timeout and no data in buffer,
-                            // so we return empty
-                            return new ScanRecords(fetchRecords);
-                        }
-                    } catch (WakeupException e) {
-                        // wakeup() is called, we need to return empty
-                        return new ScanRecords(fetchRecords);
-                    }
-                } else {
-                    // before returning the fetched records, we can send off the next round of
-                    // fetches and avoid block waiting for their responses to enable pipelining
-                    // while the user is handling the fetched records.
-                    logFetcher.sendFetches();
-
-                    return new ScanRecords(fetchRecords);
-                }
-            } while (System.nanoTime() - startNanos < timeoutNanos);
-
-            return ScanRecords.EMPTY;
-        } finally {
-            release();
-            scannerMetricGroup.recordPollEnd(System.currentTimeMillis());
+    /**
+     * Polls Arrow record batches for internal callers.
+     *
+     * <p>This method is intentionally kept off the public {@link Scan} API surface for now.
+     */
+    @Internal
+    public ArrowScanRecords pollRecordBatch(Duration timeout) {
+        if (!isArrowLogFormat) {
+            throw new UnsupportedOperationException(
+                    "Arrow record batch polling is only supported for tables whose log format is ARROW.");
         }
+        if (!isLogTable) {
+            throw new UnsupportedOperationException(
+                    "Arrow record batch polling is only supported for log tables. CDC scanning is not supported.");
+        }
+        if (hasProjection) {
+            throw new UnsupportedOperationException(
+                    "Arrow record batch polling does not support projection. Please create the scanner without projection.");
+        }
+
+        return doPoll(
+                timeout,
+                this::pollForRecordBatches,
+                ArrowScanRecords::isEmpty,
+                () -> ArrowScanRecords.EMPTY);
     }
 
     @Override
@@ -181,8 +186,8 @@ public class LogScannerImpl implements LogScanner {
         acquireAndEnsureOpen();
         try {
             TableBucket tableBucket = new TableBucket(tableId, bucket);
-            this.metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
-            this.logScannerStatus.assignScanBuckets(Collections.singletonMap(tableBucket, offset));
+            metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
+            logScannerStatus.assignScanBuckets(Collections.singletonMap(tableBucket, offset));
         } finally {
             release();
         }
@@ -202,9 +207,9 @@ public class LogScannerImpl implements LogScanner {
             // we make assumption that the partition id must belong to the current table
             // if we can't find the partition id from the table path, we'll consider the table
             // is not exist
-            this.metadataUpdater.checkAndUpdatePartitionMetadata(
+            metadataUpdater.checkAndUpdatePartitionMetadata(
                     tablePath, Collections.singleton(partitionId));
-            this.logScannerStatus.assignScanBuckets(Collections.singletonMap(tableBucket, offset));
+            logScannerStatus.assignScanBuckets(Collections.singletonMap(tableBucket, offset));
         } finally {
             release();
         }
@@ -219,7 +224,7 @@ public class LogScannerImpl implements LogScanner {
         acquireAndEnsureOpen();
         try {
             TableBucket tableBucket = new TableBucket(tableId, partitionId, bucket);
-            this.logScannerStatus.unassignScanBuckets(Collections.singletonList(tableBucket));
+            logScannerStatus.unassignScanBuckets(Collections.singletonList(tableBucket));
         } finally {
             release();
         }
@@ -236,7 +241,7 @@ public class LogScannerImpl implements LogScanner {
         acquireAndEnsureOpen();
         try {
             TableBucket tableBucket = new TableBucket(tableId, bucket);
-            this.logScannerStatus.unassignScanBuckets(Collections.singletonList(tableBucket));
+            logScannerStatus.unassignScanBuckets(Collections.singletonList(tableBucket));
         } finally {
             release();
         }
@@ -247,20 +252,75 @@ public class LogScannerImpl implements LogScanner {
         logFetcher.wakeup();
     }
 
-    private Map<TableBucket, List<ScanRecord>> pollForFetches() {
-        Map<TableBucket, List<ScanRecord>> fetchedRecords = logFetcher.collectFetch();
-        if (!fetchedRecords.isEmpty()) {
-            return fetchedRecords;
+    private ScanRecords pollForFetches() {
+        ScanRecords scanRecords = logFetcher.collectFetch();
+        // Check buckets() (includes progress-only buckets).
+        if (!scanRecords.buckets().isEmpty()) {
+            return scanRecords;
         }
 
         // send any new fetches (won't resend pending fetches).
         logFetcher.sendFetches();
-
         return logFetcher.collectFetch();
     }
 
+    private ArrowScanRecords pollForRecordBatches() {
+        ArrowScanRecords scanRecords = logFetcher.collectArrowFetch();
+        if (!scanRecords.isEmpty()) {
+            return scanRecords;
+        }
+
+        // send any new fetches (won't resend pending fetches).
+        logFetcher.sendFetches();
+        return logFetcher.collectArrowFetch();
+    }
+
+    /** Shared polling loop for row and Arrow scan results. */
+    private <T> T doPoll(
+            Duration timeout,
+            Supplier<T> pollForFetches,
+            java.util.function.Predicate<T> isEmpty,
+            Supplier<T> emptyResult) {
+        acquireAndEnsureOpen();
+        try {
+            if (!logScannerStatus.prepareToPoll()) {
+                throw new IllegalStateException("LogScanner is not subscribed any buckets.");
+            }
+
+            scannerMetricGroup.recordPollStart(System.currentTimeMillis());
+            long timeoutNanos = timeout.toNanos();
+            long startNanos = System.nanoTime();
+            do {
+                T scanRecords = pollForFetches.get();
+                if (isEmpty.test(scanRecords)) {
+                    try {
+                        if (!logFetcher.awaitNotEmpty(startNanos + timeoutNanos)) {
+                            // logFetcher waits for the timeout and no data in buffer,
+                            // so we return empty
+                            return scanRecords;
+                        }
+                    } catch (WakeupException e) {
+                        // wakeup() is called, we need to return empty
+                        return scanRecords;
+                    }
+                } else {
+                    // before returning the fetched records, we can send off the next round of
+                    // fetches and avoid block waiting for their responses to enable pipelining
+                    // while the user is handling the fetched records.
+                    logFetcher.sendFetches();
+                    return scanRecords;
+                }
+            } while (System.nanoTime() - startNanos < timeoutNanos);
+
+            return emptyResult.get();
+        } finally {
+            release();
+            scannerMetricGroup.recordPollEnd(System.currentTimeMillis());
+        }
+    }
+
     /**
-     * Acquire the light lock and ensure that the consumer hasn't been closed.
+     * Acquire the light lock and ensure that the scanner hasn't been closed.
      *
      * @throws IllegalStateException If the scanner has been closed
      */
@@ -280,8 +340,8 @@ public class LogScannerImpl implements LogScanner {
      * @throws ConcurrentModificationException if another thread already has the lock
      */
     private void acquire() {
-        final Thread thread = Thread.currentThread();
-        final long threadId = thread.getId();
+        Thread thread = Thread.currentThread();
+        long threadId = thread.getId();
         if (threadId != currentThread.get()
                 && !currentThread.compareAndSet(NO_CURRENT_THREAD, threadId)) {
             throw new ConcurrentModificationException(
@@ -298,7 +358,7 @@ public class LogScannerImpl implements LogScanner {
         refCount.incrementAndGet();
     }
 
-    /** Release the light lock protecting the consumer from multithreaded access. */
+    /** Release the light lock protecting the scanner from multithreaded access. */
     private void release() {
         if (refCount.decrementAndGet() == 0) {
             currentThread.set(NO_CURRENT_THREAD);

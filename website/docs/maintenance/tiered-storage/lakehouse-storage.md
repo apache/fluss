@@ -11,6 +11,26 @@ For deployment instructions, see [Deploying Streaming Lakehouse](../../install-d
 
 For architecture details, see [Tiering Service](../../streaming-lakehouse/tiering-service.md).
 
+## Dependencies
+
+Apache Fluss publishes the Flink-based tiering service JAR to Maven Central:
+
+| Artifact | Jar |
+|----------|-----|
+| Fluss Flink tiering service | [fluss-flink-tiering-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-tiering/$FLUSS_VERSION$/fluss-flink-tiering-$FLUSS_VERSION$.jar) |
+
+Maven coordinates:
+
+```xml
+<dependency>
+  <groupId>org.apache.fluss</groupId>
+  <artifactId>fluss-flink-tiering</artifactId>
+  <version>$FLUSS_VERSION$</version>
+</dependency>
+```
+
+Verify downloaded JARs against the [KEYS file](https://downloads.apache.org/incubator/fluss/KEYS) using the [verification instructions](/downloads#verifying-downloads).
+
 ## Cluster Configuration
 
 Lakehouse storage is configured in `server.yaml` using the `datalake.` prefix:

@@ -21,6 +21,7 @@ import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
+import org.apache.fluss.client.metadata.TestingMetadataUpdater;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
@@ -32,6 +33,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ConfigEntry;
+import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
@@ -41,6 +43,8 @@ import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidReplicationFactorException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.exception.NetworkException;
+import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.PartitionAlreadyExistsException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SchemaNotExistException;
@@ -54,6 +58,7 @@ import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.metadata.AggFunctions;
+import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.DatabaseSummary;
@@ -69,10 +74,15 @@ import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.messages.ListOffsetsRequest;
+import org.apache.fluss.rpc.messages.ListOffsetsResponse;
+import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.replica.Replica;
+import org.apache.fluss.server.tablet.TestTabletServerGateway;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.types.DataTypeChecks;
@@ -85,6 +95,7 @@ import javax.annotation.Nullable;
 
 import java.time.Duration;
 import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -94,17 +105,22 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
 import static org.apache.fluss.config.ConfigOptions.CURRENT_KV_FORMAT_VERSION;
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
+import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -178,6 +194,92 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testAlterDatabase() throws Exception {
+        // create database
+        String dbName = "test_alter_db";
+        admin.createDatabase(
+                        dbName,
+                        DatabaseDescriptor.builder()
+                                .comment("original comment")
+                                .customProperty("key1", "value1")
+                                .customProperty("key2", "value2")
+                                .build(),
+                        false)
+                .get();
+
+        DatabaseInfo databaseInfo = admin.getDatabaseInfo(dbName).get();
+        DatabaseDescriptor existingDescriptor = databaseInfo.getDatabaseDescriptor();
+
+        // Verify initial state
+        assertThat(existingDescriptor.getComment().get()).isEqualTo("original comment");
+        assertThat(existingDescriptor.getCustomProperties()).containsEntry("key1", "value1");
+        assertThat(existingDescriptor.getCustomProperties()).containsEntry("key2", "value2");
+
+        // Alter database: add and modify custom properties
+        List<DatabaseChange> databaseChanges = new ArrayList<>();
+        databaseChanges.add(DatabaseChange.set("key3", "value3"));
+        databaseChanges.add(DatabaseChange.set("key1", "updated_value1"));
+        databaseChanges.add(DatabaseChange.updateComment("updated comment"));
+        admin.alterDatabase(dbName, databaseChanges, false).get();
+
+        // Verify alterations
+        DatabaseInfo alteredDatabaseInfo = admin.getDatabaseInfo(dbName).get();
+        DatabaseDescriptor alteredDescriptor = alteredDatabaseInfo.getDatabaseDescriptor();
+        assertThat(alteredDescriptor.getComment().get()).isEqualTo("updated comment");
+        assertThat(alteredDescriptor.getCustomProperties()).containsEntry("key1", "updated_value1");
+        assertThat(alteredDescriptor.getCustomProperties()).containsEntry("key2", "value2");
+        assertThat(alteredDescriptor.getCustomProperties()).containsEntry("key3", "value3");
+        assertThat(alteredDescriptor.getCustomProperties()).hasSize(3);
+
+        // Alter database: reset a property
+        databaseChanges = new ArrayList<>();
+        databaseChanges.add(DatabaseChange.reset("key2"));
+        admin.alterDatabase(dbName, databaseChanges, false).get();
+
+        // Verify reset
+        DatabaseInfo resetDatabaseInfo = admin.getDatabaseInfo(dbName).get();
+        DatabaseDescriptor resetDescriptor = resetDatabaseInfo.getDatabaseDescriptor();
+        assertThat(resetDescriptor.getComment().get()).isEqualTo("updated comment");
+        assertThat(resetDescriptor.getCustomProperties()).containsEntry("key1", "updated_value1");
+        assertThat(resetDescriptor.getCustomProperties()).containsEntry("key3", "value3");
+        assertThat(resetDescriptor.getCustomProperties()).doesNotContainKey("key2");
+        assertThat(resetDescriptor.getCustomProperties()).hasSize(2);
+
+        // Alter database: reset comment
+        databaseChanges = new ArrayList<>();
+        // Empty string means reset comment
+        databaseChanges.add(DatabaseChange.updateComment(""));
+        admin.alterDatabase(dbName, databaseChanges, false).get();
+
+        // Verify reset
+        DatabaseInfo resetCommentDatabaseInfo = admin.getDatabaseInfo(dbName).get();
+        DatabaseDescriptor resetCommentDescriptor =
+                resetCommentDatabaseInfo.getDatabaseDescriptor();
+        assertThat(resetCommentDescriptor.getComment()).isEmpty();
+        assertThat(resetCommentDescriptor.getCustomProperties())
+                .containsEntry("key1", "updated_value1");
+        assertThat(resetCommentDescriptor.getCustomProperties()).containsEntry("key3", "value3");
+        assertThat(resetCommentDescriptor.getCustomProperties()).doesNotContainKey("key2");
+        assertThat(resetCommentDescriptor.getCustomProperties()).hasSize(2);
+
+        // throw exception if database not exist
+        List<DatabaseChange> finalDatabaseChanges = databaseChanges;
+        assertThatThrownBy(
+                        () ->
+                                admin.alterDatabase(
+                                                "test_alter_db_not_exist",
+                                                finalDatabaseChanges,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(DatabaseNotExistException.class)
+                .hasMessage(String.format("Database %s not exists.", "test_alter_db_not_exist"));
+
+        // should success if ignore not exist
+        admin.alterDatabase("test_alter_db_not_exist", databaseChanges, true).get();
+    }
+
+    @Test
     void testGetTableInfoAndSchema() throws Exception {
         SchemaInfo schemaInfo = admin.getTableSchema(DEFAULT_TABLE_PATH).get();
         assertThat(schemaInfo.getSchema()).isEqualTo(DEFAULT_SCHEMA);
@@ -194,6 +296,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         options.put(
                 ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                 String.valueOf(CURRENT_KV_FORMAT_VERSION));
+        options.put(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
         assertThat(tableInfo.toTableDescriptor())
                 .isEqualTo(tableDescriptor.withProperties(options));
         assertThat(schemaInfo2).isEqualTo(schemaInfo);
@@ -223,6 +326,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         options.put(
                 ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                 String.valueOf(CURRENT_KV_FORMAT_VERSION));
+        options.put(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
         assertThat(tableInfo.toTableDescriptor()).isEqualTo(expected.withProperties(options));
         assertThat(schemaInfo2).isEqualTo(schemaInfo);
         // assert created time
@@ -466,6 +570,73 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testAlterAggregationTableColumnWithAggFunction() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "alter_aggregation_table_column");
+        Map<String, String> properties = new HashMap<>();
+        properties.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "aggregation");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.INT())
+                                        .column("value", DataTypes.BIGINT(), AggFunctions.SUM())
+                                        .primaryKey("id")
+                                        .build())
+                        .distributedBy(3, "id")
+                        .properties(properties)
+                        .build();
+        admin.createTable(tablePath, tableDescriptor, false).get();
+
+        admin.alterTable(
+                        tablePath,
+                        Collections.singletonList(
+                                TableChange.addColumn(
+                                        "new_value",
+                                        DataTypes.BIGINT(),
+                                        "new aggregate column",
+                                        TableChange.ColumnPosition.last(),
+                                        AggFunctions.SUM())),
+                        false)
+                .get();
+
+        SchemaInfo schemaInfo = admin.getTableSchema(tablePath).get();
+        assertThat(schemaInfo.getSchema().getAggFunction("new_value")).hasValue(AggFunctions.SUM());
+
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            upsertWriter.upsert(row(1, 10L, 100L));
+            upsertWriter.upsert(row(1, 20L, 200L));
+            upsertWriter.flush();
+
+            assertThatRow(lookupRow(table.newLookup().createLookuper(), row(1)))
+                    .withSchema(schemaInfo.getSchema().getRowType())
+                    .isEqualTo(row(1, 30L, 300L));
+        }
+    }
+
+    @Test
+    void testAlterNonAggregationTableColumnWithAggFunction() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "alter_non_aggregation_table_column");
+        admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(
+                                                        TableChange.addColumn(
+                                                                "new_value",
+                                                                DataTypes.BIGINT(),
+                                                                "new aggregate column",
+                                                                TableChange.ColumnPosition.last(),
+                                                                AggFunctions.SUM())),
+                                                false)
+                                        .get())
+                .hasMessageContaining(
+                        "Aggregation function is only supported for aggregation merge engine table");
+    }
+
+    @Test
     void testCreateInvalidDatabaseAndTable() throws Exception {
         assertThatThrownBy(
                         () ->
@@ -572,6 +743,12 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         TableInfo tableInfoAggregate = admin.getTableInfo(tablePathAggregate).join();
         assertThat(tableInfoAggregate.getTableConfig().getDeleteBehavior())
                 .hasValue(DeleteBehavior.IGNORE);
+        assertThat(tableInfoAggregate.getSchema().getAggFunction("count"))
+                .hasValue(AggFunctions.SUM());
+        assertThat(tableInfoAggregate.getProperties().toMap())
+                .doesNotContainKey("fields.count.agg");
+        assertThat(tableInfoAggregate.getCustomProperties().toMap())
+                .doesNotContainKey("fields.count.agg");
 
         // Test 2.6: AGGREGATION merge engine with delete behavior explicitly set to ALLOW - should
         // be allowed
@@ -766,8 +943,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                 admin.createTable(tablePath, nonPositiveReplicaFactorTable, false)
                                         .get())
                 .cause()
-                .isInstanceOf(InvalidReplicationFactorException.class)
-                .hasMessageContaining("Replication factor must be larger than 0.");
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining("'table.replication.factor' must be greater than 0.");
 
         // let's kill one tablet server
         FLUSS_CLUSTER_EXTENSION.stopTabletServer(0);
@@ -807,6 +984,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
             options.put(
                     ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                     String.valueOf(CURRENT_KV_FORMAT_VERSION));
+            options.put(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key(), "true");
             assertThat(tableInfo.toTableDescriptor()).isEqualTo(expected.withProperties(options));
         }
     }
@@ -897,7 +1075,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                 Collectors.toMap(
                                         DatabaseSummary::getDatabaseName,
                                         DatabaseSummary::getTableCount));
-        assertThat(databaseSummaries.get("db1")).isEqualTo(1);
+        assertThat(databaseSummaries.get("db1")).isEqualTo(2);
         assertThat(databaseSummaries.get("db2")).isEqualTo(0);
 
         assertThatThrownBy(() -> admin.listTables("unknown_db").get())
@@ -942,6 +1120,32 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
             assertThat(partitionIdByNames.get(partitionInfo.getPartitionName()))
                     .isEqualTo(partitionInfo.getPartitionId());
         }
+    }
+
+    @Test
+    void testListPartitionInfosAfterTabletServerRestart() throws Exception {
+        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+        TablePath partitionedTablePath = TablePath.of(dbName, "test_retry_partitioned_table");
+        admin.createTable(partitionedTablePath, DATA1_PARTITIONED_TABLE_DESCRIPTOR, true).get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(partitionedTablePath);
+
+        // First query should succeed.
+        List<PartitionInfo> partitionInfosBefore =
+                admin.listPartitionInfos(partitionedTablePath).get();
+        assertThat(partitionInfosBefore).isNotEmpty();
+
+        // Restart all tablet servers (they bind to new ports, making cached addresses stale).
+        for (int i = 0; i < FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().size(); i++) {
+            FLUSS_CLUSTER_EXTENSION.stopTabletServer(i);
+            FLUSS_CLUSTER_EXTENSION.startTabletServer(i);
+        }
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
+
+        // Second query using the same admin client should succeed after retry with metadata
+        // refresh (verifies RetryableGatewayClientProxy convergence on stale addresses).
+        List<PartitionInfo> partitionInfosAfter =
+                admin.listPartitionInfos(partitionedTablePath).get();
+        assertThat(partitionInfosAfter).hasSize(partitionInfosBefore.size());
     }
 
     @Test
@@ -1250,6 +1454,71 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testCreateInvalidPartitionForAutoPartitionedTable() throws Exception {
+        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
+        // numToRetain defaults to 7; with DAY unit, anything older than (today - 7 days) is
+        // out-of-date.
+        TableDescriptor partitionedTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("name", DataTypes.STRING())
+                                        .column("pt", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(3, "id")
+                        .partitionedBy("pt")
+                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                        .property(
+                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
+                                AutoPartitionTimeUnit.DAY)
+                        .build();
+        TablePath tablePath = TablePath.of(dbName, "test_create_invalid_partition_auto_table");
+        admin.createTable(tablePath, partitionedTable, true).get();
+        FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
+
+        LocalDate today = LocalDate.now();
+        DateTimeFormatter dayFormatter = DateTimeFormatter.ofPattern("yyyyMMdd");
+
+        // partition value does not match expected DAY format 'yyyyMMdd'
+        assertThatThrownBy(
+                        () ->
+                                admin.createPartition(
+                                                tablePath,
+                                                newPartitionSpec("pt", "2024-03-25"),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining("does not match the expected format 'yyyyMMdd'")
+                .hasMessageContaining("DAY");
+
+        // (today - 8 days) is beyond the retention window of 7, should be rejected.
+        String outOfDatePartition = today.minusDays(8).format(dayFormatter);
+        assertThatThrownBy(
+                        () ->
+                                admin.createPartition(
+                                                tablePath,
+                                                newPartitionSpec("pt", outOfDatePartition),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining("is out-of-date")
+                .hasMessageContaining("earliest retained partition");
+
+        // (today - 7 days) is exactly at the retention boundary and should be accepted.
+        String boundaryPartition = today.minusDays(7).format(dayFormatter);
+        admin.createPartition(tablePath, newPartitionSpec("pt", boundaryPartition), false).get();
+        assertPartitionInfo(
+                admin.listPartitionInfos(tablePath).get(),
+                Arrays.asList(
+                        boundaryPartition,
+                        today.format(dayFormatter),
+                        today.plusDays(1).format(dayFormatter)));
+    }
+
+    @Test
     void testBootstrapServerConfigAsTabletServer() throws Exception {
         Configuration newConf = clientConf;
         ServerNode ts0 = FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().get(0);
@@ -1365,6 +1634,130 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 },
                 Duration.ofMinutes(1),
                 "Get lakehouse info");
+
+        // Test alter invalid config
+        assertThatThrownBy(
+                        () ->
+                                admin.alterClusterConfigs(
+                                                Collections.singletonList(
+                                                        new AlterConfig(
+                                                                "not.exist.key",
+                                                                "value",
+                                                                AlterConfigOpType.SET)))
+                                        .get())
+                .cause()
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining("not.exist.key");
+    }
+
+    @Test
+    void testDynamicDiskWriteLimitRatio() throws Exception {
+        // Valid value should succeed
+        admin.alterClusterConfigs(
+                        Collections.singletonList(
+                                new AlterConfig(
+                                        ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
+                                        "0.15",
+                                        AlterConfigOpType.SET)))
+                .get();
+        assertConfigEntry(
+                ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
+                "0.15",
+                ConfigEntry.ConfigSource.DYNAMIC_SERVER_CONFIG);
+
+        // Invalid value: 0.0 (must be > 0.1)
+        assertThatThrownBy(
+                        () ->
+                                admin.alterClusterConfigs(
+                                                Collections.singletonList(
+                                                        new AlterConfig(
+                                                                ConfigOptions
+                                                                        .SERVER_DATA_DISK_WRITE_LIMIT_RATIO
+                                                                        .key(),
+                                                                "0.0",
+                                                                AlterConfigOpType.SET)))
+                                        .get())
+                .cause()
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining("must be within (0.1, 1.0]");
+
+        // Invalid value: 0.1 (boundary, must be > 0.1)
+        assertThatThrownBy(
+                        () ->
+                                admin.alterClusterConfigs(
+                                                Collections.singletonList(
+                                                        new AlterConfig(
+                                                                ConfigOptions
+                                                                        .SERVER_DATA_DISK_WRITE_LIMIT_RATIO
+                                                                        .key(),
+                                                                "0.1",
+                                                                AlterConfigOpType.SET)))
+                                        .get())
+                .cause()
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining("must be within (0.1, 1.0]");
+
+        // Invalid value: 1.5 (must be <= 1.0)
+        assertThatThrownBy(
+                        () ->
+                                admin.alterClusterConfigs(
+                                                Collections.singletonList(
+                                                        new AlterConfig(
+                                                                ConfigOptions
+                                                                        .SERVER_DATA_DISK_WRITE_LIMIT_RATIO
+                                                                        .key(),
+                                                                "1.5",
+                                                                AlterConfigOpType.SET)))
+                                        .get())
+                .cause()
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining("must be within (0.1, 1.0]");
+
+        // Reset should succeed (restores default)
+        admin.alterClusterConfigs(
+                        Collections.singletonList(
+                                new AlterConfig(
+                                        ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
+                                        null,
+                                        AlterConfigOpType.DELETE)))
+                .get();
+    }
+
+    @Test
+    void testDynamicRemoteDataDirsWithRoundRobin() throws Exception {
+        String originalDir = FLUSS_CLUSTER_EXTENSION.getRemoteDataDir();
+        String newDir1 = FLUSS_CLUSTER_EXTENSION.getRemoteDataDir("remote-dir-1");
+        String newDir2 = FLUSS_CLUSTER_EXTENSION.getRemoteDataDir("remote-dir-2");
+
+        // Dynamically switch from single remote.data.dir to multiple remote.data.dirs
+        // with round-robin strategy; original dir must be included
+        admin.alterClusterConfigs(
+                        Collections.singletonList(
+                                new AlterConfig(
+                                        ConfigOptions.REMOTE_DATA_DIRS.key(),
+                                        String.join(",", originalDir, newDir1, newDir2),
+                                        AlterConfigOpType.SET)))
+                .get();
+
+        // Create 6 tables and verify round-robin distribution across 3 directories
+        int tableCount = 6;
+        Map<String, Integer> dirUsageCount = new HashMap<>();
+        for (int i = 0; i < tableCount; i++) {
+            TablePath tablePath = TablePath.of("test_db", "dynamic_rr_table_" + i);
+            createTable(
+                    tablePath,
+                    TableDescriptor.builder().schema(DEFAULT_SCHEMA).distributedBy(1, "id").build(),
+                    true);
+
+            TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+            String remoteDataDir = tableInfo.getRemoteDataDir();
+            assertThat(remoteDataDir).isNotNull();
+            dirUsageCount.merge(remoteDataDir, 1, Integer::sum);
+        }
+
+        // Each of the 3 directories should be used exactly twice (6 / 3 = 2)
+        assertThat(dirUsageCount).hasSize(3);
+        assertThat(dirUsageCount.values()).allMatch(count -> count == 2);
     }
 
     private void assertConfigEntry(
@@ -1610,19 +2003,24 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .containsEntry(1, ServerTag.PERMANENT_OFFLINE);
 
         // 4.remove server tag for server 100
-        assertThatThrownBy(
-                        () ->
-                                admin.removeServerTag(
-                                                Collections.singletonList(100),
-                                                ServerTag.PERMANENT_OFFLINE)
-                                        .get())
-                .cause()
-                .isInstanceOf(ServerNotExistException.class)
-                .hasMessageContaining("Server 100 not exists when trying to removing server tag.");
+        admin.removeServerTag(Collections.singletonList(100), ServerTag.PERMANENT_OFFLINE).get();
 
         // 5.remove server tag for server 0,1.
+
+        // should remove server tag successfully even we remove live tablet server from context
+        CoordinatorContext coordinatorContext =
+                FLUSS_CLUSTER_EXTENSION
+                        .getCoordinatorServer()
+                        .getCoordinatorEventProcessor()
+                        .getCoordinatorContext();
+        ServerInfo tmpServerInfo = coordinatorContext.getLiveTabletServers().get(0);
+        coordinatorContext.removeLiveTabletServer(0);
+
         admin.removeServerTag(Arrays.asList(0, 1), ServerTag.PERMANENT_OFFLINE).get();
         assertThat(zkClient.getServerTags()).isNotPresent();
+
+        // restore after test, or else will influence other tests
+        coordinatorContext.addLiveTabletServer(tmpServerInfo);
 
         // 6.remove server tag for server 2. error will be thrown and tag for 2 will not be removed
         // as the removed server tag is not equals with the exists one.
@@ -2015,5 +2413,129 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .cause()
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining("Row count is disabled for this table");
+    }
+
+    @Test
+    void testKvSnapshotLeaseForLogTable() throws Exception {
+        // Create a log table (without primary key)
+        TablePath logTablePath = TablePath.of("test_db", "test_log_table_kv_lease");
+        Schema logSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column("age", DataTypes.INT())
+                        .build();
+        TableDescriptor logTableDescriptor =
+                TableDescriptor.builder().schema(logSchema).distributedBy(3).build();
+        long tableId = createTable(logTablePath, logTableDescriptor, true);
+
+        // Create a KvSnapshotLease
+        KvSnapshotLease lease = admin.createKvSnapshotLease("test-lease-log", 60000);
+
+        // Test acquireSnapshots should fail for log table
+        Map<TableBucket, Long> snapshotIds = new HashMap<>();
+        snapshotIds.put(new TableBucket(tableId, 0), 0L);
+        assertThatThrownBy(() -> lease.acquireSnapshots(snapshotIds).get())
+                .cause()
+                .isInstanceOf(NonPrimaryKeyTableException.class)
+                .hasMessageContaining("is not a primary key table");
+
+        // Test releaseSnapshots should fail for log table
+        assertThatThrownBy(
+                        () ->
+                                lease.releaseSnapshots(
+                                                Collections.singleton(new TableBucket(tableId, 0)))
+                                        .get())
+                .cause()
+                .isInstanceOf(NonPrimaryKeyTableException.class)
+                .hasMessageContaining("is not a primary key table");
+    }
+
+    @Test
+    void testSendListOffsetsRequestOnGatewayRpcFailure() throws Exception {
+        TestTabletServerGateway failingGateway =
+                new TestTabletServerGateway(false, Collections.emptySet()) {
+                    @Override
+                    public CompletableFuture<ListOffsetsResponse> listOffsets(
+                            ListOffsetsRequest request) {
+                        CompletableFuture<ListOffsetsResponse> future = new CompletableFuture<>();
+                        future.completeExceptionally(new NetworkException("connection timed out"));
+                        return future;
+                    }
+                };
+
+        TestingMetadataUpdater metadataUpdater =
+                TestingMetadataUpdater.builder(Collections.emptyMap())
+                        .withTabletServerGateway(1, failingGateway)
+                        .build();
+
+        ListOffsetsRequest request =
+                makeListOffsetsRequest(
+                        1L, null, Arrays.asList(0, 1, 2), new OffsetSpec.LatestSpec());
+        Map<Integer, ListOffsetsRequest> leaderToRequestMap = new HashMap<>();
+        leaderToRequestMap.put(1, request);
+
+        Map<Integer, CompletableFuture<Long>> bucketToOffsetMap = new ConcurrentHashMap<>();
+        bucketToOffsetMap.put(0, new CompletableFuture<>());
+        bucketToOffsetMap.put(1, new CompletableFuture<>());
+        bucketToOffsetMap.put(2, new CompletableFuture<>());
+
+        FlussAdmin.sendListOffsetsRequest(metadataUpdater, leaderToRequestMap, bucketToOffsetMap);
+        ListOffsetsResult listOffsetsResult = new ListOffsetsResult(bucketToOffsetMap);
+        assertThatThrownBy(() -> listOffsetsResult.all().get())
+                .rootCause()
+                .isInstanceOf(NetworkException.class)
+                .hasMessageContaining("connection timed out");
+    }
+
+    @Test
+    void testClusterHealthDuringRollingUpgrade() throws Exception {
+        TablePath tablePath = TablePath.of("test_db", "health_test_table");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(DEFAULT_SCHEMA).distributedBy(3, "id").build();
+        long tableId = createTable(tablePath, tableDescriptor, true);
+        waitAllReplicasReady(tableId, 3);
+
+        // Phase 1: Cluster is healthy — status should be GREEN.
+        ClusterHealth health = admin.getClusterHealth().get();
+        assertThat(health.getStatus()).isEqualTo(ClusterHealthStatus.GREEN);
+        assertThat(health.getNumReplicas()).isEqualTo(health.getInSyncReplicas());
+        assertThat(health.getNumLeaderReplicas()).isEqualTo(health.getActiveLeaderReplicas());
+
+        // Phase 2: Stop one tablet server (simulate server crash during rolling upgrade).
+        int stoppedServerId = 0;
+        FLUSS_CLUSTER_EXTENSION.stopTabletServer(stoppedServerId);
+        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(2);
+
+        for (int bucket = 0; bucket < 3; bucket++) {
+            TableBucket tb = new TableBucket(tableId, bucket);
+            FLUSS_CLUSTER_EXTENSION.waitUntilReplicaShrinkFromIsr(tb, stoppedServerId);
+        }
+
+        // Status should not be GREEN (YELLOW or RED depending on leader placement).
+        ClusterHealth duringDown = admin.getClusterHealth().get();
+        assertThat(duringDown.getStatus()).isNotEqualTo(ClusterHealthStatus.GREEN);
+        assertThat(duringDown.getInSyncReplicas()).isLessThan(duringDown.getNumReplicas());
+
+        // Phase 3: Restart the server.
+        FLUSS_CLUSTER_EXTENSION.startTabletServer(stoppedServerId);
+        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(3);
+
+        // Phase 4: Wait for recovery — status should return to GREEN.
+        for (int bucket = 0; bucket < 3; bucket++) {
+            TableBucket tb = new TableBucket(tableId, bucket);
+            FLUSS_CLUSTER_EXTENSION.waitUntilReplicaExpandToIsr(tb, stoppedServerId);
+        }
+
+        waitUntil(
+                () -> admin.getClusterHealth().get().getStatus() == ClusterHealthStatus.GREEN,
+                Duration.ofMinutes(1),
+                "Cluster should return to GREEN after server restart");
+
+        ClusterHealth afterRecovery = admin.getClusterHealth().get();
+        assertThat(afterRecovery.getStatus()).isEqualTo(ClusterHealthStatus.GREEN);
+        assertThat(afterRecovery.getNumReplicas()).isEqualTo(afterRecovery.getInSyncReplicas());
+        assertThat(afterRecovery.getNumLeaderReplicas())
+                .isEqualTo(afterRecovery.getActiveLeaderReplicas());
     }
 }

@@ -24,11 +24,11 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss-lake</artifactId>
-        <version>0.10-SNAPSHOT</version>
+        <version>1.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-lake-paimon</artifactId>
-    <name>Fluss : Lake : Paimon</name>
+    <name>Apache Fluss (Incubating) : Lake : Paimon</name>
 
     <packaging>jar</packaging>
 
@@ -48,6 +48,31 @@
             <groupId>org.apache.paimon</groupId>
             <artifactId>paimon-bundle</artifactId>
             <version>${paimon.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- paimon-arrow and Arrow dependencies are provided because they are only needed
+             at runtime when the tiering service writes Arrow record batches to Paimon.
+             The Flink tiering plugin bundles these jars; fluss-lake-paimon itself is a
+             lightweight module that should not pull them transitively. -->
+        <dependency>
+            <groupId>org.apache.paimon</groupId>
+            <artifactId>paimon-arrow</artifactId>
+            <version>${paimon.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-vector</artifactId>
+            <version>${arrow.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.arrow</groupId>
+            <artifactId>arrow-memory-netty</artifactId>
+            <version>${arrow.version}</version>
             <scope>provided</scope>
         </dependency>
 

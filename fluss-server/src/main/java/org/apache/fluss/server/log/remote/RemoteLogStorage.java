@@ -22,6 +22,7 @@ import org.apache.fluss.exception.RemoteStorageException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
 
 import java.io.Closeable;
@@ -117,6 +118,16 @@ public interface RemoteLogStorage extends Closeable {
      */
     InputStream fetchIndex(RemoteLogSegment remoteLogSegment, IndexType indexType)
             throws RemoteStorageException;
+
+    /**
+     * Returns an input stream of the log data for the respective log segment of {@link
+     * RemoteLogSegment}.
+     *
+     * @param remoteLogSegment the remote log segment.
+     * @return input stream of the requested log data.
+     * @throws RemoteStorageException if there are any errors while fetching the log data.
+     */
+    InputStream fetchLogData(RemoteLogSegment remoteLogSegment) throws RemoteStorageException;
 
     /**
      * Read the remote log manifest from remote manifest file path.

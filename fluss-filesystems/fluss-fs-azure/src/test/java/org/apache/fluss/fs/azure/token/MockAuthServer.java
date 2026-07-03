@@ -32,6 +32,7 @@ import org.apache.fluss.shaded.netty4.io.netty.handler.logging.LogLevel;
 import org.apache.fluss.shaded.netty4.io.netty.handler.logging.LoggingHandler;
 
 import java.io.Closeable;
+import java.net.InetSocketAddress;
 
 /** Mock Netty Auth Server for facilitating the Azure auth token generation. */
 public class MockAuthServer implements Closeable {
@@ -40,6 +41,7 @@ public class MockAuthServer implements Closeable {
     private final EventLoopGroup workerGroup;
 
     private ChannelFuture channelFuture;
+    private int port;
 
     MockAuthServer(EventLoopGroup bossGroup, EventLoopGroup workerGroup) {
         this.bossGroup = bossGroup;
@@ -65,7 +67,9 @@ public class MockAuthServer implements Closeable {
                                 }
                             });
 
-            channelFuture = b.bind(8080).sync();
+            channelFuture = b.bind(0).sync();
+            InetSocketAddress address = (InetSocketAddress) channelFuture.channel().localAddress();
+            this.port = address.getPort();
             return channelFuture;
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
@@ -74,6 +78,10 @@ public class MockAuthServer implements Closeable {
 
     public static MockAuthServer create() {
         return new MockAuthServer(new NioEventLoopGroup(1), new NioEventLoopGroup());
+    }
+
+    public int getPort() {
+        return port;
     }
 
     @Override

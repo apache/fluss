@@ -19,7 +19,9 @@ package org.apache.fluss.lake.paimon.tiering.append;
 
 import org.apache.fluss.lake.paimon.tiering.RecordWriter;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.record.ArrowBatchData;
 import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.types.RowType;
 
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.table.BucketMode;
@@ -37,11 +39,19 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
 
     private final FileStoreTable fileStoreTable;
 
+    /**
+     * Lazily-initialized helper for Arrow batch writing. Stored as {@link AutoCloseable} to avoid
+     * loading Arrow classes when Arrow is not on the classpath. The actual type is {@link
+     * AppendOnlyArrowBatchHelper} which is only loaded when {@link #writeArrowBatch} is called.
+     */
+    @Nullable private AutoCloseable arrowBatchHelper;
+
     public AppendOnlyWriter(
             FileStoreTable fileStoreTable,
             TableBucket tableBucket,
             @Nullable String partition,
-            List<String> partitionKeys) {
+            List<String> partitionKeys,
+            RowType flussRowType) {
         //noinspection unchecked
         super(
                 (TableWriteImpl<InternalRow>)
@@ -50,18 +60,14 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
                 fileStoreTable.rowType(),
                 tableBucket,
                 partition,
-                partitionKeys); // Pass to parent
+                partitionKeys,
+                flussRowType);
         this.fileStoreTable = fileStoreTable;
     }
 
     @Override
     public void write(LogRecord record) throws Exception {
         flussRecordAsPaimonRow.setFlussRecord(record);
-
-        // get partition once
-        if (partition == null) {
-            partition = tableWrite.getPartition(flussRecordAsPaimonRow);
-        }
 
         // hacky, call internal method tableWrite.getWrite() to support
         // to write to given partition, otherwise, it'll always extract a partition from Paimon row
@@ -72,5 +78,32 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
             writtenBucket = 0;
         }
         tableWrite.getWrite().write(partition, writtenBucket, flussRecordAsPaimonRow);
+    }
+
+    /**
+     * Writes an Arrow batch directly to Paimon Parquet files. Delegates to {@link
+     * AppendOnlyArrowBatchHelper} which is lazily loaded to avoid class loading issues when Arrow
+     * is not on the classpath.
+     */
+    public void writeArrowBatch(ArrowBatchData arrowBatchData) throws Exception {
+        AppendOnlyArrowBatchHelper helper;
+        if (arrowBatchHelper == null) {
+            helper =
+                    new AppendOnlyArrowBatchHelper(
+                            fileStoreTable, tableWrite, tableRowType, bucket);
+            arrowBatchHelper = helper;
+        } else {
+            helper = (AppendOnlyArrowBatchHelper) arrowBatchHelper;
+        }
+        helper.writeArrowBatch(arrowBatchData, partition);
+    }
+
+    @Override
+    public void close() throws Exception {
+        if (arrowBatchHelper != null) {
+            arrowBatchHelper.close();
+            arrowBatchHelper = null;
+        }
+        super.close();
     }
 }

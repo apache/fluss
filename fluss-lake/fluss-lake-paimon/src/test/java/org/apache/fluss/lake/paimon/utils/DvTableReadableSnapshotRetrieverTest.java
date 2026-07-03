@@ -168,7 +168,7 @@ class DvTableReadableSnapshotRetrieverTest {
 
         // No readable_snapshot yet (all buckets have L0 files)
         DvTableReadableSnapshotRetriever.ReadableSnapshotResult readableSnapshotAndOffsets =
-                retriveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot1);
+                retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot1);
         assertThat(readableSnapshotAndOffsets).isNull();
         // commit tiered snapshot and readable snapshot to fluss
         // (simulate TieringCommitOperator) behavior
@@ -221,9 +221,9 @@ class DvTableReadableSnapshotRetrieverTest {
                         fileStoreTable,
                         Collections.singletonMap(bucket0, generateRows(bucket0, 3, 8)));
         tieredLakeSnapshotEndOffset.put(tb0, 8L);
-        // retrive readable snapshot and offsets
+        // retrieve readable snapshot and offsets
         readableSnapshotAndOffsets =
-                retriveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot4);
+                retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot4);
         // (simulate TieringCommitOperator) behavior
         commitSnapshot(
                 tableId,
@@ -272,7 +272,7 @@ class DvTableReadableSnapshotRetrieverTest {
                         Collections.singletonMap(bucket1, generateRows(bucket1, 3, 10)));
         tieredLakeSnapshotEndOffset.put(tb1, 10L);
         readableSnapshotAndOffsets =
-                retriveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot6);
+                retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot6);
         // readable_snapshot = snapshot5 (latest compacted snapshot)
         // readable_offsets: all buckets use snapshot1's offsets (base snapshot for flushed L0)
         assertThat(readableSnapshotAndOffsets.getReadableSnapshotId()).isEqualTo(snapshot5);
@@ -309,7 +309,7 @@ class DvTableReadableSnapshotRetrieverTest {
 
         // retrieve the readable snapshot and offsets
         readableSnapshotAndOffsets =
-                retriveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot8);
+                retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot8);
         // readable_snapshot = snapshot7
         // readable_offsets: bucket0 uses snapshot4's offset (8L), others use snapshot1's offset
         assertThat(readableSnapshotAndOffsets.getReadableSnapshotId()).isEqualTo(snapshot7);
@@ -362,7 +362,7 @@ class DvTableReadableSnapshotRetrieverTest {
         appendRows12.put(bucket2, generateRows(bucket2, 3, 11));
         long snapshot12 = writeAndCommitData(fileStoreTable, appendRows12);
         readableSnapshotAndOffsets =
-                retriveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot12);
+                retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot12);
         assertThat(readableSnapshotAndOffsets.getReadableSnapshotId()).isEqualTo(snapshot11);
         tieredLakeSnapshotEndOffset.put(tb0, 13L);
         tieredLakeSnapshotEndOffset.put(tb1, 20L);
@@ -398,7 +398,7 @@ class DvTableReadableSnapshotRetrieverTest {
         // Create an empty tiered snapshot (snapshot14) to simulate tiered snapshot commit
         long snapshot14 = writeAndCommitData(fileStoreTable, Collections.emptyMap());
         readableSnapshotAndOffsets =
-                retriveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot14);
+                retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot14);
         // readable_snapshot = snapshot13
         // readable_offsets: bucket0 uses snapshot4's offset (8L), bucket1 uses snapshot6's offset
         // (10L), bucket2 uses snapshot12's offset (11L)
@@ -418,13 +418,13 @@ class DvTableReadableSnapshotRetrieverTest {
                 tablePath,
                 snapshot14,
                 tieredLakeSnapshotEndOffset,
-                retriveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot14));
+                retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot14));
 
         // when the compacted snapshot is already registered in ZK,
         // getReadableSnapshotAndOffsets skips recomputation and returns null.
         long snapshot15 = writeAndCommitData(fileStoreTable, Collections.emptyMap());
         DvTableReadableSnapshotRetriever.ReadableSnapshotResult result15 =
-                retriveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot15);
+                retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot15);
         assertThat(result15)
                 .as(
                         "Compacted snapshot 13 is already in ZK, should skip recomputation and return null")
@@ -474,7 +474,7 @@ class DvTableReadableSnapshotRetrieverTest {
 
         // No readable_snapshot yet (all buckets have L0 files)
         DvTableReadableSnapshotRetriever.ReadableSnapshotResult readableSnapshotAndOffsets =
-                retriveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot1);
+                retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot1);
         assertThat(readableSnapshotAndOffsets).isNull();
         commitSnapshot(
                 tableId,
@@ -518,7 +518,7 @@ class DvTableReadableSnapshotRetrieverTest {
         // files flushed from the first tiered snapshot to latest compacted snapshot
         assertThat(readableSnapshotAndOffsets).isNull();
         readableSnapshotAndOffsets =
-                retriveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot3);
+                retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot3);
         assertThat(readableSnapshotAndOffsets).isNull();
         commitSnapshot(
                 tableId,
@@ -559,7 +559,7 @@ class DvTableReadableSnapshotRetrieverTest {
         long snapshot6 = writeAndCommitData(fileStoreTable, appendRowsP0More);
         tieredLakeSnapshotEndOffset.put(tbP0B0, 6L);
         readableSnapshotAndOffsets =
-                retriveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot6);
+                retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot6);
         // readable_snapshot = snapshot5
         // readable_offsets: partition0/bucket0 uses snapshot1's offset (3L),
         //                   partition0/bucket1 uses snapshot1's offset (3L),
@@ -596,7 +596,7 @@ class DvTableReadableSnapshotRetrieverTest {
         long snapshot8 = writeAndCommitData(fileStoreTable, Collections.emptyMap());
 
         readableSnapshotAndOffsets =
-                retriveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot8);
+                retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot8);
         // readable_snapshot = snapshot7
         // readable_offsets: partition0/bucket0 uses snapshot6's offset (6L),
         //                   partition0/bucket1 uses snapshot1's offset (3L),
@@ -634,7 +634,7 @@ class DvTableReadableSnapshotRetrieverTest {
         // Snapshot 7 is already registered in Fluss cluster, so the retrieve result is null
         // (no update needed).
         readableSnapshotAndOffsets =
-                retriveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot9);
+                retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot9);
         assertThat(readableSnapshotAndOffsets).isNull();
         commitSnapshot(
                 tableId,
@@ -660,7 +660,7 @@ class DvTableReadableSnapshotRetrieverTest {
         long snapshot11 = writeAndCommitData(fileStoreTable, Collections.emptyMap());
 
         readableSnapshotAndOffsets =
-                retriveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot11);
+                retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot11);
         // readable_snapshot = snapshot10
         // readable_offsets: partition0/bucket0 uses snapshot6's offset (6L),
         //                   partition0/bucket1 uses snapshot1's offset (3L),
@@ -699,7 +699,7 @@ class DvTableReadableSnapshotRetrieverTest {
                 tablePath,
                 snapshot12,
                 tieredLakeSnapshotEndOffset,
-                retriveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot12));
+                retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot12));
 
         // Step 10: COMPACT snapshot 13 - compact partition0, bucket1 again (flushes snapshot12's
         // L0)
@@ -719,7 +719,7 @@ class DvTableReadableSnapshotRetrieverTest {
         long snapshot14 = writeAndCommitData(fileStoreTable, Collections.emptyMap());
 
         readableSnapshotAndOffsets =
-                retriveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot14);
+                retrieveReadableSnapshotAndOffsets(tablePath, fileStoreTable, snapshot14);
         // readable_snapshot = snapshot13
         // readable_offsets: partition0/bucket0 uses snapshot6's offset (6L),
         //                   partition0/bucket1 uses snapshot12's offset (6L) - flushed in s13,
@@ -862,7 +862,7 @@ class DvTableReadableSnapshotRetrieverTest {
     }
 
     private DvTableReadableSnapshotRetriever.ReadableSnapshotResult
-            retriveReadableSnapshotAndOffsets(
+            retrieveReadableSnapshotAndOffsets(
                     TablePath tablePath, FileStoreTable fileStoreTable, long tieredSnapshot)
                     throws Exception {
         try (DvTableReadableSnapshotRetriever retriever =

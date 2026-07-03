@@ -96,8 +96,59 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "The directory used for storing the kv snapshot data files and remote log for log tiered storage "
-                                    + " in a Fluss supported filesystem.");
+                            "The directory used for storing the kv snapshot data files and remote log for log tiered storage"
+                                    + " in a Fluss supported filesystem. "
+                                    + "When upgrading to `remote.data.dirs`, please ensure this value is placed as the first entry in the new configuration."
+                                    + "For new clusters, it is recommended to use `remote.data.dirs` instead. "
+                                    + "If `remote.data.dirs` is configured, this value will be ignored.");
+
+    public static final ConfigOption<List<String>> REMOTE_DATA_DIRS =
+            key("remote.data.dirs")
+                    .stringType()
+                    .asList()
+                    .defaultValues()
+                    .withDescription(
+                            "A comma-separated list of directories in Fluss supported filesystems "
+                                    + "for storing the kv snapshot data files and remote log files of tables/partitions. "
+                                    + "If configured, when a new table or a new partition is created, "
+                                    + "one of the directories from this list will be selected according to the strategy "
+                                    + "specified by `remote.data.dirs.strategy` (`ROUND_ROBIN` by default). "
+                                    + "If not configured, the system uses `"
+                                    + REMOTE_DATA_DIR.key()
+                                    + "` as the sole remote data directory for all data.");
+
+    public static final ConfigOption<RemoteDataDirStrategy> REMOTE_DATA_DIRS_STRATEGY =
+            key("remote.data.dirs.strategy")
+                    .enumType(RemoteDataDirStrategy.class)
+                    .defaultValue(RemoteDataDirStrategy.ROUND_ROBIN)
+                    .withDescription(
+                            String.format(
+                                    "The strategy for selecting the remote data directory from `%s`. "
+                                            + "The candidate strategies are: %s, the default strategy is %s.\n"
+                                            + "%s: this strategy employs a round-robin approach to select one from the available remote directories.\n"
+                                            + "%s: this strategy selects one of the available remote directories based on the weights configured in `remote.data.dirs.weights`.",
+                                    REMOTE_DATA_DIRS.key(),
+                                    Arrays.toString(RemoteDataDirStrategy.values()),
+                                    RemoteDataDirStrategy.ROUND_ROBIN,
+                                    RemoteDataDirStrategy.ROUND_ROBIN,
+                                    RemoteDataDirStrategy.WEIGHTED_ROUND_ROBIN));
+
+    public static final ConfigOption<List<Integer>> REMOTE_DATA_DIRS_WEIGHTS =
+            key("remote.data.dirs.weights")
+                    .intType()
+                    .asList()
+                    .defaultValues()
+                    .withDescription(
+                            "The weights of the remote data directories. "
+                                    + "This is a list of weights corresponding to the `"
+                                    + REMOTE_DATA_DIRS.key()
+                                    + "` in the same order. When `"
+                                    + REMOTE_DATA_DIRS_STRATEGY.key()
+                                    + "` is set to `"
+                                    + RemoteDataDirStrategy.WEIGHTED_ROUND_ROBIN
+                                    + "`, this must be configured, and its size must be equal to `"
+                                    + REMOTE_DATA_DIRS.key()
+                                    + "`; otherwise, it will be ignored.");
 
     public static final ConfigOption<MemorySize> REMOTE_FS_WRITE_BUFFER_SIZE =
             key("remote.fs.write-buffer-size")
@@ -148,6 +199,27 @@ public class ConfigOptions {
                     .withDescription(
                             "The interval of auto partition check. "
                                     + "The default value is 10 minutes.");
+
+    public static final ConfigOption<Duration> COORDINATOR_LIFECYCLE_THROTTLER_INFLIGHT_TIMEOUT =
+            key("coordinator.lifecycle-throttler.inflight-timeout")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(3))
+                    .withDescription(
+                            "The timeout for an in-flight drop event in the coordinator's "
+                                    + "TableLifecycleThrottler. If a drop event has been admitted "
+                                    + "but the corresponding completion callback has not arrived "
+                                    + "within this timeout, the throttler abandons tracking of "
+                                    + "that drop and continues admitting the next pending drop.");
+
+    public static final ConfigOption<Duration>
+            COORDINATOR_LIFECYCLE_THROTTLER_TIMEOUT_CHECK_INTERVAL =
+                    key("coordinator.lifecycle-throttler.timeout-check-interval")
+                            .durationType()
+                            .defaultValue(Duration.ofMinutes(1))
+                            .withDescription(
+                                    "The periodic interval at which the coordinator's "
+                                            + "TableLifecycleThrottler scans in-flight drops for "
+                                            + "timeouts.");
 
     public static final ConfigOption<Boolean> LOG_TABLE_ALLOW_CREATION =
             key("allow.create.log.tables")
@@ -283,6 +355,28 @@ public class ConfigOptions {
                                     + "and transfer remote log files. Increase this value if you experience slow IO operations. "
                                     + "The default value is 10.")
                     .withDeprecatedKeys("coordinator.io-pool.size");
+
+    public static final ConfigOption<Double> SERVER_DATA_DISK_WRITE_LIMIT_RATIO =
+            key("server.data-disk.write-limit-ratio")
+                    .doubleType()
+                    .defaultValue(0.85)
+                    .withDescription(
+                            "Reject writes when the tablet server data disk usage exceeds this ratio. "
+                                    + "Writes resume after the usage drops below (ratio - 0.10). "
+                                    + "Set to 1.0 to disable the disk-usage protection entirely. "
+                                    + "The valid range is (0.1, 1.0].");
+
+    public static final ConfigOption<Duration> SERVER_DATA_DISK_CHECK_INTERVAL =
+            key("server.data-disk.check-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(30))
+                    .withDescription(
+                            "The interval at which the tablet server samples the local data disk "
+                                    + "usage for the write-protection state machine. A shorter interval "
+                                    + "narrows the time window during which writes can still flow in "
+                                    + "after the disk crosses the limit ratio, at the cost of slightly "
+                                    + "more frequent statvfs calls (which are in-memory and cheap). "
+                                    + "The default 30s is suitable for typical write workloads.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Coordinator Server
@@ -447,6 +541,20 @@ public class ConfigOptions {
                             "This configuration controls the directory where fluss will store its data. "
                                     + "The default value is /tmp/fluss-data");
 
+    public static final ConfigOption<List<String>> DATA_DIRS =
+            key("data.dirs")
+                    .stringType()
+                    .asList()
+                    .noDefaultValue()
+                    .withDescription(
+                            "A comma-separated list of local directories used by TabletServer to store "
+                                    + "local log, kv, checkpoints, and other node-local files. "
+                                    + "If configured, this option takes precedence over `"
+                                    + DATA_DIR.key()
+                                    + "`. If not configured, `"
+                                    + DATA_DIR.key()
+                                    + "` is used as the only local data directory.");
+
     public static final ConfigOption<Duration> WRITER_ID_EXPIRATION_TIME =
             key("server.writer-id.expiration-time")
                     .durationType()
@@ -463,6 +571,51 @@ public class ConfigOptions {
                             "The interval at which to remove writer ids that have expired due to "
                                     + WRITER_ID_EXPIRATION_TIME.key()
                                     + " passing. The default value is 10 minutes.");
+
+    public static final ConfigOption<Duration> KV_SCANNER_TTL =
+            key("kv.scanner.ttl")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(10))
+                    .withDescription(
+                            "The time-to-live for an idle KV scanner session on the server. A scanner that has not "
+                                    + "received a request within this duration will be automatically expired and its "
+                                    + "resources released. The default value is 10 minutes.");
+
+    public static final ConfigOption<Duration> KV_SCANNER_EXPIRATION_INTERVAL =
+            key("kv.scanner.expiration-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(30))
+                    .withDescription(
+                            "How often the TTL evictor runs to close idle scanner sessions. "
+                                    + "The default value is 30 seconds.");
+
+    public static final ConfigOption<Integer> KV_SCANNER_MAX_PER_BUCKET =
+            key("kv.scanner.max-per-bucket")
+                    .intType()
+                    .defaultValue(8)
+                    .withDescription(
+                            "Maximum number of concurrent scanner sessions per bucket. "
+                                    + "Exceeding this limit returns TOO_MANY_SCANNERS. "
+                                    + "The default value is 8.");
+
+    public static final ConfigOption<Integer> KV_SCANNER_MAX_PER_SERVER =
+            key("kv.scanner.max-per-server")
+                    .intType()
+                    .defaultValue(200)
+                    .withDescription(
+                            "Maximum number of concurrent scanner sessions per tablet server. "
+                                    + "Exceeding this limit returns TOO_MANY_SCANNERS. "
+                                    + "The default value is 200.");
+
+    public static final ConfigOption<MemorySize> KV_SCANNER_MAX_BATCH_SIZE =
+            key("kv.scanner.max-batch-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("10mb"))
+                    .withDescription(
+                            "Server-side cap on the per-batch payload size for KV full-scan responses. "
+                                    + "The effective batch size is min(client-requested batch_size_bytes, "
+                                    + "this value). Protects the tablet server from out-of-memory if a "
+                                    + "client passes an excessively large batch size. The default value is 10mb.");
 
     public static final ConfigOption<Integer> TABLET_SERVER_CONTROLLED_SHUTDOWN_MAX_RETRIES =
             key("tablet-server.controlled-shutdown.max-retries")
@@ -798,13 +951,23 @@ public class ConfigOptions {
                                     + "copy segments, clean up remote log segments, delete local log segments etc. "
                                     + "If the value is set to 0, it means that the remote log storage is disabled.");
 
+    public static final ConfigOption<Integer> REMOTE_LOG_TASK_MAX_UPLOAD_SEGMENTS =
+            key("remote.log.task-max-upload-segments")
+                    .intType()
+                    .defaultValue(5)
+                    .withDescription(
+                            "The maximum number of log segments to upload to remote storage per "
+                                    + "tiering task execution. This limits the upload batch size to "
+                                    + "prevent overwhelming the remote storage when there is a large "
+                                    + "backlog of segments to upload.");
+
     public static final ConfigOption<MemorySize> REMOTE_LOG_INDEX_FILE_CACHE_SIZE =
             key("remote.log.index-file-cache-size")
                     .memoryType()
                     .defaultValue(MemorySize.parse("1gb"))
                     .withDescription(
-                            "The total size of the space allocated to store index files fetched "
-                                    + "from remote storage in the local storage.");
+                            "The size of the space allocated per local data directory to store "
+                                    + "index files fetched from remote storage in the local storage.");
 
     public static final ConfigOption<Integer> REMOTE_LOG_MANAGER_THREAD_POOL_SIZE =
             key("remote.log-manager.thread-pool-size")
@@ -855,6 +1018,16 @@ public class ConfigOptions {
                     .withDescription(
                             "The number of queued requests allowed for worker threads, before blocking the I/O threads.");
 
+    public static final ConfigOption<MemorySize> NETTY_SERVER_MAX_REQUEST_SIZE =
+            key("netty.server.max-request-size")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("100mb"))
+                    .withDescription(
+                            "The maximum size of a single request that the server can receive. "
+                                    + "This limits the maximum frame length at the Netty pipeline level "
+                                    + "to protect the server from malicious clients sending oversized requests "
+                                    + "that could exhaust server memory.");
+
     public static final ConfigOption<Duration> NETTY_CONNECTION_MAX_IDLE_TIME =
             key("netty.connection.max-idle-time")
                     .durationType()
@@ -869,6 +1042,17 @@ public class ConfigOptions {
                     .withDescription(
                             "The number of threads that the client uses for sending requests to the "
                                     + "network and receiving responses from network. The default value is 4");
+
+    public static final ConfigOption<Boolean> NETTY_CLIENT_ALLOCATOR_HEAP_BUFFER_FIRST =
+            key("netty.client.allocator.heap-buffer-first")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription(
+                            "Whether to allocate heap buffer first for the netty client. "
+                                    + "If set to false, direct buffer will be used first, "
+                                    + "which requires sufficient off-heap memory to be available. "
+                                    + "By default, inner clients (server-to-server) use false "
+                                    + "and non-inner clients (external) use true.");
 
     // ------------------------------------------------------------------------
     //  Client Settings
@@ -1107,6 +1291,18 @@ public class ConfigOptions {
                     .withDescription(
                             "The authentication protocol used to authenticate the client.");
 
+    public static final ConfigOption<Boolean> CLIENT_SECURITY_ENABLE_PLUGIN_DISCOVERY =
+            key("client.security.enable-plugin-discovery")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "When set to true, the client will additionally discover "
+                                    + "authentication plugins from the configured plugins/ folder "
+                                    + "via the PluginManager, in addition to the default classpath. "
+                                    + "This is useful for standalone tools or scripts that run outside "
+                                    + "the server JVM but still need to load authentication plugins "
+                                    + "shipped in plugins/.");
+
     public static final ConfigOption<MemorySize> CLIENT_SCANNER_LOG_FETCH_MAX_BYTES =
             key("client.scanner.log.fetch.max-bytes")
                     .memoryType()
@@ -1144,6 +1340,17 @@ public class ConfigOptions {
                                     + "If not enough bytes, wait up to "
                                     + CLIENT_SCANNER_LOG_FETCH_WAIT_MAX_TIME.key()
                                     + " time to return.");
+
+    public static final ConfigOption<MemorySize> CLIENT_SCANNER_KV_FETCH_MAX_BYTES =
+            key("client.scanner.kv.fetch.max-bytes")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("4mb"))
+                    .withDescription(
+                            "The maximum amount of data the server should return per kv scan request when "
+                                    + "performing a full primary key table scan. Records are streamed in batches; "
+                                    + "the server may cap this value via '"
+                                    + KV_SCANNER_MAX_BATCH_SIZE.key()
+                                    + "'.");
 
     public static final ConfigOption<Integer> CLIENT_LOOKUP_QUEUE_SIZE =
             key("client.lookup.queue-size")
@@ -1239,7 +1446,10 @@ public class ConfigOptions {
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
-                            "JAAS configuration string for the client. If not provided, uses the JVM option -Djava.security.auth.login.config. \n"
+                            "JAAS configuration string for the client. This option is retained for backward "
+                                    + "compatibility only. Since only SASL/PLAIN is currently supported, only "
+                                    + "PlainLoginModule is accepted. Prefer using 'client.security.sasl.username' "
+                                    + "and 'client.security.sasl.password' directly.\n"
                                     + "Example: org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required username=\"admin\" password=\"admin-secret\";");
 
     public static final ConfigOption<String> CLIENT_SASL_JAAS_USERNAME =
@@ -1328,6 +1538,17 @@ public class ConfigOptions {
                                     + "When bucket key equals primary key (default bucket key), it still uses datalake's encoder "
                                     + "for optimization (encoded bytes can be reused for bucket calculation). "
                                     + "Bucket key encoding always uses datalake's encoder to align with datalake bucket calculation.");
+
+    public static final ConfigOption<Boolean> TABLE_KV_STANDBY_REPLICA_ENABLED =
+            key("table.kv.standby-replica.enabled")
+                    .booleanType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Whether to enable standby replicas for primary key tables. "
+                                    + "Standby replicas maintain recent KV snapshots for fast leader promotion. "
+                                    + "Automatically set to true by the coordinator during table creation for new PK tables. "
+                                    + "Tables created before this option was introduced are treated as disabled. "
+                                    + "Can be dynamically enabled via ALTER TABLE.");
 
     public static final ConfigOption<Boolean> TABLE_AUTO_PARTITION_ENABLED =
             key("table.auto-partition.enabled")
@@ -1517,6 +1738,22 @@ public class ConfigOptions {
                                     + "and in this case INSERT operations are converted to UPDATE_AFTER events. "
                                     + "This mode reduces storage and transmission costs but loses the ability to track previous values. "
                                     + "This option only affects primary key tables.");
+
+    public static final ConfigOption<String> TABLE_STATISTICS_COLUMNS =
+            key("table.statistics.columns")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Configures column-level statistics collection for the table. "
+                                    + "By default this option is not set and no column statistics are collected. "
+                                    + "The value '*' means collect statistics for all supported columns. "
+                                    + "A comma-separated list of column names means collect statistics only for the specified columns. "
+                                    + "Supported types include: BOOLEAN, TINYINT, SMALLINT, INTEGER, BIGINT, FLOAT, DOUBLE, "
+                                    + "STRING, CHAR, DECIMAL, DATE, TIME, TIMESTAMP, and TIMESTAMP_LTZ. "
+                                    + "Example: 'id,name,timestamp' to collect statistics only for specified columns. "
+                                    + "Note: enabling column statistics requires the V1 batch format. "
+                                    + "Downstream consumers must be upgraded to Fluss v1.0+ before enabling this option, "
+                                    + "as older versions cannot parse the extended batch format.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv
@@ -1842,6 +2079,26 @@ public class ConfigOptions {
                     .withDescription(
                             "The max fetch size for fetching log to apply to kv during recovering kv.");
 
+    public static final ConfigOption<Integer> KV_RECOVERY_REMOTE_LOG_PREFETCH_NUM =
+            key("kv.recover.remote-log.prefetch-num")
+                    .intType()
+                    .defaultValue(4)
+                    .withDescription(
+                            "The maximum number of remote log segments that can be downloaded "
+                                    + "but not yet consumed during KV recovery. A larger value "
+                                    + "overlaps more remote storage downloads with consumption, "
+                                    + "at the cost of extra local disk usage. Setting to 1 keeps "
+                                    + "the historical behavior (one-step prefetch).");
+
+    public static final ConfigOption<Integer> KV_RECOVERY_REMOTE_LOG_DOWNLOAD_THREADS =
+            key("kv.recover.remote-log.download-threads")
+                    .intType()
+                    .defaultValue(3)
+                    .withDescription(
+                            "The number of threads used to download remote log segments during "
+                                    + "KV recovery. Should be less than or equal to "
+                                    + "'kv.recover.remote-log.prefetch-num'.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for metrics
     // ------------------------------------------------------------------------
@@ -1914,6 +2171,24 @@ public class ConfigOptions {
                             .withDescription(
                                     "The interval of pushing metrics to Prometheus PushGateway.");
 
+    public static final ConfigOption<String> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_USERNAME =
+            key("metrics.reporter.prometheus-push.username")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The username for Basic Auth of the Prometheus PushGateway. "
+                                    + "Leave it unset to disable authentication.");
+
+    public static final ConfigOption<Password> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_PASSWORD =
+            key("metrics.reporter.prometheus-push.password")
+                    .passwordType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The password for Basic Auth of the Prometheus PushGateway. "
+                                    + "Only takes effect when username is configured. "
+                                    + "The value is automatically redacted when the configuration "
+                                    + "is logged or displayed.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for jmx reporter
     // ------------------------------------------------------------------------
@@ -1930,14 +2205,70 @@ public class ConfigOptions {
                                     + "like 9990-9999.");
 
     // ------------------------------------------------------------------------
+    //  ConfigOptions for influxdb reporter
+    // ------------------------------------------------------------------------
+    public static final ConfigOption<String> METRICS_REPORTER_INFLUXDB_VERSION =
+            key("metrics.reporter.influxdb.version")
+                    .stringType()
+                    .defaultValue("v3")
+                    .withDescription(
+                            "The InfluxDB version to connect to. Supported values are 'v2' and 'v3'. "
+                                    + "For InfluxDB v2, the 'org' configuration is required; for InfluxDB v3, it is not needed.");
+
+    public static final ConfigOption<String> METRICS_REPORTER_INFLUXDB_HOST_URL =
+            key("metrics.reporter.influxdb.host-url")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The InfluxDB server host URL including scheme, host name, and port.");
+
+    public static final ConfigOption<String> METRICS_REPORTER_INFLUXDB_BUCKET =
+            key("metrics.reporter.influxdb.bucket")
+                    .stringType()
+                    .noDefaultValue()
+                    .withFallbackKeys("metrics.reporter.influxdb.database")
+                    .withDescription("The InfluxDB bucket/database name.");
+
+    public static final ConfigOption<String> METRICS_REPORTER_INFLUXDB_ORG =
+            key("metrics.reporter.influxdb.org")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The InfluxDB organization name. Required for InfluxDB v2, not needed for InfluxDB v3.");
+
+    public static final ConfigOption<String> METRICS_REPORTER_INFLUXDB_TOKEN =
+            key("metrics.reporter.influxdb.token")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription("The InfluxDB authentication token.");
+
+    public static final ConfigOption<Duration> METRICS_REPORTER_INFLUXDB_PUSH_INTERVAL =
+            key("metrics.reporter.influxdb.push-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(10))
+                    .withDescription("The interval of reporting metrics to InfluxDB.");
+
+    // ------------------------------------------------------------------------
     //  ConfigOptions for lakehouse storage
     // ------------------------------------------------------------------------
+    public static final ConfigOption<Boolean> DATALAKE_ENABLED =
+            key("datalake.enabled")
+                    .booleanType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Whether the Fluss cluster is ready to create and manage lakehouse tables. "
+                                    + "If unset, Fluss keeps the legacy behavior where configuring `datalake.format` "
+                                    + "also enables lakehouse tables. If set to `false`, Fluss pre-binds the lake format "
+                                    + "for newly created tables but does not allow lakehouse tables yet. If set to `true`, "
+                                    + "Fluss fully enables lakehouse tables. When this option is explicitly set to `true`, "
+                                    + "`datalake.format` must also be configured.");
+
     public static final ConfigOption<DataLakeFormat> DATALAKE_FORMAT =
             key("datalake.format")
                     .enumType(DataLakeFormat.class)
                     .noDefaultValue()
                     .withDescription(
-                            "The datalake format used by of Fluss to be as lakehouse storage. Currently, supported formats are Paimon, Iceberg, and Lance. "
+                            "The datalake format used by Fluss as lakehouse storage. Currently, supported formats are Paimon, Iceberg, and Lance. "
                                     + "In the future, more kinds of data lake format will be supported, such as DeltaLake or Hudi.");
 
     // ------------------------------------------------------------------------
@@ -2065,5 +2396,11 @@ public class ConfigOptions {
     @Internal
     public static ConfigOption<?> getConfigOption(String key) {
         return ConfigOptionsHolder.CONFIG_OPTIONS_BY_KEY.get(key);
+    }
+
+    /** Remote data dir select strategy for Fluss. */
+    public enum RemoteDataDirStrategy {
+        ROUND_ROBIN,
+        WEIGHTED_ROUND_ROBIN
     }
 }

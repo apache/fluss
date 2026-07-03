@@ -20,7 +20,6 @@ package org.apache.fluss.server.zk.data;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.security.acl.ResourceType;
@@ -236,12 +235,13 @@ public final class ZkData {
             return PartitionsZNode.path(tablePath) + "/" + partitionName;
         }
 
-        public static byte[] encode(TablePartition partition) {
-            return partition.toJsonBytes();
+        public static byte[] encode(PartitionRegistration partitionRegistration) {
+            return JsonSerdeUtils.writeValueAsBytes(
+                    partitionRegistration, PartitionRegistrationJsonSerde.INSTANCE);
         }
 
-        public static TablePartition decode(byte[] json) {
-            return TablePartition.fromJsonBytes(json);
+        public static PartitionRegistration decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, PartitionRegistrationJsonSerde.INSTANCE);
         }
     }
 
@@ -305,13 +305,53 @@ public final class ZkData {
     // ------------------------------------------------------------------------------------------
 
     /**
-     * The znode for the active coordinator. The znode path is:
+     * The znode for alive coordinators. The znode path is:
+     *
+     * <p>/coordinators/ids
+     */
+    public static final class CoordinatorIdsZNode {
+        public static String path() {
+            return "/coordinators/ids";
+        }
+    }
+
+    /**
+     * The znode for a registered Coordinator information. The znode path is:
+     *
+     * <p>/coordinators/ids/[serverId]
+     */
+    public static final class CoordinatorIdZNode {
+        public static String path(String serverId) {
+            return CoordinatorIdsZNode.path() + "/" + serverId;
+        }
+
+        public static byte[] encode(CoordinatorAddress coordinatorAddress) {
+            return JsonSerdeUtils.writeValueAsBytes(
+                    coordinatorAddress, CoordinatorAddressJsonSerde.INSTANCE);
+        }
+
+        public static CoordinatorAddress decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, CoordinatorAddressJsonSerde.INSTANCE);
+        }
+    }
+
+    /**
+     * The znode for the coordinator leader election. The znode path is:
+     *
+     * <p>/coordinators/election
+     */
+    public static final class CoordinatorElectionZNode {
+        public static String path() {
+            return "/coordinators/election";
+        }
+    }
+
+    /**
+     * The znode for the active coordinator leader. The znode path is:
      *
      * <p>/coordinators/active
-     *
-     * <p>Note: introduce standby coordinators in the future for znode "/coordinators/standby/".
      */
-    public static final class CoordinatorZNode {
+    public static final class CoordinatorLeaderZNode {
         public static String path() {
             return "/coordinators/active";
         }
@@ -326,6 +366,24 @@ public final class ZkData {
         }
     }
 
+    /**
+     * The znode for the coordinator epoch. The znode path is:
+     *
+     * <p>/coordinators/epoch
+     */
+    public static final class CoordinatorEpochZNode {
+        public static String path() {
+            return "/coordinators/epoch";
+        }
+
+        public static byte[] encode(int epoch) {
+            return String.valueOf(epoch).getBytes(StandardCharsets.UTF_8);
+        }
+
+        public static int decode(byte[] bytes) {
+            return Integer.parseInt(new String(bytes, StandardCharsets.UTF_8));
+        }
+    }
     // ------------------------------------------------------------------------------------------
     // ZNodes under "/tabletservers/"
     // ------------------------------------------------------------------------------------------

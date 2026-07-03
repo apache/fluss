@@ -51,7 +51,7 @@ public class EndsWith extends NullFalseLeafBinaryFunction {
             long rowCount,
             Object min,
             Object max,
-            Long nullCount,
+            long nullCount,
             Object patternLiteral) {
         return true;
     }

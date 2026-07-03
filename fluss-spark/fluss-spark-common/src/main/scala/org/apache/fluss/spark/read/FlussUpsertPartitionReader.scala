@@ -24,9 +24,10 @@ import org.apache.fluss.config.Configuration
 import org.apache.fluss.memory.MemorySegment
 import org.apache.fluss.metadata.{TableBucket, TablePath}
 import org.apache.fluss.record.LogRecord
-import org.apache.fluss.row.{encode, InternalRow, KeyValueRow}
+import org.apache.fluss.row.{encode, InternalRow => FlussInternalRow, KeyValueRow}
 import org.apache.fluss.spark.SparkFlussConf
 import org.apache.fluss.spark.utils.LogChangesIterator
+import org.apache.fluss.types.{DataField, RowType}
 import org.apache.fluss.utils.CloseableIterator
 
 import org.apache.spark.internal.Logging
@@ -45,10 +46,13 @@ import scala.collection.mutable
 class FlussUpsertPartitionReader(
     tablePath: TablePath,
     projection: Array[Int],
+    limit: Option[Int],
     flussPartition: FlussUpsertInputPartition,
     flussConfig: Configuration)
-  extends FlussPartitionReader(tablePath, flussConfig)
+  extends FlussPartitionReader(tablePath, flussConfig, limit)
   with Logging {
+
+  override protected lazy val projectedRowType: RowType = rowType.project(projectionWithPks)
 
   private val readOptimized = flussConfig.get(SparkFlussConf.READ_OPTIMIZED_OPTION)
   private val tableBucket: TableBucket = flussPartition.tableBucket
@@ -65,13 +69,12 @@ class FlussUpsertPartitionReader(
     extraProjections ++= projection
     pkIndexes.foreach {
       pkIndex =>
-        projection.find(p => p == pkIndex) match {
-          case Some(index) =>
-            _pkProjection += index
-          case _ =>
+        projection.indexOf(pkIndex) match {
+          case -1 =>
             extraProjections += pkIndex
             _pkProjection += projection.length + i
             i += 1
+          case idx => _pkProjection += idx
         }
     }
     (extraProjections.toArray, _pkProjection.toArray)
@@ -79,12 +82,12 @@ class FlussUpsertPartitionReader(
 
   private var snapshotScanner: BatchScanner = _
   private var logScanner: LogScanner = _
-  private var mergedIterator: Iterator[InternalRow] = _
+  private var mergedIterator: Iterator[FlussInternalRow] = _
 
   // initialize scanners
   initialize()
 
-  override def next(): Boolean = {
+  override def next0(): Boolean = {
     if (closed) {
       return false
     }
@@ -99,16 +102,20 @@ class FlussUpsertPartitionReader(
 
   private def createSortMergeReader(): SortMergeReader = {
     // Create key encoder for primary keys
+    val pkIndexes = tableInfo.getSchema.getPrimaryKeyIndexes
+    val pkFields = new java.util.ArrayList[DataField]()
+    pkIndexes.foreach(i => pkFields.add(rowType.getFields.get(i)))
+    val pkRowType = new RowType(pkFields)
     val keyEncoder =
       encode.KeyEncoder.ofPrimaryKeyEncoder(
-        rowType,
+        pkRowType,
         tableInfo.getPhysicalPrimaryKeys,
         tableInfo.getTableConfig,
         tableInfo.isDefaultBucketKey)
 
     // Create comparators based on primary key
-    val comparator = new Comparator[InternalRow] {
-      override def compare(o1: InternalRow, o2: InternalRow): Int = {
+    val comparator = new Comparator[FlussInternalRow] {
+      override def compare(o1: FlussInternalRow, o2: FlussInternalRow): Int = {
         val key1 = keyEncoder.encodeKey(o1)
         val key2 = keyEncoder.encodeKey(o2)
         MemorySegment.wrap(key1).compare(MemorySegment.wrap(key2), 0, 0, key1.length)
@@ -156,7 +163,7 @@ class FlussUpsertPartitionReader(
 
       // Convert snapshot iterator to LogRecord iterator for SortMergeReader
       new CloseableIterator[LogRecord] {
-        private var currentBatch: java.util.Iterator[InternalRow] = _
+        private var currentBatch: java.util.Iterator[FlussInternalRow] = _
         private var hasMoreBatches = true
 
         override def hasNext: Boolean = {
@@ -196,9 +203,9 @@ class FlussUpsertPartitionReader(
       createSnapshotIterator()
     }
 
-    // Create the SortMergeReader
+    // null: scanners already project rows; passing projectionWithPks here double-projects
     val sortMergeReader = new SortMergeReader(
-      projectionWithPks,
+      null,
       pkProjection,
       snapshotIterators,
       comparator,

@@ -23,11 +23,11 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss</artifactId>
-        <version>0.10-SNAPSHOT</version>
+        <version>1.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-dist</artifactId>
-    <name>Fluss : Dist</name>
+    <name>Apache Fluss (Incubating) : Dist</name>
     <packaging>jar</packaging>
 
     <dependencies>
@@ -78,6 +78,13 @@
 
         <dependency>
             <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-metrics-influxdb</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-lake-paimon</artifactId>
             <version>${project.version}</version>
             <scope>provided</scope>
@@ -93,6 +100,13 @@
         <dependency>
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-lake-lance</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-lake-hudi</artifactId>
             <version>${project.version}</version>
             <scope>provided</scope>
         </dependency>

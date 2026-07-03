@@ -94,7 +94,7 @@ And then you can use the staged maven artifacts as dependencies in the project a
 
 For any user-facing feature included in a release, we aim to ensure it is functional, usable, and well-documented for the Fluss community.
 
-To support this, release managers can create and assign cross-team testing issues that outline key scenarios to validate. These issues are open to—and encouraged for—all community members to pick up and help verify.
+To support this, release managers can create and assign cross-team testing issues that outline key scenarios to validate. These issues are open to, and encouraged for, all community members to pick up and help verify.
 
 A great way to get started is by walking through the official Quickstart Guide: https://fluss.apache.org/docs/quickstart/flink/ (please switch to the documentation version currently under release).
 

@@ -51,6 +51,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.server.testutils.KvTestUtils.assertLookupResponse;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.dropDatabase;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newLookupRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
@@ -201,6 +202,12 @@ class KvReplicaRestoreITCase {
                             .get(),
                     keyValue.f1);
         }
+
+        // restart the failed server to make sure the cluster is healthy for other tests
+        dropDatabase(FLUSS_CLUSTER_EXTENSION, "test_db");
+        FLUSS_CLUSTER_EXTENSION.stopTabletServer(leaderServer);
+        FLUSS_CLUSTER_EXTENSION.startTabletServer(leaderServer);
+        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(3);
     }
 
     @Test

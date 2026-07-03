@@ -56,6 +56,11 @@ public abstract class AzureDelegationTokenReceiver implements SecurityTokenRecei
             LOG.debug("Provider already exists");
         }
 
+        // Tell the ABFS driver to use the custom token provider instead of defaulting to SharedKey.
+        // DynamicTemporaryAzureCredentialsProvider implements CustomTokenProviderAdaptee, which
+        // requires auth.type=Custom to be activated.
+        hadoopConfig.set("fs.azure.account.auth.type", "Custom");
+
         // then, set addition info
         if (additionInfos == null) {
             // if addition info is null, it also means we have not received any token,

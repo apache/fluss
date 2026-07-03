@@ -22,14 +22,19 @@ import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypeRoot;
+import org.apache.fluss.types.RowType;
 
+import java.time.Instant;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -110,6 +115,46 @@ public class PartitionUtils {
     }
 
     /**
+     * Validates that the partition time value in the given {@link PartitionSpec} is valid and not
+     * out-of-date when auto-partition is enabled. Throws {@link InvalidPartitionException} if the
+     * format doesn't match or the partition is older than the earliest retained one.
+     */
+    public static void validateAutoPartitionTime(
+            PartitionSpec partitionSpec,
+            List<String> partitionKeys,
+            AutoPartitionStrategy autoPartitionStrategy) {
+        if (!autoPartitionStrategy.isAutoPartitionEnabled()) {
+            return;
+        }
+        String autoPartitionKey =
+                autoPartitionStrategy.key() != null
+                        ? autoPartitionStrategy.key()
+                        : partitionKeys.get(0);
+        String partitionTime = partitionSpec.getSpecMap().get(autoPartitionKey);
+        AutoPartitionTimeUnit timeUnit = autoPartitionStrategy.timeUnit();
+        if (partitionTime == null || !isValidPartitionTime(partitionTime, timeUnit)) {
+            throw new InvalidPartitionException(
+                    String.format(
+                            "Partition value '%s' does not match the expected format '%s' "
+                                    + "for auto-partition time unit '%s'.",
+                            partitionTime, getPartitionTimeFormat(timeUnit), timeUnit));
+        }
+        ZonedDateTime currentZonedDateTime =
+                ZonedDateTime.ofInstant(Instant.now(), autoPartitionStrategy.timeZone().toZoneId());
+        // Get the earliest partition time that needs to be retained.
+        String lastRetainPartitionTime =
+                generateAutoPartitionTime(
+                        currentZonedDateTime, -autoPartitionStrategy.numToRetain(), timeUnit);
+        if (lastRetainPartitionTime.compareTo(partitionTime) > 0) {
+            throw new InvalidPartitionException(
+                    String.format(
+                            "Partition value '%s' is out-of-date. The earliest retained "
+                                    + "partition is '%s'.",
+                            partitionTime, lastRetainPartitionTime));
+        }
+    }
+
+    /**
      * Generate {@link ResolvedPartitionSpec} for auto partition in server. When we auto creating a
      * partition, we need to first generate a {@link ResolvedPartitionSpec}.
      *
@@ -157,8 +202,89 @@ public class PartitionUtils {
         return autoPartitionFieldSpec;
     }
 
+    /** Returns the time string format pattern for the given time unit. */
+    private static String getPartitionTimeFormat(AutoPartitionTimeUnit timeUnit) {
+        switch (timeUnit) {
+            case YEAR:
+                return YEAR_FORMAT;
+            case QUARTER:
+                return QUARTER_FORMAT;
+            case MONTH:
+                return MONTH_FORMAT;
+            case DAY:
+                return DAY_FORMAT;
+            case HOUR:
+                return HOUR_FORMAT;
+            default:
+                throw new IllegalArgumentException("Unsupported time unit: " + timeUnit);
+        }
+    }
+
+    /**
+     * Returns true if the given time string matches the format expected for the given time unit.
+     */
+    private static boolean isValidPartitionTime(String time, AutoPartitionTimeUnit timeUnit) {
+        try {
+            DateTimeFormatter.ofPattern(getPartitionTimeFormat(timeUnit)).parse(time);
+            return true;
+        } catch (DateTimeParseException e) {
+            return false;
+        }
+    }
+
     private static String getFormattedTime(ZonedDateTime zonedDateTime, String format) {
         return DateTimeFormatter.ofPattern(format).format(zonedDateTime);
+    }
+
+    /**
+     * Parses a partition value string back to its typed Fluss internal representation. This is the
+     * reverse operation of {@link #convertValueOfType(Object, DataTypeRoot)}.
+     *
+     * @param value the string representation of the partition value
+     * @param type the data type root of the partition column
+     * @return the typed value as a Fluss internal data structure
+     */
+    public static Object parseValueOfType(String value, DataTypeRoot type) {
+        switch (type) {
+            case CHAR:
+            case STRING:
+                return BinaryString.fromString(value);
+            case BOOLEAN:
+                if ("true".equalsIgnoreCase(value)) {
+                    return true;
+                } else if ("false".equalsIgnoreCase(value)) {
+                    return false;
+                }
+                throw new IllegalArgumentException(
+                        "Invalid boolean partition value: '"
+                                + value
+                                + "'. Expected 'true' or 'false'.");
+            case BINARY:
+            case BYTES:
+                return PartitionNameConverters.parseHexString(value);
+            case TINYINT:
+                return Byte.parseByte(value);
+            case SMALLINT:
+                return Short.parseShort(value);
+            case INTEGER:
+                return Integer.parseInt(value);
+            case BIGINT:
+                return Long.parseLong(value);
+            case DATE:
+                return PartitionNameConverters.parseDayString(value);
+            case TIME_WITHOUT_TIME_ZONE:
+                return PartitionNameConverters.parseMilliString(value);
+            case FLOAT:
+                return PartitionNameConverters.parseFloat(value);
+            case DOUBLE:
+                return PartitionNameConverters.parseDouble(value);
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+                return PartitionNameConverters.parseTimestampNtz(value);
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                return PartitionNameConverters.parseTimestampLtz(value);
+            default:
+                throw new IllegalArgumentException("Unsupported DataTypeRoot: " + type);
+        }
     }
 
     public static String convertValueOfType(Object value, DataTypeRoot type) {
@@ -221,5 +347,29 @@ public class PartitionUtils {
                 throw new IllegalArgumentException("Unsupported DataTypeRoot: " + type);
         }
         return stringPartitionKey;
+    }
+
+    /** Projects {@code tableInfo}'s row type down to its partition key columns, in key order. */
+    public static RowType partitionRowType(TableInfo tableInfo) {
+        RowType schema = tableInfo.getRowType();
+        List<String> fieldNames = schema.getFieldNames();
+        int[] indexes =
+                tableInfo.getPartitionKeys().stream().mapToInt(fieldNames::indexOf).toArray();
+        return schema.project(indexes);
+    }
+
+    /**
+     * Builds a row of typed partition values by parsing each string with {@link
+     * #parseValueOfType(String, DataTypeRoot)} for the column at that ordinal in {@code
+     * partitionRowType}.
+     */
+    public static GenericRow toPartitionRow(
+            List<String> partitionValues, RowType partitionRowType) {
+        GenericRow row = new GenericRow(partitionValues.size());
+        for (int i = 0; i < partitionValues.size(); i++) {
+            DataTypeRoot type = partitionRowType.getTypeAt(i).getTypeRoot();
+            row.setField(i, parseValueOfType(partitionValues.get(i), type));
+        }
+        return row;
     }
 }

@@ -35,6 +35,7 @@ import org.apache.fluss.rpc.messages.PbStopReplicaRespForBucket;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
@@ -83,6 +84,7 @@ public class CoordinatorRequestBatch {
     private static final Schema EMPTY_SCHEMA = Schema.newBuilder().build();
     private static final TableDescriptor EMPTY_TABLE_DESCRIPTOR =
             TableDescriptor.builder().schema(EMPTY_SCHEMA).distributedBy(0).build();
+    private static final String EMPTY_REMOTE_DATA_DIR = "";
 
     // a map from tablet server to notify the leader and isr for each bucket.
     private final Map<Integer, Map<TableBucket, PbNotifyLeaderAndIsrReqForBucket>>
@@ -276,11 +278,11 @@ public class CoordinatorRequestBatch {
      *       none-partitioned table
      *   <li>case3: Table create and bucketAssignment don't generated, case will happen for new
      *       created partitioned table
-     *   <li>case4: Table is queued for deletion, in this case we will set a empty tableBucket set
+     *   <li>case4: Table is queued for deletion, in this case we will set an empty tableBucket set
      *       and tableId set to {@link TableMetadata#DELETED_TABLE_ID} to avoid send unless info to
      *       tabletServer
      *   <li>case5: Partition create and bucketAssignment of this partition generated.
-     *   <li>case6: Partition is queued for deletion, in this case we will set a empty tableBucket
+     *   <li>case6: Partition is queued for deletion, in this case we will set an empty tableBucket
      *       set and partitionId set to {@link PartitionMetadata#DELETED_PARTITION_ID } to avoid
      *       send unless info to tabletServer
      *   <li>case7: Leader and isr is changed for these input tableBuckets
@@ -412,6 +414,18 @@ public class CoordinatorRequestBatch {
                     makeNotifyLeaderAndIsrRequest(
                             coordinatorEpoch, notifyRequestEntry.getValue().values());
 
+            // Track exactly which buckets THIS request marked as pending leader activation. Only
+            // those entries (where leader == serverId) need to be cleared if the request fails
+            Set<TableBucket> addedToPendingLeaderActivation = new HashSet<>();
+            for (Map.Entry<TableBucket, PbNotifyLeaderAndIsrReqForBucket> entry :
+                    notifyRequestEntry.getValue().entrySet()) {
+                int leader = entry.getValue().getLeader();
+                if (leader == serverId) {
+                    coordinatorContext.addPendingLeaderActivation(entry.getKey());
+                    addedToPendingLeaderActivation.add(entry.getKey());
+                }
+            }
+
             coordinatorChannelManager.sendBucketLeaderAndIsrRequest(
                     serverId,
                     notifyLeaderAndIsrRequest,
@@ -427,6 +441,21 @@ public class CoordinatorRequestBatch {
                             // coordinator will remove the sender for the tablet server and mark all
                             // replica in the tablet server as offline. so, in here, if encounter
                             // any error, we just ignore it.
+
+                            // Clear pending state so the health API does not report stale
+                            // RED. The coordinator will detect actual server death via
+                            // heartbeat timeout and trigger re-election separately.
+                            if (!addedToPendingLeaderActivation.isEmpty()) {
+                                eventManager.put(
+                                        new AccessContextEvent<Void>(
+                                                ctx -> {
+                                                    for (TableBucket tb :
+                                                            addedToPendingLeaderActivation) {
+                                                        ctx.clearPendingLeaderActivation(tb);
+                                                    }
+                                                    return null;
+                                                }));
+                            }
                             return;
                         }
                         // put the response receive event into the event manager
@@ -682,6 +711,7 @@ public class CoordinatorRequestBatch {
         // tablet servers.
         return makeUpdateMetadataRequest(
                 coordinatorContext.getCoordinatorServerInfo(),
+                coordinatorContext.getCoordinatorEpoch(),
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
                 tableMetadataList,
                 partitionMetadataList);
@@ -694,7 +724,13 @@ public class CoordinatorRequestBatch {
         if (tableInfo == null) {
             if (tableQueuedForDeletion) {
                 return TableInfo.of(
-                        DELETED_TABLE_PATH, tableId, 0, EMPTY_TABLE_DESCRIPTOR, -1L, -1L);
+                        DELETED_TABLE_PATH,
+                        tableId,
+                        0,
+                        EMPTY_TABLE_DESCRIPTOR,
+                        EMPTY_REMOTE_DATA_DIR,
+                        -1L,
+                        -1L);
             } else {
                 // it may happen that the table is dropped, but the partition still exists
                 // when coordinator restarts, it won't consider it as deleted table,
@@ -710,6 +746,7 @@ public class CoordinatorRequestBatch {
                             DELETED_TABLE_ID,
                             0,
                             EMPTY_TABLE_DESCRIPTOR,
+                            EMPTY_REMOTE_DATA_DIR,
                             -1L,
                             -1L)
                     : tableInfo;

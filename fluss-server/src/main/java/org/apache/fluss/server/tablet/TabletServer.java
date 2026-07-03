@@ -22,7 +22,6 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.exception.InvalidServerRackInfoException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.registry.MetricRegistry;
@@ -41,6 +40,7 @@ import org.apache.fluss.server.authorizer.AuthorizerLoader;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.kv.KvManager;
+import org.apache.fluss.server.kv.scan.ScannerManager;
 import org.apache.fluss.server.kv.snapshot.DefaultCompletedKvSnapshotCommitter;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
@@ -49,6 +49,7 @@ import org.apache.fluss.server.metrics.ServerMetricUtils;
 import org.apache.fluss.server.metrics.UserMetrics;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.replica.ReplicaManager;
+import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperUtils;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
@@ -71,7 +72,6 @@ import javax.annotation.concurrent.GuardedBy;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -79,6 +79,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.config.ConfigOptions.BACKGROUND_THREADS;
+import static org.apache.fluss.config.FlussConfigUtils.validateTabletConfigs;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucket;
 
 /**
@@ -144,7 +145,13 @@ public class TabletServer extends ServerBase {
     private KvManager kvManager;
 
     @GuardedBy("lock")
+    private LocalDiskManager localDiskManager;
+
+    @GuardedBy("lock")
     private ReplicaManager replicaManager;
+
+    @GuardedBy("lock")
+    private ScannerManager scannerManager;
 
     @GuardedBy("lock")
     private @Nullable RemoteLogManager remoteLogManager = null;
@@ -177,7 +184,7 @@ public class TabletServer extends ServerBase {
 
     public TabletServer(Configuration conf, Clock clock) {
         super(conf);
-        validateConfigs(conf);
+        validateTabletConfigs(conf);
         this.terminationFuture = new CompletableFuture<>();
         this.serverId = conf.getInt(ConfigOptions.TABLET_SERVER_ID);
         this.rack = conf.getString(ConfigOptions.TABLET_SERVER_RACK);
@@ -187,6 +194,7 @@ public class TabletServer extends ServerBase {
 
     public static void main(String[] args) {
         Configuration configuration = loadConfiguration(args, TabletServer.class.getSimpleName());
+        applyServerDefaultConfigurations(configuration);
         TabletServer tabletServer = new TabletServer(configuration);
         startServer(tabletServer);
     }
@@ -223,17 +231,24 @@ public class TabletServer extends ServerBase {
 
             this.metadataCache = new TabletServerMetadataCache(metadataManager);
 
+            this.localDiskManager = LocalDiskManager.create(conf);
             this.logManager =
-                    LogManager.create(conf, zkClient, scheduler, clock, tabletServerMetricGroup);
+                    LogManager.create(
+                            conf,
+                            zkClient,
+                            scheduler,
+                            clock,
+                            tabletServerMetricGroup,
+                            localDiskManager);
             logManager.startup();
 
-            this.kvManager = KvManager.create(conf, zkClient, logManager, tabletServerMetricGroup);
+            this.kvManager =
+                    KvManager.create(
+                            conf, zkClient, logManager, tabletServerMetricGroup, localDiskManager);
             kvManager.startup();
 
             // Register kvManager to dynamicConfigManager for dynamic reconfiguration
             dynamicConfigManager.register(kvManager);
-            // Start dynamicConfigManager after all reconfigurable components are registered
-            dynamicConfigManager.startup();
 
             this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);
             if (authorizer != null) {
@@ -243,7 +258,7 @@ public class TabletServer extends ServerBase {
             // to fetch log.
             this.clientMetricGroup =
                     new ClientMetricGroup(metricRegistry, SERVER_NAME + "-" + serverId);
-            this.rpcClient = RpcClient.create(conf, clientMetricGroup, true);
+            this.rpcClient = RpcClient.create(conf, clientMetricGroup);
 
             this.coordinatorGateway =
                     GatewayClientProxy.createGatewayProxy(
@@ -255,6 +270,8 @@ public class TabletServer extends ServerBase {
                     Executors.newFixedThreadPool(
                             conf.get(ConfigOptions.SERVER_IO_POOL_SIZE),
                             new ExecutorThreadFactory("tablet-server-io"));
+
+            this.scannerManager = new ScannerManager(conf, scheduler);
 
             this.replicaManager =
                     new ReplicaManager(
@@ -272,9 +289,20 @@ public class TabletServer extends ServerBase {
                             this,
                             tabletServerMetricGroup,
                             userMetrics,
+                            scannerManager,
                             clock,
-                            ioExecutor);
+                            ioExecutor,
+                            localDiskManager);
             replicaManager.startup();
+
+            // Register DefaultSnapshotContext for dynamic kv.snapshot.interval
+            dynamicConfigManager.register(replicaManager.getKvSnapshotContext());
+            // Register replicaManager to dynamicConfigManager for dynamic config
+            dynamicConfigManager.register(replicaManager);
+            // Register localDiskManager for dynamic server.data-disk.write-limit-ratio
+            dynamicConfigManager.register(localDiskManager);
+            // Start dynamicConfigManager after all reconfigurable components are registered
+            dynamicConfigManager.startup();
 
             this.tabletService =
                     new TabletService(
@@ -286,7 +314,10 @@ public class TabletServer extends ServerBase {
                             metadataManager,
                             authorizer,
                             dynamicConfigManager,
-                            ioExecutor);
+                            ioExecutor,
+                            scannerManager,
+                            coordinatorGateway,
+                            interListenerName);
 
             RequestsMetrics requestsMetrics =
                     RequestsMetrics.createTabletServerRequestMetrics(tabletServerMetricGroup);
@@ -428,6 +459,10 @@ public class TabletServer extends ServerBase {
                     scheduler.shutdown();
                 }
 
+                if (scannerManager != null) {
+                    scannerManager.close();
+                }
+
                 if (kvManager != null) {
                     kvManager.shutdown();
                 }
@@ -442,6 +477,10 @@ public class TabletServer extends ServerBase {
 
                 if (replicaManager != null) {
                     replicaManager.shutdown();
+                }
+
+                if (localDiskManager != null) {
+                    localDiskManager.close();
                 }
 
                 if (authorizer != null) {
@@ -556,40 +595,6 @@ public class TabletServer extends ServerBase {
     @VisibleForTesting
     public @Nullable Authorizer getAuthorizer() {
         return authorizer;
-    }
-
-    private static void validateConfigs(Configuration conf) {
-        Optional<Integer> serverId = conf.getOptional(ConfigOptions.TABLET_SERVER_ID);
-        if (!serverId.isPresent()) {
-            throw new IllegalConfigurationException(
-                    String.format("Configuration %s must be set.", ConfigOptions.TABLET_SERVER_ID));
-        }
-
-        if (serverId.get() < 0) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be greater than or equal 0.",
-                            ConfigOptions.TABLET_SERVER_ID.key()));
-        }
-
-        if (conf.get(ConfigOptions.BACKGROUND_THREADS) < 1) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be greater than or equal 1.",
-                            ConfigOptions.BACKGROUND_THREADS.key()));
-        }
-
-        if (conf.get(ConfigOptions.REMOTE_DATA_DIR) == null) {
-            throw new IllegalConfigurationException(
-                    String.format("Configuration %s must be set.", ConfigOptions.REMOTE_DATA_DIR));
-        }
-
-        if (conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes() > Integer.MAX_VALUE) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be less than or equal %d bytes.",
-                            ConfigOptions.LOG_SEGMENT_FILE_SIZE.key(), Integer.MAX_VALUE));
-        }
     }
 
     @VisibleForTesting

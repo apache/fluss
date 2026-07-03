@@ -24,12 +24,12 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss-flink</artifactId>
-        <version>0.10-SNAPSHOT</version>
+        <version>1.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-flink-common</artifactId>
 
-    <name>Fluss : Engine Flink : Common</name>
+    <name>Apache Fluss (Incubating) : Engine Flink : Common</name>
 
     <properties>
         <flink.major.version>1.20</flink.major.version>
@@ -95,6 +95,12 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- RoaringBitmap for bitmap SQL functions (FIP-37) -->
+        <dependency>
+            <groupId>org.roaringbitmap</groupId>
+            <artifactId>RoaringBitmap</artifactId>
+            <version>${roaringbitmap.version}</version>
+        </dependency>
 
         <!-- test dependency -->
         <dependency>

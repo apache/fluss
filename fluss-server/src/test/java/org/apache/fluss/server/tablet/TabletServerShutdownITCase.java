@@ -217,7 +217,9 @@ public class TabletServerShutdownITCase {
         // should be no leader
         LeaderAndIsr expectedLeaderAndIsr2 =
                 expectedLeaderAndIsr1.newLeaderAndIsr(
-                        LeaderAndIsr.NO_LEADER, Collections.singletonList(leader));
+                        LeaderAndIsr.NO_LEADER,
+                        Collections.singletonList(leader),
+                        Collections.emptyList());
         retry(
                 Duration.ofMinutes(1),
                 () ->

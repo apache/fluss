@@ -15,17 +15,80 @@
  * limitations under the License.
  */
 
-import {themes as prismThemes} from 'prism-react-renderer';
 import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
+import lightTheme from './src/utils/prismLight';
+import darkTheme from './src/utils/prismDark';
 import versionReplace from './src/plugins/remark-version-replace/index';
 import { loadVersionData } from './src/utils/versionData';
 const { versionsMap, latestVersion } = loadVersionData();
 
 const config: Config = {
   title: 'Apache Fluss™ (Incubating)',
-  tagline: 'Streaming Storage for Real-Time Analytics & AI',
+  tagline: 'The streaming storage layer for real-time analytics and the lakehouse',
   favicon: 'img/logo/fluss_favicon.svg',
+
+  headTags: [
+    {
+      tagName: 'meta',
+      attributes: {
+        name: 'description',
+        content:
+          'Apache Fluss is an open-source columnar streaming storage system. Sub-second freshness, primary-key tables, first-class Apache Flink integration, and native tiering to Apache Iceberg and Apache Paimon.',
+      },
+    },
+    {
+      tagName: 'meta',
+      attributes: {
+        property: 'og:title',
+        content: 'Apache Fluss · Streaming Storage for the Real-Time Lakehouse',
+      },
+    },
+    {
+      tagName: 'meta',
+      attributes: {
+        property: 'og:description',
+        content:
+          'Open-source columnar streaming storage with sub-second freshness, primary-key tables, Flink integration, and native tiering to Iceberg and Paimon.',
+      },
+    },
+    {
+      tagName: 'meta',
+      attributes: {
+        property: 'og:type',
+        content: 'website',
+      },
+    },
+    {
+      tagName: 'meta',
+      attributes: {
+        name: 'twitter:card',
+        content: 'summary_large_image',
+      },
+    },
+    {
+      tagName: 'meta',
+      attributes: {
+        name: 'twitter:title',
+        content: 'Apache Fluss · Streaming Storage for the Real-Time Lakehouse',
+      },
+    },
+    {
+      tagName: 'meta',
+      attributes: {
+        name: 'twitter:description',
+        content:
+          'Open-source columnar streaming storage with sub-second freshness, primary-key tables, Flink integration, and native tiering to Iceberg and Paimon.',
+      },
+    },
+    {
+      tagName: 'meta',
+      attributes: {
+        name: 'theme-color',
+        content: '#102856',
+      },
+    },
+  ],
 
   // Set the production url of your site here
   url: 'https://fluss.apache.org/',
@@ -41,6 +104,10 @@ const config: Config = {
   trailingSlash: true,
 
   onBrokenLinks: 'throw',
+
+  // Serve blog-dependent static resources (avatars) from blog/static/
+  // Blog content is cloned from a separate repo via setup_blog.sh
+  staticDirectories: ['static', 'blog/static'],
 
   // Even if you don't use internationalization, you can use this field to set
   // useful metadata like html lang. For example, if your site is Chinese, you
@@ -62,8 +129,6 @@ const config: Config = {
       {
         docs: {
             sidebarPath: './sidebars.ts',
-            editUrl: ({docPath}) =>
-                `https://github.com/apache/fluss/edit/main/website/docs/${docPath}`,
             remarkPlugins: [versionReplace],
             lastVersion: latestVersion,
             versions: versionsMap
@@ -94,10 +159,9 @@ const config: Config = {
         path: 'community',
         routeBasePath: 'community',
         sidebarPath: './sidebarsCommunity.js',
-        editUrl: ({docPath}) => {
-          return `https://github.com/apache/fluss/edit/main/website/community/${docPath}`;
-        },
-        // ... other options
+        // editUrl intentionally omitted so the "Edit this page" link does
+        // not appear at the bottom of community pages (mirrors the docs and
+        // blog presets, which also leave editUrl unset).
       },
     ],
     [
@@ -111,16 +175,16 @@ const config: Config = {
     [
       '@docusaurus/plugin-pwa',
       {
-          debug: true,
+          debug: false,
           offlineModeActivationStrategies: [
             'appInstalled',
             'standalone',
             'queryString',
           ],
           pwaHead: [
-            { tagName: 'link', rel: 'icon', href: '/img/logo.svg' },
+            { tagName: 'link', rel: 'icon', href: '/img/logo/fluss_favicon.svg' },
             { tagName: 'link', rel: 'manifest', href: '/manifest.json' },
-            { tagName: 'meta', name: 'theme-color', content: '#0071e3' },
+            { tagName: 'meta', name: 'theme-color', content: '#102856' },
           ],
       },
     ],
@@ -155,13 +219,15 @@ const config: Config = {
     image: 'img/logo/png/colored_logo.png',
     colorMode: {
       defaultMode: 'light',
-      disableSwitch: true,
+      disableSwitch: false,
+      respectPrefersColorScheme: false,
     },
     navbar: {
       title: '',
       logo: {
         alt: 'Fluss',
-        src: 'img/logo/svg/colored_logo.svg',
+        src: 'img/logo/svg/white_color_logo.svg',
+        srcDark: 'img/logo/svg/white_color_logo.svg',
       },
       items: [
         {
@@ -190,16 +256,6 @@ const config: Config = {
         {to: '/roadmap', label: 'Roadmap', position: 'left'},
         {to: '/downloads', label: 'Downloads', position: 'left'},
         {
-            label: 'ASF', position: 'right', items: [
-                {to: 'https://www.apache.org/', label: 'Foundation'},
-                {to: 'https://www.apache.org/licenses/', label: 'License'},
-                {to: 'https://www.apache.org/foundation/sponsorship.html', label: 'Donate'},
-                {to: 'https://www.apache.org/foundation/thanks.html', label: 'Sponsors'},
-                {to: 'https://www.apache.org/security/', label: 'Security'},
-                {to: 'https://privacy.apache.org/policies/privacy-policy-public.html', label: 'Privacy'}
-            ]
-        },
-        {
           type: 'docsVersionDropdown',
           position: 'right',
           dropdownActiveClassDisabled: true,
@@ -214,6 +270,48 @@ const config: Config = {
     },
     footer: {
       style: 'dark',
+      links: [
+        {
+          title: 'Product',
+          items: [
+            {label: 'Documentation', to: '/docs/quickstart/flink'},
+            {label: 'Quickstart', to: '/docs/quickstart/flink'},
+            {label: 'Roadmap', to: '/roadmap'},
+            {label: 'Downloads', to: '/downloads'},
+            {label: 'Blog', to: '/blog'},
+          ],
+        },
+        {
+          title: 'Community',
+          items: [
+            {label: 'GitHub', href: 'https://github.com/apache/fluss'},
+            {label: 'Slack', href: 'https://join.slack.com/t/apache-fluss/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw'},
+            {label: 'Welcome', to: '/community/welcome'},
+            {label: 'Contribute', to: '/community/welcome'},
+          ],
+        },
+        {
+          title: 'Resources',
+          items: [
+            {label: 'Talks', to: '/learn/talks'},
+            {label: 'Videos', to: '/learn/videos'},
+            {label: 'Issues', href: 'https://github.com/apache/fluss/issues'},
+            {label: 'Releases', href: 'https://github.com/apache/fluss/releases'},
+          ],
+        },
+        {
+          title: 'Apache',
+          items: [
+            {label: 'Foundation', href: 'https://www.apache.org/'},
+            {label: 'License', href: 'https://www.apache.org/licenses/'},
+            {label: 'Events', href: 'https://events.apache.org'},
+            {label: 'Donate', href: 'https://www.apache.org/foundation/sponsorship.html'},
+            {label: 'Sponsors', href: 'https://www.apache.org/foundation/thanks.html'},
+            {label: 'Security', href: 'https://www.apache.org/security/'},
+            {label: 'Privacy', href: 'https://privacy.apache.org/policies/privacy-policy-public.html'},
+          ],
+        },
+      ],
       logo: {
         width: 200,
         src: "/img/apache-incubator.svg",
@@ -225,8 +323,8 @@ const config: Config = {
                   <p>Apache, the names of Apache projects, and the feather logo are either registered trademarks or trademarks of the Apache Software Foundation in the United States and/or other countries. All other marks mentioned may be trademarks or registered trademarks of their respective owners.</p>`,
     },
     prism: {
-      theme: prismThemes.vsDark,
-      darkTheme: prismThemes.dracula,
+      theme: lightTheme,
+      darkTheme: darkTheme,
       additionalLanguages: ['java', 'bash', 'scala']
     },
     algolia: {

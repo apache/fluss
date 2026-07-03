@@ -27,9 +27,14 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ColumnPositionType;
 import org.apache.fluss.config.cluster.ConfigEntry;
+import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.lake.committer.LakeCommitResult;
+import org.apache.fluss.metadata.AggFunction;
+import org.apache.fluss.metadata.AggFunctionType;
+import org.apache.fluss.metadata.AggFunctions;
+import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseSummary;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -62,6 +67,7 @@ import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseRequest;
 import org.apache.fluss.rpc.messages.AcquireKvSnapshotLeaseResponse;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
+import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
@@ -85,6 +91,7 @@ import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
+import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.MetadataResponse;
@@ -139,6 +146,7 @@ import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
 import org.apache.fluss.rpc.messages.PbRebalancePlanForBucket;
 import org.apache.fluss.rpc.messages.PbRebalanceProgressForBucket;
+import org.apache.fluss.rpc.messages.PbRemoteLogManifestEntry;
 import org.apache.fluss.rpc.messages.PbRemoteLogSegment;
 import org.apache.fluss.rpc.messages.PbRemotePathAndLocalFile;
 import org.apache.fluss.rpc.messages.PbRenameColumn;
@@ -184,18 +192,24 @@ import org.apache.fluss.server.entity.StopReplicaResultForBucket;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
+import org.apache.fluss.server.log.FilterInfo;
 import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TableMetadata;
+import org.apache.fluss.server.zk.ZooKeeperClient.TableBucketAndManifest;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.json.DataTypeJsonSerde;
 import org.apache.fluss.utils.json.JsonSerdeUtils;
 import org.apache.fluss.utils.json.TableBucketOffsets;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -224,6 +238,8 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * request/response.
  */
 public class ServerRpcMessageUtils {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ServerRpcMessageUtils.class);
 
     public static TablePath toTablePath(PbTablePath pbTablePath) {
         return new TablePath(pbTablePath.getDatabaseName(), pbTablePath.getTableName());
@@ -292,7 +308,7 @@ public class ServerRpcMessageUtils {
             case SUBTRACT:
             default:
                 throw new IllegalArgumentException(
-                        "Unsupported alter configs op type " + pbAlterConfig.getOpType());
+                        "Unsupported alter table configs op type " + pbAlterConfig.getOpType());
         }
     }
 
@@ -301,6 +317,36 @@ public class ServerRpcMessageUtils {
                 .filter(Objects::nonNull)
                 .map(ServerRpcMessageUtils::toTableChange)
                 .collect(Collectors.toList());
+    }
+
+    private static DatabaseChange toDatabaseChange(PbAlterConfig pbAlterConfig) {
+        AlterConfigOpType opType = AlterConfigOpType.from(pbAlterConfig.getOpType());
+        String configKey = pbAlterConfig.getConfigKey();
+        switch (opType) {
+            case SET: // SET_OPTION or SET_COMMENT
+                return DatabaseChange.set(configKey, pbAlterConfig.getConfigValue());
+            case DELETE: // RESET_OPTION or RESET_COMMENT
+                return DatabaseChange.reset(configKey);
+            case APPEND:
+            case SUBTRACT:
+            default:
+                throw new IllegalArgumentException(
+                        "Unsupported alter database configs op type " + pbAlterConfig.getOpType());
+        }
+    }
+
+    public static List<DatabaseChange> toDatabaseChanges(AlterDatabaseRequest request) {
+        List<DatabaseChange> databaseChanges =
+                request.getConfigChangesList().stream()
+                        .filter(Objects::nonNull)
+                        .map(ServerRpcMessageUtils::toDatabaseChange)
+                        .collect(Collectors.toList());
+
+        if (request.hasComment()) {
+            databaseChanges.add(DatabaseChange.updateComment(request.getComment()));
+        }
+
+        return databaseChanges;
     }
 
     public static List<TableChange> toAlterTableSchemaChanges(AlterTableRequest request) {
@@ -316,15 +362,38 @@ public class ServerRpcMessageUtils {
         return addColumns.stream()
                 .filter(Objects::nonNull)
                 .map(
-                        pbAddColumn ->
-                                TableChange.addColumn(
-                                        pbAddColumn.getColumnName(),
-                                        JsonSerdeUtils.readValue(
-                                                pbAddColumn.getDataTypeJson(),
-                                                DataTypeJsonSerde.INSTANCE),
-                                        pbAddColumn.hasComment() ? pbAddColumn.getComment() : null,
-                                        toColumnPosition(pbAddColumn.getColumnPositionType())))
+                        pbAddColumn -> {
+                            AggFunction aggFunction = toAggFunction(pbAddColumn);
+                            return TableChange.addColumn(
+                                    pbAddColumn.getColumnName(),
+                                    JsonSerdeUtils.readValue(
+                                            pbAddColumn.getDataTypeJson(),
+                                            DataTypeJsonSerde.INSTANCE),
+                                    pbAddColumn.hasComment() ? pbAddColumn.getComment() : null,
+                                    toColumnPosition(pbAddColumn.getColumnPositionType()),
+                                    aggFunction);
+                        })
                 .collect(Collectors.toList());
+    }
+
+    private static AggFunction toAggFunction(PbAddColumn pbAddColumn) {
+        if (!pbAddColumn.hasAggFunctionType()) {
+            return null;
+        }
+
+        AggFunctionType type = AggFunctionType.fromString(pbAddColumn.getAggFunctionType());
+        if (type == null) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "Unknown aggregation function type: %s",
+                            pbAddColumn.getAggFunctionType()));
+        }
+
+        Map<String, String> parameters = new HashMap<>();
+        for (PbKeyValue parameter : pbAddColumn.getAggFunctionParamsList()) {
+            parameters.put(parameter.getKey(), parameter.getValue());
+        }
+        return AggFunctions.of(type, parameters);
     }
 
     public static List<TableChange.SchemaChange> toDropColumns(List<PbDropColumn> dropColumns) {
@@ -422,6 +491,7 @@ public class ServerRpcMessageUtils {
 
     public static UpdateMetadataRequest makeUpdateMetadataRequest(
             @Nullable ServerInfo coordinatorServer,
+            @Nullable Integer coordinatorEpoch,
             Set<ServerInfo> aliveTableServers,
             List<TableMetadata> tableMetadataList,
             List<PartitionMetadata> partitionMetadataList) {
@@ -464,6 +534,9 @@ public class ServerRpcMessageUtils {
         updateMetadataRequest.addAllTableMetadatas(pbTableMetadataList);
         updateMetadataRequest.addAllPartitionMetadatas(pbPartitionMetadataList);
 
+        if (coordinatorEpoch != null) {
+            updateMetadataRequest.setCoordinatorEpoch(coordinatorEpoch);
+        }
         return updateMetadataRequest;
     }
 
@@ -530,6 +603,7 @@ public class ServerRpcMessageUtils {
                         .setTableId(tableInfo.getTableId())
                         .setSchemaId(tableInfo.getSchemaId())
                         .setTableJson(tableInfo.toTableDescriptor().toJsonBytes())
+                        .setRemoteDataDir(tableInfo.getRemoteDataDir())
                         .setCreatedTime(tableInfo.getCreatedTime())
                         .setModifiedTime(tableInfo.getModifiedTime());
         TablePath tablePath = tableInfo.getTablePath();
@@ -588,6 +662,14 @@ public class ServerRpcMessageUtils {
                         tableId,
                         pbTableMetadata.getSchemaId(),
                         TableDescriptor.fromJsonBytes(pbTableMetadata.getTableJson()),
+                        // For backward capability. When an older Coordinator sends an
+                        // UpdateMetadataRequest to a newer TabletServer, the remoteDataDir will be
+                        // missing. In this case, setting it to null is acceptable because the
+                        // TabletServerMetadataCache does not maintain any remoteDataDir
+                        // information.
+                        pbTableMetadata.hasRemoteDataDir()
+                                ? pbTableMetadata.getRemoteDataDir()
+                                : null,
                         pbTableMetadata.getCreatedTime(),
                         pbTableMetadata.getModifiedTime());
 
@@ -632,7 +714,8 @@ public class ServerRpcMessageUtils {
                 new PbNotifyLeaderAndIsrReqForBucket()
                         .setLeader(notifyLeaderAndIsrData.getLeader())
                         .setLeaderEpoch(notifyLeaderAndIsrData.getLeaderEpoch())
-                        .setBucketEpoch(notifyLeaderAndIsrData.getBucketEpoch());
+                        .setBucketEpoch(notifyLeaderAndIsrData.getBucketEpoch())
+                        .setStandbyReplicas(notifyLeaderAndIsrData.getStandbyReplicasArray());
 
         TableBucket tb = notifyLeaderAndIsrData.getTableBucket();
         PbTableBucket pbTableBucket =
@@ -668,6 +751,11 @@ public class ServerRpcMessageUtils {
                 isr.add(reqForBucket.getIsrAt(i));
             }
 
+            List<Integer> standbyReplicas = new ArrayList<>();
+            for (int i = 0; i < reqForBucket.getStandbyReplicasCount(); i++) {
+                standbyReplicas.add(reqForBucket.getStandbyReplicaAt(i));
+            }
+
             PbTableBucket pbTableBucket = reqForBucket.getTableBucket();
             notifyLeaderAndIsrDataList.add(
                     new NotifyLeaderAndIsrData(
@@ -678,6 +766,7 @@ public class ServerRpcMessageUtils {
                                     reqForBucket.getLeader(),
                                     reqForBucket.getLeaderEpoch(),
                                     isr,
+                                    standbyReplicas,
                                     request.getCoordinatorEpoch(),
                                     reqForBucket.getBucketEpoch())));
         }
@@ -845,6 +934,34 @@ public class ServerRpcMessageUtils {
         return produceResponse;
     }
 
+    public static @Nullable Map<Long, FilterInfo> getTableFilterInfoMap(FetchLogRequest request) {
+        Map<Long, FilterInfo> result = null;
+        for (PbFetchLogReqForTable tableReq : request.getTablesReqsList()) {
+            if (tableReq.hasFilterPredicate()) {
+                if (!tableReq.hasFilterSchemaId()) {
+                    throw new IllegalArgumentException(
+                            "Filter predicate is set but filterSchemaId is missing for table "
+                                    + tableReq.getTableId());
+                }
+                int schemaId = tableReq.getFilterSchemaId();
+                if (schemaId < 0) {
+                    throw new IllegalArgumentException(
+                            "Invalid filterSchemaId ("
+                                    + schemaId
+                                    + ") for table "
+                                    + tableReq.getTableId());
+                }
+                if (result == null) {
+                    result = new HashMap<>();
+                }
+                result.put(
+                        tableReq.getTableId(),
+                        new FilterInfo(tableReq.getFilterPredicate(), schemaId));
+            }
+        }
+        return result == null ? null : Collections.unmodifiableMap(result);
+    }
+
     public static Map<TableBucket, FetchReqInfo> getFetchLogData(FetchLogRequest request) {
         Map<TableBucket, FetchReqInfo> fetchDataMap = new HashMap<>();
         for (PbFetchLogReqForTable fetchLogReqForTable : request.getTablesReqsList()) {
@@ -891,6 +1008,9 @@ public class ServerRpcMessageUtils {
             FetchLogResultForBucket bucketResult = entry.getValue();
             PbFetchLogRespForBucket fetchLogRespForBucket =
                     new PbFetchLogRespForBucket().setBucketId(tb.getBucket());
+            if (bucketResult.hasFilteredEndOffset()) {
+                fetchLogRespForBucket.setFilteredEndOffset(bucketResult.getFilteredEndOffset());
+            }
             if (tb.getPartitionId() != null) {
                 fetchLogRespForBucket.setPartitionId(tb.getPartitionId());
             }
@@ -1212,6 +1332,7 @@ public class ServerRpcMessageUtils {
                         reqForBucket.setPartitionId(tb.getPartitionId());
                     }
                     leaderAndIsr.isr().forEach(reqForBucket::addNewIsr);
+                    leaderAndIsr.standbyReplicas().forEach(reqForBucket::addStandbyReplica);
                     if (reqForBucketByTableId.containsKey(tb.getTableId())) {
                         reqForBucketByTableId.get(tb.getTableId()).add(reqForBucket);
                     } else {
@@ -1253,12 +1374,18 @@ public class ServerRpcMessageUtils {
                 for (int i = 0; i < reqForBucket.getNewIsrsCount(); i++) {
                     newIsr.add(reqForBucket.getNewIsrAt(i));
                 }
+                List<Integer> standbyReplicas = new ArrayList<>();
+                for (int i = 0; i < reqForBucket.getStandbyReplicasCount(); i++) {
+                    standbyReplicas.add(reqForBucket.getStandbyReplicaAt(i));
+                }
+
                 leaderAndIsrMap.put(
                         tb,
                         new LeaderAndIsr(
                                 leaderId,
                                 reqForBucket.getLeaderEpoch(),
                                 newIsr,
+                                standbyReplicas,
                                 reqForBucket.getCoordinatorEpoch(),
                                 reqForBucket.getBucketEpoch()));
             }
@@ -1285,7 +1412,8 @@ public class ServerRpcMessageUtils {
                         .setLeaderEpoch(leaderAndIsr.leaderEpoch())
                         .setCoordinatorEpoch(leaderAndIsr.coordinatorEpoch())
                         .setBucketEpoch(leaderAndIsr.bucketEpoch())
-                        .setIsrs(leaderAndIsr.isrArray());
+                        .setIsrs(leaderAndIsr.isrArray())
+                        .setStandbyReplicas(leaderAndIsr.standbyReplicasArray());
             }
 
             if (respMap.containsKey(tb.getTableId())) {
@@ -1334,6 +1462,10 @@ public class ServerRpcMessageUtils {
                 for (int i = 0; i < respForBucket.getIsrsCount(); i++) {
                     isr.add(respForBucket.getIsrAt(i));
                 }
+                List<Integer> standbyReplicas = new ArrayList<>();
+                for (int i = 0; i < respForBucket.getStandbyReplicasCount(); i++) {
+                    standbyReplicas.add(respForBucket.getStandbyReplicaAt(i));
+                }
                 adjustIsrResult.put(
                         tb,
                         new AdjustIsrResultForBucket(
@@ -1342,6 +1474,7 @@ public class ServerRpcMessageUtils {
                                         respForBucket.getLeaderId(),
                                         respForBucket.getLeaderEpoch(),
                                         isr,
+                                        standbyReplicas,
                                         respForBucket.getCoordinatorEpoch(),
                                         respForBucket.getBucketEpoch())));
             }
@@ -1570,16 +1703,18 @@ public class ServerRpcMessageUtils {
     }
 
     public static ListPartitionInfosResponse toListPartitionInfosResponse(
-            List<String> partitionKeys, Map<String, Long> partitionNameAndIds) {
+            List<String> partitionKeys, Map<String, PartitionRegistration> partitionRegistrations) {
         ListPartitionInfosResponse listPartitionsResponse = new ListPartitionInfosResponse();
-        for (Map.Entry<String, Long> partitionNameAndId : partitionNameAndIds.entrySet()) {
+        for (Map.Entry<String, PartitionRegistration> partitionRegistration :
+                partitionRegistrations.entrySet()) {
             ResolvedPartitionSpec spec =
                     ResolvedPartitionSpec.fromPartitionName(
-                            partitionKeys, partitionNameAndId.getKey());
+                            partitionKeys, partitionRegistration.getKey());
             listPartitionsResponse
                     .addPartitionsInfo()
-                    .setPartitionId(partitionNameAndId.getValue())
-                    .setPartitionSpec(makePbPartitionSpec(spec));
+                    .setPartitionId(partitionRegistration.getValue().getPartitionId())
+                    .setPartitionSpec(makePbPartitionSpec(spec))
+                    .setRemoteDataDir(partitionRegistration.getValue().getRemoteDataDir());
         }
         return listPartitionsResponse;
     }
@@ -2146,5 +2281,23 @@ public class ServerRpcMessageUtils {
             }
         }
         return offsets;
+    }
+
+    public static ListRemoteLogManifestsResponse makeListRemoteLogManifestsResponse(
+            List<TableBucketAndManifest> remoteLogManifestInfos) {
+        ListRemoteLogManifestsResponse response = new ListRemoteLogManifestsResponse();
+        for (TableBucketAndManifest entry : remoteLogManifestInfos) {
+            PbRemoteLogManifestEntry pb = response.addManifest();
+            PbTableBucket pbTb = pb.setTableBucket();
+            pbTb.setTableId(entry.getTableBucket().getTableId());
+            if (entry.getTableBucket().getPartitionId() != null) {
+                pbTb.setPartitionId(entry.getTableBucket().getPartitionId());
+            }
+            pbTb.setBucketId(entry.getTableBucket().getBucket());
+            pb.setRemoteLogManifestPath(
+                    entry.getManifestHandle().getRemoteLogManifestPath().toString());
+            pb.setRemoteLogEndOffset(entry.getManifestHandle().getRemoteLogEndOffset());
+        }
+        return response;
     }
 }

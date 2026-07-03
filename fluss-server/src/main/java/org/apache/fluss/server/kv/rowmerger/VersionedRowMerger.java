@@ -65,7 +65,10 @@ public class VersionedRowMerger implements RowMerger {
 
     @Nullable
     @Override
-    public BinaryValue merge(BinaryValue oldValue, BinaryValue newValue) {
+    public BinaryValue merge(@Nullable BinaryValue oldValue, BinaryValue newValue) {
+        if (oldValue == null) {
+            return newValue;
+        }
         // return newRow if newRow's version is larger or equal than oldRow's version
         return versionComparator.compare(oldValue.row, newValue.row) <= 0 ? newValue : oldValue;
     }

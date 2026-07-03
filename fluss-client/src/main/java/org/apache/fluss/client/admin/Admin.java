@@ -18,9 +18,11 @@
 package org.apache.fluss.client.admin;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.client.metadata.ActiveKvSnapshots;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
+import org.apache.fluss.client.metadata.RemoteLogManifestInfo;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.rebalance.GoalType;
 import org.apache.fluss.cluster.rebalance.RebalanceProgress;
@@ -53,6 +55,7 @@ import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.exception.TooManyPartitionsException;
+import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.DatabaseSummary;
@@ -136,6 +139,24 @@ public interface Admin extends AutoCloseable {
      */
     CompletableFuture<Void> createDatabase(
             String databaseName, DatabaseDescriptor databaseDescriptor, boolean ignoreIfExists);
+
+    /**
+     * Alter a database with the given {@code databaseChanges}.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     *
+     * <ul>
+     *   <li>{@link DatabaseNotExistException} when the database does not exist and {@code
+     *       ignoreIfNotExists} is false.
+     * </ul>
+     *
+     * @param databaseName The name of the database.
+     * @param databaseChanges The database changes.
+     * @param ignoreIfNotExists if it is true, do nothing if database does not exist. If false,
+     *     throw a {@link DatabaseNotExistException}.
+     */
+    CompletableFuture<Void> alterDatabase(
+            String databaseName, List<DatabaseChange> databaseChanges, boolean ignoreIfNotExists);
 
     /**
      * Get the database with the given database name asynchronously.
@@ -751,4 +772,49 @@ public interface Admin extends AutoCloseable {
      * @since 0.9
      */
     CompletableFuture<Void> deleteProducerOffsets(String producerId);
+
+    /**
+     * Get the health status of the cluster asynchronously.
+     *
+     * <p>The returned {@link ClusterHealth} contains replica statistics and an overall {@link
+     * ClusterHealthStatus}:
+     *
+     * <ul>
+     *   <li>{@link ClusterHealthStatus#GREEN} — all replicas are in-sync and all leaders are
+     *       active. The cluster is fully healthy.
+     *   <li>{@link ClusterHealthStatus#YELLOW} — all leaders are active, but some replicas have not
+     *       yet rejoined the in-sync replica set (ISR).
+     *   <li>{@link ClusterHealthStatus#RED} — one or more leader replicas have not yet been
+     *       confirmed active (e.g., leader election or KV snapshot recovery is still in progress).
+     *   <li>{@link ClusterHealthStatus#UNKNOWN} — the Coordinator was unable to determine cluster
+     *       health (e.g., the server does not support this API).
+     * </ul>
+     *
+     * <p>This API is designed for the situation like a Kubernetes readiness-probe gate during
+     * rolling upgrades: only proceed to the next pod when the status is {@code GREEN}, ensuring all
+     * replicas have fully recovered before the next server is restarted.
+     *
+     * @return a {@link CompletableFuture} that completes with the cluster health information.
+     * @since 1.0
+     */
+    CompletableFuture<ClusterHealth> getClusterHealth();
+
+    /**
+     * List per-bucket remote log manifest entries for a table or partition scope.
+     *
+     * @param tableId the table to query
+     * @param partitionId optional partition id (null for non-partitioned tables)
+     * @return per-bucket manifest paths and end offsets
+     */
+    CompletableFuture<List<RemoteLogManifestInfo>> listRemoteLogManifests(
+            long tableId, @Nullable Long partitionId);
+
+    /**
+     * List per-bucket active KV snapshot ids for a table or partition scope.
+     *
+     * @param tableId the table to query
+     * @param partitionId optional partition id (null for non-partitioned tables)
+     * @return per-bucket active snapshot ids grouped by bucket
+     */
+    CompletableFuture<ActiveKvSnapshots> listKvSnapshots(long tableId, @Nullable Long partitionId);
 }

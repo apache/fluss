@@ -56,6 +56,7 @@ public class RemoteLogTestBase extends ReplicaTestBase {
 
         conf.set(ConfigOptions.REMOTE_LOG_INDEX_FILE_CACHE_SIZE, MemorySize.parse("1mb"));
         conf.set(ConfigOptions.REMOTE_FS_WRITE_BUFFER_SIZE, MemorySize.parse("10b"));
+        conf.setInt(ConfigOptions.REMOTE_LOG_TASK_MAX_UPLOAD_SEGMENTS, Integer.MAX_VALUE);
         return conf;
     }
 
@@ -86,7 +87,13 @@ public class RemoteLogTestBase extends ReplicaTestBase {
                         physicalTablePath,
                         tb,
                         Collections.singletonList(0),
-                        new LeaderAndIsr(0, 0, Collections.singletonList(0), 0, 0)));
+                        new LeaderAndIsr(
+                                0,
+                                0,
+                                Collections.singletonList(0),
+                                Collections.emptyList(),
+                                0,
+                                0)));
         addMultiSegmentsToLogTablet(replica.getLogTablet(), segmentSize);
         return replica;
     }

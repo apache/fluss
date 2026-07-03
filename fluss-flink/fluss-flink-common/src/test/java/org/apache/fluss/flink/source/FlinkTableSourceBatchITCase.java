@@ -23,6 +23,9 @@ import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericMap;
 
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -321,9 +324,9 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         List<String> expected =
                 Arrays.asList(
                         "+I[1, address1, name1]",
-                        "+I[2, address2, name2]",
+                        "+I[2, null, name2]",
                         "+I[3, address3, name3]",
-                        "+I[4, address4, name4]",
+                        "+I[4, null, name4]",
                         "+I[5, address5, name5]");
         assertThat(collected).isSubsetOf(expected);
         assertThat(collected).hasSize(2);
@@ -351,6 +354,39 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         assertThat(collected).hasSize(3);
     }
 
+    @Test
+    void testLimitLogTableScanWithComplexTypes() throws Exception {
+        String tableName = prepareLogTableWithComplexTypes();
+
+        // normal scan with complex types (array, map)
+        String query = String.format("SELECT * FROM %s limit 3", tableName);
+        CloseableIterator<Row> iterRows = tEnv.executeSql(query).collect();
+        List<String> collected = collectRowsWithTimeout(iterRows, 3);
+        List<String> expected =
+                Arrays.asList(
+                        "+I[1, [1, 10, 100], {key1=10}]",
+                        "+I[2, [2, 20, 200], {key2=20}]",
+                        "+I[3, [3, 30, 300], {key3=30}]",
+                        "+I[4, [4, 40, 400], {key4=40}]",
+                        "+I[5, [5, 50, 500], {key5=50}]");
+        assertThat(collected).isSubsetOf(expected);
+        assertThat(collected).hasSize(3);
+
+        // projection scan - select id and array column
+        query = String.format("SELECT id, arr FROM %s limit 3", tableName);
+        iterRows = tEnv.executeSql(query).collect();
+        collected = collectRowsWithTimeout(iterRows, 3);
+        expected =
+                Arrays.asList(
+                        "+I[1, [1, 10, 100]]",
+                        "+I[2, [2, 20, 200]]",
+                        "+I[3, [3, 30, 300]]",
+                        "+I[4, [4, 40, 400]]",
+                        "+I[5, [5, 50, 500]]");
+        assertThat(collected).isSubsetOf(expected);
+        assertThat(collected).hasSize(3);
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testCountPushDownForPkTable(boolean partitionTable) throws Exception {
@@ -367,6 +403,33 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         List<String> collected = collectRowsWithTimeout(iterRows, 1);
         List<String> expected = Collections.singletonList("+I[5]");
         assertThat(collected).isEqualTo(expected);
+
+        // test COUNT(column) pushdown on non-nullable column
+        query = String.format("SELECT COUNT(id) FROM %s", tableName);
+        assertThat(tEnv.explainSql(query))
+                .contains(
+                        "aggregates=[grouping=[], aggFunctions=[Count1AggFunction()]]]], fields=[count1$0]");
+        iterRows = tEnv.executeSql(query).collect();
+        collected = collectRowsWithTimeout(iterRows, 1);
+        assertThat(collected).isEqualTo(expected);
+
+        // test COUNT(column) on nullable column - should NOT push down
+        // For PK table, this will fail because it doesn't support full scan in batch mode
+        assertThatThrownBy(
+                        () ->
+                                tEnv.explainSql(
+                                        String.format("SELECT COUNT(address) FROM %s", tableName)))
+                .hasMessageContaining(
+                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+
+        assertThatThrownBy(
+                        () ->
+                                tEnv.explainSql(
+                                        String.format(
+                                                "SELECT COUNT(DISTINCT address) FROM %s",
+                                                tableName)))
+                .hasMessageContaining(
+                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
 
         // test not push down grouping count.
         assertThatThrownBy(
@@ -415,6 +478,32 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         List<String> collected = collectRowsWithTimeout(iterRows, 1);
         List<String> expected = Collections.singletonList(String.format("+I[%s]", expectedRows));
         assertThat(collected).isEqualTo(expected);
+
+        // test COUNT(column) pushdown
+        query = String.format("SELECT COUNT(id) FROM %s", tableName);
+        assertThat(tEnv.explainSql(query))
+                .contains(
+                        "aggregates=[grouping=[], aggFunctions=[Count1AggFunction()]]]], fields=[count1$0]");
+        iterRows = tEnv.executeSql(query).collect();
+        collected = collectRowsWithTimeout(iterRows, 1);
+        assertThat(collected).isEqualTo(expected);
+
+        // test COUNT(column) with NULL values - should NOT push down for nullable columns
+        // This will fail because log table doesn't support full scan in batch mode
+        assertThatThrownBy(
+                        () ->
+                                tEnv.explainSql(
+                                        String.format("SELECT COUNT(address) FROM %s", tableName)))
+                .hasMessageContaining(
+                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
+        assertThatThrownBy(
+                        () ->
+                                tEnv.explainSql(
+                                        String.format(
+                                                "SELECT COUNT(DISTINCT address) FROM %s",
+                                                tableName)))
+                .hasMessageContaining(
+                        "Currently, Fluss only support queries on table with datalake enabled or point queries on primary key when it's in batch execution mode.");
 
         // test not push down grouping count.
         assertThatThrownBy(
@@ -500,11 +589,11 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
 
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
 
-        // prepare table data
+        // prepare table data with NULL values in address column
         try (Table table = conn.getTable(tablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             for (int i = 1; i <= 5; i++) {
-                Object[] values = new Object[] {i, "address" + i, "name" + i};
+                Object[] values = new Object[] {i, i % 2 == 0 ? null : "address" + i, "name" + i};
                 appendWriter.append(row(values));
                 // make sure every bucket has records
                 appendWriter.flush();
@@ -535,16 +624,54 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                 waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath);
         Collection<String> partitions = partitionNameById.values();
 
-        // prepare table data
+        // prepare table data with NULL values in address column
         try (Table table = conn.getTable(tablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             for (int i = 1; i <= 5; i++) {
                 for (String partition : partitions) {
-                    Object[] values = new Object[] {i, "address" + i, "name" + i, partition};
+                    Object[] values =
+                            new Object[] {
+                                i, i % 2 == 0 ? null : "address" + i, "name" + i, partition
+                            };
                     appendWriter.append(row(values));
                     // make sure every bucket has records
                     appendWriter.flush();
                 }
+            }
+        }
+
+        return tableName;
+    }
+
+    private String prepareLogTableWithComplexTypes() throws Exception {
+        String tableName = String.format("test_complex_log_table_%s", RandomUtils.nextInt());
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + "  id int not null,"
+                                + "  arr array<int>,"
+                                + "  mp map<varchar, int>)"
+                                + " with ("
+                                + "  'bucket.num' = '4', "
+                                + "  'table.auto-partition.enabled' = 'false' "
+                                + ")",
+                        tableName));
+
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+
+        // prepare table data with complex types
+        try (Table table = conn.getTable(tablePath)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            for (int i = 1; i <= 5; i++) {
+                Object[] values =
+                        new Object[] {
+                            i,
+                            new GenericArray(new int[] {i, i * 10, i * 100}),
+                            GenericMap.of(BinaryString.fromString("key" + i), i * 10)
+                        };
+                appendWriter.append(row(values));
+                // make sure every bucket has records
+                appendWriter.flush();
             }
         }
 

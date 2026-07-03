@@ -61,7 +61,9 @@ public class LanceLakeCatalog implements LakeCatalog {
         List<Field> fields = new ArrayList<>();
         // set schema
         fields.addAll(
-                LanceArrowUtils.toArrowSchema(tableDescriptor.getSchema().getRowType())
+                LanceArrowUtils.toArrowSchema(
+                                tableDescriptor.getSchema().getRowType(),
+                                tableDescriptor.getCustomProperties())
                         .getFields());
         try {
             LanceDatasetAdapter.createDataset(config.getDatasetUri(), new Schema(fields), params);

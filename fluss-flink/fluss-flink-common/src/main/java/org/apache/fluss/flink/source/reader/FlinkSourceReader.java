@@ -35,6 +35,7 @@ import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.types.RowType;
 
 import org.apache.flink.api.connector.source.SourceEvent;
@@ -69,6 +70,7 @@ public class FlinkSourceReader<OUT>
             RowType sourceOutputType,
             SourceReaderContext context,
             @Nullable int[] projectedFields,
+            @Nullable Predicate logRecordBatchFilter,
             FlinkSourceReaderMetrics flinkSourceReaderMetrics,
             FlinkRecordEmitter<OUT> recordEmitter,
             LakeSource<LakeSplit> lakeSource) {
@@ -82,8 +84,9 @@ public class FlinkSourceReader<OUT>
                                         tablePath,
                                         sourceOutputType,
                                         projectedFields,
-                                        flinkSourceReaderMetrics,
-                                        lakeSource),
+                                        logRecordBatchFilter,
+                                        lakeSource,
+                                        flinkSourceReaderMetrics),
                         (ignore) -> {}),
                 recordEmitter,
                 context.getConfiguration(),

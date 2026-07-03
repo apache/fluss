@@ -34,6 +34,9 @@ public class TestingMetricGroups {
     public static final CoordinatorMetricGroup COORDINATOR_METRICS =
             new CoordinatorMetricGroup(NOPMetricRegistry.INSTANCE, "cluster1", "host", "0");
 
+    public static final LakeTieringMetricGroup LAKE_TIERING_METRICS =
+            new LakeTieringMetricGroup(NOPMetricRegistry.INSTANCE, COORDINATOR_METRICS);
+
     public static final TableMetricGroup TABLE_METRICS =
             new TableMetricGroup(
                     NOPMetricRegistry.INSTANCE,

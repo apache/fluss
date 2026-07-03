@@ -91,6 +91,7 @@ class ReplicaFetcherManagerTest extends ReplicaTestBase {
                                         leader.id(),
                                         LeaderAndIsr.INITIAL_LEADER_EPOCH,
                                         Arrays.asList(leader.id(), TABLET_SERVER_ID),
+                                        Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         LeaderAndIsr.INITIAL_BUCKET_EPOCH))),
                 result -> {});

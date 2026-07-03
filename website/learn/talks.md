@@ -8,6 +8,24 @@ Talks and presentations about Apache Fluss from conferences, meetups, and commun
 
 ---
 
+### Lake, Stream, and Everything In Between: Apache Fluss and the Streaming Lakehouse
+**Mehul Batra** • OpenXdata 2026 • April 2026
+
+A walkthrough of Apache Fluss as table-first columnar streaming storage, covering union reads across streaming and lakehouse layers, zero-ETL integration with open table formats (Iceberg), and the architectural shift from Lambda to Kappa patterns for real-time analytics in the AI era.
+
+[📹 Watch on YouTube](https://youtu.be/idy-B3nKGmA?si=VJ3wHp30RKOxeBoO)
+
+---
+
+### Open by Design: Community as the Foundation of Open Source Data (Panel)
+**Yuxia Luo (Apache Fluss PPMC) with Ethan Guo, Tim Meehan, Prashant Singh & Shawn Chang** • OpenXdata 2026 • April 2026
+
+A cross-project panel on building resilient governance and lowering barriers to contribution in open source data communities, drawing on experience from Apache Fluss, Flink, Iceberg, Hudi, and Presto to discuss what sustainable, community-led development looks like in practice.
+
+[📹 Watch on YouTube](https://youtu.be/ZLGLl0I4rfY?si=_DBuj7NZQZ7aBpdK)
+
+---
+
 ### Fluss: A Streaming Storage for Real-Time Lakehouse
 **Jark Wu** • Carnegie Mellon Future Data Systems Seminar Series 2025 • December 2025
 
@@ -20,7 +38,7 @@ This seminar session explores Fluss as the foundation of a Streaming Lakehouse m
 ### The Seven Deadly Sins of Streaming
 **Giannis Polyzos** • Big Data Conference Europe 2025 • December 2025
 
-Exploring the Streaming Lakehouse model—powered by Fluss’s columnar streaming storage—addresses the “Seven Deadly Sins of Streaming,” from redundant data copies and unqueryable streams to stale lakehouse data and costly architectures. By unifying streaming and lakehouse systems through streaming tables, Fluss enables real-time dashboards, streaming ETL, and Customer 360 use cases within a single, modern architecture that delivers fresher, more efficient real-time analytics.
+Exploring the Streaming Lakehouse model, powered by Fluss’s columnar streaming storage, addresses the “Seven Deadly Sins of Streaming,” from redundant data copies and unqueryable streams to stale lakehouse data and costly architectures. By unifying streaming and lakehouse systems through streaming tables, Fluss enables real-time dashboards, streaming ETL, and Customer 360 use cases within a single, modern architecture that delivers fresher, more efficient real-time analytics.
 
 [📹 Watch on YouTube](https://www.youtube.com/watch?v=ZOh9XH4zGLM)
 
@@ -38,7 +56,7 @@ This session explores how real-time data processing extends far beyond ingestion
 ### Fluss: Making Your Lakehouse Truly Real Time
 **Jark Wu** • Flink Forward 2025 • November 2025
 
-Exploring how Fluss bridges data streaming and the Lakehouse (Iceberg) by serving real-time data directly on top of it, enabling powerful analytics on streams while delivering low-latency updates to Iceberg—effectively transforming it into a Real-Time Lakehouse. We’ll close with real-world use cases that showcase how Fluss powers Real-Time Lakehouses and fuels the next generation of AI-driven applications.
+Exploring how Fluss bridges data streaming and the Lakehouse (Iceberg) by serving real-time data directly on top of it, enabling powerful analytics on streams while delivering low-latency updates to Iceberg, effectively transforming it into a Real-Time Lakehouse. We’ll close with real-world use cases that showcase how Fluss powers Real-Time Lakehouses and fuels the next generation of AI-driven applications.
 
 [📹 Watch on YouTube](https://www.youtube.com/watch?v=pnrW5r-4mIQ)
 
@@ -47,7 +65,7 @@ Exploring how Fluss bridges data streaming and the Lakehouse (Iceberg) by servin
 ### Apache Fluss and The Seven Deadly Sins of Streaming
 **Giannis Polyzos** • Flink Forward 2025 • November 2025
 
-Exploring how Apache Fluss addresses the “seven deadly sins” of streaming by introducing streams-as-tables that unify streaming and lakehouse systems, unlocking modern real-time analytics use cases such as real-time dashboards, streaming ETL, and Customer 360—all within a single, cohesive architecture.
+Exploring how Apache Fluss addresses the “seven deadly sins” of streaming by introducing streams-as-tables that unify streaming and lakehouse systems, unlocking modern real-time analytics use cases such as real-time dashboards, streaming ETL, and Customer 360, all within a single, cohesive architecture.
 
 [📹 Watch on YouTube](https://www.youtube.com/watch?v=3c5RgJFTsMM)
 

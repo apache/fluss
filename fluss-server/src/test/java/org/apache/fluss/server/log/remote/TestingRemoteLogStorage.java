@@ -20,10 +20,18 @@ package org.apache.fluss.server.log.remote;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.RemoteStorageException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.remote.RemoteLogManifest;
+import org.apache.fluss.remote.RemoteLogSegment;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * A testing implementation of {@link org.apache.fluss.server.log.remote.RemoteLogStorage} which can
@@ -33,9 +41,79 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
 
     public final AtomicBoolean writeManifestFail = new AtomicBoolean(false);
 
+    /**
+     * When set to a non-negative value N, the first N calls to {@link #copyLogSegmentFiles} will
+     * succeed and the (N+1)th call will throw a {@link RemoteStorageException}. A negative value
+     * (default) disables this failure injection.
+     */
+    public final AtomicInteger copySegmentFailAfterNCopies = new AtomicInteger(-1);
+
+    private final AtomicInteger copySegmentCount = new AtomicInteger(0);
+
+    /**
+     * When set to a positive value, each call to {@link #fetchLogData} will sleep for the given
+     * number of milliseconds before delegating to the real implementation. Used by integration
+     * tests that need to simulate a slow remote storage backend.
+     */
+    public final AtomicLong fetchLogDataDelayMs = new AtomicLong(0L);
+
+    /**
+     * When set to a positive value N, the first N {@link #fetchLogData} calls (across <b>all</b>
+     * segments) will throw a {@link RemoteStorageException}. Subsequent calls behave normally.
+     * Useful to exercise the exponential-backoff retry loop inside {@code
+     * RemoteLogFetcher#downloadSegmentWithRetry}.
+     */
+    public final AtomicInteger fetchLogDataFailFirstN = new AtomicInteger(0);
+
+    /**
+     * When set to {@code true}, every {@link #fetchLogData} call throws a {@link
+     * RemoteStorageException}. Used to validate that retries are exhausted and the failure is
+     * correctly propagated.
+     */
+    public final AtomicBoolean fetchLogDataAlwaysFail = new AtomicBoolean(false);
+
+    /**
+     * Per-segment failure budget. For each entry {@code (segmentId, N)}, the next N {@link
+     * #fetchLogData} calls that target that segment throw a {@link RemoteStorageException};
+     * subsequent calls for the same segment behave normally. Useful for tests that need a specific
+     * segment's prefetch to exhaust its retries (i.e. {@code DOWNLOAD_MAX_RETRIES + 1} attempts) so
+     * the prefetch path raises {@code ExecutionException} which is then propagated directly by
+     * {@code RemoteLogFetcher#fetchSegmentFile} — without poisoning unrelated segments.
+     */
+    public final Map<UUID, AtomicInteger> fetchLogDataFailureBudget = new ConcurrentHashMap<>();
+
+    private final AtomicInteger fetchLogDataCount = new AtomicInteger(0);
+
+    /**
+     * Optional test hook invoked inside {@link #fetchLogData} on the worker thread. Tests can block
+     * the worker on their own latches and assert real interruption. If it throws {@link
+     * InterruptedException}, the worker's interrupt flag is restored and a {@link
+     * RemoteStorageException} is propagated. Default null preserves existing behavior.
+     */
+    public volatile FetchLogDataBarrier fetchLogDataBarrier = null;
+
+    /** Interruptible test hook for {@link TestingRemoteLogStorage#fetchLogDataBarrier}. */
+    @FunctionalInterface
+    public interface FetchLogDataBarrier {
+        void run() throws InterruptedException;
+    }
+
     public TestingRemoteLogStorage(Configuration conf, ExecutorService ioExecutor)
             throws IOException {
         super(conf, ioExecutor);
+    }
+
+    @Override
+    public void copyLogSegmentFiles(
+            RemoteLogSegment remoteLogSegment, LogSegmentFiles logSegmentFiles)
+            throws RemoteStorageException {
+        int failAfter = copySegmentFailAfterNCopies.get();
+        if (failAfter >= 0 && copySegmentCount.get() >= failAfter) {
+            throw new RemoteStorageException(
+                    "Simulated copy failure after " + failAfter + " successful copies");
+        }
+        super.copyLogSegmentFiles(remoteLogSegment, logSegmentFiles);
+        copySegmentCount.incrementAndGet();
     }
 
     @Override
@@ -45,5 +123,57 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
             throw new RuntimeException("failed to upload remote log manifest snapshot");
         }
         return super.writeRemoteLogManifestSnapshot(manifest);
+    }
+
+    @Override
+    public InputStream fetchLogData(RemoteLogSegment remoteLogSegment)
+            throws RemoteStorageException {
+        int idx = fetchLogDataCount.getAndIncrement();
+        if (fetchLogDataAlwaysFail.get()) {
+            throw new RemoteStorageException(
+                    "Simulated persistent fetchLogData failure for segment "
+                            + remoteLogSegment.remoteLogSegmentId());
+        }
+        int failFirstN = fetchLogDataFailFirstN.get();
+        if (idx < failFirstN) {
+            throw new RemoteStorageException(
+                    "Simulated transient fetchLogData failure, attempt "
+                            + (idx + 1)
+                            + "/"
+                            + failFirstN);
+        }
+        AtomicInteger budget = fetchLogDataFailureBudget.get(remoteLogSegment.remoteLogSegmentId());
+        if (budget != null && budget.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
+            throw new RemoteStorageException(
+                    "Simulated per-segment fetchLogData failure for segment "
+                            + remoteLogSegment.remoteLogSegmentId()
+                            + " (budget remaining: "
+                            + budget.get()
+                            + ")");
+        }
+        FetchLogDataBarrier barrier = fetchLogDataBarrier;
+        if (barrier != null) {
+            try {
+                barrier.run();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RemoteStorageException("Interrupted at fetchLogData test barrier", e);
+            }
+        }
+        long delayMs = fetchLogDataDelayMs.get();
+        if (delayMs > 0L) {
+            try {
+                Thread.sleep(delayMs);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RemoteStorageException("Interrupted while simulating slow download", e);
+            }
+        }
+        return super.fetchLogData(remoteLogSegment);
+    }
+
+    /** Returns how many times {@link #fetchLogData} has been invoked since construction. */
+    public int fetchLogDataInvocationCount() {
+        return fetchLogDataCount.get();
     }
 }

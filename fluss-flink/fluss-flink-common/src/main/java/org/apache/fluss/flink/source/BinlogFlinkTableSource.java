@@ -19,7 +19,9 @@ package org.apache.fluss.flink.source;
 
 import org.apache.fluss.client.initializer.OffsetsInitializer;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.source.deserializer.BinlogDeserializationSchema;
+import org.apache.fluss.flink.source.reader.LeaseContext;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.metadata.TablePath;
@@ -50,6 +52,7 @@ public class BinlogFlinkTableSource implements ScanTableSource {
     private final boolean streaming;
     private final FlinkConnectorOptionsUtils.StartupOptions startupOptions;
     private final long scanPartitionDiscoveryIntervalMs;
+    private final int splitPerAssignmentBatchSize;
     private final Map<String, String> tableOptions;
 
     // Projection pushdown
@@ -67,6 +70,28 @@ public class BinlogFlinkTableSource implements ScanTableSource {
             FlinkConnectorOptionsUtils.StartupOptions startupOptions,
             long scanPartitionDiscoveryIntervalMs,
             Map<String, String> tableOptions) {
+        this(
+                tablePath,
+                flussConfig,
+                binlogOutputType,
+                isPartitioned,
+                streaming,
+                startupOptions,
+                scanPartitionDiscoveryIntervalMs,
+                FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.defaultValue(),
+                tableOptions);
+    }
+
+    public BinlogFlinkTableSource(
+            TablePath tablePath,
+            Configuration flussConfig,
+            org.apache.flink.table.types.logical.RowType binlogOutputType,
+            boolean isPartitioned,
+            boolean streaming,
+            FlinkConnectorOptionsUtils.StartupOptions startupOptions,
+            long scanPartitionDiscoveryIntervalMs,
+            int splitPerAssignmentBatchSize,
+            Map<String, String> tableOptions) {
         this.tablePath = tablePath;
         this.flussConfig = flussConfig;
         this.binlogOutputType = binlogOutputType;
@@ -74,6 +99,7 @@ public class BinlogFlinkTableSource implements ScanTableSource {
         this.streaming = streaming;
         this.startupOptions = startupOptions;
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
+        this.splitPerAssignmentBatchSize = splitPerAssignmentBatchSize;
         this.tableOptions = tableOptions;
 
         // Extract data columns from the 'before' nested ROW type (index 3)
@@ -125,12 +151,14 @@ public class BinlogFlinkTableSource implements ScanTableSource {
                         isPartitioned,
                         flussRowType,
                         projectedFields,
+                        null,
                         offsetsInitializer,
                         scanPartitionDiscoveryIntervalMs,
+                        splitPerAssignmentBatchSize,
                         new BinlogDeserializationSchema(),
                         streaming,
                         partitionFilters,
-                        null);
+                        LeaseContext.DEFAULT);
 
         return SourceProvider.of(source);
     }
@@ -146,6 +174,7 @@ public class BinlogFlinkTableSource implements ScanTableSource {
                         streaming,
                         startupOptions,
                         scanPartitionDiscoveryIntervalMs,
+                        splitPerAssignmentBatchSize,
                         tableOptions);
         copy.producedDataType = producedDataType;
         copy.projectedFields = projectedFields;

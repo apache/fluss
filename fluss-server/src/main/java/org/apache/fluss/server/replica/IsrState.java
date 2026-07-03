@@ -40,20 +40,35 @@ public interface IsrState {
      */
     List<Integer> maximalIsr();
 
+    /**
+     * Returns the list of standby replicas for this bucket. Standby replicas are follower replicas
+     * designated to maintain a recent KV snapshot so that they can be quickly promoted to leader
+     * without a full data rebuild. Currently, at most one standby replica is supported per bucket,
+     * and it is only applicable to primary-key tables.
+     */
+    List<Integer> standbyReplicas();
+
     /** Indicates if we have an AdjustIsr request inflight. */
     boolean isInflight();
 
     /** Class to represent the committed isr state of a {@link TableBucket}. */
     class CommittedIsrState implements IsrState {
         private final List<Integer> isr;
+        private final List<Integer> standbyReplicas;
 
-        public CommittedIsrState(List<Integer> isr) {
+        public CommittedIsrState(List<Integer> isr, List<Integer> standbyReplicas) {
             this.isr = isr;
+            this.standbyReplicas = standbyReplicas;
         }
 
         @Override
         public List<Integer> isr() {
             return isr;
+        }
+
+        @Override
+        public List<Integer> standbyReplicas() {
+            return standbyReplicas;
         }
 
         @Override
@@ -136,6 +151,11 @@ public interface IsrState {
         }
 
         @Override
+        public List<Integer> standbyReplicas() {
+            return lastCommittedState.standbyReplicas();
+        }
+
+        @Override
         public List<Integer> maximalIsr() {
             ArrayList<Integer> maximalIsr = new ArrayList<>(lastCommittedState.isr());
             maximalIsr.add(newInSyncReplicaId);
@@ -203,6 +223,11 @@ public interface IsrState {
         @Override
         public List<Integer> isr() {
             return lastCommittedState.isr();
+        }
+
+        @Override
+        public List<Integer> standbyReplicas() {
+            return lastCommittedState.standbyReplicas();
         }
 
         @Override

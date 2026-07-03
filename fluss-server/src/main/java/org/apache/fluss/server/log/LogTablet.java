@@ -84,8 +84,12 @@ public final class LogTablet {
 
     private static final Logger LOG = LoggerFactory.getLogger(LogTablet.class);
 
+    // Configured local storage root that owns this tablet, for example /data-0.
+    private final File dataDir;
+    // Logical table/partition identity of this tablet.
     private final PhysicalTablePath physicalPath;
 
+    // Concrete log tablet directory under dataDir, for example /data-0/db/table/log-0.
     @GuardedBy("lock")
     private final LocalLog localLog;
 
@@ -130,6 +134,7 @@ public final class LogTablet {
     private volatile long lakeMaxTimestamp = -1;
 
     private LogTablet(
+            File dataDir,
             PhysicalTablePath physicalPath,
             LocalLog localLog,
             Configuration conf,
@@ -139,6 +144,7 @@ public final class LogTablet {
             int tieredLogLocalSegments,
             boolean isChangelog,
             Clock clock) {
+        this.dataDir = dataDir;
         this.physicalPath = physicalPath;
         this.localLog = localLog;
         this.maxSegmentFileSize = (int) conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes();
@@ -221,6 +227,12 @@ public final class LogTablet {
         }
     }
 
+    /** Returns the configured local data directory that owns this tablet. */
+    public File getDataDir() {
+        return dataDir;
+    }
+
+    /** Returns the concrete log tablet directory under the owning local data directory. */
     public File getLogDir() {
         return localLog.getLogTabletDir();
     }
@@ -291,6 +303,7 @@ public final class LogTablet {
     }
 
     public static LogTablet create(
+            File dataDir,
             PhysicalTablePath tablePath,
             File tabletDir,
             Configuration conf,
@@ -339,6 +352,7 @@ public final class LogTablet {
                         logFormat);
 
         return new LogTablet(
+                dataDir,
                 tablePath,
                 log,
                 conf,
@@ -355,6 +369,7 @@ public final class LogTablet {
         MetricGroup metricGroup = bucketMetricGroup.addGroup("log");
         metricGroup.gauge(
                 MetricNames.LOG_NUM_SEGMENTS, () -> localLog.getSegments().numberOfSegments());
+        metricGroup.gauge(MetricNames.LOG_START_OFFSET, localLog::getLocalLogStartOffset);
         metricGroup.gauge(MetricNames.LOG_END_OFFSET, localLog::getLocalLogEndOffset);
     }
 
@@ -395,13 +410,42 @@ public final class LogTablet {
         return append(records, false);
     }
 
-    /** Read messages from the local log. */
+    /** Read messages from the local log without projection or filter. */
+    public FetchDataInfo read(
+            long readOffset, int maxLength, FetchIsolation fetchIsolation, boolean minOneMessage)
+            throws IOException {
+        return read(readOffset, maxLength, fetchIsolation, minOneMessage, null, null);
+    }
+
+    /** Read messages from the local log with projection but without filter. */
     public FetchDataInfo read(
             long readOffset,
             int maxLength,
             FetchIsolation fetchIsolation,
             boolean minOneMessage,
             @Nullable FileLogProjection projection)
+            throws IOException {
+        return read(readOffset, maxLength, fetchIsolation, minOneMessage, projection, null);
+    }
+
+    /**
+     * Read messages from the local log.
+     *
+     * @param readOffset the offset to start reading from
+     * @param maxLength the maximum number of bytes to read
+     * @param fetchIsolation the fetch isolation level
+     * @param minOneMessage if true, at least one message is returned even if it exceeds maxLength
+     * @param projection the column projection to apply, or null for no projection
+     * @param filterContext the filter context for server-side filter pushdown, or null for no
+     *     filtering
+     */
+    public FetchDataInfo read(
+            long readOffset,
+            int maxLength,
+            FetchIsolation fetchIsolation,
+            boolean minOneMessage,
+            @Nullable FileLogProjection projection,
+            @Nullable FilterContext filterContext)
             throws IOException {
         LogOffsetMetadata maxOffsetMetadata = null;
         if (fetchIsolation == FetchIsolation.LOG_END) {
@@ -410,7 +454,8 @@ public final class LogTablet {
             maxOffsetMetadata = fetchHighWatermarkMetadata();
         }
 
-        return localLog.read(readOffset, maxLength, minOneMessage, maxOffsetMetadata, projection);
+        return localLog.read(
+                readOffset, maxLength, minOneMessage, maxOffsetMetadata, projection, filterContext);
     }
 
     /**

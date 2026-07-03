@@ -23,11 +23,11 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss</artifactId>
-        <version>0.10-SNAPSHOT</version>
+        <version>1.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-protogen</artifactId>
-    <name>Fluss : ProtoGen :</name>
+    <name>Apache Fluss (Incubating) : ProtoGen :</name>
     <packaging>pom</packaging>
     <description>
         ProtoGen is a protobuf compatible code generator which is used to generate Java code for the
@@ -35,6 +35,15 @@
         Lightproto project to match to needs of Fluss. ProtoGen maintains a fork of Lightproto in
         the Fluss repository, because Splunk Lightproto has been archived:
         https://github.com/splunk/lightproto.
+
+        Apache Fluss is an effort undergoing incubation at The Apache Software
+        Foundation (ASF), sponsored by the Apache Incubator PMC. Incubation is
+        required of all newly accepted projects until a further review indicates
+        that the infrastructure, communications, and decision-making process have
+        stabilized in a manner consistent with other successful ASF projects.
+        While incubation status is not necessarily a reflection of the
+        completeness or stability of the code, it does indicate that the project
+        has yet to be fully endorsed by the ASF.
     </description>
 
     <modules>

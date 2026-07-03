@@ -21,10 +21,13 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
+import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
+import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
@@ -77,9 +80,9 @@ import org.apache.fluss.server.entity.StopReplicaResultForBucket;
 import org.apache.fluss.server.entity.UserContext;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvSnapshotResource;
+import org.apache.fluss.server.kv.scan.ScannerManager;
 import org.apache.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
 import org.apache.fluss.server.kv.snapshot.DefaultSnapshotContext;
-import org.apache.fluss.server.kv.snapshot.SnapshotContext;
 import org.apache.fluss.server.log.FetchDataInfo;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.ListOffsetsParam;
@@ -104,12 +107,13 @@ import org.apache.fluss.server.replica.delay.DelayedTableBucketKey;
 import org.apache.fluss.server.replica.delay.DelayedWrite;
 import org.apache.fluss.server.replica.fetcher.InitialFetchStatus;
 import org.apache.fluss.server.replica.fetcher.ReplicaFetcherManager;
+import org.apache.fluss.server.storage.DiskUsageMonitor;
+import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
-import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.Scheduler;
 
@@ -121,7 +125,9 @@ import javax.annotation.concurrent.GuardedBy;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -131,6 +137,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
@@ -141,14 +148,13 @@ import java.util.stream.Stream;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.apache.fluss.server.TabletManagerBase.getTableInfo;
-import static org.apache.fluss.utils.FileUtils.isDirectoryEmpty;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
 import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /** A manager for replica. */
-public class ReplicaManager {
+public class ReplicaManager implements ServerReconfigurable {
     private static final Logger LOG = LoggerFactory.getLogger(ReplicaManager.class);
 
     public static final String HIGH_WATERMARK_CHECKPOINT_FILE_NAME = "high-watermark-checkpoint";
@@ -159,10 +165,11 @@ public class ReplicaManager {
     private final ZooKeeperClient zkClient;
     protected final int serverId;
     private final AtomicBoolean highWatermarkCheckPointThreadStarted = new AtomicBoolean(false);
-    private final OffsetCheckpointFile highWatermarkCheckpoint;
+    private final Map<File, OffsetCheckpointFile> highWatermarkCheckpoints;
+    private final LocalDiskManager localDiskManager;
 
     @GuardedBy("replicaStateChangeLock")
-    private final Map<TableBucket, HostedReplica> allReplicas = MapUtils.newConcurrentHashMap();
+    private final Map<TableBucket, HostedReplica> allReplicas = new ConcurrentHashMap<>();
 
     private final TabletServerMetadataCache metadataCache;
     private final ExecutorService ioExecutor;
@@ -193,7 +200,10 @@ public class ReplicaManager {
 
     // for kv snapshot
     private final KvSnapshotResource kvSnapshotResource;
-    private final SnapshotContext kvSnapshotContext;
+    private final DefaultSnapshotContext kvSnapshotContext;
+
+    /** The minimum number of in-sync replicas required for writes with acks=-1. */
+    private volatile int minInSyncReplicas;
 
     // remote log manager for remote log storage.
     private final RemoteLogManager remoteLogManager;
@@ -204,6 +214,8 @@ public class ReplicaManager {
     private final String internalListenerName;
 
     private final Clock clock;
+
+    private final ScannerManager scannerManager;
 
     public ReplicaManager(
             Configuration conf,
@@ -219,8 +231,10 @@ public class ReplicaManager {
             FatalErrorHandler fatalErrorHandler,
             TabletServerMetricGroup serverMetricGroup,
             UserMetrics userMetrics,
+            ScannerManager scannerManager,
             Clock clock,
-            ExecutorService ioExecutor)
+            ExecutorService ioExecutor,
+            LocalDiskManager localDiskManager)
             throws IOException {
         this(
                 conf,
@@ -236,9 +250,18 @@ public class ReplicaManager {
                 fatalErrorHandler,
                 serverMetricGroup,
                 userMetrics,
-                new RemoteLogManager(conf, zkClient, coordinatorGateway, clock, ioExecutor),
+                new RemoteLogManager(
+                        conf,
+                        zkClient,
+                        coordinatorGateway,
+                        localDiskManager,
+                        logManager,
+                        clock,
+                        ioExecutor),
+                scannerManager,
                 clock,
-                ioExecutor);
+                ioExecutor,
+                localDiskManager);
     }
 
     @VisibleForTesting
@@ -257,22 +280,27 @@ public class ReplicaManager {
             TabletServerMetricGroup serverMetricGroup,
             UserMetrics userMetrics,
             RemoteLogManager remoteLogManager,
+            ScannerManager scannerManager,
             Clock clock,
-            ExecutorService ioExecutor)
+            ExecutorService ioExecutor,
+            LocalDiskManager localDiskManager)
             throws IOException {
         this.conf = conf;
         this.zkClient = zkClient;
         this.scheduler = scheduler;
+        this.localDiskManager = localDiskManager;
         this.logManager = logManager;
         this.kvManager = kvManager;
         this.serverId = serverId;
         this.metadataCache = metadataCache;
 
-        this.highWatermarkCheckpoint =
-                new OffsetCheckpointFile(
-                        new File(
-                                logManager.getDataDir().getAbsolutePath(),
-                                HIGH_WATERMARK_CHECKPOINT_FILE_NAME));
+        this.highWatermarkCheckpoints = new HashMap<>();
+        for (File dataDir : localDiskManager.dataDirs()) {
+            highWatermarkCheckpoints.put(
+                    dataDir,
+                    new OffsetCheckpointFile(
+                            new File(dataDir, HIGH_WATERMARK_CHECKPOINT_FILE_NAME)));
+        }
         this.delayedWriteManager =
                 new DelayedOperationManager<>(
                         "delay write",
@@ -305,6 +333,9 @@ public class ReplicaManager {
         this.userMetrics = userMetrics;
         this.clock = clock;
         this.ioExecutor = ioExecutor;
+        this.minInSyncReplicas = conf.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER);
+        this.scannerManager = checkNotNull(scannerManager, "scannerManager");
+
         registerMetrics();
     }
 
@@ -317,10 +348,60 @@ public class ReplicaManager {
                 this::maybeShrinkIsr,
                 0L,
                 conf.get(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME).toMillis() / 2);
+
+        // Start periodic disk usage monitoring (initial + periodic sampling)
+        localDiskManager.startDiskUsageMonitor(scheduler);
     }
 
     public RemoteLogManager getRemoteLogManager() {
         return remoteLogManager;
+    }
+
+    public DefaultSnapshotContext getKvSnapshotContext() {
+        return kvSnapshotContext;
+    }
+
+    public int getMinInSyncReplicas() {
+        return minInSyncReplicas;
+    }
+
+    @VisibleForTesting
+    public int getCoordinatorEpoch() {
+        return coordinatorEpoch;
+    }
+
+    // ============ ServerReconfigurable Implementation ============
+
+    @Override
+    public void validate(Configuration newConfig) throws ConfigException {
+        // Type validation is already handled by DynamicServerConfig.
+        // Here we only do basic sanity checks.
+        int newMinInSyncReplicas =
+                newConfig.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER);
+        if (newMinInSyncReplicas <= 0) {
+            throw new ConfigException(
+                    String.format(
+                            "Invalid log.replica.min-in-sync-replicas-number can not be "
+                                    + "negative or zero: %d",
+                            newMinInSyncReplicas));
+        }
+    }
+
+    @Override
+    public void reconfigure(Configuration newConfig) {
+        int newMinInSyncReplicas =
+                newConfig.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER);
+        if (newMinInSyncReplicas == minInSyncReplicas) {
+            LOG.debug(
+                    "log.replica.min-in-sync-replicas-number unchanged: {}", newMinInSyncReplicas);
+            return;
+        }
+        int oldMinInSyncReplicas = minInSyncReplicas;
+        minInSyncReplicas = newMinInSyncReplicas;
+        LOG.info(
+                "log.replica.min-in-sync-replicas-number reconfigured: {} -> {}",
+                oldMinInSyncReplicas,
+                newMinInSyncReplicas);
     }
 
     private void registerMetrics() {
@@ -349,6 +430,11 @@ public class ReplicaManager {
         physicalStorage.gauge(
                 MetricNames.SERVER_PHYSICAL_STORAGE_REMOTE_LOG_SIZE,
                 this::physicalStorageRemoteLogSize);
+
+        serverMetricGroup.gauge(
+                MetricNames.DISK_USAGE_RATIO, localDiskManager::getLastDiskUsageRatio);
+        serverMetricGroup.gauge(
+                MetricNames.DISK_WRITE_LOCKED, () -> localDiskManager.isDiskWriteLocked() ? 1 : 0);
     }
 
     @VisibleForTesting
@@ -414,7 +500,7 @@ public class ReplicaManager {
 
     /**
      * Receive a request to make these replicas to become leader or follower, if the replica doesn't
-     * exit, we will create it.
+     * exist, we will create it.
      */
     public void becomeLeaderOrFollower(
             int requestCoordinatorEpoch,
@@ -518,6 +604,16 @@ public class ReplicaManager {
         }
     }
 
+    @VisibleForTesting
+    public boolean isDiskWriteLocked() {
+        return localDiskManager.isDiskWriteLocked();
+    }
+
+    @VisibleForTesting
+    public DiskUsageMonitor getDiskUsageMonitor() {
+        return localDiskManager.getDiskUsageMonitor();
+    }
+
     /**
      * Append log records to leader replicas of the buckets, and wait for them to be replicated to
      * other replicas.
@@ -535,6 +631,7 @@ public class ReplicaManager {
         if (isRequiredAcksInvalid(requiredAcks)) {
             throw new InvalidRequiredAcksException("Invalid required acks: " + requiredAcks);
         }
+        localDiskManager.ensureWritable();
 
         long startTime = System.currentTimeMillis();
         Map<TableBucket, ProduceLogResultForBucket> appendResult =
@@ -588,6 +685,7 @@ public class ReplicaManager {
         if (isRequiredAcksInvalid(requiredAcks)) {
             throw new InvalidRequiredAcksException("Invalid required acks: " + requiredAcks);
         }
+        localDiskManager.ensureWritable();
 
         long startTime = System.currentTimeMillis();
         Map<TableBucket, PutKvResultForBucket> kvPutResult =
@@ -882,7 +980,20 @@ public class ReplicaManager {
                         TableBucket tb = data.getTableBucket();
                         HostedReplica hostedReplica = getReplica(tb);
                         if (hostedReplica instanceof NoneReplica) {
-                            // do nothing fort this case.
+                            if (data.isDeleteLocal()) {
+                                try {
+                                    sweepOrphanTabletDirs(tb, deletedTableIds, deletedPartitionIds);
+                                } catch (Exception e) {
+                                    LOG.error(
+                                            "Failed to sweep orphan tablet directories for {}",
+                                            tb,
+                                            e);
+                                    result.add(
+                                            new StopReplicaResultForBucket(
+                                                    tb, ApiError.fromThrowable(e)));
+                                    continue;
+                                }
+                            }
                             result.add(new StopReplicaResultForBucket(tb));
                         } else if (hostedReplica instanceof OfflineReplica) {
                             LOG.warn(
@@ -1045,10 +1156,14 @@ public class ReplicaManager {
             TableBucket tb = data.getTableBucket();
             try {
                 Replica replica = getReplicaOrException(tb);
+                // register replica to remote log manager first.
+                remoteLogManager.registerReplica(replica);
+
                 replica.makeLeader(data);
                 if (replica.isDataLakeEnabled()) {
                     updateWithLakeTableSnapshot(replica);
                 }
+
                 // start the remote log tiering tasks for leaders
                 remoteLogManager.startLogTiering(replica);
                 result.put(tb, new NotifyLeaderAndIsrResultForBucket(tb));
@@ -1099,6 +1214,7 @@ public class ReplicaManager {
                 Replica replica = getReplicaOrException(data.getTableBucket());
                 if (replica.makeFollower(data)) {
                     replicasBecomeFollower.add(replica);
+                    scannerManager.closeScannersForBucket(tb);
                 }
                 // stop the remote log tiering tasks for followers
                 remoteLogManager.stopLogTiering(replica);
@@ -1365,13 +1481,22 @@ public class ReplicaManager {
                     fetchParams.markReadOneMessage();
                 }
                 limitBytes = Math.max(0, limitBytes - recordBatchSize);
-
+                FetchLogResultForBucket fetchLogResult;
+                if (fetchedData.hasFilteredEndOffset()) {
+                    fetchLogResult =
+                            new FetchLogResultForBucket(
+                                    tb,
+                                    fetchedData.getRecords(),
+                                    readInfo.getHighWatermark(),
+                                    fetchedData.getFilteredEndOffset());
+                } else {
+                    fetchLogResult =
+                            new FetchLogResultForBucket(
+                                    tb, fetchedData.getRecords(), readInfo.getHighWatermark());
+                }
                 logReadResult.put(
                         tb,
-                        new LogReadResult(
-                                new FetchLogResultForBucket(
-                                        tb, fetchedData.getRecords(), readInfo.getHighWatermark()),
-                                fetchedData.getFetchOffsetMetadata()));
+                        new LogReadResult(fetchLogResult, fetchedData.getFetchOffsetMetadata()));
 
                 // update metrics
                 if (isFromFollower) {
@@ -1423,19 +1548,22 @@ public class ReplicaManager {
         // of RemoteLogSegment. For client fetcher, it will fetch the log from remote in client.
         // For follower, it can update its local metadata to adjust the next fetch offset.
         else if (canFetchFromRemoteLog(replica, fetchOffset)) {
-            RemoteLogFetchInfo remoteLogFetchInfo = fetchLogFromRemote(replica, fetchOffset);
-            if (remoteLogFetchInfo != null) {
-                return new FetchLogResultForBucket(
-                        tb, remoteLogFetchInfo, replica.getLogHighWatermark());
-            } else {
-                return new FetchLogResultForBucket(
-                        tb,
-                        ApiError.fromThrowable(
-                                new LogOffsetOutOfRangeException(
-                                        String.format(
-                                                "The fetch offset %s is out of range for table bucket %s",
-                                                fetchOffset, tb))));
+            try {
+                RemoteLogFetchInfo remoteLogFetchInfo = fetchLogFromRemote(replica, fetchOffset);
+                if (remoteLogFetchInfo != null) {
+                    return new FetchLogResultForBucket(
+                            tb, remoteLogFetchInfo, replica.getLogHighWatermark());
+                }
+            } catch (Exception ex) {
+                return new FetchLogResultForBucket(tb, ApiError.fromThrowable(ex));
             }
+            return new FetchLogResultForBucket(
+                    tb,
+                    ApiError.fromThrowable(
+                            new LogOffsetOutOfRangeException(
+                                    String.format(
+                                            "The fetch offset %s is out of range for table bucket %s",
+                                            fetchOffset, tb))));
         } else {
             return new FetchLogResultForBucket(tb, ApiError.fromThrowable(e));
         }
@@ -1503,17 +1631,25 @@ public class ReplicaManager {
     @VisibleForTesting
     void checkpointHighWatermarks() {
         List<Replica> onlineReplicasList = getOnlineReplicaList();
-        Map<TableBucket, Long> highWatermarks = new HashMap<>();
-        for (Replica replica : onlineReplicasList) {
-            LogTablet logTablet = replica.getLogTablet();
-            highWatermarks.put(logTablet.getTableBucket(), logTablet.getHighWatermark());
+        if (onlineReplicasList.isEmpty()) {
+            return;
         }
 
-        if (!highWatermarks.isEmpty()) {
-            try {
-                highWatermarkCheckpoint.write(highWatermarks);
-            } catch (Exception e) {
-                throw new LogStorageException("Error while writing to high watermark file", e);
+        Map<File, Map<TableBucket, Long>> highWatermarksByDir = new HashMap<>();
+        for (Replica replica : onlineReplicasList) {
+            LogTablet logTablet = replica.getLogTablet();
+            highWatermarksByDir
+                    .computeIfAbsent(logTablet.getDataDir(), ignored -> new HashMap<>())
+                    .put(logTablet.getTableBucket(), logTablet.getHighWatermark());
+        }
+
+        for (Map.Entry<File, Map<TableBucket, Long>> entry : highWatermarksByDir.entrySet()) {
+            if (!entry.getValue().isEmpty()) {
+                try {
+                    highWatermarkCheckpoints.get(entry.getKey()).write(entry.getValue());
+                } catch (Exception e) {
+                    throw new LogStorageException("Error while writing to high watermark file", e);
+                }
             }
         }
     }
@@ -1768,6 +1904,8 @@ public class ReplicaManager {
         // First stop fetchers for this table bucket.
         replicaFetcherManager.removeFetcherForBuckets(Collections.singleton(tb));
 
+        scannerManager.closeScannersForBucket(tb);
+
         HostedReplica replica = getReplica(tb);
         if (replica instanceof OnlineReplica) {
             Replica replicaToDelete = ((OnlineReplica) replica).getReplica();
@@ -1776,6 +1914,9 @@ public class ReplicaManager {
                     serverMetricGroup.removeTableBucketMetricGroup(
                             replicaToDelete.getPhysicalTablePath().getTablePath(), tb);
                     replicaToDelete.delete();
+                    localDiskManager.recordReplicaDelete(
+                            replicaToDelete.getLogTablet().getDataDir(),
+                            replicaToDelete.isKvTable());
                     Path tabletParentDir = replicaToDelete.getTabletParentDir();
                     if (tb.getPartitionId() != null) {
                         deletedPartitionIds.put(tb.getPartitionId(), tabletParentDir);
@@ -1801,6 +1942,59 @@ public class ReplicaManager {
         return new StopReplicaResultForBucket(tb);
     }
 
+    /**
+     * Remove on-disk tablet directories for a bucket that the in-memory ReplicaManager does not
+     * know about. This handles the case where a stopReplica(delete=true) arrives after the
+     * TabletServer was restarted during a delete — LogManager loaded the log at startup but no
+     * NotifyLeaderAndIsr ever ran, so allReplicas is empty.
+     */
+    private void sweepOrphanTabletDirs(
+            TableBucket tb, Map<Long, Path> deletedTableIds, Map<Long, Path> deletedPartitionIds) {
+        Optional<LogTablet> orphanLog = logManager.getLog(tb);
+        if (!orphanLog.isPresent()) {
+            return;
+        }
+
+        LogTablet logTablet = orphanLog.get();
+        File dataDir = logTablet.getDataDir();
+        PhysicalTablePath physicalTablePath = logTablet.getPhysicalTablePath();
+        Path tabletParentDir = logManager.getTabletParentDir(dataDir, physicalTablePath, tb);
+
+        // Clean KV before log so that if KV cleanup fails, the log is still
+        // present and a coordinator retry can re-enter this method.
+        boolean isKvTable = false;
+        if (kvManager.getKv(tb).isPresent()) {
+            kvManager.dropKv(tb);
+            isKvTable = true;
+        } else {
+            File kvTabletDir = FlussPaths.kvTabletDir(dataDir, physicalTablePath, tb);
+            if (kvTabletDir.exists()) {
+                isKvTable = true;
+                try {
+                    FileUtils.deleteDirectory(kvTabletDir);
+                } catch (IOException e) {
+                    throw new KvStorageException(
+                            String.format(
+                                    "Failed to delete orphan KV tablet directory %s", kvTabletDir),
+                            e);
+                }
+            }
+        }
+
+        logManager.dropLog(tb);
+
+        localDiskManager.recordReplicaDelete(dataDir, isKvTable);
+
+        if (tb.getPartitionId() != null) {
+            deletedPartitionIds.put(tb.getPartitionId(), tabletParentDir);
+            deletedTableIds.put(tb.getTableId(), tabletParentDir.getParent());
+        } else {
+            deletedTableIds.put(tb.getTableId(), tabletParentDir);
+        }
+
+        LOG.info("Swept orphan tablet directories for bucket {}", tb);
+    }
+
     private void truncateToHighWatermark(List<Replica> replicas) {
         for (Replica replica : replicas) {
             long highWatermark = replica.getLogTablet().getHighWatermark();
@@ -1823,20 +2017,30 @@ public class ReplicaManager {
                             requestCoordinatorEpoch, requestName, this.coordinatorEpoch);
             LOG.warn("Ignore the {} request because {}", requestName, errorMessage);
             throw new InvalidCoordinatorException(errorMessage);
-        } else {
+        } else if (requestCoordinatorEpoch > this.coordinatorEpoch) {
+            LOG.info(
+                    "Update coordinator epoch from {} to {} for coordinator leader switch.",
+                    this.coordinatorEpoch,
+                    requestCoordinatorEpoch);
             this.coordinatorEpoch = requestCoordinatorEpoch;
         }
+        // ignore equal case
     }
 
     private void dropEmptyTableOrPartitionDir(Path dir, long id, String dirType) {
-        if (!Files.exists(dir) || !isDirectoryEmpty(dir)) {
-            return;
-        }
-
-        LOG.info("Drop empty {} dir '{}' of {} id {}.", dirType, dir, dirType, id);
         try {
-            FileUtils.deleteDirectory(dir.toFile());
-        } catch (Exception e) {
+            Files.delete(dir);
+            LOG.info("Dropped empty {} dir '{}' of {} id {}.", dirType, dir, dirType, id);
+        } catch (DirectoryNotEmptyException e) {
+            LOG.warn(
+                    "{} dir '{}' of {} id {} is not empty, skipping deletion.",
+                    dirType,
+                    dir,
+                    dirType,
+                    id);
+        } catch (NoSuchFileException ignored) {
+            // Already gone — fine.
+        } catch (IOException e) {
             LOG.error("Failed to delete empty {} dir '{}' of {} id {}.", dirType, dir, dirType, e);
         }
     }
@@ -1852,20 +2056,29 @@ public class ReplicaManager {
                 TableInfo tableInfo = getTableInfo(zkClient, tablePath);
 
                 boolean isKvTable = tableInfo.hasPrimaryKey();
+                Optional<LogTablet> existingLogTabletOpt = logManager.getLog(tb);
+                File dataDir =
+                        existingLogTabletOpt
+                                .map(LogTablet::getDataDir)
+                                .orElseGet(
+                                        () ->
+                                                localDiskManager.selectDataDirForNewBucket(
+                                                        isKvTable));
                 BucketMetricGroup bucketMetricGroup =
                         serverMetricGroup.addTableBucketMetricGroup(
                                 physicalTablePath, tb, isKvTable);
                 Replica replica =
                         new Replica(
+                                dataDir,
                                 physicalTablePath,
                                 tb,
                                 logManager,
                                 isKvTable ? kvManager : null,
                                 conf.get(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME).toMillis(),
-                                conf.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER),
+                                this::getMinInSyncReplicas,
                                 serverId,
                                 new OffsetCheckpointFile.LazyOffsetCheckpoints(
-                                        highWatermarkCheckpoint),
+                                        highWatermarkCheckpoints.get(dataDir)),
                                 delayedWriteManager,
                                 delayedFetchLogManager,
                                 adjustIsrManager,
@@ -1874,7 +2087,12 @@ public class ReplicaManager {
                                 fatalErrorHandler,
                                 bucketMetricGroup,
                                 tableInfo,
-                                clock);
+                                clock,
+                                remoteLogManager,
+                                scannerManager);
+                if (!existingLogTabletOpt.isPresent()) {
+                    localDiskManager.recordReplicaLoad(dataDir, isKvTable);
+                }
                 allReplicas.put(tb, new OnlineReplica(replica));
                 replicaOpt = Optional.of(replica);
             } else if (hostedReplica instanceof OnlineReplica) {

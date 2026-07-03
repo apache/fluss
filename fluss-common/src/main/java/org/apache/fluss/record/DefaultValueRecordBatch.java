@@ -278,6 +278,11 @@ public class DefaultValueRecordBatch implements ValueRecordBatch {
             return DefaultValueRecordBatch.pointToMemory(segment, 0);
         }
 
+        /** Returns the current serialized size of the batch, including the record-batch header. */
+        public int sizeInBytes() {
+            return sizeInBytes;
+        }
+
         private void writeBatchHeader() throws IOException {
             outputView.setPosition(0);
             // update header

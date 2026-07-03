@@ -28,11 +28,11 @@ import org.apache.fluss.metrics.ThreadSafeSimpleCounter;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
-import org.apache.fluss.utils.MapUtils;
 
 import javax.annotation.Nullable;
 
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.metrics.utils.MetricGroupUtils.makeScope;
@@ -43,7 +43,7 @@ import static org.apache.fluss.metrics.utils.MetricGroupUtils.makeScope;
  */
 public class TableMetricGroup extends AbstractMetricGroup {
 
-    private final Map<TableBucket, BucketMetricGroup> buckets = MapUtils.newConcurrentHashMap();
+    private final Map<TableBucket, BucketMetricGroup> buckets = new ConcurrentHashMap<>();
 
     private final TablePath tablePath;
 

@@ -133,7 +133,8 @@ public class AdjustIsrTest extends ReplicaTestBase {
         // To mock we prepare an isr shrink in Replica#maybeShrinkIsr();
         IsrState.PendingShrinkIsrState pendingShrinkIsrState =
                 replica.prepareIsrShrink(
-                        new IsrState.CommittedIsrState(Arrays.asList(1, 2, 3)),
+                        new IsrState.CommittedIsrState(
+                                Arrays.asList(1, 2, 3), Collections.emptyList()),
                         Arrays.asList(1, 2),
                         Collections.singletonList(3));
 
@@ -161,7 +162,8 @@ public class AdjustIsrTest extends ReplicaTestBase {
         // To mock we prepare an isr shrink in Replica#maybeShrinkIsr();
         IsrState.PendingShrinkIsrState pendingShrinkIsrState =
                 replica.prepareIsrShrink(
-                        new IsrState.CommittedIsrState(Arrays.asList(1, 2, 3)),
+                        new IsrState.CommittedIsrState(
+                                Arrays.asList(1, 2, 3), Collections.emptyList()),
                         Arrays.asList(1, 2),
                         Collections.singletonList(3));
 
@@ -176,6 +178,6 @@ public class AdjustIsrTest extends ReplicaTestBase {
                 .hasMessage(
                         "Rejecting adjustIsr request for table bucket "
                                 + "TableBucket{tableId=150001, bucket=1} because it specified ineligible replicas [2] "
-                                + "in the new ISR LeaderAndIsr{leader=1, leaderEpoch=0, isr=[1, 2], coordinatorEpoch=0, bucketEpoch=0}");
+                                + "in the new ISR LeaderAndIsr{leader=1, leaderEpoch=0, isr=[1, 2], standbyReplicas=[], coordinatorEpoch=0, bucketEpoch=0}");
     }
 }

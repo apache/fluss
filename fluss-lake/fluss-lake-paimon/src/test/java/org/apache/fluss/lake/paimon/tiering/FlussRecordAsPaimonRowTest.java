@@ -1071,4 +1071,26 @@ class FlussRecordAsPaimonRowTest {
         assertThat(map).isNotNull();
         assertThat(map.size()).isEqualTo(0);
     }
+
+    @Test
+    void testAccessRowBeforeSetThrowsIllegalState() {
+        String expectedMsg = "setFlussRecord() must be called before accessing the row.";
+        RowType rowType =
+                RowType.of(
+                        new org.apache.paimon.types.IntType(),
+                        // system columns: __bucket, __offset, __timestamp
+                        new org.apache.paimon.types.IntType(),
+                        new org.apache.paimon.types.BigIntType(),
+                        new org.apache.paimon.types.LocalZonedTimestampType(3));
+        FlussRecordAsPaimonRow row = new FlussRecordAsPaimonRow(0, rowType);
+        assertThatThrownBy(row::getRowKind)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(expectedMsg);
+        assertThatThrownBy(() -> row.isNullAt(0))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(expectedMsg);
+        assertThatThrownBy(() -> row.getLong(0))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining(expectedMsg);
+    }
 }

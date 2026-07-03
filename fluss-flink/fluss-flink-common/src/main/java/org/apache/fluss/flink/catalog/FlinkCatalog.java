@@ -25,10 +25,14 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.adapter.CatalogTableAdapter;
+import org.apache.fluss.flink.functions.bitmap.RbAndAggFunction;
+import org.apache.fluss.flink.functions.bitmap.RbBuildAggFunction;
+import org.apache.fluss.flink.functions.bitmap.RbOrAggFunction;
 import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.procedure.ProcedureManager;
 import org.apache.fluss.flink.utils.CatalogExceptionUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
+import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
@@ -47,11 +51,13 @@ import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogDatabase;
 import org.apache.flink.table.catalog.CatalogDatabaseImpl;
 import org.apache.flink.table.catalog.CatalogFunction;
+import org.apache.flink.table.catalog.CatalogFunctionImpl;
 import org.apache.flink.table.catalog.CatalogMaterializedTable;
 import org.apache.flink.table.catalog.CatalogPartition;
 import org.apache.flink.table.catalog.CatalogPartitionSpec;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.CatalogView;
+import org.apache.flink.table.catalog.FunctionLanguage;
 import org.apache.flink.table.catalog.ObjectPath;
 import org.apache.flink.table.catalog.ResolvedCatalogBaseTable;
 import org.apache.flink.table.catalog.ResolvedCatalogMaterializedTable;
@@ -82,6 +88,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -132,6 +139,16 @@ public class FlinkCatalog extends AbstractCatalog {
     protected final Supplier<Map<String, String>> lakeCatalogPropertiesSupplier;
     protected Connection connection;
     protected Admin admin;
+
+    private static final Map<String, String> BUILTIN_BITMAP_FUNCTIONS;
+
+    static {
+        Map<String, String> map = new HashMap<>();
+        map.put("rb_build_agg", RbBuildAggFunction.class.getName());
+        map.put("rb_or_agg", RbOrAggFunction.class.getName());
+        map.put("rb_and_agg", RbAndAggFunction.class.getName());
+        BUILTIN_BITMAP_FUNCTIONS = Collections.unmodifiableMap(map);
+    }
 
     public FlinkCatalog(
             String name,
@@ -278,9 +295,55 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     @Override
-    public void alterDatabase(String databaseName, CatalogDatabase catalogDatabase, boolean b)
+    public void alterDatabase(
+            String databaseName, CatalogDatabase catalogDatabase, boolean ignoreIfNotExists)
             throws DatabaseNotExistException, CatalogException {
-        throw new UnsupportedOperationException();
+        try {
+            // Get current database info
+            DatabaseDescriptor currentDescriptor =
+                    admin.getDatabaseInfo(databaseName).get().getDatabaseDescriptor();
+
+            List<DatabaseChange> databaseChanges = new ArrayList<>();
+
+            // Check comment changes
+            String oldComment = currentDescriptor.getComment().orElse(null);
+            String newComment = catalogDatabase.getComment();
+            if (!Objects.equals(oldComment, newComment)) {
+                databaseChanges.add(DatabaseChange.updateComment(newComment));
+            }
+
+            // Check custom properties changes
+            Map<String, String> oldProps = currentDescriptor.getCustomProperties();
+            Map<String, String> newProps = catalogDatabase.getProperties();
+
+            newProps.forEach(
+                    (k, v) -> {
+                        if (!oldProps.containsKey(k) || !oldProps.get(k).equals(v)) {
+                            databaseChanges.add(DatabaseChange.set(k, v));
+                        }
+                    });
+
+            oldProps.keySet()
+                    .forEach(
+                            (k) -> {
+                                if (!newProps.containsKey(k)) {
+                                    databaseChanges.add(DatabaseChange.reset(k));
+                                }
+                            });
+
+            admin.alterDatabase(databaseName, databaseChanges, ignoreIfNotExists).get();
+        } catch (Exception e) {
+            Throwable t = ExceptionUtils.stripExecutionException(e);
+            if (CatalogExceptionUtils.isDatabaseNotExist(t)) {
+                if (!ignoreIfNotExists) {
+                    throw new DatabaseNotExistException(getName(), databaseName);
+                }
+            } else {
+                throw new CatalogException(
+                        String.format("Failed to alter database %s in %s", databaseName, getName()),
+                        t);
+            }
+        }
     }
 
     @Override
@@ -472,9 +535,9 @@ public class FlinkCatalog extends AbstractCatalog {
             } else if (CatalogExceptionUtils.isTableAlreadyExist(t)) {
                 throw new TableAlreadyExistException(getName(), objectPath);
             } else if (CatalogExceptionUtils.isLakeTableAlreadyExist(t)) {
-                throw new CatalogException(t.getMessage());
+                throw new CatalogException(t.getMessage(), t);
             } else if (isTableInvalid(t)) {
-                throw new InvalidTableException(t.getMessage());
+                throw new InvalidTableException(t.getMessage(), t);
             } else {
                 throw new CatalogException(
                         String.format("Failed to create table %s in %s", objectPath, getName()), t);
@@ -518,7 +581,7 @@ public class FlinkCatalog extends AbstractCatalog {
             if (CatalogExceptionUtils.isTableNotExist(t)) {
                 throw new TableNotExistException(getName(), objectPath);
             } else if (isTableInvalid(t)) {
-                throw new InvalidTableException(t.getMessage());
+                throw new InvalidTableException(t.getMessage(), t);
             } else {
                 throw new CatalogException(
                         String.format("Failed to alter table %s in %s", objectPath, getName()), t);
@@ -699,19 +762,26 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     @Override
-    public List<String> listFunctions(String s) throws DatabaseNotExistException, CatalogException {
-        return Collections.emptyList();
+    public List<String> listFunctions(String dbName)
+            throws DatabaseNotExistException, CatalogException {
+        return new ArrayList<>(BUILTIN_BITMAP_FUNCTIONS.keySet());
+    }
+
+    @Override
+    public boolean functionExists(ObjectPath objectPath) throws CatalogException {
+        return BUILTIN_BITMAP_FUNCTIONS.containsKey(
+                objectPath.getObjectName().toLowerCase(Locale.ROOT));
     }
 
     @Override
     public CatalogFunction getFunction(ObjectPath functionPath)
             throws FunctionNotExistException, CatalogException {
-        throw new FunctionNotExistException(getName(), functionPath);
-    }
-
-    @Override
-    public boolean functionExists(ObjectPath objectPath) throws CatalogException {
-        return false;
+        String className =
+                BUILTIN_BITMAP_FUNCTIONS.get(functionPath.getObjectName().toLowerCase(Locale.ROOT));
+        if (className == null) {
+            throw new FunctionNotExistException(getName(), functionPath);
+        }
+        return new CatalogFunctionImpl(className, FunctionLanguage.JAVA);
     }
 
     @Override

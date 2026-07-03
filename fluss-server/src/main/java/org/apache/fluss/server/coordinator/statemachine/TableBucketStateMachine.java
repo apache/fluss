@@ -20,6 +20,7 @@ package org.apache.fluss.server.coordinator.statemachine;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.CoordinatorRequestBatch;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElection.ControlledShutdownLeaderElection;
@@ -311,7 +312,8 @@ public class TableBucketStateMachine {
             ElectionResult electionResult = optionalElectionResult.get();
             LeaderAndIsr leaderAndIsr = electionResult.leaderAndIsr;
             try {
-                zooKeeperClient.registerLeaderAndIsr(tableBucket, leaderAndIsr);
+                zooKeeperClient.registerLeaderAndIsr(
+                        tableBucket, leaderAndIsr, coordinatorContext.getCoordinatorZkVersion());
             } catch (Exception e) {
                 LOG.error(
                         "Fail to create state node for table bucket {} in zookeeper.",
@@ -379,7 +381,7 @@ public class TableBucketStateMachine {
         if (!tableBucketLeadAndIsrInfos.isEmpty()) {
             try {
                 zooKeeperClient.batchRegisterLeaderAndIsrForTablePartition(
-                        tableBucketLeadAndIsrInfos);
+                        tableBucketLeadAndIsrInfos, coordinatorContext.getCoordinatorZkVersion());
                 registerSuccessList.addAll(tableBucketLeadAndIsrInfos);
             } catch (Exception e) {
                 LOG.error(
@@ -437,9 +439,15 @@ public class TableBucketStateMachine {
         }
         // For the case that the table bucket has been initialized, we use all the live assigned
         // servers as inSyncReplica set.
+        TableInfo tableInfo = coordinatorContext.getTableInfoById(tableBucket.getTableId());
+        boolean standbyEnabled =
+                tableInfo.hasPrimaryKey() && tableInfo.getTableConfig().isStandbyReplicaEnabled();
         Optional<ElectionResult> resultOpt =
                 initReplicaLeaderElection(
-                        assignedServers, liveServers, coordinatorContext.getCoordinatorEpoch());
+                        assignedServers,
+                        liveServers,
+                        coordinatorContext.getCoordinatorEpoch(),
+                        standbyEnabled);
         if (!resultOpt.isPresent()) {
             LOG.error(
                     "The leader election for table bucket {} is empty.",
@@ -454,7 +462,10 @@ public class TableBucketStateMachine {
         List<RegisterTableBucketLeadAndIsrInfo> registerSuccessList = new ArrayList<>();
         for (RegisterTableBucketLeadAndIsrInfo info : registerList) {
             try {
-                zooKeeperClient.registerLeaderAndIsr(info.getTableBucket(), info.getLeaderAndIsr());
+                zooKeeperClient.registerLeaderAndIsr(
+                        info.getTableBucket(),
+                        info.getLeaderAndIsr(),
+                        coordinatorContext.getCoordinatorZkVersion());
                 registerSuccessList.add(info);
             } catch (Exception e) {
                 LOG.error(
@@ -496,7 +507,10 @@ public class TableBucketStateMachine {
         }
         ElectionResult electionResult = optionalElectionResult.get();
         try {
-            zooKeeperClient.updateLeaderAndIsr(tableBucket, electionResult.leaderAndIsr);
+            zooKeeperClient.updateLeaderAndIsr(
+                    tableBucket,
+                    electionResult.leaderAndIsr,
+                    coordinatorContext.getCoordinatorZkVersion());
         } catch (Exception e) {
             LOG.error(
                     "Fail to update bucket LeaderAndIsr for table bucket {}.",
@@ -613,10 +627,14 @@ public class TableBucketStateMachine {
         }
 
         Optional<ElectionResult> resultOpt = Optional.empty();
+        TableInfo tableInfo = coordinatorContext.getTableInfoById(tableBucket.getTableId());
+        boolean standbyReplicaEnabled =
+                tableInfo.hasPrimaryKey() && tableInfo.getTableConfig().isStandbyReplicaEnabled();
         if (electionStrategy instanceof DefaultLeaderElection) {
             resultOpt =
                     ((DefaultLeaderElection) electionStrategy)
-                            .leaderElection(assignment, liveReplicas, leaderAndIsr);
+                            .leaderElection(
+                                    assignment, liveReplicas, leaderAndIsr, standbyReplicaEnabled);
         } else if (electionStrategy instanceof ControlledShutdownLeaderElection) {
             Set<Integer> shuttingDownTabletServers = coordinatorContext.shuttingDownTabletServers();
             resultOpt =
@@ -625,11 +643,12 @@ public class TableBucketStateMachine {
                                     assignment,
                                     liveReplicas,
                                     leaderAndIsr,
-                                    shuttingDownTabletServers);
+                                    shuttingDownTabletServers,
+                                    standbyReplicaEnabled);
         } else if (electionStrategy instanceof ReassignmentLeaderElection) {
             resultOpt =
                     ((ReassignmentLeaderElection) electionStrategy)
-                            .leaderElection(liveReplicas, leaderAndIsr);
+                            .leaderElection(liveReplicas, leaderAndIsr, standbyReplicaEnabled);
         }
 
         if (!resultOpt.isPresent()) {
@@ -670,23 +689,45 @@ public class TableBucketStateMachine {
      * @param assignments the assignments
      * @param aliveReplicas the alive replicas
      * @param coordinatorEpoch the coordinator epoch
+     * @param standbyReplicaEnabled whether standby replica is enabled for this table bucket
      * @return the election result
      */
     @VisibleForTesting
     public static Optional<ElectionResult> initReplicaLeaderElection(
-            List<Integer> assignments, List<Integer> aliveReplicas, int coordinatorEpoch) {
-        // currently, we always use the first replica in assignment, which also in aliveReplicas and
-        // isr as the leader replica.
-        for (int assignment : assignments) {
-            if (aliveReplicas.contains(assignment)) {
-                return Optional.of(
-                        new ElectionResult(
-                                aliveReplicas,
-                                new LeaderAndIsr(
-                                        assignment, 0, aliveReplicas, coordinatorEpoch, 0)));
+            List<Integer> assignments,
+            List<Integer> aliveReplicas,
+            int coordinatorEpoch,
+            boolean standbyReplicaEnabled) {
+        // First we will filter out the assignment list to only contain the alive replicas.
+        List<Integer> availableReplicas =
+                assignments.stream().filter(aliveReplicas::contains).collect(Collectors.toList());
+
+        // If the assignment list is empty, we return empty.
+        if (availableReplicas.isEmpty()) {
+            return Optional.empty();
+        }
+
+        //  Then we will use the first replica in assignment as the leader replica.
+        int leader = availableReplicas.get(0);
+
+        // If standby replica is enabled, we will use the second replica in assignment as the
+        // standby if exists.
+        List<Integer> standbyReplicas = new ArrayList<>();
+        if (standbyReplicaEnabled) {
+            if (availableReplicas.size() > 1) {
+                standbyReplicas.add(availableReplicas.get(1));
             }
         }
 
-        return Optional.empty();
+        return Optional.of(
+                new ElectionResult(
+                        availableReplicas,
+                        new LeaderAndIsr(
+                                leader,
+                                0,
+                                availableReplicas,
+                                standbyReplicas,
+                                coordinatorEpoch,
+                                0)));
     }
 }

@@ -266,6 +266,9 @@ When using SET to modify [Storage Options](engine-flink/options.md#storage-optio
 - The following [Storage Options](engine-flink/options.md#storage-options):
   - `table.datalake.enabled`: Enable or disable lakehouse storage for the table.
   - `table.datalake.freshness`: Set the data freshness for lakehouse storage.
+  - `table.log.tiered.local-segments`: Set the number of log segments to retain locally when tiered storage is enabled.
+  - `table.auto-partition.num-retention`: Set the number of historical partitions to retain for auto partitioning.
+  - `table.auto-partition.num-precreate`: Set the number of future partitions to pre-create for auto partitioning.
 
 ```sql title="Flink SQL"
 -- Enable lakehouse storage for the table
@@ -273,6 +276,9 @@ ALTER TABLE my_table SET ('table.datalake.enabled' = 'true');
 
 -- Set the freshness to 5 minutes for lakehouse storage
 ALTER TABLE my_table SET ('table.datalake.freshness' = '5min');
+
+-- Set the number of local segments to retain to 5
+ALTER TABLE my_table SET ('table.log.tiered.local-segments' = '5');
 ```
 
 **Limits**

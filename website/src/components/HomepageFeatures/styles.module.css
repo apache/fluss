@@ -15,52 +15,251 @@
  * limitations under the License.
  */
 
+/* Always-dark homepage section.
+ * Pinned to deep-blue gradient (#0A1745 → #102856) for both light and
+ * dark mode, so the page reads as a single brutalist dark experience
+ * regardless of theme. Same cyan / violet / blue radial overlays as
+ * before — they just sit on a dark base now. */
 .features {
+  position: relative;
+  padding: var(--fluss-space-24) 0;
+  background:
+    radial-gradient(1200px 520px at -5% -10%, rgba(38, 109, 149, 0.16), transparent 60%),
+    radial-gradient(900px 460px at 110% 110%, rgba(124, 58, 237, 0.14), transparent 60%),
+    radial-gradient(700px 360px at 50% 0%, rgba(28, 80, 120, 0.08), transparent 60%),
+    linear-gradient(180deg, #0A1745 0%, #102856 100%);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  color: rgba(219, 234, 254, 0.88);
+}
+
+/* Mesh lines now use translucent white instead of brand-blue alpha. */
+.features::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 64px 64px;
+  mask-image: radial-gradient(ellipse at center, black 30%, transparent 80%);
+  -webkit-mask-image: radial-gradient(ellipse at center, black 30%, transparent 80%);
+  pointer-events: none;
+}
+
+.container {
+  position: relative;
+  z-index: 1;
+  max-width: var(--fluss-container-max);
+  margin: 0 auto;
+  padding: 0 var(--fluss-container-pad);
+}
+
+.header {
+  text-align: left;
+  max-width: 720px;
+  margin-bottom: var(--fluss-space-16);
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 14px;
+  border-radius: var(--fluss-radius-pill);
+  background: linear-gradient(120deg, rgba(38, 109, 149, 0.18) 0%, rgba(28, 80, 120, 0.14) 100%);
+  border: 1px solid rgba(122, 175, 203, 0.32);
+  color: #B1CEDF;
+  font-family: var(--fluss-font-display);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: var(--fluss-space-4);
+  box-shadow: 0 2px 8px rgba(38, 109, 149, 0.12);
+}
+
+.eyebrow::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: linear-gradient(120deg, var(--fluss-blue-600), var(--fluss-cyan));
+}
+
+.heading {
+  font-family: var(--fluss-font-display);
+  font-size: clamp(2rem, 3vw + 1rem, 3rem);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+  color: #FFFFFF;
+  margin: 0 0 var(--fluss-space-4);
+}
+
+.lead {
+  font-size: 1.125rem;
+  line-height: 1.65;
+  color: rgba(219, 234, 254, 0.78);
+  margin: 0;
+  text-wrap: pretty;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--fluss-space-4);
+}
+
+@media (max-width: 996px) {
+  .grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 600px) {
+  .grid { grid-template-columns: 1fr; }
+}
+
+/* Pillar card — translucent white over the deep-blue section bg.
+ * Same translucent-card pattern as .statCard / .communityCard. */
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--fluss-space-3);
+  padding: var(--fluss-space-8) var(--fluss-space-6) var(--fluss-space-6);
+  background:
+    radial-gradient(420px 200px at 100% 0%, rgba(38, 109, 149, 0.12), transparent 60%),
+    rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--fluss-radius-lg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 2px 6px rgba(0, 0, 0, 0.25);
+  position: relative;
+  overflow: hidden;
+  transition: transform var(--fluss-motion-base) var(--fluss-ease-out),
+              box-shadow var(--fluss-motion-base) var(--fluss-ease-out),
+              border-color var(--fluss-motion-base) var(--fluss-ease-out);
+}
+
+.card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--fluss-blue-600), var(--fluss-cyan));
+  opacity: 0;
+  transition: opacity var(--fluss-motion-base) var(--fluss-ease-out);
+}
+
+.card::after {
+  content: '';
+  position: absolute;
+  inset: -40% -40% auto auto;
+  width: 240px;
+  height: 240px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(38, 109, 149, 0.18), transparent);
+  opacity: 0;
+  transition: opacity var(--fluss-motion-base) var(--fluss-ease-out);
+  pointer-events: none;
+}
+
+.card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(122, 175, 203, 0.32);
+  border-color: rgba(122, 175, 203, 0.32);
+}
+
+.card:hover::before,
+.card:hover::after {
+  opacity: 1;
+}
+
+.cardTop {
   display: flex;
   align-items: center;
-  padding: 2rem 0;
-  width: 100%;
-  background: #F7F9FE;
+  justify-content: space-between;
+  margin-bottom: var(--fluss-space-2);
 }
 
-.featureSvg {
-  height: 48px;
-  width: 48px;
+/* Icon container enlarged from 48px → 64px (and inner SVG 24 → 32) so the
+   six pillars are visually distinct at a glance (Jark feedback, PR #3226). */
+.iconWrap {
+  width: 64px;
+  height: 64px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--fluss-radius-md);
+  background:
+    linear-gradient(135deg, rgba(28, 80, 120, 0.20) 0%, rgba(38, 109, 149, 0.28) 100%);
+  color: #B1CEDF;
+  box-shadow:
+    inset 0 0 0 1px rgba(122, 175, 203, 0.32),
+    0 4px 12px rgba(38, 109, 149, 0.18);
 }
 
-.core_features {
-    background-color: white;
-    padding: 2.5rem 2rem 3.375rem;
-    border-radius: 8px;
-    height: calc(100% - 5rem);
-    text-align: left;
+.icon {
+  width: 32px;
+  height: 32px;
 }
 
-.core_features_title {
-    font-size: 1.25rem;
-    font-weight: 500;
-    line-height: 1.6;
-    margin-bottom: 0.75rem;
+.number {
+  font-family: var(--fluss-font-mono);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.42);
 }
 
-.core_features_content {
-    font-size: 1rem;
-    font-weight: 400;
-    line-height: 1.875;
+.title {
+  font-family: var(--fluss-font-display);
+  font-size: 1.375rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+  color: #FFFFFF;
+  margin: 0;
 }
 
-.core_features_icon {
-    width: 4rem;
-    height: 4rem;
-    background-color: white;
-    position: relative;
-    transform: translateY(50%);
-    border-radius: 50%;
-    left: 1.5rem;
-    svg {
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-    }
+.summary {
+  font-size: 1.0625rem;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.92);
+  font-weight: 500;
+  margin: 0;
+  text-wrap: pretty;
+}
+
+.body {
+  font-size: 0.9375rem;
+  line-height: 1.65;
+  color: rgba(219, 234, 254, 0.78);
+  margin: 0;
+  text-wrap: pretty;
+}
+
+.basis {
+  /* `margin-top: auto` in a flex column pushes this block to the
+     bottom of the card. Combined with the grid's default stretch
+     alignment (so all cards in a row share the tallest card's height),
+     every "Architectural basis" section starts at the same horizontal
+     line across the row regardless of how long each card's body text
+     is. */
+  margin: auto 0 0;
+  padding-top: var(--fluss-space-3);
+  border-top: 1px dashed rgba(255, 255, 255, 0.12);
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  color: rgba(219, 234, 254, 0.70);
+}
+
+.basisLabel {
+  display: block;
+  font-family: var(--fluss-font-display);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #B1CEDF;
+  margin-bottom: 2px;
 }

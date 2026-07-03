@@ -45,6 +45,7 @@ public class TableRegistrationJsonSerde
     static final String BUCKET_COUNT_NAME = "bucket_count";
     static final String PROPERTIES_NAME = "properties";
     static final String CUSTOM_PROPERTIES_NAME = "custom_properties";
+    static final String REMOTE_DATA_DIR = "remote_data_dir";
     static final String CREATED_TIME = "created_time";
     static final String MODIFIED_TIME = "modified_time";
     private static final String VERSION_KEY = "version";
@@ -100,11 +101,16 @@ public class TableRegistrationJsonSerde
         }
         generator.writeEndObject();
 
+        // serialize remote data dir
+        if (tableReg.remoteDataDir != null) {
+            generator.writeStringField(REMOTE_DATA_DIR, tableReg.remoteDataDir);
+        }
+
         // serialize createdTime
         generator.writeNumberField(CREATED_TIME, tableReg.createdTime);
 
         // serialize modifiedTime
-        generator.writeNumberField(MODIFIED_TIME, tableReg.createdTime);
+        generator.writeNumberField(MODIFIED_TIME, tableReg.modifiedTime);
 
         generator.writeEndObject();
     }
@@ -141,6 +147,13 @@ public class TableRegistrationJsonSerde
         Map<String, String> customProperties =
                 deserializeProperties(node.get(CUSTOM_PROPERTIES_NAME));
 
+        // When deserialize from an old version, the remote data dir may not exist.
+        // But we will fill it with ConfigOptions.REMOTE_DATA_DIR immediately.
+        String remoteDataDir = null;
+        if (node.has(REMOTE_DATA_DIR)) {
+            remoteDataDir = node.get(REMOTE_DATA_DIR).asText();
+        }
+
         long createdTime = node.get(CREATED_TIME).asLong();
         long modifiedTime = node.get(MODIFIED_TIME).asLong();
 
@@ -151,6 +164,7 @@ public class TableRegistrationJsonSerde
                 distribution,
                 properties,
                 customProperties,
+                remoteDataDir,
                 createdTime,
                 modifiedTime);
     }

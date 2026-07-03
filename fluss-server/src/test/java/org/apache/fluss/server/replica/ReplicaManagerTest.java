@@ -21,12 +21,14 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.DiskWriteLockedException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -37,6 +39,7 @@ import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordBatch;
+import org.apache.fluss.record.KvRecordTestUtils;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
@@ -62,16 +65,21 @@ import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.entity.StopReplicaData;
 import org.apache.fluss.server.entity.StopReplicaResultForBucket;
+import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.ListOffsetsParam;
+import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.testutils.KvTestUtils;
+import org.apache.fluss.server.testutils.ServerTestTags;
+import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.testutils.DataTestUtils;
@@ -81,13 +89,16 @@ import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.types.Tuple2;
 
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
+import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -123,11 +134,13 @@ import static org.apache.fluss.record.TestData.DATA3_SCHEMA_PK_AUTO_INC;
 import static org.apache.fluss.record.TestData.DATA3_TABLE_ID_PK_AUTO_INC;
 import static org.apache.fluss.record.TestData.DATA3_TABLE_PATH_PK_AUTO_INC;
 import static org.apache.fluss.record.TestData.DATA_1_WITH_KEY_AND_VALUE;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.record.TestData.EXPECTED_LOG_RESULTS_FOR_DATA_1_WITH_PK;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
 import static org.apache.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
+import static org.apache.fluss.server.replica.ReplicaManager.HIGH_WATERMARK_CHECKPOINT_FILE_NAME;
 import static org.apache.fluss.server.testutils.PartitionMetadataAssert.assertPartitionMetadata;
 import static org.apache.fluss.server.testutils.TableMetadataAssert.assertTableMetadata;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
@@ -480,6 +493,66 @@ class ReplicaManagerTest extends ReplicaTestBase {
             assertMemoryRecordsEquals(
                     DATA1_ROW_TYPE, schemaGetter, records1, Collections.singletonList(DATA1));
         }
+    }
+
+    @Test
+    void testAppendRejectedWhenDiskLocked() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
+        makeLogTableAsLeader(tb.getBucket());
+
+        // simulate disk usage breaching the write-limit ratio (default 0.85)
+        replicaManager.getDiskUsageMonitor().update(0.95);
+        assertThat(replicaManager.isDiskWriteLocked()).isTrue();
+
+        assertThatThrownBy(
+                        () ->
+                                replicaManager.appendRecordsToLog(
+                                        20000,
+                                        1,
+                                        Collections.singletonMap(
+                                                tb, genMemoryLogRecordsByObject(DATA1)),
+                                        null,
+                                        (result) -> {}))
+                .isInstanceOf(DiskWriteLockedException.class)
+                .hasMessageContaining("data disk usage");
+
+        // recover when usage drops below (limit - 0.10) -> 0.75
+        replicaManager.getDiskUsageMonitor().update(0.50);
+        assertThat(replicaManager.isDiskWriteLocked()).isFalse();
+
+        CompletableFuture<List<ProduceLogResultForBucket>> future = new CompletableFuture<>();
+        replicaManager.appendRecordsToLog(
+                20000,
+                1,
+                Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
+                null,
+                future::complete);
+        assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 0, 10L));
+    }
+
+    @Test
+    void testPutKvRejectedWhenDiskLocked() {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, 1);
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb.getBucket());
+
+        replicaManager.getDiskUsageMonitor().update(0.99);
+        assertThat(replicaManager.isDiskWriteLocked()).isTrue();
+
+        assertThatThrownBy(
+                        () ->
+                                replicaManager.putRecordsToKv(
+                                        20000,
+                                        1,
+                                        Collections.singletonMap(
+                                                tb, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)),
+                                        null,
+                                        MergeMode.DEFAULT,
+                                        PUT_KV_VERSION,
+                                        (result) -> {}))
+                .isInstanceOf(DiskWriteLockedException.class);
+
+        // unlock for any subsequent tests on the shared replicaManager instance
+        replicaManager.getDiskUsageMonitor().update(0.10);
     }
 
     @Test
@@ -1457,6 +1530,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         TABLET_SERVER_ID,
                                         1,
                                         Arrays.asList(1, 2, 3),
+                                        Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
                 future::complete);
@@ -1477,6 +1551,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         TABLET_SERVER_ID,
                                         INITIAL_LEADER_EPOCH,
                                         Arrays.asList(1, 2, 3),
+                                        Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
                 future::complete);
@@ -1511,6 +1586,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         TABLET_SERVER_ID,
                                         1,
                                         Arrays.asList(1, 2, 3),
+                                        Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
                 future::complete);
@@ -1542,6 +1618,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         TABLET_SERVER_ID,
                                         2,
                                         Arrays.asList(1, 2, 3),
+                                        Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
                 future::complete);
@@ -1903,6 +1980,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         nonePartitionTableId,
                         1,
                         DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis());
         TableInfo partitionTableInfo =
@@ -1911,6 +1989,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         partitionTableId,
                         1,
                         DATA1_PARTITIONED_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis());
         TableMetadata tableMetadata1 =
@@ -1935,11 +2014,15 @@ class ReplicaManagerTest extends ReplicaTestBase {
         // register table to zk.
         zkClient.registerTable(
                 nonePartitionTablePath,
-                TableRegistration.newTable(nonePartitionTableId, DATA1_TABLE_DESCRIPTOR));
+                TableRegistration.newTable(
+                        nonePartitionTableId, DEFAULT_REMOTE_DATA_DIR, DATA1_TABLE_DESCRIPTOR));
         zkClient.registerFirstSchema(nonePartitionTablePath, DATA1_TABLE_DESCRIPTOR.getSchema());
         zkClient.registerTable(
                 partitionTablePath,
-                TableRegistration.newTable(partitionTableId, DATA1_PARTITIONED_TABLE_DESCRIPTOR));
+                TableRegistration.newTable(
+                        partitionTableId,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        DATA1_PARTITIONED_TABLE_DESCRIPTOR));
         zkClient.registerFirstSchema(
                 partitionTablePath, DATA1_PARTITIONED_TABLE_DESCRIPTOR.getSchema());
 
@@ -1978,6 +2061,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                                 DELETED_TABLE_ID, // mark as deleted.
                                                 1,
                                                 DATA1_TABLE_DESCRIPTOR,
+                                                DEFAULT_REMOTE_DATA_DIR,
                                                 System.currentTimeMillis(),
                                                 System.currentTimeMillis()),
                                         Collections.emptyList())),
@@ -2065,6 +2149,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         tableId,
                         1,
                         DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
                         System.currentTimeMillis(),
                         System.currentTimeMillis());
         TableBucket tableBucket1 = new TableBucket(tableId, 1);
@@ -2360,5 +2445,144 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         assertThat(serverMetadataCache.getPartitionMetadata(k)).isEmpty();
                     }
                 });
+    }
+
+    @Test
+    void testStopReplicas_closesScanners() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, 0);
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, tb.getBucket());
+
+        KvTablet kvTablet =
+                kvManager
+                        .getKv(tb)
+                        .orElseThrow(() -> new IllegalStateException("KvTablet not found"));
+        KvRecordTestUtils.KvRecordBatchFactory batchFactory =
+                KvRecordTestUtils.KvRecordBatchFactory.of(DEFAULT_SCHEMA_ID);
+        KvRecordTestUtils.KvRecordFactory recordFactory =
+                KvRecordTestUtils.KvRecordFactory.of(DATA1_ROW_TYPE);
+        kvTablet.putAsLeader(
+                batchFactory.ofRecords(
+                        Collections.singletonList(
+                                recordFactory.ofRecord("k1".getBytes(), new Object[] {1, "v1"}))),
+                null);
+        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        scannerManager.createScanner(replica, null);
+        assertThat(scannerManager.activeScannerCount()).isEqualTo(1);
+
+        CompletableFuture<List<StopReplicaResultForBucket>> future = new CompletableFuture<>();
+        replicaManager.stopReplicas(
+                INITIAL_COORDINATOR_EPOCH,
+                Collections.singletonList(
+                        new StopReplicaData(
+                                tb, false, false, INITIAL_COORDINATOR_EPOCH, INITIAL_LEADER_EPOCH)),
+                future::complete);
+        future.get();
+
+        assertThat(scannerManager.activeScannerCount()).isEqualTo(0);
+    }
+
+    // ---- JBOD multi-directory tests ----
+
+    @Test
+    @Tag(ServerTestTags.JBOD_MULTI_DIR_TAG)
+    void testNewBucketsDistributedAcrossDataDirs() throws Exception {
+        File dataDir1 = new File(tempDir, "data-1");
+        File dataDir2 = new File(tempDir, "data-2");
+        makeLogTableAsLeader(0);
+        makeLogTableAsLeader(1);
+
+        Replica logReplica1 =
+                replicaManager.getReplicaOrException(new TableBucket(DATA1_TABLE_ID, 0));
+        Replica logReplica2 =
+                replicaManager.getReplicaOrException(new TableBucket(DATA1_TABLE_ID, 1));
+        assertThat(logReplica1.getLogTablet().getDataDir()).isEqualTo(dataDir1.getAbsoluteFile());
+        assertThat(logReplica2.getLogTablet().getDataDir()).isEqualTo(dataDir2.getAbsoluteFile());
+    }
+
+    @Test
+    @Tag(ServerTestTags.JBOD_MULTI_DIR_TAG)
+    void testLogAndKvCoLocatedForPrimaryKeyTable() throws Exception {
+        File dataDir1 = new File(tempDir, "data-1");
+        File dataDir2 = new File(tempDir, "data-2");
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, 0);
+        makeKvTableAsLeader(DATA1_TABLE_ID_PK, DATA1_TABLE_PATH_PK, 1);
+
+        Replica kvReplica1 =
+                replicaManager.getReplicaOrException(new TableBucket(DATA1_TABLE_ID_PK, 0));
+        Replica kvReplica2 =
+                replicaManager.getReplicaOrException(new TableBucket(DATA1_TABLE_ID_PK, 1));
+        assertThat(kvReplica1.getLogTablet().getLogDir().toPath()).startsWith(dataDir1.toPath());
+        assertThat(kvReplica1.getKvTablet().getKvTabletDir().toPath())
+                .startsWith(dataDir1.toPath());
+        assertThat(kvReplica2.getLogTablet().getLogDir().toPath()).startsWith(dataDir2.toPath());
+        assertThat(kvReplica2.getKvTablet().getKvTabletDir().toPath())
+                .startsWith(dataDir2.toPath());
+    }
+
+    @Test
+    @Tag(ServerTestTags.JBOD_MULTI_DIR_TAG)
+    void testHighWatermarkCheckpointIsWrittenPerDirectory() throws Exception {
+        File dataDir1 = new File(tempDir, "data-1");
+        File dataDir2 = new File(tempDir, "data-2");
+        makeLogTableAsLeader(0);
+        makeLogTableAsLeader(1);
+
+        Replica replica1 = replicaManager.getReplicaOrException(new TableBucket(DATA1_TABLE_ID, 0));
+        Replica replica2 = replicaManager.getReplicaOrException(new TableBucket(DATA1_TABLE_ID, 1));
+        replica1.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 1);
+        replica2.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 1);
+
+        replicaManager.checkpointHighWatermarks();
+
+        Map<TableBucket, Long> checkpoint1 =
+                new OffsetCheckpointFile(new File(dataDir1, HIGH_WATERMARK_CHECKPOINT_FILE_NAME))
+                        .read();
+        Map<TableBucket, Long> checkpoint2 =
+                new OffsetCheckpointFile(new File(dataDir2, HIGH_WATERMARK_CHECKPOINT_FILE_NAME))
+                        .read();
+
+        assertThat(checkpoint1).containsOnlyKeys(new TableBucket(DATA1_TABLE_ID, 0));
+        assertThat(checkpoint1.get(new TableBucket(DATA1_TABLE_ID, 0))).isEqualTo(10L);
+        assertThat(checkpoint2).containsOnlyKeys(new TableBucket(DATA1_TABLE_ID, 1));
+        assertThat(checkpoint2.get(new TableBucket(DATA1_TABLE_ID, 1))).isEqualTo(10L);
+    }
+
+    @Test
+    void testStopReplicaSweepsOrphanDirsForNoneReplica() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        PhysicalTablePath physicalTablePath = PhysicalTablePath.of(DATA1_TABLE_PATH);
+
+        // Create a log directly via LogManager without going through ReplicaManager.
+        // This simulates the state after TS restart where LogManager loaded the log
+        // but no NotifyLeaderAndIsr arrived (so allReplicas is empty → NoneReplica).
+        File dataDir = localDiskManager.dataDirs().get(0);
+        LogTablet logTablet =
+                logManager.getOrCreateLog(
+                        dataDir, physicalTablePath, tb, LogFormat.ARROW, 1, false);
+        File logDir = logTablet.getLogDir();
+        Path tableDir = logManager.getTabletParentDir(dataDir, physicalTablePath, tb);
+        assertThat(logDir).exists();
+        assertThat(tableDir).exists();
+
+        // Verify the bucket is NoneReplica (not in allReplicas).
+        assertThat(replicaManager.getReplica(tb)).isInstanceOf(ReplicaManager.NoneReplica.class);
+
+        // Send stopReplicas with deleteLocal=true. This should hit the NoneReplica
+        // branch and invoke sweepOrphanTabletDirs to clean up the orphan log.
+        CompletableFuture<List<StopReplicaResultForBucket>> future = new CompletableFuture<>();
+        replicaManager.stopReplicas(
+                INITIAL_COORDINATOR_EPOCH,
+                Collections.singletonList(
+                        new StopReplicaData(tb, true, false, INITIAL_COORDINATOR_EPOCH, 0)),
+                future::complete);
+
+        assertThat(future.get()).containsOnly(new StopReplicaResultForBucket(tb));
+        // The log directory and table parent directory should be cleaned up.
+        assertThat(logDir).doesNotExist();
+        assertThat(tableDir).doesNotExist();
+        // LogManager should no longer hold the log.
+        assertThat(logManager.getLog(tb)).isNotPresent();
     }
 }

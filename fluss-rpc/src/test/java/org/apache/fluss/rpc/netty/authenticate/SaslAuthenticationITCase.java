@@ -106,9 +106,9 @@ public class SaslAuthenticationITCase {
         clientConfig.setString("client.security.sasl.mechanism", "FAKE");
         clientConfig.setString("client.security.sasl.jaas.config", jaasClientInfo);
         assertThatThrownBy(() -> testAuthentication(clientConfig))
-                .cause()
                 .isExactlyInstanceOf(AuthenticationException.class)
-                .hasMessage("Failed to load login manager");
+                .hasMessageContaining(
+                        "Only 'org.apache.fluss.security.auth.sasl.plain.PlainLoginModule' is supported in 'client.security.sasl.jaas.config'.");
     }
 
     @Test
@@ -120,9 +120,9 @@ public class SaslAuthenticationITCase {
         clientConfig.setString("client.security.sasl.mechanism", "DIGEST-MD5");
         clientConfig.setString("client.security.sasl.jaas.config", jaasClientInfo);
         assertThatThrownBy(() -> testAuthentication(clientConfig))
-                .cause()
                 .isExactlyInstanceOf(AuthenticationException.class)
-                .hasMessage("SASL server enables [PLAIN] while protocol of client is 'DIGEST-MD5'");
+                .hasMessageContaining(
+                        "Only 'org.apache.fluss.security.auth.sasl.plain.PlainLoginModule' is supported in 'client.security.sasl.jaas.config'.");
     }
 
     @Test
@@ -206,7 +206,7 @@ public class SaslAuthenticationITCase {
                     new ServerNode(
                             1, "localhost", availablePort1.getPort(), ServerType.TABLET_SERVER);
             try (NettyClient nettyClient =
-                    new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
+                    new NettyClient(clientConfig, TestingClientMetricGroup.newInstance())) {
                 ListTablesRequest request =
                         new ListTablesRequest().setDatabaseName("test-database");
                 ListTablesResponse listTablesResponse =

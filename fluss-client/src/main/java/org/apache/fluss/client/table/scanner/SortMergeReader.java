@@ -321,23 +321,31 @@ public class SortMergeReader {
                 return true;
             }
             try {
-                // if currentMergedRows is null, we need to get the next mergedRows
-                if (currentMergedRows == null) {
-                    SortMergeRows sortMergeRows =
-                            currentLakeSnapshotRecords.hasNext()
-                                    ? currentLakeSnapshotRecords.next()
-                                    : null;
-                    //  next mergedRows is not null and is not empty, set the currentMergedRows
-                    if (sortMergeRows != null && !sortMergeRows.mergedRows.isEmpty()) {
-                        currentMergedRows = sortMergeRows.mergedRows.iterator();
+                // Loop to skip empty merge results (e.g., when a snapshot record is
+                // deleted by changelog) and advance to the next non-empty result.
+                while (returnedRow == null) {
+                    if (currentMergedRows == null) {
+                        if (!currentLakeSnapshotRecords.hasNext()) {
+                            return false;
+                        }
+
+                        SortMergeRows sortMergeRows = currentLakeSnapshotRecords.next();
+                        if (!sortMergeRows.mergedRows.isEmpty()) {
+                            currentMergedRows = sortMergeRows.mergedRows.iterator();
+                        } else {
+                            // If mergedRows is empty (e.g., record was deleted), continue
+                            // the loop to try the next snapshot record.
+                            continue;
+                        }
+                    }
+
+                    if (currentMergedRows.hasNext()) {
+                        returnedRow = currentMergedRows.next();
+                    } else {
+                        currentMergedRows = null;
                     }
                 }
-                // check if has next row, whether does, set the internalRow to returned in method
-                // next;
-                if (currentMergedRows != null && currentMergedRows.hasNext()) {
-                    returnedRow = currentMergedRows.next();
-                }
-                return returnedRow != null;
+                return true;
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }

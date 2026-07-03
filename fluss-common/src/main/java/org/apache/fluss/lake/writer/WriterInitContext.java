@@ -34,6 +34,12 @@ import javax.annotation.Nullable;
 @PublicEvolving
 public interface WriterInitContext {
 
+    /** Unknown split index for lake writers that do not need split-level coordination. */
+    int UNKNOWN_SPLIT_INDEX = -1;
+
+    /** Unknown tiering round timestamp for lake writers that do not need round coordination. */
+    long UNKNOWN_TIERING_ROUND_TIMESTAMP = -1L;
+
     /**
      * Returns the table path.
      *
@@ -62,4 +68,30 @@ public interface WriterInitContext {
      * @return the Fluss table info
      */
     TableInfo tableInfo();
+
+    /**
+     * Returns the split index in the current tiering round.
+     *
+     * <p>The split whose index is {@code 0} is the first split in the current tiering round. Lake
+     * writers that need one writer to coordinate round-level metadata can use the first split as
+     * the coordinator. The value is {@link #UNKNOWN_SPLIT_INDEX} when the lake writer does not need
+     * this information.
+     *
+     * @return the split index in the current tiering round
+     */
+    default int splitIndex() {
+        return UNKNOWN_SPLIT_INDEX;
+    }
+
+    /**
+     * Returns the timestamp when the current tiering round was generated.
+     *
+     * <p>The value is {@link #UNKNOWN_TIERING_ROUND_TIMESTAMP} when the lake writer does not need
+     * round-level timestamp coordination.
+     *
+     * @return the tiering round timestamp in milliseconds
+     */
+    default long tieringRoundTimestamp() {
+        return UNKNOWN_TIERING_ROUND_TIMESTAMP;
+    }
 }

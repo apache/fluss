@@ -50,4 +50,14 @@ object SparkFlussConf {
       .durationType()
       .defaultValue(Duration.ofMillis(10000L))
       .withDescription("The timeout for log scanner to poll records.")
+
+  val SCAN_MAX_RECORDS_PER_PARTITION: ConfigOption[java.lang.Long] =
+    ConfigBuilder
+      .key("scan.maxRecordsPerPartition")
+      .longType()
+      .noDefaultValue()
+      .withDescription(
+        "The maximum number of records per Spark input partition when reading a log table. " +
+          "When set, each Fluss bucket whose offset range exceeds this value will be split " +
+          "into multiple partitions. Disabled by default (one partition per bucket).")
 }

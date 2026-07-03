@@ -20,12 +20,14 @@ package org.apache.fluss.rpc.protocol;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.CorruptMessageException;
 import org.apache.fluss.exception.CorruptRecordException;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.DeletionDisabledException;
+import org.apache.fluss.exception.DiskWriteLockedException;
 import org.apache.fluss.exception.DuplicateSequenceException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.FencedTieringEpochException;
@@ -39,6 +41,7 @@ import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidProducerIdException;
 import org.apache.fluss.exception.InvalidReplicationFactorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
+import org.apache.fluss.exception.InvalidScanRequestException;
 import org.apache.fluss.exception.InvalidServerRackInfoException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.InvalidTargetColumnException;
@@ -55,6 +58,7 @@ import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.exception.NetworkException;
 import org.apache.fluss.exception.NoRebalanceInProgressException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
+import org.apache.fluss.exception.NotCoordinatorLeaderException;
 import org.apache.fluss.exception.NotEnoughReplicasAfterAppendException;
 import org.apache.fluss.exception.NotEnoughReplicasException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
@@ -65,6 +69,7 @@ import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RebalanceFailureException;
 import org.apache.fluss.exception.RecordTooLargeException;
 import org.apache.fluss.exception.RetriableAuthenticationException;
+import org.apache.fluss.exception.ScannerExpiredException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.SecurityTokenException;
@@ -78,6 +83,8 @@ import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.exception.TooManyPartitionsException;
+import org.apache.fluss.exception.TooManyScannersException;
+import org.apache.fluss.exception.UnknownScannerIdException;
 import org.apache.fluss.exception.UnknownServerException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.exception.UnknownWriterIdException;
@@ -245,7 +252,25 @@ public enum Errors {
     INVALID_PRODUCER_ID_EXCEPTION(
             63,
             "The client has attempted to perform an operation with an invalid producer ID.",
-            InvalidProducerIdException::new);
+            InvalidProducerIdException::new),
+    CONFIG_EXCEPTION(64, "A configuration error occurred.", ConfigException::new),
+    NOT_COORDINATOR_LEADER_EXCEPTION(
+            65,
+            "The coordinator is not a leader and cannot process request.",
+            NotCoordinatorLeaderException::new),
+    SCANNER_EXPIRED(
+            66, "The scanner session has expired due to inactivity.", ScannerExpiredException::new),
+    UNKNOWN_SCANNER_ID(
+            67, "The scanner id is not recognized by the server.", UnknownScannerIdException::new),
+    INVALID_SCAN_REQUEST(68, "The scan request is invalid.", InvalidScanRequestException::new),
+    TOO_MANY_SCANNERS(
+            69,
+            "The per-bucket or per-server scanner session limit has been reached.",
+            TooManyScannersException::new),
+    DISK_WRITE_LOCKED(
+            70,
+            "The tablet server has rejected writes because its data disk usage reached the configured write-limit ratio.",
+            DiskWriteLockedException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

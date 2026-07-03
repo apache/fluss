@@ -22,6 +22,7 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.server.metrics.group.BucketMetricGroup;
 
@@ -121,6 +122,14 @@ public class RemoteLogTablet {
                     }
                     MetricGroup metricGroup = bucketMetricGroup.addGroup("remoteLog");
                     metricGroup.gauge(MetricNames.LOG_NUM_SEGMENTS, () -> numRemoteLogSegments);
+                    metricGroup.gauge(
+                            MetricNames.LOG_START_OFFSET,
+                            () -> {
+                                if (remoteLogStartOffset == INIT_REMOTE_LOG_START_OFFSET) {
+                                    return -1L;
+                                }
+                                return remoteLogStartOffset;
+                            });
                     metricGroup.gauge(MetricNames.LOG_END_OFFSET, () -> remoteLogEndOffset);
                     metricGroup.gauge(MetricNames.REMOTE_LOG_SIZE, this::getRemoteSizeInBytes);
                     remoteLogMetrics = metricGroup;

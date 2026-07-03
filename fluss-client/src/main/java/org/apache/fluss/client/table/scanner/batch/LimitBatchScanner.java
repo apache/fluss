@@ -37,6 +37,8 @@ import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.LimitScanRequest;
 import org.apache.fluss.rpc.messages.LimitScanResponse;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ChunkedAllocationManager;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.SchemaUtil;
@@ -66,6 +68,8 @@ public class LimitBatchScanner implements BatchScanner {
     private final SchemaGetter schemaGetter;
     private final KvFormat kvFormat;
     private final int targetSchemaId;
+    /** The chunked allocation manager factory to reuse memory for arrow log write batch. */
+    private final ChunkedAllocationManager.ChunkedFactory chunkedFactory;
 
     /**
      * A cache for schema projection mapping from source schema to target. Use HashMap here, because
@@ -90,7 +94,7 @@ public class LimitBatchScanner implements BatchScanner {
         RowType rowType = tableInfo.getRowType();
         this.fieldGetters = new InternalRow.FieldGetter[rowType.getFieldCount()];
         for (int i = 0; i < rowType.getFieldCount(); i++) {
-            this.fieldGetters[i] = InternalRow.createFieldGetter(rowType.getTypeAt(i), i);
+            this.fieldGetters[i] = InternalRow.createDeepFieldGetter(rowType.getTypeAt(i), i);
         }
 
         LimitScanRequest limitScanRequest =
@@ -116,6 +120,7 @@ public class LimitBatchScanner implements BatchScanner {
 
         this.kvFormat = tableInfo.getTableConfig().getKvFormat();
         this.endOfInput = false;
+        this.chunkedFactory = new ChunkedAllocationManager.ChunkedFactory();
     }
 
     @Nullable
@@ -124,16 +129,27 @@ public class LimitBatchScanner implements BatchScanner {
         if (endOfInput) {
             return null;
         }
+        LimitScanResponse response;
         try {
-            LimitScanResponse response = scanFuture.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
-            List<InternalRow> scanRows = parseLimitScanResponse(response);
-            endOfInput = true;
-            return CloseableIterator.wrap(scanRows.iterator());
+            response = scanFuture.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
             // poll next time
             return CloseableIterator.emptyIterator();
         } catch (Exception e) {
             throw new IOException(e);
+        }
+
+        ByteBuf parsedByteBuf = response.getParsedByteBuf();
+        try {
+            List<InternalRow> scanRows = parseLimitScanResponse(response);
+            endOfInput = true;
+            return CloseableIterator.wrap(scanRows.iterator());
+        } catch (Exception e) {
+            throw new IOException(e);
+        } finally {
+            if (parsedByteBuf != null) {
+                parsedByteBuf.release();
+            }
         }
     }
 
@@ -164,7 +180,8 @@ public class LimitBatchScanner implements BatchScanner {
             }
         } else {
             LogRecordReadContext readContext =
-                    LogRecordReadContext.createReadContext(tableInfo, false, null, schemaGetter);
+                    LogRecordReadContext.createReadContext(
+                            tableInfo, false, null, schemaGetter, chunkedFactory);
             LogRecords records = MemoryLogRecords.pointToByteBuffer(recordsBuffer);
             for (LogRecordBatch logRecordBatch : records.batches()) {
                 // A batch of log record maybe little more than limit, thus we need slice the
@@ -203,5 +220,7 @@ public class LimitBatchScanner implements BatchScanner {
     @Override
     public void close() throws IOException {
         scanFuture.cancel(true);
+        // Release off-heap memory held by the chunked allocation manager factory.
+        chunkedFactory.close();
     }
 }

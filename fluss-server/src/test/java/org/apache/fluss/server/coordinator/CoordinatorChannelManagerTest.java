@@ -54,8 +54,7 @@ class CoordinatorChannelManagerTest {
         Configuration configuration = new Configuration();
         CoordinatorChannelManager coordinatorChannelManager =
                 new CoordinatorChannelManager(
-                        RpcClient.create(
-                                configuration, TestingClientMetricGroup.newInstance(), false));
+                        RpcClient.create(configuration, TestingClientMetricGroup.newInstance()));
         List<ServerNode> tabletServersNode = FLUSS_CLUSTER_EXTENSION.getTabletServerNodes();
 
         // test start up using server 0
@@ -93,6 +92,7 @@ class CoordinatorChannelManagerTest {
         // we use update metadata request to test for simplicity
         UpdateMetadataRequest updateMetadataRequest =
                 makeUpdateMetadataRequest(
+                        null,
                         null,
                         Collections.emptySet(),
                         Collections.emptyList(),

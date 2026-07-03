@@ -12,6 +12,26 @@ To integrate Fluss with Iceberg, you must enable lakehouse storage and configure
 
 > **NOTE**: Iceberg requires JDK11 or later. Please ensure that both your Fluss deployment and the Flink cluster used for tiering services are running on JDK11+.
 
+## Dependencies
+
+Apache Fluss publishes the Iceberg lake connector to Maven Central:
+
+| Artifact | Jar |
+|----------|-----|
+| Fluss Iceberg lake connector | [fluss-lake-iceberg-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-lake-iceberg/$FLUSS_VERSION$/fluss-lake-iceberg-$FLUSS_VERSION$.jar) |
+
+Maven coordinates:
+
+```xml
+<dependency>
+  <groupId>org.apache.fluss</groupId>
+  <artifactId>fluss-lake-iceberg</artifactId>
+  <version>$FLUSS_VERSION$</version>
+</dependency>
+```
+
+Verify downloaded JARs against the [KEYS file](https://downloads.apache.org/incubator/fluss/KEYS) using the [verification instructions](/downloads#verifying-downloads).
+
 
 ## Configure Iceberg as LakeHouse Storage
 
@@ -149,18 +169,17 @@ export HADOOP_CLASSPATH=`$HADOOP_HOME/bin/hadoop classpath`
 Follow the dependency management guidelines below for required JARs:
 
 ##### 1. Core Fluss Components
-- **Fluss Flink Connector**: Put [fluss-flink connector jar](/downloads) into `${FLINK_HOME}/lib`
-  - Choose a connector version matching your Flink version
-  - For Flink 1.20: [fluss-flink-1.20-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar)
+- **Fluss Flink Connector**: Put the Fluss Flink connector JAR into `${FLINK_HOME}/lib` — see [Dependencies](../../engine-flink/getting-started.md#dependencies) for all supported Flink versions.
+  - For Flink 1.20: [fluss-flink-1.20-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar)
 
 ##### 2. Remote Storage Support
-If you are using remote storage, download the corresponding [Fluss filesystem jar](/downloads#filesystem-jars) and place it into `${FLINK_HOME}/lib`:
-- **Amazon S3**: [fluss-fs-s3 jar](/downloads#filesystem-jars)
-- **Aliyun OSS**: [fluss-fs-oss jar](/downloads#filesystem-jars)
-- **HDFS**: [fluss-fs-hdfs jar](/downloads#filesystem-jars)
+If you are using remote storage, download the corresponding Fluss filesystem JAR and place it into `${FLINK_HOME}/lib`:
+- **Amazon S3**: see [S3 Dependencies](../../maintenance/tiered-storage/filesystems/s3.md#dependencies)
+- **Aliyun OSS**: see [OSS Dependencies](../../maintenance/tiered-storage/filesystems/oss.md#dependencies)
+- **HDFS**: see [HDFS Dependencies](../../maintenance/tiered-storage/filesystems/hdfs.md#dependencies)
 
 ##### 3. Iceberg Lake Connector
-- **Fluss Lake Iceberg**: Put [fluss-lake-iceberg jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-iceberg/$FLUSS_VERSION$/fluss-lake-iceberg-$FLUSS_VERSION$.jar) into `${FLINK_HOME}/lib`
+- **Fluss Lake Iceberg**: Put [fluss-lake-iceberg-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-lake-iceberg/$FLUSS_VERSION$/fluss-lake-iceberg-$FLUSS_VERSION$.jar) into `${FLINK_HOME}/lib`
 
 ##### 4. Iceberg Catalog Dependencies
 Put the JARs required by your Iceberg Catalog into `${FLINK_HOME}/lib`.

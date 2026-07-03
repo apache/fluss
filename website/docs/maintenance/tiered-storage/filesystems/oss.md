@@ -9,10 +9,30 @@ sidebar_position: 3
 
 [Aliyun Object Storage Service](https://www.aliyun.com/product/oss) (Aliyun OSS) is widely used, particularly popular among China’s cloud users, and it provides cloud object storage for a variety of use cases.
 
+## Dependencies
+
+Apache Fluss publishes the OSS filesystem plugin to Maven Central:
+
+| Artifact | Jar |
+|----------|-----|
+| Fluss OSS filesystem plugin | [fluss-fs-oss-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-fs-oss/$FLUSS_VERSION$/fluss-fs-oss-$FLUSS_VERSION$.jar) |
+
+Maven coordinates:
+
+```xml
+<dependency>
+  <groupId>org.apache.fluss</groupId>
+  <artifactId>fluss-fs-oss</artifactId>
+  <version>$FLUSS_VERSION$</version>
+</dependency>
+```
+
+Verify downloaded JARs against the [KEYS file](https://downloads.apache.org/incubator/fluss/KEYS) using the [verification instructions](/downloads#verifying-downloads).
+
 
 ## Configurations setup
 
-To enabled OSS as remote storage, there are some required configurations that must be add to Fluss' `server.yaml`:
+To enabled OSS as remote storage, there are some required configurations that must be added to Fluss' `server.yaml`:
 
 ```yaml
 # The dir that used to be as the remote storage of Fluss

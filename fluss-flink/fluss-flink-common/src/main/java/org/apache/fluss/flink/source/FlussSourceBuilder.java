@@ -21,17 +21,23 @@ import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.client.initializer.OffsetsInitializer;
+import org.apache.fluss.client.initializer.SnapshotOffsetsInitializer;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
+import org.apache.fluss.flink.utils.LakeSourceUtils;
+import org.apache.fluss.lake.source.LakeSource;
+import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.types.RowType;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -59,6 +65,11 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
  *     .build();
  * }</pre>
  *
+ * <p>When the target table has datalake enabled and the source starts in full mode (the default,
+ * {@link OffsetsInitializer#full()}), the built source performs a union read: it reads the
+ * historical data tiered to the lake (e.g. Iceberg, Paimon) together with the real-time data still
+ * in Fluss. Other startup modes (earliest/latest/timestamp) read data from Fluss only.
+ *
  * @param <OUT> The type of records produced by the source being built
  */
 public class FlussSourceBuilder<OUT> {
@@ -68,8 +79,11 @@ public class FlussSourceBuilder<OUT> {
 
     private int[] projectedFields;
     private String[] projectedFieldNames;
+    private Predicate logRecordBatchFilter;
     private Long scanPartitionDiscoveryIntervalMs;
+    private Integer splitPerAssignmentBatchSize;
     private OffsetsInitializer offsetsInitializer;
+    private boolean bounded;
     private FlussDeserializationSchema<OUT> deserializationSchema;
 
     private String bootstrapServers;
@@ -132,6 +146,20 @@ public class FlussSourceBuilder<OUT> {
     }
 
     /**
+     * Sets the maximum number of splits assigned to a reader in one assignment request.
+     *
+     * <p>If not specified, the default value from {@link
+     * FlinkConnectorOptions#SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE} is used.
+     *
+     * @param splitPerAssignmentBatchSize maximum splits per assignment request
+     * @return this builder
+     */
+    public FlussSourceBuilder<OUT> setSplitPerAssignmentBatchSize(int splitPerAssignmentBatchSize) {
+        this.splitPerAssignmentBatchSize = splitPerAssignmentBatchSize;
+        return this;
+    }
+
+    /**
      * Sets the starting offsets strategy for the Fluss source.
      *
      * <p>If not specified, {@link OffsetsInitializer#full()} is used by default.
@@ -141,6 +169,19 @@ public class FlussSourceBuilder<OUT> {
      */
     public FlussSourceBuilder<OUT> setStartingOffsets(OffsetsInitializer offsetsInitializer) {
         this.offsetsInitializer = offsetsInitializer;
+        return this;
+    }
+
+    /**
+     * Builds a bounded source for batch execution. The source reads up to the latest offsets at job
+     * startup and then finishes; combined with the default {@link OffsetsInitializer#full()} on a
+     * datalake-enabled table this performs a bounded union read of the lake snapshot and the Fluss
+     * log. If not called, the source is unbounded (streaming).
+     *
+     * @return this builder
+     */
+    public FlussSourceBuilder<OUT> setBounded() {
+        this.bounded = true;
         return this;
     }
 
@@ -171,6 +212,21 @@ public class FlussSourceBuilder<OUT> {
     public FlussSourceBuilder<OUT> setProjectedFields(String... projectedFieldNames) {
         checkNotNull(projectedFieldNames, "Field names must not be null");
         this.projectedFieldNames = projectedFieldNames;
+        return this;
+    }
+
+    /**
+     * Sets the filter predicate for server-side record batch filtering based on column statistics.
+     *
+     * <p>The predicate is evaluated against per-batch column statistics (min/max values) to skip
+     * entire record batches that cannot contain matching rows.
+     *
+     * @param filter the predicate to filter record batches
+     * @return this builder
+     */
+    public FlussSourceBuilder<OUT> setFilter(Predicate filter) {
+        checkNotNull(filter, "filter must not be null");
+        this.logRecordBatchFilter = filter;
         return this;
     }
 
@@ -223,6 +279,10 @@ public class FlussSourceBuilder<OUT> {
                     FlinkConnectorOptions.SCAN_PARTITION_DISCOVERY_INTERVAL
                             .defaultValue()
                             .toMillis();
+        }
+        if (splitPerAssignmentBatchSize == null) {
+            splitPerAssignmentBatchSize =
+                    FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.defaultValue();
         }
 
         if (this.flussConf == null) {
@@ -288,6 +348,40 @@ public class FlussSourceBuilder<OUT> {
                         ? tableInfo.getRowType().project(projectedFields)
                         : tableInfo.getRowType();
 
+        // union read (lake historical + Fluss) only applies to full startup mode, like the SQL
+        // connector; other startup modes read Fluss only.
+        boolean lakeEnabled = tableInfo.getTableConfig().isDataLakeEnabled();
+        boolean fullStartup = offsetsInitializer instanceof SnapshotOffsetsInitializer;
+
+        if (bounded && !(lakeEnabled && fullStartup)) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Bounded (batch) read requires a datalake-enabled table started in "
+                                    + "full mode (OffsetsInitializer.full()), but table '%s' has "
+                                    + "datalake enabled=%s and full startup mode=%s.",
+                            tablePath, lakeEnabled, fullStartup));
+        }
+
+        LakeSource<LakeSplit> lakeSource = null;
+        if (lakeEnabled && fullStartup) {
+            lakeSource =
+                    LakeSourceUtils.createLakeSource(tablePath, tableInfo.getProperties().toMap());
+            if (lakeSource != null) {
+                if (projectedFields != null) {
+                    int[][] nestedProjectedFields = new int[projectedFields.length][];
+                    for (int i = 0; i < projectedFields.length; i++) {
+                        nestedProjectedFields[i] = new int[] {projectedFields[i]};
+                    }
+                    lakeSource.withProject(nestedProjectedFields);
+                }
+                // push the record-batch filter to the lake side as well,
+                // so the historical lake scan is filtered consistently with Fluss.
+                if (logRecordBatchFilter != null) {
+                    lakeSource.withFilters(Collections.singletonList(logRecordBatchFilter));
+                }
+            }
+        }
+
         LOG.info("Creating Fluss Source with Configuration: {}", flussConf);
 
         return new FlussSource<>(
@@ -297,9 +391,12 @@ public class FlussSourceBuilder<OUT> {
                 isPartitioned,
                 sourceOutputType,
                 projectedFields,
+                logRecordBatchFilter,
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
+                splitPerAssignmentBatchSize,
                 deserializationSchema,
-                true);
+                !bounded,
+                lakeSource);
     }
 }

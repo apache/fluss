@@ -19,19 +19,28 @@ package org.apache.fluss.server.tablet;
 
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.exception.InvalidScanRequestException;
+import org.apache.fluss.exception.NotLeaderOrFollowerException;
+import org.apache.fluss.exception.ScannerExpiredException;
+import org.apache.fluss.exception.StaleMetadataException;
+import org.apache.fluss.exception.UnknownScannerIdException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.entity.PrefixLookupResultForBucket;
 import org.apache.fluss.rpc.entity.ResultForBucket;
+import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.GetClusterHealthRequest;
+import org.apache.fluss.rpc.messages.GetClusterHealthResponse;
 import org.apache.fluss.rpc.messages.GetTableStatsRequest;
 import org.apache.fluss.rpc.messages.GetTableStatsResponse;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
@@ -52,12 +61,15 @@ import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsResponse;
+import org.apache.fluss.rpc.messages.PbScanReqForBucket;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.ScanKvRequest;
+import org.apache.fluss.rpc.messages.ScanKvResponse;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
@@ -74,10 +86,16 @@ import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.UserContext;
+import org.apache.fluss.server.kv.scan.OpenScanResult;
+import org.apache.fluss.server.kv.scan.ScannerContext;
+import org.apache.fluss.server.kv.scan.ScannerManager;
 import org.apache.fluss.server.log.FetchParams;
+import org.apache.fluss.server.log.FetchParamsBuilder;
+import org.apache.fluss.server.log.FilterInfo;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
+import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -108,6 +126,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifySnaps
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getProduceLogData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getPutKvData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getStopReplicaData;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTableFilterInfoMap;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTableStatsRequestData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getTargetColumns;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getUpdateMetadataRequestData;
@@ -132,6 +151,9 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     private final ReplicaManager replicaManager;
     private final TabletServerMetadataCache metadataCache;
     private final TabletServerMetadataProvider metadataFunctionProvider;
+    private final ScannerManager scannerManager;
+    private final CoordinatorGateway coordinatorGateway;
+    private final String interListenerName;
 
     public TabletService(
             int serverId,
@@ -142,7 +164,10 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             MetadataManager metadataManager,
             @Nullable Authorizer authorizer,
             DynamicConfigManager dynamicConfigManager,
-            ExecutorService ioExecutor) {
+            ExecutorService ioExecutor,
+            ScannerManager scannerManager,
+            CoordinatorGateway coordinatorGateway,
+            String interListenerName) {
         super(
                 remoteFileSystem,
                 ServerType.TABLET_SERVER,
@@ -156,6 +181,9 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         this.metadataCache = metadataCache;
         this.metadataFunctionProvider =
                 new TabletServerMetadataProvider(zkClient, metadataManager, metadataCache);
+        this.scannerManager = scannerManager;
+        this.coordinatorGateway = coordinatorGateway;
+        this.interListenerName = interListenerName;
     }
 
     @Override
@@ -209,18 +237,24 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     private static FetchParams getFetchParams(FetchLogRequest request) {
         FetchParams fetchParams;
+        Map<Long, FilterInfo> tableFilterInfoMap = getTableFilterInfoMap(request);
         if (request.hasMinBytes()) {
             fetchParams =
-                    new FetchParams(
-                            request.getFollowerServerId(),
-                            request.getMaxBytes(),
-                            request.getMinBytes(),
-                            request.hasMaxWaitMs()
-                                    ? request.getMaxWaitMs()
-                                    : DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE);
+                    new FetchParamsBuilder(request.getFollowerServerId(), request.getMaxBytes())
+                            .withMinFetchBytes(request.getMinBytes())
+                            .withMaxWaitMs(
+                                    request.hasMaxWaitMs()
+                                            ? request.getMaxWaitMs()
+                                            : DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE)
+                            .withTableFilterInfoMap(tableFilterInfoMap)
+                            .build();
         } else {
-            fetchParams = new FetchParams(request.getFollowerServerId(), request.getMaxBytes());
+            fetchParams =
+                    new FetchParamsBuilder(request.getFollowerServerId(), request.getMaxBytes())
+                            .withTableFilterInfoMap(tableFilterInfoMap)
+                            .build();
         }
+
         return fetchParams;
     }
 
@@ -420,6 +454,234 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         CompletableFuture<NotifyLakeTableOffsetResponse> response = new CompletableFuture<>();
         replicaManager.notifyLakeTableOffset(getNotifyLakeTableOffset(request), response::complete);
         return response;
+    }
+
+    @Override
+    public CompletableFuture<GetClusterHealthResponse> getClusterHealth(
+            GetClusterHealthRequest request) {
+        // Tablet servers don't own the cluster-wide health view; we forward the call to the
+        // coordinator over the internal listener.
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.DESCRIBE, Resource.cluster());
+        }
+
+        if (metadataCache.getCoordinatorServer(interListenerName) == null) {
+            // Fail fast during the startup window before the tablet has received its first
+            // UpdateMetadataRequest from the coordinator. The supplier inside coordinatorGateway
+            // would otherwise block-and-retry, which is not what readiness probes want.
+            CompletableFuture<GetClusterHealthResponse> failed = new CompletableFuture<>();
+            failed.completeExceptionally(
+                    new StaleMetadataException(
+                            "Tablet server has not yet received coordinator metadata; cluster"
+                                    + " health is unavailable."));
+            return failed;
+        }
+        return coordinatorGateway.getClusterHealth(request);
+    }
+
+    @Override
+    public CompletableFuture<ScanKvResponse> scanKv(ScanKvRequest request) {
+        ScanKvResponse response = new ScanKvResponse();
+        ScannerContext openedContext = null;
+        ScannerContext acquiredContext = null;
+        try {
+            if (request.hasBucketScanReq() && request.hasScannerId()) {
+                throw new InvalidScanRequestException(
+                        "ScanKvRequest must not set both bucket_scan_req and scanner_id.");
+            }
+            if (request.hasBucketScanReq()
+                    && request.hasCloseScanner()
+                    && request.isCloseScanner()) {
+                throw new InvalidScanRequestException(
+                        "ScanKvRequest must not set close_scanner together with bucket_scan_req.");
+            }
+            if (!request.hasBucketScanReq() && !request.hasScannerId()) {
+                throw new InvalidScanRequestException(
+                        "ScanKvRequest must have either bucket_scan_req (new scan) "
+                                + "or scanner_id (continuation).");
+            }
+
+            boolean isCloseRequest = request.hasCloseScanner() && request.isCloseScanner();
+
+            // Validate batch_size_bytes up-front so malformed requests never open a snapshot.
+            int effectiveBatchSize = 0;
+            if (!isCloseRequest) {
+                if (!request.hasBatchSizeBytes()) {
+                    throw new InvalidScanRequestException(
+                            "batch_size_bytes is required for data-fetching scan requests.");
+                }
+                int requestedBatchSize = request.getBatchSizeBytes();
+                if (requestedBatchSize <= 0) {
+                    throw new InvalidScanRequestException(
+                            "batch_size_bytes must be greater than 0.");
+                }
+                effectiveBatchSize =
+                        Math.min(requestedBatchSize, scannerManager.getMaxBatchSizeBytes());
+            }
+
+            ScannerContext context;
+
+            boolean isNewScan = false;
+            long initialLogOffset = 0L;
+
+            if (request.hasBucketScanReq()) {
+                PbScanReqForBucket bucketReq = request.getBucketScanReq();
+                long tableId = bucketReq.getTableId();
+                authorizeTable(READ, tableId);
+
+                TableBucket tableBucket =
+                        new TableBucket(
+                                tableId,
+                                bucketReq.hasPartitionId() ? bucketReq.getPartitionId() : null,
+                                bucketReq.getBucketId());
+                Long limit = bucketReq.hasLimit() ? bucketReq.getLimit() : null;
+
+                OpenScanResult openResult =
+                        scannerManager.createScanner(
+                                replicaManager.getReplicaOrException(tableBucket), limit);
+                isNewScan = true;
+                initialLogOffset = openResult.getLogOffset();
+
+                context = openResult.getContext();
+                if (context == null) {
+                    // Empty bucket: no session registered; still return the captured offset.
+                    response.setHasMoreResults(false);
+                    response.setLogOffset(initialLogOffset);
+                    return CompletableFuture.completedFuture(response);
+                }
+                openedContext = context;
+            } else {
+                byte[] scannerId = request.getScannerId();
+                context = scannerManager.getScanner(scannerId);
+                if (context == null) {
+                    if (isCloseRequest) {
+                        response.setScannerId(scannerId);
+                        response.setHasMoreResults(false);
+                        return CompletableFuture.completedFuture(response);
+                    }
+                    if (scannerManager.isRecentlyExpired(scannerId)) {
+                        throw new ScannerExpiredException(
+                                "Scanner session has expired due to inactivity. "
+                                        + "Please start a new scan.");
+                    } else {
+                        throw new UnknownScannerIdException(
+                                "Unknown scanner ID. The session may have expired or "
+                                        + "never existed.");
+                    }
+                }
+                openedContext = context;
+            }
+
+            // Cursor-exclusion CAS: serialises concurrent same-scannerId RPCs and rejects if
+            // close() has begun.
+            if (!context.tryAcquireForUse()) {
+                throw new InvalidScanRequestException(
+                        String.format(
+                                "Concurrent scan request on scanner ID for bucket %s, or session "
+                                        + "is closing; only one in-flight scanKv RPC per scanner "
+                                        + "is allowed.",
+                                context.getTableBucket()));
+            }
+            acquiredContext = context;
+
+            // Honour close even on a non-leader: the local session is still ours to release.
+            // Close requests are exempt from callSeqId validation.
+            if (isCloseRequest) {
+                response.setScannerId(context.getScannerId());
+                response.setHasMoreResults(false);
+                return CompletableFuture.completedFuture(response);
+            }
+
+            // Validate callSeqId for all data-fetching requests (open + continuation).
+            if (request.hasCallSeqId()) {
+                int expectedSeqId = context.getCallSeqId() + 1;
+                int requestSeqId = request.getCallSeqId();
+                if (requestSeqId != expectedSeqId) {
+                    throw new InvalidScanRequestException(
+                            String.format(
+                                    "Out-of-order scan request: expected callSeqId=%d but got %d.",
+                                    expectedSeqId, requestSeqId));
+                }
+            } else {
+                throw new InvalidScanRequestException(
+                        "call_seq_id is required for ScanKV requests to ensure "
+                                + "in-order processing and at-least-once semantics.");
+            }
+
+            // Catch a leadership flip ahead of the eventual closeScannersForBucket callback so
+            // the client can redirect rather than consume a stale snapshot.
+            if (!request.hasBucketScanReq()) {
+                Replica replica = replicaManager.getReplicaOrException(context.getTableBucket());
+                if (!replica.isLeader()) {
+                    throw new NotLeaderOrFollowerException(
+                            String.format(
+                                    "Leader is no longer local for bucket %s; client should "
+                                            + "restart the scan against the new leader.",
+                                    context.getTableBucket()));
+                }
+            }
+
+            // Refresh TTL only now that the request is fully validated.
+            scannerManager.markAccessed(context);
+
+            // Gate on builder.sizeInBytes() (not raw bytes) so the threshold reflects the
+            // serialised batch. Always append at least one record so a tiny effectiveBatchSize
+            // cannot produce an empty has_more=true response.
+            DefaultValueRecordBatch.Builder builder = DefaultValueRecordBatch.builder();
+            boolean appendedAny = false;
+            while (context.isValid()
+                    && (!appendedAny || builder.sizeInBytes() < effectiveBatchSize)) {
+                builder.append(context.currentValue());
+                context.advance();
+                appendedAny = true;
+            }
+
+            boolean hasMore = context.isValid();
+            if (!hasMore) {
+                // RocksIterator.next() does not throw on internal errors; an unchecked status
+                // would silently truncate the scan and report has_more=false to the client.
+                context.checkIteratorStatus();
+            }
+            DefaultValueRecordBatch batch = builder.build();
+
+            response.setScannerId(context.getScannerId());
+            response.setHasMoreResults(hasMore);
+            if (batch.sizeInBytes() > 0) {
+                response.setRecords(batch.getSegment(), batch.getPosition(), batch.sizeInBytes());
+            }
+            if (isNewScan) {
+                response.setLogOffset(initialLogOffset);
+            }
+
+            // Update callSeqId AFTER the response is prepared so a duplicate retry can be
+            // detected via the in-order check.
+            if (request.hasCallSeqId()) {
+                context.setCallSeqId(request.getCallSeqId());
+            }
+
+            // Keep the session alive only if there's more to read; otherwise leave openedContext
+            // set so finally drains it.
+            if (hasMore) {
+                openedContext = null;
+            }
+
+        } catch (Exception e) {
+            if (e instanceof InterruptedException || e.getCause() instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            ApiError apiError = ApiError.fromThrowable(e);
+            response.setErrorCode(apiError.error().code());
+            response.setErrorMessage(apiError.message() != null ? apiError.message() : "");
+        } finally {
+            if (acquiredContext != null) {
+                acquiredContext.releaseAfterUse();
+            }
+            if (openedContext != null) {
+                scannerManager.removeScanner(openedContext);
+            }
+        }
+
+        return CompletableFuture.completedFuture(response);
     }
 
     @Override

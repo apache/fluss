@@ -36,7 +36,6 @@ import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
@@ -93,6 +92,7 @@ import org.apache.fluss.server.tablet.TabletService;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 
 import org.slf4j.Logger;
@@ -111,6 +111,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.metadata.TablePath.DEFAULT_DATABASE_NAME;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclFilter;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toResolvedPartitionSpec;
 import static org.apache.fluss.security.acl.Resource.TABLE_SPLITTER;
@@ -245,10 +246,27 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
 
     @Override
     public CompletableFuture<DatabaseExistsResponse> databaseExists(DatabaseExistsRequest request) {
-        // By design: database exists not need to check database authorization.
+        String databaseName = request.getDatabaseName();
         DatabaseExistsResponse response = new DatabaseExistsResponse();
-        boolean exists = metadataManager.databaseExists(request.getDatabaseName());
-        response.setExists(exists);
+
+        // Check authorization first for efficiency - avoids unnecessary metadata lookup
+        // We skip authorization for the default database for backward compatibilities, as
+        // FlinkCatalog checks existence for the default database when open().
+        if (!DEFAULT_DATABASE_NAME.equals(databaseName)
+                && authorizer != null
+                && !authorizer.isAuthorized(
+                        currentSession(),
+                        OperationType.DESCRIBE,
+                        Resource.database(databaseName))) {
+            LOG.debug(
+                    "User {} not authorized to access database '{}', returning false",
+                    currentSession().getPrincipal(),
+                    databaseName);
+            response.setExists(false);
+            return CompletableFuture.completedFuture(response);
+        }
+
+        response.setExists(metadataManager.databaseExists(databaseName));
         return CompletableFuture.completedFuture(response);
     }
 
@@ -284,6 +302,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         response.setTableJson(tableInfo.toTableDescriptor().toJsonBytes())
                 .setSchemaId(tableInfo.getSchemaId())
                 .setTableId(tableInfo.getTableId())
+                .setRemoteDataDir(tableInfo.getRemoteDataDir())
                 .setCreatedTime(tableInfo.getCreatedTime())
                 .setModifiedTime(tableInfo.getModifiedTime());
         return CompletableFuture.completedFuture(response);
@@ -308,10 +327,22 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
 
     @Override
     public CompletableFuture<TableExistsResponse> tableExists(TableExistsRequest request) {
-        // By design: table exists not need to check table authorization.
+        TablePath tablePath = toTablePath(request.getTablePath());
         TableExistsResponse response = new TableExistsResponse();
-        boolean exists = metadataManager.tableExists(toTablePath(request.getTablePath()));
-        response.setExists(exists);
+
+        // Check authorization first for efficiency - avoids unnecessary metadata lookup
+        if (authorizer != null
+                && !authorizer.isAuthorized(
+                        currentSession(), OperationType.DESCRIBE, Resource.table(tablePath))) {
+            LOG.debug(
+                    "User {} not authorized to access table '{}', returning false",
+                    currentSession().getPrincipal(),
+                    tablePath);
+            response.setExists(false);
+            return CompletableFuture.completedFuture(response);
+        }
+
+        response.setExists(metadataManager.tableExists(tablePath));
         return CompletableFuture.completedFuture(response);
     }
 
@@ -362,21 +393,21 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     }
 
     private long getPartitionId(TablePath tablePath, String partitionName) {
-        Optional<TablePartition> optTablePartition;
+        Optional<PartitionRegistration> optPartitionRegistration;
         try {
-            optTablePartition = zkClient.getPartition(tablePath, partitionName);
+            optPartitionRegistration = zkClient.getPartition(tablePath, partitionName);
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format("Failed to get latest kv snapshots for table '%s'", tablePath),
                     e);
         }
-        if (!optTablePartition.isPresent()) {
+        if (!optPartitionRegistration.isPresent()) {
             throw new PartitionNotExistException(
                     String.format(
                             "The partition '%s' of table '%s' does not exist.",
                             partitionName, tablePath));
         }
-        return optTablePartition.get().getPartitionId();
+        return optPartitionRegistration.get().getPartitionId();
     }
 
     @Override
@@ -436,19 +467,19 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         TablePath tablePath = toTablePath(request.getTablePath());
         authorizeTable(OperationType.DESCRIBE, tablePath);
 
-        Map<String, Long> partitionNameAndIds;
+        Map<String, PartitionRegistration> partitionRegistrations;
         if (request.hasPartialPartitionSpec()) {
             ResolvedPartitionSpec partitionSpecFromRequest =
                     toResolvedPartitionSpec(request.getPartialPartitionSpec());
-            partitionNameAndIds =
+            partitionRegistrations =
                     metadataManager.listPartitions(tablePath, partitionSpecFromRequest);
         } else {
-            partitionNameAndIds = metadataManager.listPartitions(tablePath);
+            partitionRegistrations = metadataManager.listPartitions(tablePath);
         }
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         List<String> partitionKeys = tableInfo.getPartitionKeys();
         return CompletableFuture.completedFuture(
-                toListPartitionInfosResponse(partitionKeys, partitionNameAndIds));
+                toListPartitionInfosResponse(partitionKeys, partitionRegistrations));
     }
 
     @Override

@@ -114,8 +114,9 @@ public class PartialUpdater {
             if (partialUpdateCols.get(i)) {
                 rowEncoder.encodeField(i, flussFieldGetters[i].getFieldOrNull(partialValue.row));
             } else {
-                // use the old row value
-                if (oldValue == null) {
+                // use the old row value, the old row may be old schema with fewer fields,
+                // in this case, the missing fields will be set to null
+                if (oldValue == null || oldValue.row.getFieldCount() < i + 1) {
                     rowEncoder.encodeField(i, null);
                 } else {
                     rowEncoder.encodeField(i, flussFieldGetters[i].getFieldOrNull(oldValue.row));
@@ -146,8 +147,13 @@ public class PartialUpdater {
                 if (!primaryKeyCols.get(i) && partialUpdateCols.get(i)) {
                     rowEncoder.encodeField(i, null);
                 } else {
-                    // use the old row value
-                    rowEncoder.encodeField(i, flussFieldGetters[i].getFieldOrNull(value.row));
+                    // use the old row value, the old row may be old schema with fewer fields,
+                    // in this case, the missing fields will be set to null
+                    if (value.row.getFieldCount() < i + 1) {
+                        rowEncoder.encodeField(i, null);
+                    } else {
+                        rowEncoder.encodeField(i, flussFieldGetters[i].getFieldOrNull(value.row));
+                    }
                 }
             }
             return new BinaryValue(targetSchemaId, rowEncoder.finishRow());

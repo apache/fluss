@@ -63,12 +63,14 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
     private final Table icebergTable;
     private static final ThreadLocal<Long> currentCommitSnapshotId = new ThreadLocal<>();
 
+    static {
+        Listeners.register(new IcebergSnapshotCreateListener(), CreateSnapshotEvent.class);
+    }
+
     public IcebergLakeCommitter(IcebergCatalogProvider icebergCatalogProvider, TablePath tablePath)
             throws IOException {
         this.icebergCatalog = icebergCatalogProvider.get();
         this.icebergTable = getTable(tablePath);
-        // register iceberg listener
-        Listeners.register(new IcebergSnapshotCreateListener(), CreateSnapshotEvent.class);
     }
 
     @Override
@@ -141,6 +143,7 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
                     snapshotId = rewriteCommitSnapshotId;
                 }
             }
+            // Iceberg does not provide cumulative table stats API yet; leave stats as -1 (unknown).
             return LakeCommitResult.committedIsReadable(snapshotId);
         } catch (Exception e) {
             throw new IOException("Failed to commit to Iceberg table.", e);

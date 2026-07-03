@@ -17,3 +17,4 @@
 #
 
 org.apache.fluss.lake.paimon.PaimonLakeStoragePlugin
+org.apache.fluss.lake.iceberg.IcebergLakeStoragePlugin

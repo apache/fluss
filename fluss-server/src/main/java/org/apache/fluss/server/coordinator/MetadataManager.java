@@ -35,6 +35,7 @@ import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.DatabaseSummary;
@@ -44,13 +45,15 @@ import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.security.acl.FlussPrincipal;
+import org.apache.fluss.server.entity.DatabasePropertyChanges;
 import org.apache.fluss.server.entity.TablePropertyChanges;
+import org.apache.fluss.server.utils.TableDescriptorValidation;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.DatabaseRegistration;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.PartitionRegistration;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
@@ -73,7 +76,7 @@ import java.util.Set;
 import java.util.concurrent.Callable;
 
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableProperties;
-import static org.apache.fluss.server.utils.TableDescriptorValidation.validateTableDescriptor;
+import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableSchema;
 
 /** A manager for metadata. */
 public class MetadataManager {
@@ -109,6 +112,14 @@ public class MetadataManager {
         this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
     }
 
+    /** Validates the table descriptor. */
+    public void validateTableDescriptor(TableDescriptor tableDescriptor) {
+        TableDescriptorValidation.validateTableDescriptor(
+                tableDescriptor,
+                maxBucketNum,
+                lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat());
+    }
+
     public void createDatabase(
             String databaseName, DatabaseDescriptor databaseDescriptor, boolean ignoreIfExists)
             throws DatabaseAlreadyExistException {
@@ -136,8 +147,93 @@ public class MetadataManager {
         }
     }
 
-    public DatabaseInfo getDatabase(String databaseName) throws DatabaseNotExistException {
+    public void alterDatabaseProperties(
+            String databaseName,
+            DatabasePropertyChanges databasePropertyChanges,
+            boolean ignoreIfNotExists) {
+        try {
+            // Check if database exists
+            if (!databaseExists(databaseName)) {
+                if (ignoreIfNotExists) {
+                    return;
+                }
+                throw new DatabaseNotExistException("Database " + databaseName + " not exists.");
+            }
 
+            DatabaseRegistration databaseRegistration = getDatabaseRegistration(databaseName);
+            DatabaseDescriptor currentDescriptor = databaseRegistration.toDatabaseDescriptor();
+
+            // Create updated descriptor
+            DatabaseDescriptor newDescriptor =
+                    getUpdatedDatabaseDescriptor(currentDescriptor, databasePropertyChanges);
+
+            if (newDescriptor != null) {
+                // Update the database in ZooKeeper
+                DatabaseRegistration updatedRegistration =
+                        databaseRegistration.newProperties(newDescriptor);
+                zookeeperClient.updateDatabase(databaseName, updatedRegistration);
+                LOG.info("Successfully altered database properties for database: {}", databaseName);
+            } else {
+                LOG.info(
+                        "No properties changed when alter database {}, skip update.", databaseName);
+            }
+        } catch (Exception e) {
+            if (e instanceof DatabaseNotExistException) {
+                if (ignoreIfNotExists) {
+                    return;
+                }
+                throw (DatabaseNotExistException) e;
+            } else if (e instanceof RuntimeException) {
+                throw (RuntimeException) e;
+            } else {
+                throw new FlussRuntimeException("Failed to alter database: " + databaseName, e);
+            }
+        }
+    }
+
+    @Nullable
+    private DatabaseDescriptor getUpdatedDatabaseDescriptor(
+            DatabaseDescriptor currentDescriptor, DatabasePropertyChanges changes) {
+        Map<String, String> newCustomProperties =
+                new HashMap<>(currentDescriptor.getCustomProperties());
+        // set properties
+        newCustomProperties.putAll(changes.customPropertiesToSet);
+        // reset properties
+        newCustomProperties.keySet().removeAll(changes.customPropertiesToReset);
+
+        if (newCustomProperties.equals(currentDescriptor.getCustomProperties())
+                && changes.commentToSet == null) {
+            return null;
+        }
+
+        String newComment;
+        if (changes.commentToSet != null) {
+            // If comment is set to empty string, it means to reset the comment
+            if (changes.commentToSet.isEmpty()) {
+                newComment = null;
+            } else {
+                newComment = changes.commentToSet;
+            }
+        } else {
+            newComment = currentDescriptor.getComment().orElse(null);
+        }
+
+        return DatabaseDescriptor.builder()
+                .customProperties(newCustomProperties)
+                .comment(newComment)
+                .build();
+    }
+
+    public DatabaseInfo getDatabase(String databaseName) throws DatabaseNotExistException {
+        DatabaseRegistration databaseReg = getDatabaseRegistration(databaseName);
+        return new DatabaseInfo(
+                databaseName,
+                databaseReg.toDatabaseDescriptor(),
+                databaseReg.createdTime,
+                databaseReg.modifiedTime);
+    }
+
+    public DatabaseRegistration getDatabaseRegistration(String databaseName) {
         Optional<DatabaseRegistration> optionalDB;
         try {
             optionalDB = zookeeperClient.getDatabase(databaseName);
@@ -149,13 +245,7 @@ public class MetadataManager {
         if (!optionalDB.isPresent()) {
             throw new DatabaseNotExistException("Database '" + databaseName + "' does not exist.");
         }
-
-        DatabaseRegistration databaseReg = optionalDB.get();
-        return new DatabaseInfo(
-                databaseName,
-                databaseReg.toDatabaseDescriptor(),
-                databaseReg.createdTime,
-                databaseReg.modifiedTime);
+        return optionalDB.get();
     }
 
     public boolean databaseExists(String databaseName) {
@@ -186,9 +276,9 @@ public class MetadataManager {
     /**
      * List the partitions of the given table.
      *
-     * <p>Return a map from partition name to partition id.
+     * @return a map from partition name to partition registration.
      */
-    public Map<String, Long> listPartitions(TablePath tablePath)
+    public Map<String, PartitionRegistration> listPartitions(TablePath tablePath)
             throws TableNotExistException, TableNotPartitionedException {
         return listPartitions(tablePath, null);
     }
@@ -196,9 +286,9 @@ public class MetadataManager {
     /**
      * List the partitions of the given table and partitionSpec.
      *
-     * <p>Return a map from partition name to partition id.
+     * @return a map from partition name to partition registration.
      */
-    public Map<String, Long> listPartitions(
+    public Map<String, PartitionRegistration> listPartitions(
             TablePath tablePath, ResolvedPartitionSpec partitionFilter)
             throws TableNotExistException, TableNotPartitionedException, InvalidPartitionException {
         TableInfo tableInfo = getTable(tablePath);
@@ -208,10 +298,10 @@ public class MetadataManager {
         }
         try {
             if (partitionFilter == null) {
-                return zookeeperClient.getPartitionNameAndIds(tablePath);
+                return zookeeperClient.getPartitionRegistrations(tablePath);
             } else {
 
-                return zookeeperClient.getPartitionNameAndIds(
+                return zookeeperClient.getPartitionRegistrations(
                         tablePath, tableInfo.getPartitionKeys(), partitionFilter);
             }
         } catch (Exception e) {
@@ -225,6 +315,12 @@ public class MetadataManager {
 
     public void dropDatabase(String name, boolean ignoreIfNotExists, boolean cascade)
             throws DatabaseNotExistException, DatabaseNotEmptyException {
+        if (CoordinatorServer.DEFAULT_DATABASE.equals(name)) {
+            throw new UnsupportedOperationException(
+                    "Cannot drop the default database '"
+                            + name
+                            + "'. The default database is required for cluster operation.");
+        }
         if (!databaseExists(name)) {
             if (ignoreIfNotExists) {
                 return;
@@ -275,6 +371,7 @@ public class MetadataManager {
      * Returns -1 if the table already exists and ignoreIfExists is true.
      *
      * @param tablePath the table path
+     * @param remoteDataDir the remote data directory
      * @param tableToCreate the table descriptor describing the table to create
      * @param tableAssignment the table assignment, will be null when the table is partitioned table
      * @param ignoreIfExists whether to ignore if the table already exists
@@ -282,13 +379,11 @@ public class MetadataManager {
      */
     public long createTable(
             TablePath tablePath,
+            String remoteDataDir,
             TableDescriptor tableToCreate,
             @Nullable TableAssignment tableAssignment,
             boolean ignoreIfExists)
             throws TableAlreadyExistException, DatabaseNotExistException {
-        // validate table properties before creating table
-        validateTableDescriptor(tableToCreate, maxBucketNum);
-
         if (!databaseExists(tablePath.getDatabaseName())) {
             throw new DatabaseNotExistException(
                     "Database " + tablePath.getDatabaseName() + " does not exist.");
@@ -323,7 +418,9 @@ public class MetadataManager {
                     }
                     // register the table
                     zookeeperClient.registerTable(
-                            tablePath, TableRegistration.newTable(tableId, tableToCreate), false);
+                            tablePath,
+                            TableRegistration.newTable(tableId, remoteDataDir, tableToCreate),
+                            false);
                     return tableId;
                 },
                 "Fail to create table " + tablePath);
@@ -344,6 +441,7 @@ public class MetadataManager {
             if (!schemaChanges.isEmpty()) {
                 Schema newSchema =
                         SchemaUpdate.applySchemaChanges(table.getSchema(), schemaChanges);
+                validateAlterTableSchema(table, newSchema);
                 LakeCatalog.Context lakeCatalogContext =
                         new CoordinatorService.DefaultLakeCatalogContext(
                                 false,
@@ -421,19 +519,35 @@ public class MetadataManager {
             TableInfo tableInfo = tableReg.toTableInfo(tablePath, schemaInfo);
 
             // validate the changes
-            validateAlterTableProperties(
-                    tableInfo,
-                    tablePropertyChanges.tableKeysToChange(),
-                    tablePropertyChanges.customKeysToChange());
+            validateAlterTableProperties(tableInfo, tablePropertyChanges.tableKeysToChange());
 
             TableDescriptor tableDescriptor = tableInfo.toTableDescriptor();
             TableDescriptor newDescriptor =
                     getUpdatedTableDescriptor(tableDescriptor, tablePropertyChanges);
 
             if (newDescriptor != null) {
-                // reuse the same validate logic with the createTable() method
-                validateTableDescriptor(newDescriptor, maxBucketNum);
+                // is to enable datalake for the table
+                if (isDataLakeEnabled(newDescriptor) && !isDataLakeEnabled(tableDescriptor)) {
+                    // The table was created before cluster-level datalake was enabled.
+                    // Backfill `table.datalake.format` before enabling datalake on the table
+                    // so the updated table metadata stays consistent with the cluster setting.
+                    if (!tableInfo.getTableConfig().getDataLakeFormat().isPresent()) {
+                        DataLakeFormat dataLakeFormat =
+                                lakeCatalogDynamicLoader
+                                        .getLakeCatalogContainer()
+                                        .getDataLakeFormat();
+                        if (dataLakeFormat == null) {
+                            throw new InvalidAlterTableException(
+                                    "Cannot alter table "
+                                            + tablePath
+                                            + " in data lake, because the Fluss cluster doesn't enable datalake tables.");
+                        }
+                        newDescriptor = newDescriptor.withDataLakeFormat(dataLakeFormat);
+                    }
+                }
 
+                // reuse the same validate logic with the createTable() method
+                validateTableDescriptor(newDescriptor);
                 // pre alter table properties, e.g. create lake table in lake storage if it's to
                 // enable datalake for the table
                 preAlterTableProperties(
@@ -496,7 +610,12 @@ public class MetadataManager {
         // We should always alter lake table even though datalake is disabled.
         // Otherwise, if user alter the fluss table when datalake is disabled, then enable datalake
         // again, the lake table will mismatch.
-        if (lakeCatalog != null) {
+        // Only sync to lake if this table has ever opted into datalake (key present regardless of
+        // value).
+        if (lakeCatalog != null
+                && tableDescriptor
+                        .getProperties()
+                        .containsKey(ConfigOptions.TABLE_DATALAKE_ENABLED.key())) {
             try {
                 lakeCatalog.alterTable(tablePath, tableChanges, lakeCatalogContext);
             } catch (TableNotExistException e) {
@@ -692,13 +811,14 @@ public class MetadataManager {
     public void createPartition(
             TablePath tablePath,
             long tableId,
+            String remoteDataDir,
             PartitionAssignment partitionAssignment,
             ResolvedPartitionSpec partition,
             boolean ignoreIfExists) {
         String partitionName = partition.getPartitionName();
-        Optional<TablePartition> optionalTablePartition =
-                getOptionalTablePartition(tablePath, partitionName);
-        if (optionalTablePartition.isPresent()) {
+        Optional<PartitionRegistration> optionalPartitionRegistration =
+                getOptionalPartitionRegistration(tablePath, partitionName);
+        if (optionalPartitionRegistration.isPresent()) {
             if (ignoreIfExists) {
                 return;
             }
@@ -751,7 +871,12 @@ public class MetadataManager {
             long partitionId = zookeeperClient.getPartitionIdAndIncrement();
             // register partition assignments and partition metadata to zk in transaction
             zookeeperClient.registerPartitionAssignmentAndMetadata(
-                    partitionId, partitionName, partitionAssignment, tablePath, tableId);
+                    partitionId,
+                    partitionName,
+                    partitionAssignment,
+                    remoteDataDir,
+                    tablePath,
+                    tableId);
             LOG.info(
                     "Register partition {} to zookeeper for table [{}].", partitionName, tablePath);
         } catch (KeeperException.NodeExistsException nodeExistsException) {
@@ -773,9 +898,9 @@ public class MetadataManager {
     public void dropPartition(
             TablePath tablePath, ResolvedPartitionSpec partition, boolean ignoreIfNotExists) {
         String partitionName = partition.getPartitionName();
-        Optional<TablePartition> optionalTablePartition =
-                getOptionalTablePartition(tablePath, partitionName);
-        if (!optionalTablePartition.isPresent()) {
+        Optional<PartitionRegistration> optionalPartitionRegistration =
+                getOptionalPartitionRegistration(tablePath, partitionName);
+        if (!optionalPartitionRegistration.isPresent()) {
             if (ignoreIfNotExists) {
                 return;
             }
@@ -797,7 +922,7 @@ public class MetadataManager {
         }
     }
 
-    private Optional<TablePartition> getOptionalTablePartition(
+    private Optional<PartitionRegistration> getOptionalPartitionRegistration(
             TablePath tablePath, String partitionName) {
         try {
             return zookeeperClient.getPartition(tablePath, partitionName);

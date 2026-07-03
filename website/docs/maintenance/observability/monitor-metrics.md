@@ -294,10 +294,15 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="15"><strong>coordinator</strong></th>
-      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="8">-</td>
+       <th rowspan="28"><strong>coordinator</strong></th>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="11">-</td>
       <td>activeCoordinatorCount</td>
-      <td>The number of active CoordinatorServer in this cluster.</td>
+      <td>The number of active CoordinatorServer (only leader) in this cluster.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>aliveCoordinatorCount</td>
+      <td>The number of alive (including leader and standby) CoordinatorServer in this cluster.</td>
       <td>Gauge</td>
     </tr>
     <tr>
@@ -341,15 +346,20 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
     <tr>
-      <td>eventQueueTimeMs</td>
-      <td>The time that an event spent waiting in the queue to be processed.</td>
-      <td>Histogram</td>
+      <td>pendingLeaderActivationCount</td>
+      <td>The number of buckets currently waiting for the leader-activation acknowledgement from the target tablet server. A non-zero, sustained value blocks the cluster-health API from reporting GREEN and will hold the readiness gate during a rolling upgrade; if it stays non-zero indefinitely it indicates a stuck activation that requires investigation.</td>
+      <td>Gauge</td>
     </tr>
     <tr>
-      <td rowspan="2">event</td>
+      <td rowspan="3">event</td>
       <td>eventQueueSize</td>
       <td>The number of events currently waiting to be processed in the coordinator event queue. This metric is labeled with <code>event_type</code> to distinguish between different types of coordinator events.</td>
       <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>eventQueueTimeMs</td>
+      <td>The time that an event spent waiting in the queue to be processed.</td>
+      <td>Histogram</td>
     </tr>
     <tr>
       <td>eventProcessingTimeMs</td>
@@ -363,14 +373,72 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
      <tr>
+      <td rowspan="2">table</td>
+      <td>bucketCount</td>
+      <td>The number of buckets of each table.</td>
+      <td>Gauge</td>
+    </tr>
+     <tr>
+      <td>partitionCount</td>
+      <td>The number of partitions of each table.</td>
+      <td>Gauge</td>
+    </tr>
+     <tr>
       <td rowspan="2">table_bucket</td>
       <td>numKvSnapshots</td>
-      <td>number of kv snapshots of each table bucket.</td>
+      <td>The number of kv snapshots of each table bucket.</td>
       <td>Gauge</td>
     </tr>
      <tr>
       <td>allKvSnapshotSize</td>
-      <td>all kv snapshot size of each table bucket.</td>
+      <td>All kv snapshot size of each table bucket.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td rowspan="2">lakeTiering</td>
+      <td>pendingTablesCount</td>
+      <td>The number of tables waiting to be tiered.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>runningTablesCount</td>
+      <td>The number of tables currently being tiered.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td rowspan="7">lakeTiering_table</td>
+      <td>tierLag</td>
+      <td>Time in milliseconds since the last successful tiering operation for this table. For newly registered tables that have never completed a tiering round, the lag is measured from the time the table was registered.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>tierDuration</td>
+      <td>Duration in milliseconds of the last tiering operation for this table.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>failuresTotal</td>
+      <td>The total number of tiering failures for this table.</td>
+      <td>Counter</td>
+    </tr>
+    <tr>
+      <td>fileSize</td>
+      <td>Cumulative total file size (in bytes) of the lake table after the last tiering round. Returns -1 if no tiering has completed yet.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>recordCount</td>
+      <td>Cumulative total record count of the lake table after the last tiering round. Returns -1 if no tiering has completed yet.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>pendingTime</td>
+      <td>How long (in milliseconds) the table has been waiting in the pending queue for tiering. Returns 0 when the table is not currently pending.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>freshness</td>
+      <td>The user-configured data freshness interval (in milliseconds) for this table.</td>
       <td>Gauge</td>
     </tr>
   </tbody>
@@ -576,17 +644,29 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="1"><strong>coordinator</strong></th>
+      <th rowspan="2"><strong>coordinator</strong></th>
       <td rowspan="1">request</td>
       <td>requestQueueSize</td>
       <td>The CoordinatorServer node network waiting queue size.</td>
       <td>Gauge</td>
     </tr>
     <tr>
-      <th rowspan="8">tabletserver</th>
+      <td rowspan="1">request_processor_index</td>
+      <td>requestQueueSize</td>
+      <td>The CoordinatorServer node network waiting queue size labeled with <code>processor_index</code>.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <th rowspan="9">tabletserver</th>
       <td rowspan="1">request</td>
       <td>requestQueueSize</td>
       <td>The TabletServer node network waiting queue size.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td rowspan="1">request_processor_index</td>
+      <td>requestQueueSize</td>
+      <td>The TabletServer node network waiting queue size labeled with <code>processor_index</code>.</td>
       <td>Gauge</td>
     </tr>
     <tr>
@@ -790,6 +870,11 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
      <tr>
+      <td>startOffset</td>
+      <td>The start offset in local storage for this table bucket.</td>
+      <td>Gauge</td>
+    </tr>
+     <tr>
       <td>endOffset</td>
       <td>The end offset in local storage for this table bucket.</td>
       <td>Gauge</td>
@@ -797,18 +882,23 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
      <tr>
       <td rowspan="2">table_bucket_lakeTiering</td>
       <td>pendingRecords</td>
-      <td>The number of records lag between local log and remote log for this table bucket.</td>
+      <td>The number of records lag between the latest log record and the latest tiered lake log record for this table bucket. Returns -1 if row count is disabled (WAL mode or v0.9 old table) and no tiering has completed.</td>
       <td>Gauge</td>
     </tr>
      <tr>
       <td>timestampLag</td>
-      <td>The timestamp lag between local log and remote log for this table bucket in milliseconds.</td>
+      <td>The timestamp lag between the latest log record and the latest tiered lake log record for this table bucket, in milliseconds.</td>
       <td>Gauge</td>
     </tr>
     <tr>
       <td rowspan="3">table_bucket_remoteLog</td>
       <td>numSegments</td>
       <td>The number of segments in remote storage for this table bucket.</td>
+      <td>Gauge</td>
+    </tr>
+     <tr>
+      <td>startOffset</td>
+      <td>The start offset in remote storage for this table bucket.</td>
       <td>Gauge</td>
     </tr>
      <tr>
@@ -1077,6 +1167,36 @@ How to Use Flink Metrics, you can see [Flink Metrics](https://nightlies.apache.o
             <td>Table</td>
             <td>The output records per second.</td>
             <td>Meter</td>
-        </tr>  
+        </tr>
+    </tbody>
+</table>
+
+### Tiering Service Metrics
+
+These metrics are exposed by the Flink-based tiering source reader when running the Lake Tiering Service.
+All metrics are registered under the `fluss.tieringService` metric group, which is a child of the Flink `SourceReaderMetricGroup`.
+
+<table class="table table-bordered">
+    <thead>
+    <tr>
+      <th class="text-left" style={{width: '225pt'}}>Metrics Name</th>
+      <th class="text-left" style={{width: '165pt'}}>Level</th>
+      <th class="text-left" style={{width: '300pt'}}>Description</th>
+      <th class="text-left" style={{width: '70pt'}}>Type</th>
+    </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td>readBytes</td>
+            <td>Flink Source Operator</td>
+            <td>The cumulative bytes read from Fluss records since the tiering job started. For the snapshot path, this measures per-record BinaryRow size; for the log path, this measures batch-level byte size from log fetches.</td>
+            <td>Counter</td>
+        </tr>
+        <tr>
+            <td>readBytesPerSecond</td>
+            <td>Flink Source Operator</td>
+            <td>The read throughput rate in bytes per second, derived from the readBytes counter using a 60-second sliding window.</td>
+            <td>Meter</td>
+        </tr>
     </tbody>
 </table>

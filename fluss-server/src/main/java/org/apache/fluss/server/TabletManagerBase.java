@@ -43,12 +43,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
@@ -71,7 +71,7 @@ public abstract class TabletManagerBase {
         KV
     }
 
-    protected final File dataDir;
+    protected final List<File> dataDirs;
 
     protected final Configuration conf;
 
@@ -83,22 +83,31 @@ public abstract class TabletManagerBase {
     private final String tabletDirPrefix;
 
     public TabletManagerBase(
-            TabletType tabletType, File dataDir, Configuration conf, int recoveryThreads) {
+            TabletType tabletType, List<File> dataDirs, Configuration conf, int recoveryThreads) {
         this.tabletType = tabletType;
         this.tabletDirPrefix = getTabletDirPrefix(tabletType);
-        this.dataDir = dataDir;
+        this.dataDirs = new ArrayList<>(dataDirs);
         this.conf = conf;
         this.recoveryThreads = recoveryThreads;
     }
 
     /**
-     * Return the directories of the tablets to be loaded.
+     * Return the directories of the tablets to be loaded, grouped by configured data directory.
      *
      * <p>See more about the local directory contracts: {@link FlussPaths#logTabletDir(File,
      * PhysicalTablePath, TableBucket)} and {@link FlussPaths#kvTabletDir(File, PhysicalTablePath,
      * TableBucket)}.
      */
-    protected List<File> listTabletsToLoad() {
+    protected Map<File, List<File>> listTabletsToLoad() {
+        Map<File, List<File>> tabletsToLoadByDataDir = new LinkedHashMap<>();
+        for (File dataDir : dataDirs) {
+            tabletsToLoadByDataDir.put(dataDir, listTabletsToLoad(dataDir));
+        }
+        return tabletsToLoadByDataDir;
+    }
+
+    /** Returns the tablet directories to be loaded from a single configured data directory. */
+    protected List<File> listTabletsToLoad(File dataDir) {
         List<File> tabletsToLoad = new ArrayList<>();
         // Get all database directory.
         File[] dbDirs = FileUtils.listDirectories(dataDir);
@@ -140,41 +149,21 @@ public abstract class TabletManagerBase {
         return Executors.newFixedThreadPool(recoveryThreads, new ExecutorThreadFactory(poolName));
     }
 
-    /** Running a series of jobs in a thread pool, and return the count of the successful job. */
-    protected int runInThreadPool(Runnable[] runnableJobs, String poolName) throws Throwable {
-        List<Future<?>> jobsForTabletDir = new ArrayList<>();
-        ExecutorService pool = createThreadPool(poolName);
-        for (Runnable runnable : runnableJobs) {
-            jobsForTabletDir.add(pool.submit(runnable));
-        }
-        int successCount = 0;
-        try {
-            for (Future<?> future : jobsForTabletDir) {
-                try {
-                    future.get();
-                    successCount++;
-                } catch (InterruptedException | ExecutionException e) {
-                    throw e.getCause();
-                }
-            }
-        } finally {
-            pool.shutdown();
-        }
-        return successCount;
-    }
-
     /**
-     * Get the tablet directory with given directory name for the given table path and table bucket.
+     * Get the tablet directory with given directory name for the given data directory, table path
+     * and table bucket.
      *
      * <p>When the parent directory of the tablet directory is missing, it will create the
      * directory.
      *
+     * @param dataDir the local data directory chosen for this tablet
      * @param tablePath the table path of the bucket
      * @param tableBucket the table bucket
      * @return the tablet directory
      */
-    protected File getOrCreateTabletDir(PhysicalTablePath tablePath, TableBucket tableBucket) {
-        File tabletDir = getTabletDir(tablePath, tableBucket);
+    protected File getOrCreateTabletDir(
+            File dataDir, PhysicalTablePath tablePath, TableBucket tableBucket) {
+        File tabletDir = getTabletDir(dataDir, tablePath, tableBucket);
         if (tabletDir.exists()) {
             return tabletDir;
         }
@@ -182,11 +171,13 @@ public abstract class TabletManagerBase {
         return tabletDir;
     }
 
-    public Path getTabletParentDir(PhysicalTablePath tablePath, TableBucket tableBucket) {
-        return getTabletDir(tablePath, tableBucket).toPath().getParent();
+    public Path getTabletParentDir(
+            File dataDir, PhysicalTablePath tablePath, TableBucket tableBucket) {
+        return getTabletDir(dataDir, tablePath, tableBucket).toPath().getParent();
     }
 
-    protected File getTabletDir(PhysicalTablePath tablePath, TableBucket tableBucket) {
+    protected File getTabletDir(
+            File dataDir, PhysicalTablePath tablePath, TableBucket tableBucket) {
         switch (tabletType) {
             case LOG:
                 return FlussPaths.logTabletDir(dataDir, tablePath, tableBucket);

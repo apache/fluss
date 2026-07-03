@@ -19,6 +19,7 @@ package org.apache.fluss.lake.iceberg;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
@@ -26,6 +27,7 @@ import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.coordinator.SchemaUpdate;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.iceberg.PartitionField;
@@ -50,6 +52,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
@@ -59,6 +62,14 @@ import static org.assertj.core.api.AssertionsForClassTypes.assertThatThrownBy;
 
 /** Unit test for {@link IcebergLakeCatalog}. */
 class IcebergLakeCatalogTest {
+
+    private static final Schema FLUSS_SCHEMA =
+            Schema.newBuilder()
+                    .column("id", DataTypes.BIGINT())
+                    .column("name", DataTypes.STRING())
+                    .column("amount", DataTypes.INT())
+                    .column("address", DataTypes.STRING())
+                    .build();
 
     @TempDir private File tempWarehouseDir;
 
@@ -623,5 +634,517 @@ class IcebergLakeCatalogTest {
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessage("Cannot reset table property '%s'", property);
         }
+    }
+
+    @Test
+    void testAlterTableAddColumnLastNullable() {
+        String database = "test_alter_add_col_db";
+        String tableName = "test_alter_add_col_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+        createLogTable(database, tableName);
+
+        List<TableChange> changes =
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "new_col",
+                                DataTypes.INT(),
+                                "new_col comment",
+                                TableChange.ColumnPosition.last()));
+
+        flussIcebergCatalog.alterTable(
+                tablePath, changes, getLakeCatalogContext(FLUSS_SCHEMA, changes));
+
+        Table table =
+                flussIcebergCatalog
+                        .getIcebergCatalog()
+                        .loadTable(TableIdentifier.of(database, tableName));
+        List<String> fieldNames =
+                table.schema().columns().stream()
+                        .map(Types.NestedField::name)
+                        .collect(Collectors.toList());
+        assertThat(fieldNames)
+                .containsExactly(
+                        "id",
+                        "name",
+                        "amount",
+                        "address",
+                        "new_col",
+                        BUCKET_COLUMN_NAME,
+                        OFFSET_COLUMN_NAME,
+                        TIMESTAMP_COLUMN_NAME);
+
+        // Verify the new column's type and nullability
+        Types.NestedField newCol = table.schema().findField("new_col");
+        assertThat(newCol.type()).isEqualTo(Types.IntegerType.get());
+        assertThat(newCol.isOptional()).isTrue();
+        assertThat(newCol.doc()).isEqualTo("new_col comment");
+    }
+
+    @Test
+    void testAlterTableAddColumnNotLast() {
+        String database = "test_alter_add_col_not_last_db";
+        String tableName = "test_alter_add_col_not_last_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+        createLogTable(database, tableName);
+
+        List<TableChange> changes =
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "new_col",
+                                DataTypes.INT(),
+                                null,
+                                TableChange.ColumnPosition.first()));
+
+        // Use a simple context since SchemaUpdate rejects non-LAST position
+        TableDescriptor td = getTableDescriptor(FLUSS_SCHEMA);
+        assertThatThrownBy(
+                        () ->
+                                flussIcebergCatalog.alterTable(
+                                        tablePath, changes, new TestingLakeCatalogContext(td)))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessage("Only support to add column at last for iceberg table.");
+    }
+
+    @Test
+    void testAlterTableAddColumnNotNullable() {
+        String database = "test_alter_add_col_not_nullable_db";
+        String tableName = "test_alter_add_col_not_nullable_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+        createLogTable(database, tableName);
+
+        List<TableChange> changes =
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "new_col",
+                                DataTypes.INT().copy(false),
+                                null,
+                                TableChange.ColumnPosition.last()));
+
+        // Use a simple context since SchemaUpdate rejects non-nullable columns
+        TableDescriptor td = getTableDescriptor(FLUSS_SCHEMA);
+        assertThatThrownBy(
+                        () ->
+                                flussIcebergCatalog.alterTable(
+                                        tablePath, changes, new TestingLakeCatalogContext(td)))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessage("Only support to add nullable column for iceberg table.");
+    }
+
+    @Test
+    void testAlterTableAddExistingColumns() {
+        String database = "test_alter_add_existing_col_db";
+        String tableName = "test_alter_add_existing_col_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+        createLogTable(database, tableName);
+
+        // Simulate crash recovery: add columns to iceberg first, then retry
+        List<TableChange> changes =
+                Arrays.asList(
+                        TableChange.addColumn(
+                                "new_column",
+                                DataTypes.INT(),
+                                null,
+                                TableChange.ColumnPosition.last()),
+                        TableChange.addColumn(
+                                "new_column2",
+                                DataTypes.STRING(),
+                                null,
+                                TableChange.ColumnPosition.last()));
+
+        // First call succeeds - adds columns to iceberg
+        flussIcebergCatalog.alterTable(
+                tablePath, changes, getLakeCatalogContext(FLUSS_SCHEMA, changes));
+
+        // Second call with same changes should succeed (idempotent via schema compatibility)
+        // because iceberg schema now matches the expected schema
+        flussIcebergCatalog.alterTable(
+                tablePath, changes, getLakeCatalogContext(FLUSS_SCHEMA, changes));
+    }
+
+    @Test
+    void testAlterTableAddColumnWhenIcebergSchemaNotMatch() {
+        String database = "test_alter_add_col_schema_mismatch_db";
+        String tableName = "test_alter_add_col_schema_mismatch_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+        createLogTable(database, tableName);
+
+        List<TableChange> changes =
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "new_col",
+                                DataTypes.INT(),
+                                "new_col comment",
+                                TableChange.ColumnPosition.last()));
+
+        // Test column number mismatch: pass a wider Fluss schema that doesn't match iceberg
+        Schema widerFlussSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("name", DataTypes.STRING())
+                        .column("amount", DataTypes.INT())
+                        .column("address", DataTypes.STRING())
+                        .column("phone", DataTypes.INT())
+                        .build();
+        assertThatThrownBy(
+                        () ->
+                                flussIcebergCatalog.alterTable(
+                                        tablePath,
+                                        changes,
+                                        getLakeCatalogContext(widerFlussSchema, changes)))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("Iceberg schema is not compatible with Fluss schema");
+
+        // Test column order mismatch
+        Schema disorderFlussSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("amount", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column("address", DataTypes.STRING())
+                        .build();
+        assertThatThrownBy(
+                        () ->
+                                flussIcebergCatalog.alterTable(
+                                        tablePath,
+                                        changes,
+                                        getLakeCatalogContext(disorderFlussSchema, changes)))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("Iceberg schema is not compatible with Fluss schema");
+    }
+
+    @Test
+    void testAlterTableAddColumnWithComplexTypeTable() {
+        String database = "test_alter_add_col_complex_db";
+        String tableName = "test_alter_add_col_complex_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+
+        // Create table with complex types (Map, Array)
+        Schema complexSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("tags", DataTypes.ARRAY(DataTypes.STRING()))
+                        .column("metadata", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()))
+                        .build();
+
+        TableDescriptor td = getTableDescriptor(complexSchema);
+        flussIcebergCatalog.createTable(tablePath, td, new TestingLakeCatalogContext());
+
+        // ADD COLUMN should succeed despite Iceberg reassigning field IDs for complex types
+        List<TableChange> changes =
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "new_col",
+                                DataTypes.STRING(),
+                                null,
+                                TableChange.ColumnPosition.last()));
+
+        flussIcebergCatalog.alterTable(
+                tablePath, changes, getLakeCatalogContext(complexSchema, changes));
+
+        Table table =
+                flussIcebergCatalog
+                        .getIcebergCatalog()
+                        .loadTable(TableIdentifier.of(database, tableName));
+        List<String> fieldNames =
+                table.schema().columns().stream()
+                        .map(Types.NestedField::name)
+                        .collect(Collectors.toList());
+        assertThat(fieldNames)
+                .containsExactly(
+                        "id",
+                        "tags",
+                        "metadata",
+                        "new_col",
+                        BUCKET_COLUMN_NAME,
+                        OFFSET_COLUMN_NAME,
+                        TIMESTAMP_COLUMN_NAME);
+
+        // Verify the new column
+        Types.NestedField newCol = table.schema().findField("new_col");
+        assertThat(newCol.type()).isEqualTo(Types.StringType.get());
+        assertThat(newCol.isOptional()).isTrue();
+    }
+
+    @Test
+    void testAlterTableAddColumnIdempotencyWithComplexTypes() {
+        String database = "test_alter_idempotent_complex_db";
+        String tableName = "test_alter_idempotent_complex_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+
+        Schema complexSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("data", DataTypes.MAP(DataTypes.STRING(), DataTypes.STRING()))
+                        .build();
+
+        TableDescriptor td = getTableDescriptor(complexSchema);
+        flussIcebergCatalog.createTable(tablePath, td, new TestingLakeCatalogContext());
+
+        List<TableChange> changes =
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "new_col",
+                                DataTypes.INT(),
+                                null,
+                                TableChange.ColumnPosition.last()));
+
+        // First call succeeds
+        flussIcebergCatalog.alterTable(
+                tablePath, changes, getLakeCatalogContext(complexSchema, changes));
+
+        // Second call (crash recovery) should succeed via idempotency check
+        flussIcebergCatalog.alterTable(
+                tablePath, changes, getLakeCatalogContext(complexSchema, changes));
+    }
+
+    @Test
+    void testAlterTableAddArrayColumn() {
+        String database = "test_alter_add_array_db";
+        String tableName = "test_alter_add_array_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+        createLogTable(database, tableName);
+
+        List<TableChange> changes =
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "new_arr",
+                                DataTypes.ARRAY(DataTypes.STRING()),
+                                null,
+                                TableChange.ColumnPosition.last()));
+
+        flussIcebergCatalog.alterTable(
+                tablePath, changes, getLakeCatalogContext(FLUSS_SCHEMA, changes));
+
+        Table table =
+                flussIcebergCatalog
+                        .getIcebergCatalog()
+                        .loadTable(TableIdentifier.of(database, tableName));
+        Types.NestedField field = table.schema().findField("new_arr");
+        assertThat(field).isNotNull();
+        assertThat(field.isOptional()).isTrue();
+        assertThat(field.type().isListType()).isTrue();
+        Types.ListType listType = field.type().asListType();
+        assertThat(listType.elementType()).isEqualTo(Types.StringType.get());
+        assertThat(listType.elementId()).isNotEqualTo(field.fieldId());
+        assertThat(table.schema().columns())
+                .extracting(Types.NestedField::name)
+                .containsSubsequence("new_arr", BUCKET_COLUMN_NAME);
+    }
+
+    @Test
+    void testAlterTableAddMapColumn() {
+        String database = "test_alter_add_map_db";
+        String tableName = "test_alter_add_map_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+        createLogTable(database, tableName);
+
+        List<TableChange> changes =
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "new_map",
+                                DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()),
+                                null,
+                                TableChange.ColumnPosition.last()));
+
+        flussIcebergCatalog.alterTable(
+                tablePath, changes, getLakeCatalogContext(FLUSS_SCHEMA, changes));
+
+        Table table =
+                flussIcebergCatalog
+                        .getIcebergCatalog()
+                        .loadTable(TableIdentifier.of(database, tableName));
+        Types.NestedField field = table.schema().findField("new_map");
+        assertThat(field.type().isMapType()).isTrue();
+        Types.MapType mapType = field.type().asMapType();
+        assertThat(mapType.keyType()).isEqualTo(Types.StringType.get());
+        assertThat(mapType.valueType()).isEqualTo(Types.IntegerType.get());
+        assertThat(mapType.keyId()).isNotEqualTo(mapType.valueId());
+        assertThat(mapType.keyId()).isNotEqualTo(field.fieldId());
+        assertThat(mapType.valueId()).isNotEqualTo(field.fieldId());
+    }
+
+    @Test
+    void testAlterTableAddRowColumn() {
+        String database = "test_alter_add_row_db";
+        String tableName = "test_alter_add_row_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+        createLogTable(database, tableName);
+
+        List<TableChange> changes =
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "new_row",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("a", DataTypes.INT()),
+                                        DataTypes.FIELD("b", DataTypes.STRING())),
+                                null,
+                                TableChange.ColumnPosition.last()));
+
+        flussIcebergCatalog.alterTable(
+                tablePath, changes, getLakeCatalogContext(FLUSS_SCHEMA, changes));
+
+        Table table =
+                flussIcebergCatalog
+                        .getIcebergCatalog()
+                        .loadTable(TableIdentifier.of(database, tableName));
+        Types.NestedField field = table.schema().findField("new_row");
+        assertThat(field.type().isStructType()).isTrue();
+        Types.StructType struct = field.type().asStructType();
+        assertThat(struct.fields()).extracting(Types.NestedField::name).containsExactly("a", "b");
+        assertThat(struct.field("a").type()).isEqualTo(Types.IntegerType.get());
+        assertThat(struct.field("b").type()).isEqualTo(Types.StringType.get());
+        assertThat(struct.field("a").fieldId()).isNotEqualTo(struct.field("b").fieldId());
+        assertThat(struct.field("a").fieldId()).isNotEqualTo(field.fieldId());
+    }
+
+    @Test
+    void testAlterTableAddNestedComplexColumn() {
+        String database = "test_alter_add_nested_db";
+        String tableName = "test_alter_add_nested_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+        createLogTable(database, tableName);
+
+        List<TableChange> changes =
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "new_nested",
+                                DataTypes.ARRAY(
+                                        DataTypes.ROW(
+                                                DataTypes.FIELD("x", DataTypes.INT()),
+                                                DataTypes.FIELD("y", DataTypes.STRING()))),
+                                null,
+                                TableChange.ColumnPosition.last()));
+
+        flussIcebergCatalog.alterTable(
+                tablePath, changes, getLakeCatalogContext(FLUSS_SCHEMA, changes));
+
+        Table table =
+                flussIcebergCatalog
+                        .getIcebergCatalog()
+                        .loadTable(TableIdentifier.of(database, tableName));
+        Types.NestedField field = table.schema().findField("new_nested");
+        Types.ListType listType = field.type().asListType();
+        Types.StructType struct = listType.elementType().asStructType();
+        assertThat(struct.fields()).extracting(Types.NestedField::name).containsExactly("x", "y");
+
+        Set<Integer> ids = new HashSet<>();
+        ids.add(field.fieldId());
+        ids.add(listType.elementId());
+        ids.add(struct.field("x").fieldId());
+        ids.add(struct.field("y").fieldId());
+        assertThat(ids).hasSize(4);
+    }
+
+    @Test
+    void testAlterTableAddDecimalColumnPreservesPrecisionScale() {
+        String database = "test_alter_add_decimal_db";
+        String tableName = "test_alter_add_decimal_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+        createLogTable(database, tableName);
+
+        List<TableChange> changes =
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "new_dec",
+                                DataTypes.DECIMAL(20, 5),
+                                null,
+                                TableChange.ColumnPosition.last()));
+
+        flussIcebergCatalog.alterTable(
+                tablePath, changes, getLakeCatalogContext(FLUSS_SCHEMA, changes));
+
+        Table table =
+                flussIcebergCatalog
+                        .getIcebergCatalog()
+                        .loadTable(TableIdentifier.of(database, tableName));
+        assertThat(table.schema().findField("new_dec").type())
+                .isEqualTo(Types.DecimalType.of(20, 5));
+    }
+
+    @Test
+    void testAlterTableAddTimestampVariants() {
+        String database = "test_alter_add_ts_db";
+        String tableName = "test_alter_add_ts_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+        createLogTable(database, tableName);
+
+        List<TableChange> changes =
+                Arrays.asList(
+                        TableChange.addColumn(
+                                "new_ts",
+                                DataTypes.TIMESTAMP(6),
+                                null,
+                                TableChange.ColumnPosition.last()),
+                        TableChange.addColumn(
+                                "new_ts_ltz",
+                                DataTypes.TIMESTAMP_LTZ(6),
+                                null,
+                                TableChange.ColumnPosition.last()));
+
+        flussIcebergCatalog.alterTable(
+                tablePath, changes, getLakeCatalogContext(FLUSS_SCHEMA, changes));
+
+        Table table =
+                flussIcebergCatalog
+                        .getIcebergCatalog()
+                        .loadTable(TableIdentifier.of(database, tableName));
+        assertThat(table.schema().findField("new_ts").type())
+                .isEqualTo(Types.TimestampType.withoutZone());
+        assertThat(table.schema().findField("new_ts_ltz").type())
+                .isEqualTo(Types.TimestampType.withZone());
+    }
+
+    @Test
+    void testAlterTableComplexTypeMismatch() {
+        String database = "test_alter_complex_mismatch_db";
+        String tableName = "test_alter_complex_mismatch_table";
+        TablePath tablePath = TablePath.of(database, tableName);
+
+        Schema actualSchema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("tags", DataTypes.ARRAY(DataTypes.STRING()))
+                        .build();
+        flussIcebergCatalog.createTable(
+                tablePath, getTableDescriptor(actualSchema), new TestingLakeCatalogContext());
+
+        Schema mismatched =
+                Schema.newBuilder()
+                        .column("id", DataTypes.BIGINT())
+                        .column("tags", DataTypes.ARRAY(DataTypes.INT()))
+                        .build();
+        List<TableChange> changes =
+                Collections.singletonList(
+                        TableChange.addColumn(
+                                "new_col",
+                                DataTypes.STRING(),
+                                null,
+                                TableChange.ColumnPosition.last()));
+
+        assertThatThrownBy(
+                        () ->
+                                flussIcebergCatalog.alterTable(
+                                        tablePath,
+                                        changes,
+                                        getLakeCatalogContext(mismatched, changes)))
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("Iceberg schema is not compatible with Fluss schema");
+    }
+
+    private void createLogTable(String database, String tableName) {
+        TableDescriptor td = getTableDescriptor(FLUSS_SCHEMA);
+        TablePath tablePath = TablePath.of(database, tableName);
+        flussIcebergCatalog.createTable(tablePath, td, new TestingLakeCatalogContext());
+    }
+
+    private TestingLakeCatalogContext getLakeCatalogContext(
+            Schema schema, List<TableChange> schemaChanges) {
+        Schema expectedSchema = SchemaUpdate.applySchemaChanges(schema, schemaChanges);
+        return new TestingLakeCatalogContext(
+                getTableDescriptor(schema), getTableDescriptor(expectedSchema));
+    }
+
+    private TableDescriptor getTableDescriptor(Schema schema) {
+        return TableDescriptor.builder().schema(schema).distributedBy(3).build();
     }
 }

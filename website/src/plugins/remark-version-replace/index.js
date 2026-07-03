@@ -59,6 +59,7 @@ const plugin = (options) => {
             "$FLUSS_VERSION$": version.fullVersion,
             "$FLUSS_VERSION_SHORT$": version.shortVersion,
             "$FLUSS_DOCKER_VERSION$": version.dockerVersion,
+            "$FLUSS_QUICKSTART_FLINK_DOCKER_VERSION$": `1.20-${version.dockerVersion}`,
             "$PAIMON_VERSION$": version.paimonVersion,
             "$PAIMON_VERSION_SHORT$": version.paimonVersionShort,
             "$FLUSS_MAVEN_REPO_URL$": version.mavenRepoUrl

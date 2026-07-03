@@ -25,6 +25,7 @@ import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.memory.LazyMemorySegmentPool;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.PreAllocatedPagedOutputView;
@@ -32,10 +33,11 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.record.LogRecordBatchStatisticsCollector;
 import org.apache.fluss.row.arrow.ArrowWriter;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ChunkedAllocationManager;
 import org.apache.fluss.utils.CopyOnWriteMap;
 import org.apache.fluss.utils.MathUtils;
 import org.apache.fluss.utils.clock.Clock;
@@ -58,10 +60,12 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
+import static org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocatorUtil.createBufferAllocator;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
@@ -98,6 +102,12 @@ public final class RecordAccumulator {
     /** The arrow buffer allocator to allocate memory for arrow log write batch. */
     private final BufferAllocator bufferAllocator;
 
+    /** The chunked allocation manager factory, stored for explicit native memory release. */
+    private final ChunkedAllocationManager.ChunkedFactory chunkedFactory;
+
+    /** Guard to make {@link #destroyResources()} idempotent. */
+    private final AtomicBoolean resourcesDestroyed = new AtomicBoolean(false);
+
     /** The pool of lazily created arrow {@link ArrowWriter}s for arrow log write batch. */
     private final ArrowWriterPool arrowWriterPool;
 
@@ -133,7 +143,8 @@ public final class RecordAccumulator {
                 Math.max(1, (int) conf.get(ConfigOptions.CLIENT_WRITER_BATCH_SIZE).getBytes());
 
         this.writerBufferPool = LazyMemorySegmentPool.createWriterBufferPool(conf);
-        this.bufferAllocator = new RootAllocator(Long.MAX_VALUE);
+        this.chunkedFactory = new ChunkedAllocationManager.ChunkedFactory();
+        this.bufferAllocator = createBufferAllocator(chunkedFactory);
         this.arrowWriterPool = new ArrowWriterPool(bufferAllocator);
         this.incomplete = new IncompleteBatches();
         this.nodesDrainIndex = new HashMap<>();
@@ -306,16 +317,20 @@ public final class RecordAccumulator {
     }
 
     /** Abort all incomplete batches (whether they have been sent or not). */
-    public void abortBatches(final Exception reason) {
+    public void abortAllBatches(final Exception reason) {
         for (WriteBatch batch : incomplete.copyAll()) {
-            Deque<WriteBatch> dq = getDeque(batch.physicalTablePath(), batch.bucketId());
-            synchronized (dq) {
-                batch.abortRecordAppends();
-                dq.remove(batch);
-            }
-            batch.abort(reason);
-            deallocate(batch);
+            abortBatch(reason, batch);
         }
+    }
+
+    private void abortBatch(final Exception reason, WriteBatch batch) {
+        Deque<WriteBatch> dq = getDeque(batch.physicalTablePath(), batch.bucketId());
+        synchronized (dq) {
+            batch.abortRecordAppends();
+            dq.remove(batch);
+        }
+        batch.abort(reason);
+        deallocate(batch);
     }
 
     /** Get the deque for the given table-bucket, creating it if necessary. */
@@ -610,6 +625,7 @@ public final class RecordAccumulator {
             case COMPACTED_KV:
             case INDEXED_KV:
                 return new KvWriteBatch(
+                        tableInfo.getTableId(),
                         bucketId,
                         physicalTablePath,
                         tableInfo.getSchemaId(),
@@ -628,16 +644,25 @@ public final class RecordAccumulator {
                                 outputView.getPreAllocatedSize(),
                                 tableInfo.getRowType(),
                                 tableInfo.getTableConfig().getArrowCompressionInfo());
+                LogRecordBatchStatisticsCollector statisticsCollector = null;
+                if (tableInfo.isStatisticsEnabled()) {
+                    statisticsCollector =
+                            new LogRecordBatchStatisticsCollector(
+                                    tableInfo.getRowType(), tableInfo.getStatsIndexMapping());
+                }
                 return new ArrowLogWriteBatch(
+                        tableInfo.getTableId(),
                         bucketId,
                         physicalTablePath,
                         tableInfo.getSchemaId(),
                         arrowWriter,
                         outputView,
-                        clock.milliseconds());
+                        clock.milliseconds(),
+                        statisticsCollector);
 
             case COMPACTED_LOG:
                 return new CompactedLogWriteBatch(
+                        tableInfo.getTableId(),
                         bucketId,
                         physicalTablePath,
                         schemaId,
@@ -647,6 +672,7 @@ public final class RecordAccumulator {
 
             case INDEXED_LOG:
                 return new IndexedLogWriteBatch(
+                        tableInfo.getTableId(),
                         bucketId,
                         physicalTablePath,
                         tableInfo.getSchemaId(),
@@ -706,56 +732,103 @@ public final class RecordAccumulator {
             }
 
             final WriteBatch batch;
+            List<WriteBatch> staleBatches = null;
+            long oldStaleTableId = -1L;
             synchronized (deque) {
                 WriteBatch first = deque.peekFirst();
                 if (first == null) {
                     continue;
                 }
 
-                // TODO retry back off check.
-
-                if (size + first.estimatedSizeInBytes() > maxSize && !ready.isEmpty()) {
-                    // there is a rare case that a single batch size is larger than the request size
-                    // due to compression; in this case we will still eventually send this batch in
-                    // a single request.
-                    break;
+                if (tableBucket.getTableId() != first.tableId()) {
+                    // Table has been dropped and re-created with a new table id. Drain ALL
+                    // consecutive head batches that belong to the old table instance in one
+                    // pass under the lock, then abort them outside the lock with a single
+                    // aggregated WARN line.
+                    oldStaleTableId = first.tableId();
+                    staleBatches = new ArrayList<>();
+                    while (first != null
+                            && first.tableId() == oldStaleTableId
+                            && first.tableId() != tableBucket.getTableId()) {
+                        staleBatches.add(deque.pollFirst());
+                        first = deque.peekFirst();
+                    }
+                    batch = null;
                 } else {
-                    if (shouldStopDrainBatchesForBucket(first, tableBucket)) {
+                    // TODO retry back off check.
+
+                    if (size + first.estimatedSizeInBytes() > maxSize && !ready.isEmpty()) {
+                        // there is a rare case that a single batch size is larger than the
+                        // request size due to compression; in this case we will still
+                        // eventually send this batch in a single request.
                         break;
+                    } else if (shouldStopDrainBatchesForBucket(first, tableBucket)) {
+                        // Buckets are independent — skip this one, keep draining others.
+                        continue;
+                    }
+
+                    batch = deque.pollFirst();
+                    long writerId =
+                            idempotenceManager.idempotenceEnabled()
+                                    ? idempotenceManager.writerId()
+                                    : NO_WRITER_ID;
+                    if (writerId != NO_WRITER_ID && !batch.hasBatchSequence()) {
+                        // If writer id of the bucket do not match the latest one of writer,
+                        // we update it and reset the batch sequence. This should be only done when
+                        // all
+                        // its in-flight batches have completed. This is guarantee in
+                        // `shouldStopDrainBatchesForBucket`.
+                        idempotenceManager.maybeUpdateWriterId(tableBucket);
+
+                        // If the batch already has an assigned batch sequence, then we should not
+                        // change writer id and batch sequence, since this may introduce
+                        // duplicates. In particular, the previous attempt may actually have been
+                        // accepted, and if we change writer id and sequence here, this attempt
+                        // will also be accepted, causing a duplicate.
+                        //
+                        // Additionally, we update the next batch sequence bound for the table
+                        // bucket,
+                        // and also have the writerStateManager track the batch to ensure
+                        // that sequence ordering is maintained even if we receive out of order
+                        // responses.
+                        batch.setWriterState(
+                                writerId, idempotenceManager.nextSequence(tableBucket));
+                        idempotenceManager.incrementBatchSequence(tableBucket);
+                        LOG.debug(
+                                "Assigner writerId {} to batch with batch sequence {} being sent to table bucket {}",
+                                writerId,
+                                batch.batchSequence(),
+                                tableBucket);
+                        idempotenceManager.addInFlightBatch(batch, tableBucket);
                     }
                 }
+            }
 
-                batch = deque.pollFirst();
-                long writerId =
-                        idempotenceManager.idempotenceEnabled()
-                                ? idempotenceManager.writerId()
-                                : NO_WRITER_ID;
-                if (writerId != NO_WRITER_ID && !batch.hasBatchSequence()) {
-                    // If writer id of the bucket do not match the latest one of writer,
-                    // we update it and reset the batch sequence. This should be only done when all
-                    // its in-flight batches have completed. This is guarantee in
-                    // `shouldStopDrainBatchesForBucket`.
-                    idempotenceManager.maybeUpdateWriterId(tableBucket);
-
-                    // If the batch already has an assigned batch sequence, then we should not
-                    // change writer id and batch sequence, since this may introduce
-                    // duplicates. In particular, the previous attempt may actually have been
-                    // accepted, and if we change writer id and sequence here, this attempt
-                    // will also be accepted, causing a duplicate.
-                    //
-                    // Additionally, we update the next batch sequence bound for the table bucket,
-                    // and also have the writerStateManager track the batch to ensure
-                    // that sequence ordering is maintained even if we receive out of order
-                    // responses.
-                    batch.setWriterState(writerId, idempotenceManager.nextSequence(tableBucket));
-                    idempotenceManager.incrementBatchSequence(tableBucket);
-                    LOG.debug(
-                            "Assigner writerId {} to batch with batch sequence {} being sent to table bucket {}",
-                            writerId,
-                            batch.batchSequence(),
-                            tableBucket);
-                    idempotenceManager.addInFlightBatch(batch, tableBucket);
+            // Abort stale batches *outside* the deque lock so user callbacks (alien methods)
+            // and memory deallocation never run while holding it. Aggregate to a single WARN.
+            if (staleBatches != null) {
+                LOG.warn(
+                        "Table {} has been dropped and re-created with a new table ID. "
+                                + "Old ID: {}, New ID: {}. Aborting {} pending batches for the old table instance.",
+                        physicalTablePath,
+                        oldStaleTableId,
+                        tableBucket.getTableId(),
+                        staleBatches.size());
+                TableNotExistException reason =
+                        new TableNotExistException(
+                                String.format(
+                                        "Table '%s' has been dropped and re-created with a new table ID (old: %d, new: %d). "
+                                                + "Further writes to the old table instance cannot proceed. "
+                                                + "Please recreate the writer with the new table metadata.",
+                                        physicalTablePath,
+                                        oldStaleTableId,
+                                        tableBucket.getTableId()),
+                                null,
+                                true);
+                for (WriteBatch staleBatch : staleBatches) {
+                    abortBatch(reason, staleBatch);
                 }
+                continue;
             }
 
             // the rest of the work by processing outside the lock close() is particularly expensive
@@ -946,15 +1019,30 @@ public final class RecordAccumulator {
         }
     }
 
-    /** Close this accumulator and force all the record buffers to be drained. */
+    /** Close this accumulator to reject new appends. */
     public void close() {
         closed = true;
+    }
 
+    /**
+     * Destroy all resources held by this accumulator including the Arrow writer pool and buffer
+     * allocator.
+     *
+     * <p>This must only be called after the sender thread has fully exited and no more drain
+     * operations will occur. Otherwise, draining batches may attempt to recycle Arrow writers using
+     * an already-closed allocator, causing "Accounted size went negative" errors.
+     *
+     * <p>This method is idempotent: subsequent calls after the first are no-ops.
+     */
+    @VisibleForTesting
+    public void destroyResources() {
+        if (!resourcesDestroyed.compareAndSet(false, true)) {
+            return;
+        }
         writerBufferPool.close();
         arrowWriterPool.close();
-        // Release all the memory segments.
-        bufferAllocator.releaseBytes(bufferAllocator.getAllocatedMemory());
         bufferAllocator.close();
+        chunkedFactory.close();
     }
 
     /** Per table bucket and write batches. */

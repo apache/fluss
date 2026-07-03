@@ -33,6 +33,7 @@ import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.kv.KvManager;
+import org.apache.fluss.server.kv.scan.ScannerManager;
 import org.apache.fluss.server.kv.snapshot.TestingCompletedKvSnapshotCommitter;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
@@ -40,11 +41,13 @@ import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
+import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.ManualClock;
@@ -68,6 +71,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
 
 import static org.apache.fluss.record.TestData.DATA1;
@@ -75,6 +79,7 @@ import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.metrics.group.TestingMetricGroups.USER_METRICS;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
@@ -101,6 +106,8 @@ public class ReplicaFetcherThreadTest {
     private ReplicaManager followerRM;
     private ReplicaFetcherThread followerFetcher;
     private ExecutorService ioExecutor;
+    private LocalDiskManager leaderLocalDiskManager;
+    private LocalDiskManager followerLocalDiskManager;
 
     @BeforeAll
     static void baseBeforeAll() {
@@ -116,8 +123,10 @@ public class ReplicaFetcherThreadTest {
         manualClock = new ManualClock(System.currentTimeMillis());
         Configuration conf = new Configuration();
         tb = new TableBucket(DATA1_TABLE_ID, 0);
-        leaderRM = createReplicaManager(leaderServerId);
-        followerRM = createReplicaManager(followerServerId);
+        leaderLocalDiskManager = createLocalDiskManager(leaderServerId);
+        leaderRM = createReplicaManager(leaderServerId, leaderLocalDiskManager);
+        followerLocalDiskManager = createLocalDiskManager(followerServerId);
+        followerRM = createReplicaManager(followerServerId, followerLocalDiskManager);
         // with local test leader end point.
         leader =
                 new ServerNode(
@@ -140,6 +149,12 @@ public class ReplicaFetcherThreadTest {
 
     @AfterEach
     public void tearDown() throws Exception {
+        if (leaderLocalDiskManager != null) {
+            leaderLocalDiskManager.close();
+        }
+        if (followerLocalDiskManager != null) {
+            followerLocalDiskManager.close();
+        }
         if (ioExecutor != null) {
             ioExecutor.shutdownNow();
         }
@@ -373,11 +388,92 @@ public class ReplicaFetcherThreadTest {
                 () -> assertThat(followerReplica.getLocalLogEndOffset()).isEqualTo(30L));
     }
 
+    @Test
+    void testFetchTimeoutReleasesPooledByteBuf() throws Exception {
+        // This test verifies that when a fetchLog RPC times out, the pooled ByteBuf
+        // held by the late-arriving FetchLogResponse is properly released.
+        // Without the fix, the ByteBuf would leak, causing Netty direct memory growth.
+
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        try {
+            Configuration conf = new Configuration();
+            ServerNode followerNode =
+                    new ServerNode(
+                            followerServerId,
+                            "localhost",
+                            10001,
+                            ServerType.TABLET_SERVER,
+                            "rack2");
+            TestingLeaderEndpoint testingEndpoint =
+                    new TestingLeaderEndpoint(conf, leaderRM, followerNode);
+
+            // Append records to leader so fetch responses carry actual data
+            CompletableFuture<List<ProduceLogResultForBucket>> future = new CompletableFuture<>();
+            leaderRM.appendRecordsToLog(
+                    1000,
+                    1,
+                    Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
+                    null,
+                    future::complete);
+            assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 0, 10L));
+
+            // Configure the endpoint to delay responses by 3 seconds (longer than 1s timeout)
+            testingEndpoint.setFetchDelay(scheduler, 3000);
+
+            // Create a fetcher with a very short timeout (1 second) to trigger timeout quickly
+            ReplicaFetcherThread timeoutFetcher =
+                    new ReplicaFetcherThread(
+                            "test-timeout-fetcher",
+                            followerRM,
+                            testingEndpoint,
+                            1000,
+                            1 /* 1 second timeout */);
+
+            timeoutFetcher.addBuckets(
+                    Collections.singletonMap(
+                            tb,
+                            new InitialFetchStatus(
+                                    DATA1_TABLE_ID, DATA1_TABLE_PATH, leader.id(), 0L)));
+
+            // Start the fetcher - it will send fetches, each timing out after 1s,
+            // then the delayed responses arrive after 3s
+            timeoutFetcher.start();
+
+            // Wait until at least one delayed response has been allocated
+            retry(
+                    Duration.ofSeconds(10),
+                    () -> assertThat(testingEndpoint.getAllAllocatedByteBufs()).isNotEmpty());
+
+            // Shutdown the fetcher to stop new requests
+            timeoutFetcher.shutdown();
+
+            // Wait until ALL allocated ByteBufs have been released (refCnt == 0).
+            // The thenAccept callback releases them when late responses arrive.
+            retry(
+                    Duration.ofSeconds(15),
+                    () -> {
+                        java.util.List<ByteBuf> allBufs = testingEndpoint.getAllAllocatedByteBufs();
+                        for (int i = 0; i < allBufs.size(); i++) {
+                            assertThat(allBufs.get(i).refCnt())
+                                    .as(
+                                            "Pooled ByteBuf #%d should be released after"
+                                                    + " fetch timeout. refCnt > 0 means the"
+                                                    + " buffer leaked.",
+                                            i)
+                                    .isEqualTo(0);
+                        }
+                    });
+        } finally {
+            scheduler.shutdownNow();
+        }
+    }
+
     private void registerTableInZkClient() throws Exception {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
         zkClient.registerTable(
                 DATA1_TABLE_PATH,
-                TableRegistration.newTable(DATA1_TABLE_ID, DATA1_TABLE_DESCRIPTOR));
+                TableRegistration.newTable(
+                        DATA1_TABLE_ID, DEFAULT_REMOTE_DATA_DIR, DATA1_TABLE_DESCRIPTOR));
         zkClient.registerFirstSchema(DATA1_TABLE_PATH, DATA1_SCHEMA);
     }
 
@@ -393,6 +489,7 @@ public class ReplicaFetcherThreadTest {
                                         leaderServerId,
                                         INITIAL_LEADER_EPOCH,
                                         Arrays.asList(leaderServerId, followerServerId),
+                                        Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
                 result -> {});
@@ -407,13 +504,23 @@ public class ReplicaFetcherThreadTest {
                                         leaderServerId,
                                         INITIAL_LEADER_EPOCH,
                                         Arrays.asList(leaderServerId, followerServerId),
+                                        Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
                 result -> {});
     }
 
-    private ReplicaManager createReplicaManager(int serverId) throws Exception {
+    private LocalDiskManager createLocalDiskManager(int serverId) throws Exception {
         Configuration conf = new Configuration();
+        conf.set(ConfigOptions.TABLET_SERVER_ID, serverId);
+        conf.setString(ConfigOptions.DATA_DIR, tempDir.getAbsolutePath() + "/server-" + serverId);
+        return LocalDiskManager.create(conf);
+    }
+
+    private ReplicaManager createReplicaManager(int serverId, LocalDiskManager localDiskManager)
+            throws Exception {
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.TABLET_SERVER_ID, serverId);
         conf.setString(ConfigOptions.DATA_DIR, tempDir.getAbsolutePath() + "/server-" + serverId);
         conf.set(ConfigOptions.WRITER_ID_EXPIRATION_TIME, Duration.ofHours(12));
         Scheduler scheduler = new FlussScheduler(2);
@@ -425,7 +532,8 @@ public class ReplicaFetcherThreadTest {
                         zkClient,
                         scheduler,
                         manualClock,
-                        TestingMetricGroups.TABLET_SERVER_METRICS);
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
+                        localDiskManager);
         logManager.startup();
         ReplicaManager replicaManager =
                 new TestingReplicaManager(
@@ -440,10 +548,11 @@ public class ReplicaFetcherThreadTest {
                                         null,
                                         conf,
                                         new LakeCatalogDynamicLoader(conf, null, true))),
-                        RpcClient.create(conf, TestingClientMetricGroup.newInstance(), false),
+                        RpcClient.create(conf, TestingClientMetricGroup.newInstance()),
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         manualClock,
-                        ioExecutor);
+                        ioExecutor,
+                        localDiskManager);
         replicaManager.startup();
         return replicaManager;
     }
@@ -464,7 +573,8 @@ public class ReplicaFetcherThreadTest {
                 RpcClient rpcClient,
                 TabletServerMetricGroup serverMetricGroup,
                 Clock clock,
-                ExecutorService ioExecutor)
+                ExecutorService ioExecutor,
+                LocalDiskManager localDiskManager)
                 throws IOException {
             super(
                     conf,
@@ -480,8 +590,10 @@ public class ReplicaFetcherThreadTest {
                     NOPErrorHandler.INSTANCE,
                     serverMetricGroup,
                     USER_METRICS,
+                    new ScannerManager(conf, scheduler),
                     clock,
-                    ioExecutor);
+                    ioExecutor,
+                    localDiskManager);
         }
 
         @Override

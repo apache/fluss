@@ -151,7 +151,7 @@ public class PaimonLakeCatalog implements LakeCatalog {
             }
         } catch (Catalog.ColumnAlreadyExistException | Catalog.ColumnNotExistException e) {
             // This shouldn't happen for AddColumn operations
-            throw new InvalidAlterTableException(e.getMessage());
+            throw new InvalidAlterTableException(e.getMessage(), e);
         } catch (Catalog.TableNotExistException e) {
             throw new TableNotExistException("Table " + tablePath + " does not exist.");
         }

@@ -20,19 +20,26 @@ package org.apache.fluss.spark.read
 import org.apache.fluss.client.table.scanner.ScanRecord
 import org.apache.fluss.config.Configuration
 import org.apache.fluss.metadata.{TableBucket, TablePath}
+import org.apache.fluss.predicate.Predicate
+import org.apache.fluss.types.RowType
 
 /** Partition reader that reads log data from a single Fluss table bucket. */
 class FlussAppendPartitionReader(
     tablePath: TablePath,
     projection: Array[Int],
+    pushedPredicate: Option[Predicate],
+    limit: Option[Int],
     flussPartition: FlussAppendInputPartition,
     flussConfig: Configuration)
-  extends FlussPartitionReader(tablePath, flussConfig) {
+  extends FlussPartitionReader(tablePath, flussConfig, limit) {
+
+  override protected lazy val projectedRowType: RowType = rowType.project(projection)
 
   private val tableBucket: TableBucket = flussPartition.tableBucket
   private val partitionId = tableBucket.getPartitionId
   private val bucketId = tableBucket.getBucket
-  private val logScanner = table.newScan().project(projection).createLogScanner()
+  private val logScanner =
+    table.newScan().project(projection).filter(pushedPredicate.orNull).createLogScanner()
 
   // Iterator for current batch of records
   private var currentRecords: java.util.Iterator[ScanRecord] = java.util.Collections.emptyIterator()
@@ -52,7 +59,7 @@ class FlussAppendPartitionReader(
     currentRecords = scanRecords.records(tableBucket).iterator()
   }
 
-  override def next(): Boolean = {
+  override def next0(): Boolean = {
     if (closed || currentOffset >= flussPartition.stopOffset) {
       return false
     }

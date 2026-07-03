@@ -24,11 +24,11 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss-metrics</artifactId>
-        <version>0.10-SNAPSHOT</version>
+        <version>1.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-metrics-jmx</artifactId>
-    <name>Fluss : Metrics : JMX</name>
+    <name>Apache Fluss (Incubating) : Metrics : JMX</name>
 
     <properties>
         <!-- required by JmxServer -->

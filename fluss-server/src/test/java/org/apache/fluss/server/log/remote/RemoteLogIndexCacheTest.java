@@ -49,7 +49,7 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
     @BeforeEach
     public void setup() throws Exception {
         super.setup();
-        rlIndexCache = remoteLogManager.getRemoteLogIndexCache();
+        rlIndexCache = remoteLogManager.getRemoteLogIndexCache(localDiskManager.dataDirs().get(0));
     }
 
     @ParameterizedTest

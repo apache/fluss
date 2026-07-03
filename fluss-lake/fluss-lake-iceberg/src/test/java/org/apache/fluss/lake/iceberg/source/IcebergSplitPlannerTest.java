@@ -18,15 +18,23 @@
 
 package org.apache.fluss.lake.iceberg.source;
 
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.PredicateBuilder;
+import org.apache.fluss.types.IntType;
+import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.StringType;
 
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.data.GenericRecord;
+import org.apache.iceberg.expressions.Expression;
+import org.apache.iceberg.expressions.Expressions;
 import org.apache.iceberg.types.Types;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -34,6 +42,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
@@ -143,5 +152,66 @@ class IcebergSplitPlannerTest extends IcebergSourceTestBase {
                     .containsExactlyInAnyOrder(
                             Collections.singletonList("a"), Collections.singletonList("b"));
         }
+    }
+
+    @Test
+    void testOnlyIncludesFilterColumnStats() throws Exception {
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "test_filter_column_stats");
+        Schema schema =
+                new Schema(
+                        optional(1, "c1", Types.IntegerType.get()),
+                        optional(2, "c2", Types.StringType.get()),
+                        optional(3, "c3", Types.StringType.get()));
+        PartitionSpec partitionSpec = PartitionSpec.builderFor(schema).bucket("c1", 2).build();
+        createTable(tablePath, schema, partitionSpec);
+
+        Table table = getTable(tablePath);
+        GenericRecord record = createIcebergRecord(schema, 12, "a", "A");
+        writeRecord(table, Collections.singletonList(record), null, 0);
+        table.refresh();
+        Snapshot snapshot = table.currentSnapshot();
+
+        PredicateBuilder predicateBuilder =
+                new PredicateBuilder(RowType.of(new IntType(), new StringType(), new StringType()));
+        LakeSource<IcebergSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        lakeSource.withFilters(Collections.singletonList(predicateBuilder.greaterOrEqual(0, 10)));
+        List<IcebergSplit> icebergSplits = lakeSource.createPlanner(snapshot::snapshotId).plan();
+
+        assertThat(icebergSplits).hasSize(1);
+        assertThat(icebergSplits.get(0).fileScanTask().file().lowerBounds().keySet())
+                .containsOnly(1);
+    }
+
+    @Test
+    void testReferencedColumns() {
+        // Unbound predicates expose the referenced column through their named reference.
+        assertThat(referencedColumns(Expressions.greaterThanOrEqual("c1", 10))).containsOnly("c1");
+
+        // Compound expressions merge referenced columns and deduplicate repeated columns.
+        Expression compoundExpression =
+                Expressions.and(
+                        Expressions.or(
+                                Expressions.greaterThanOrEqual("c1", 10),
+                                Expressions.equal("c2", "a")),
+                        Expressions.not(Expressions.lessThan("c1", 20)));
+        assertThat(referencedColumns(compoundExpression)).containsOnly("c1", "c2");
+
+        // Bound predicates expose the resolved field through their bound reference.
+        Schema schema =
+                new Schema(
+                        optional(1, "c1", Types.IntegerType.get()),
+                        optional(2, "c2", Types.StringType.get()));
+        Expression boundExpression =
+                Expressions.greaterThanOrEqual("c2", "a").bind(schema.asStruct(), true);
+        assertThat(referencedColumns(boundExpression)).containsOnly("c2");
+    }
+
+    private Set<String> referencedColumns(Expression expression) {
+        return new IcebergSplitPlanner(
+                        new Configuration(),
+                        TablePath.of(DEFAULT_DB, "test_referenced_columns"),
+                        0,
+                        null)
+                .referencedColumns(expression);
     }
 }

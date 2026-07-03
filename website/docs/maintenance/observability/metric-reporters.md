@@ -93,6 +93,8 @@ Parameters:
 - `metrics.reporter.prometheus-push.random-job-name-suffix` - (Optional) Specifies whether a random suffix should be appended to the job name, defaults to true. This is useful when multiple instances of the reporter are running on the same host. 
 - `metrics.reporter.prometheus-push.delete-on-shutdown` - (Optional) Specifies whether to delete metrics from the PushGateway on shutdown, defaults to true. Fluss will try its best to delete the metrics but this is not guaranteed.
 - `metrics.reporter.prometheus-push.grouping-key` - Specifies the grouping key which is the group and global labels of all metrics. The label name and value are separated by `=`, and labels are separated by `;`, e.g., `k1=v1;k2=v2`.
+- `metrics.reporter.prometheus-push.username` - (Optional) The username for Basic Auth of the Prometheus PushGateway. Leave it unset to disable authentication.
+- `metrics.reporter.prometheus-push.password` - (Optional) The password for Basic Auth of the Prometheus PushGateway. Only takes effect when `username` is configured.
 
 Example configuration:
 
@@ -104,4 +106,43 @@ metrics.reporter.prometheus-push.push-interval: 10 SECONDS
 metrics.reporter.prometheus-push.random-job-name-suffix: true
 metrics.reporter.prometheus-push.delete-on-shutdown: true
 metrics.reporter.prometheus-push.grouping-key: instance=instance01;cluster=clusterA
+metrics.reporter.prometheus-push.username: myuser
+metrics.reporter.prometheus-push.password: mypassword
+```
+
+### InfluxDB
+
+Type: push
+
+InfluxDB reporter supports both InfluxDB v2 and InfluxDB v3. The default version is v3.
+
+Parameters:
+
+- `metrics.reporter.influxdb.version` - (Optional) The InfluxDB version to connect to, defaults to `v3`. Supported values are `v2` and `v3`.
+- `metrics.reporter.influxdb.host-url` - The InfluxDB server host URL including scheme, host name, and port.
+- `metrics.reporter.influxdb.bucket` - The InfluxDB bucket/database name.
+- `metrics.reporter.influxdb.org` - The InfluxDB organization name. Required for InfluxDB v2, not needed for InfluxDB v3.
+- `metrics.reporter.influxdb.token` - The InfluxDB authentication token.
+- `metrics.reporter.influxdb.push-interval` - (Optional) The interval of reporting metrics to InfluxDB, defaults to 10 SECONDS.
+
+Example configuration for InfluxDB v3 (default):
+
+```yaml
+metrics.reporters: influxdb
+metrics.reporter.influxdb.host-url: http://localhost:8181
+metrics.reporter.influxdb.bucket: fluss_metrics
+metrics.reporter.influxdb.token: your-influxdb-token
+metrics.reporter.influxdb.push-interval: 10 SECONDS
+```
+
+Example configuration for InfluxDB v2:
+
+```yaml
+metrics.reporters: influxdb
+metrics.reporter.influxdb.version: v2
+metrics.reporter.influxdb.host-url: http://localhost:8086
+metrics.reporter.influxdb.bucket: fluss_metrics
+metrics.reporter.influxdb.org: fluss_org
+metrics.reporter.influxdb.token: your-influxdb-token
+metrics.reporter.influxdb.push-interval: 10 SECONDS
 ```

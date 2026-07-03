@@ -17,12 +17,16 @@
 
 package org.apache.fluss.lake.paimon.tiering;
 
+import org.apache.fluss.lake.batch.ArrowRecordBatch;
+import org.apache.fluss.lake.batch.RecordBatch;
 import org.apache.fluss.lake.paimon.tiering.append.AppendOnlyWriter;
 import org.apache.fluss.lake.paimon.tiering.mergetree.MergeTreeWriter;
 import org.apache.fluss.lake.writer.LakeWriter;
+import org.apache.fluss.lake.writer.SupportsRecordBatchWrite;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.types.RowType;
 
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Catalog;
@@ -37,7 +41,7 @@ import java.util.Map;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 
 /** Implementation of {@link LakeWriter} for Paimon. */
-public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult> {
+public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult>, SupportsRecordBatchWrite {
 
     private final Catalog paimonCatalog;
     private final RecordWriter<?> recordWriter;
@@ -52,6 +56,7 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult> {
                         writerInitContext.tableInfo().getTableConfig().isDataLakeAutoCompaction());
 
         List<String> partitionKeys = fileStoreTable.partitionKeys();
+        RowType flussRowType = writerInitContext.tableInfo().getRowType();
 
         this.recordWriter =
                 fileStoreTable.primaryKeys().isEmpty()
@@ -59,12 +64,14 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult> {
                                 fileStoreTable,
                                 writerInitContext.tableBucket(),
                                 writerInitContext.partition(),
-                                partitionKeys)
+                                partitionKeys,
+                                flussRowType)
                         : new MergeTreeWriter(
                                 fileStoreTable,
                                 writerInitContext.tableBucket(),
                                 writerInitContext.partition(),
-                                partitionKeys);
+                                partitionKeys,
+                                flussRowType);
     }
 
     @Override
@@ -73,6 +80,25 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult> {
             recordWriter.write(record);
         } catch (Exception e) {
             throw new IOException("Failed to write Fluss record to Paimon.", e);
+        }
+    }
+
+    @Override
+    public void write(RecordBatch recordBatch) throws IOException {
+        if (!(recordBatch instanceof ArrowRecordBatch)) {
+            throw new IllegalArgumentException(
+                    "PaimonLakeWriter only supports ArrowRecordBatch, but got "
+                            + recordBatch.getClass().getSimpleName());
+        }
+        if (!(recordWriter instanceof AppendOnlyWriter)) {
+            throw new IllegalStateException(
+                    "Arrow record batch writing is only supported for append-only tables.");
+        }
+        try {
+            ((AppendOnlyWriter) recordWriter)
+                    .writeArrowBatch(((ArrowRecordBatch) recordBatch).getArrowBatchData());
+        } catch (Exception e) {
+            throw new IOException("Failed to write Arrow record batch to Paimon.", e);
         }
     }
 

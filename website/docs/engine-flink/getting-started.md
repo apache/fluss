@@ -9,6 +9,30 @@ sidebar_position: 1
 For a quick introduction to running Flink, refer to the [Quick Start](quickstart/flink.md) guide.
 
 
+## Dependencies
+
+Apache Fluss publishes the following JARs to Maven Central:
+
+| Artifact | Jar |
+|----------|-----|
+| Fluss connector for Flink 2.2 | [fluss-flink-2.2-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-2.2/$FLUSS_VERSION$/fluss-flink-2.2-$FLUSS_VERSION$.jar) |
+| Fluss connector for Flink 1.20 | [fluss-flink-1.20-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar) |
+| Fluss connector for Flink 1.19 | [fluss-flink-1.19-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-1.19/$FLUSS_VERSION$/fluss-flink-1.19-$FLUSS_VERSION$.jar) |
+| Fluss connector for Flink 1.18 | [fluss-flink-1.18-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-flink-1.18/$FLUSS_VERSION$/fluss-flink-1.18-$FLUSS_VERSION$.jar) |
+
+Maven coordinates (example for Flink 1.20):
+
+```xml
+<dependency>
+  <groupId>org.apache.fluss</groupId>
+  <artifactId>fluss-flink-1.20</artifactId>
+  <version>$FLUSS_VERSION$</version>
+</dependency>
+```
+
+Verify downloaded JARs against the [KEYS file](https://downloads.apache.org/incubator/fluss/KEYS) using the [verification instructions](/downloads#verifying-downloads).
+
+
 ## Supported Flink Versions
 | Fluss Connector Versions | Supported Flink Versions |
 |--------------------------|--------------------------| 
@@ -55,7 +79,7 @@ tar -xzf flink-1.20.3-bin-scala_2.12.tgz
 ```
 - **Copy Fluss Flink Bundled Jar**
 
-Download [Fluss Flink Bundled jar](/downloads) and copy to the `lib` directory of your Flink home.
+Download the Fluss Flink connector JAR from the [Dependencies](#dependencies) section above and copy it to the `lib` directory of your Flink home.
 
 ```shell
 cp fluss-flink-1.20-$FLUSS_VERSION$.jar <FLINK_HOME>/lib/

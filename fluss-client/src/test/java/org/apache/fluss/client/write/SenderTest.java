@@ -24,6 +24,7 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -43,6 +44,7 @@ import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
 import org.apache.fluss.utils.clock.SystemClock;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -61,12 +63,15 @@ import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
+import static org.apache.fluss.record.TestData.DATA2_TABLE_ID;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.rpc.protocol.Errors.SCHEMA_NOT_EXIST;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getProduceLogData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeProduceLogResponse;
@@ -99,6 +104,11 @@ final class SenderTest {
         metadataUpdater = initializeMetadataUpdater();
         writerMetricGroup = TestingWriterMetricGroup.newInstance();
         sender = setupWithIdempotenceState();
+    }
+
+    @AfterEach
+    public void teardown() throws Exception {
+        sender.destroyResources();
     }
 
     @Test
@@ -169,6 +179,39 @@ final class SenderTest {
         assertThat(idempotenceManager.isWriterIdValid()).isTrue();
         assertThat(idempotenceManager.hasWriterId(0L)).isTrue();
         assertThat(idempotenceManager.writerId()).isEqualTo(0L);
+    }
+
+    /**
+     * Verifies the two-phase close prevents the shutdown race condition. Previously,
+     * initiateClose() destroyed the Arrow BufferAllocator while the sender's drain loop was still
+     * running, causing "Accounted size went negative". With the fix, initiateClose() only rejects
+     * new appends; resource destruction is deferred to destroyResources().
+     */
+    @Test
+    void testCloseSenderBeforeAccumulatorDrain() throws Exception {
+        // Append a record so there is an undrained batch.
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> {});
+
+        // Sender begins to prepare write data.
+        Cluster clusterSnapshot = metadataUpdater.getCluster();
+        RecordAccumulator.ReadyCheckResult readyCheckResult = accumulator.ready(clusterSnapshot);
+        assertThat(readyCheckResult.readyNodes).isNotEmpty();
+
+        // Close the accumulator before it drains — this is the race window.
+        sender.initiateClose();
+
+        // Drain after the sender is closed. Before the fix this threw "Accounted size went
+        // negative" because the Arrow
+        // allocator was closed while the drain was still running.
+        Map<Integer, List<ReadyWriteBatch>> drained =
+                accumulator.drain(clusterSnapshot, readyCheckResult.readyNodes, MAX_REQUEST_SIZE);
+        assertThat(drained).isNotEmpty();
+        sender.runOnce();
+        assertThat(accumulator.hasUnDrained()).isFalse();
+
+        // even double destroy is still safe.
+        sender.destroyResources();
+        sender.destroyResources();
     }
 
     @Test
@@ -610,6 +653,100 @@ final class SenderTest {
         assertThat(future1.get()).isNull();
     }
 
+    /**
+     * Tests that when a batch's response is lost (e.g., due to request timeout) but the batch was
+     * successfully written on the server, and subsequent batches with higher sequence numbers are
+     * acknowledged, the client should treat the retried batch as already committed instead of
+     * entering an infinite retry loop with {@link
+     * org.apache.fluss.exception.OutOfOrderSequenceException}.
+     *
+     * <p>Detailed scenario:
+     *
+     * <ol>
+     *   <li>Send batch1(seq=0) ~ batch5(seq=4). All 5 batches are successfully written on the
+     *       server (server {@code lastBatchSeq=4}).
+     *   <li>batch2~5 (seq=1~4) responses return normally. Client {@code lastAckedBatchSequence=4}.
+     *   <li>Send batch6(seq=5) and ack successfully. Server {@code lastBatchSeq=5}.
+     *   <li>batch1(seq=0) response is lost due to {@code REQUEST_TIME_OUT}. batch1 is re-enqueued
+     *       for retry.
+     *   <li>Client retries batch1(seq=0). Since server {@code lastBatchSeq=5} and {@code 0 != 5+1},
+     *       server returns {@code OUT_OF_ORDER_SEQUENCE_EXCEPTION}.
+     *   <li>Client detects {@code batch1.seq(0) <= lastAckedBatchSequence(5)}: batch1 is already
+     *       committed. Client completes batch1 successfully without further retries.
+     * </ol>
+     */
+    @Test
+    void testCorrectHandlingOfOutOfOrderResponsesWhenResponseLostButSubsequentBatchesSucceeded()
+            throws Exception {
+        IdempotenceManager idempotenceManager = createIdempotenceManager(true);
+        Sender sender1 = setupWithIdempotenceState(idempotenceManager);
+        sender1.runOnce();
+        assertThat(idempotenceManager.isWriterIdValid()).isTrue();
+        assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(0);
+
+        // Send batch1 (seq=0): its response will be lost later.
+        CompletableFuture<Exception> future1 = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future1.complete(e));
+        sender1.runOnce();
+        assertThat(future1.isDone()).isFalse();
+        assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(1);
+        assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isNotPresent();
+
+        // Send batch2~5 (seq=1~4) and collect their futures.
+        int numFollowingBatches = 4;
+        List<CompletableFuture<Exception>> followingFutures = new ArrayList<>();
+        for (int i = 0; i < numFollowingBatches; i++) {
+            CompletableFuture<Exception> future = new CompletableFuture<>();
+            followingFutures.add(future);
+            appendToAccumulator(tb1, row(i + 2, "b"), (tb, leo, e) -> future.complete(e));
+            sender1.runOnce();
+            assertThat(future.isDone()).isFalse();
+        }
+        assertThat(idempotenceManager.nextSequence(tb1)).isEqualTo(5);
+
+        // batch2~5 (seq=1~4) responses return normally.
+        for (int seq = 1; seq <= numFollowingBatches; seq++) {
+            finishIdempotentProduceLogRequest(
+                    seq, tb1, 1, createProduceLogResponse(tb1, seq, seq + 1L));
+            assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(seq));
+            assertThat(followingFutures.get(seq - 1).isDone()).isTrue();
+            assertThat(followingFutures.get(seq - 1).get()).isNull();
+        }
+
+        // Send batch6 (seq=5) and ack successfully.
+        // Now server lastBatchSeq=5. batch1 (seq=0) is still waiting response.
+        CompletableFuture<Exception> future6 = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(6, "f"), (tb, leo, e) -> future6.complete(e));
+        sender1.runOnce(); // drain and send batch6 (seq=5)
+        finishIdempotentProduceLogRequest(5, tb1, 1, createProduceLogResponse(tb1, 5L, 6L));
+        assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(5));
+        assertThat(future6.isDone()).isTrue();
+        assertThat(future6.get()).isNull();
+
+        // All 6 batches are written successfully on the server (server lastBatchSeq=5).
+        // batch1 (seq=0) response is lost, simulated by REQUEST_TIME_OUT.
+        finishIdempotentProduceLogRequest(
+                0, tb1, 0, createProduceLogResponse(tb1, Errors.REQUEST_TIME_OUT));
+        assertThat(future1.isDone()).isFalse();
+
+        // Now retry batch1 (seq=0). Server lastBatchSeq=5, so 0 != 5+1,
+        // server returns OUT_OF_ORDER_SEQUENCE_EXCEPTION.
+        sender1.runOnce(); // send retried batch1
+        finishIdempotentProduceLogRequest(
+                0, tb1, 0, createProduceLogResponse(tb1, Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION));
+
+        // The client should detect that batch1.seq(0) <= lastAckedBatchSequence(5),
+        // meaning batch1 was already committed on the server (its response was just lost).
+        // It should complete batch1 successfully instead of entering an infinite retry loop.
+        assertThat(future1.isDone()).isTrue();
+        assertThat(future1.get()).isNull();
+        // lastAckedBatchSequence should remain at 5 (not changed by completing already-committed
+        // batch1)
+        assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(5));
+        // No more inflight batches
+        assertThat(sender1.numOfInFlightBatches(tb1)).isEqualTo(0);
+    }
+
     @Test
     void testCorrectHandlingOfDuplicateSequenceError() throws Exception {
         IdempotenceManager idempotenceManager = createIdempotenceManager(true);
@@ -747,6 +884,40 @@ final class SenderTest {
         assertThat(future.get()).isNull();
     }
 
+    @Test
+    void testSendWhenTableIdChanges() throws Exception {
+        CompletableFuture<Exception> future1 = new CompletableFuture<>();
+        appendToAccumulator(tb1, row(1, "a"), (tb, leo, e) -> future1.complete(e));
+        TableInfo newTableInfo =
+                TableInfo.of(
+                        DATA1_TABLE_PATH,
+                        DATA2_TABLE_ID,
+                        1,
+                        DATA1_TABLE_DESCRIPTOR,
+                        DEFAULT_REMOTE_DATA_DIR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis());
+        TableBucket newTableBucket = new TableBucket(newTableInfo.getTableId(), tb1.getBucket());
+
+        metadataUpdater.updateTableInfos(Collections.singletonMap(DATA1_TABLE_PATH, newTableInfo));
+        sender.runOnce();
+        Exception exception = future1.get();
+        assertThat(exception).isNotNull();
+        assertThat(exception).isExactlyInstanceOf(TableNotExistException.class);
+        assertThat(exception.getMessage())
+                .contains(
+                        String.format(
+                                "Table '%s' has been dropped and re-created with a new table ID (old: %s, new: %s)",
+                                DATA1_TABLE_PATH, DATA1_TABLE_ID, newTableInfo.getTableId()));
+
+        CompletableFuture<Exception> future2 = new CompletableFuture<>();
+        appendToAccumulator(
+                newTableInfo, newTableBucket, row(1, "a"), (tb, leo, e) -> future2.complete(e));
+        sender.runOnce();
+        finishRequest(newTableBucket, 0, createProduceLogResponse(newTableBucket, 0, 1));
+        assertThat(future2.get()).isNull();
+    }
+
     private TestingMetadataUpdater initializeMetadataUpdater() {
         Map<TablePath, TableInfo> tableInfos = new HashMap<>();
         tableInfos.put(DATA1_TABLE_PATH, DATA1_TABLE_INFO);
@@ -756,8 +927,14 @@ final class SenderTest {
 
     private void appendToAccumulator(TableBucket tb, GenericRow row, WriteCallback writeCallback)
             throws Exception {
+        appendToAccumulator(DATA1_TABLE_INFO, tb, row, writeCallback);
+    }
+
+    private void appendToAccumulator(
+            TableInfo tableInfo, TableBucket tb, GenericRow row, WriteCallback writeCallback)
+            throws Exception {
         accumulator.append(
-                WriteRecord.forArrowAppend(DATA1_TABLE_INFO, DATA1_PHYSICAL_TABLE_PATH, row, null),
+                WriteRecord.forArrowAppend(tableInfo, DATA1_PHYSICAL_TABLE_PATH, row, null),
                 writeCallback,
                 metadataUpdater.getCluster(),
                 tb.getBucket(),

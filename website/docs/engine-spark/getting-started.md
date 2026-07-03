@@ -6,6 +6,28 @@ sidebar_position: 1
 
 # Getting Started with Spark Engine
 
+## Dependencies
+
+Apache Fluss publishes the following JARs to Maven Central:
+
+| Artifact | Jar |
+|----------|-----|
+| Fluss connector for Spark 3.5 (Scala 2.12) | [fluss-spark-3.5_2.12-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-spark-3.5_2.12/$FLUSS_VERSION$/fluss-spark-3.5_2.12-$FLUSS_VERSION$.jar) |
+| Fluss connector for Spark 3.4 (Scala 2.12) | [fluss-spark-3.4_2.12-$FLUSS_VERSION$.jar]($FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-spark-3.4_2.12/$FLUSS_VERSION$/fluss-spark-3.4_2.12-$FLUSS_VERSION$.jar) |
+
+Maven coordinates (example for Spark 3.5):
+
+```xml
+<dependency>
+  <groupId>org.apache.fluss</groupId>
+  <artifactId>fluss-spark-3.5_2.12</artifactId>
+  <version>$FLUSS_VERSION$</version>
+</dependency>
+```
+
+Verify downloaded JARs against the [KEYS file](https://downloads.apache.org/incubator/fluss/KEYS) using the [verification instructions](/downloads#verifying-downloads).
+
+
 ## Supported Spark Versions
 | Fluss Connector Versions | Supported Spark Versions |
 |--------------------------|--------------------------|
@@ -28,7 +50,7 @@ Fluss supports Apache Spark's SQL API and Spark Structured Streaming.
 | [SQL Show Partitions](ddl.md#show-partitions)        | ✔️    |                                             |
 | [SQL Add Partition](ddl.md#add-partition)             | ✔️    |                                             |
 | [SQL Drop Partition](ddl.md#drop-partition)          | ✔️    |                                             |
-| [SQL Select (Batch)](reads.md)                       | ✔️    | Log table and primary-key table             |
+| [SQL Select (Batch)](reads.md)                       | ✔️    | Log table and primary-key table; both support union read when lake-enabled |
 | [SQL Insert Into](writes.md)                         | ✔️    | Log table and primary-key table             |
 | [Structured Streaming Read](structured-streaming.md#streaming-read) | ✔️ | Log table and primary-key table             |
 | [Structured Streaming Write](structured-streaming.md#streaming-write) | ✔️ | Log table and primary-key table           |
@@ -46,7 +68,7 @@ tar -xzf spark-3.5.7-bin-hadoop3.tgz
 
 - **Copy Fluss Spark Bundled Jar**
 
-Download [Fluss Spark Bundled jar](/downloads) and copy to the `jars` directory of your Spark home.
+Download the Fluss Spark connector JAR from the [Dependencies](#dependencies) section above and copy it to the `jars` directory of your Spark home.
 
 ```shell
 cp fluss-spark-3.5_2.12-$FLUSS_VERSION$.jar <SPARK_HOME>/jars/

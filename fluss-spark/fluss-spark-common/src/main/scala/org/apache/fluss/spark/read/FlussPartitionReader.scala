@@ -29,11 +29,15 @@ import org.apache.fluss.types.RowType
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.connector.metric.CustomTaskMetric
 import org.apache.spark.sql.connector.read.PartitionReader
 
 import java.time.Duration
 
-abstract class FlussPartitionReader(tablePath: TablePath, flussConfig: Configuration)
+abstract class FlussPartitionReader(
+    tablePath: TablePath,
+    flussConfig: Configuration,
+    limit: Option[Int])
   extends PartitionReader[InternalRow]
   with Logging {
 
@@ -46,8 +50,25 @@ abstract class FlussPartitionReader(tablePath: TablePath, flussConfig: Configura
 
   protected var currentRow: InternalRow = _
   protected var closed = false
+  protected var numRowsRead: Long = 0L
 
   override def get(): InternalRow = currentRow
+
+  override def currentMetricsValues(): Array[CustomTaskMetric] =
+    Array(FlussNumRowsReadTaskMetric(numRowsRead))
+
+  def next0(): Boolean
+
+  override def next(): Boolean = {
+    if (limit.exists(numRowsRead >= _)) {
+      return false
+    }
+    val hasNext = next0()
+    if (hasNext) {
+      numRowsRead += 1
+    }
+    hasNext
+  }
 
   def close0(): Unit
 
@@ -69,7 +90,9 @@ abstract class FlussPartitionReader(tablePath: TablePath, flussConfig: Configura
     convertToSparkRow(scanRecord.getRow)
   }
 
+  protected def projectedRowType: RowType
+
   protected def convertToSparkRow(flussRow: FlussInternalRow): InternalRow = {
-    DataConverter.toSparkInternalRow(flussRow, rowType)
+    DataConverter.toSparkInternalRow(flussRow, projectedRowType)
   }
 }

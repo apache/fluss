@@ -24,11 +24,11 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss-metrics</artifactId>
-        <version>0.10-SNAPSHOT</version>
+        <version>1.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-metrics-prometheus</artifactId>
-    <name>Fluss : Metrics : Prometheus</name>
+    <name>Apache Fluss (Incubating) : Metrics : Prometheus</name>
 
     <properties>
         <prometheus.version>0.8.1</prometheus.version>

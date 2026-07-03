@@ -94,7 +94,7 @@ public class IcebergRecordAsFlussRow implements InternalRow {
             return (int) ((LocalDate) value).toEpochDay();
         }
         if (value instanceof LocalTime) {
-            return (int) ((LocalTime) value).toNanoOfDay() / 1_000_000;
+            return (int) (((LocalTime) value).toNanoOfDay() / 1_000_000);
         }
         return (Integer) value;
     }

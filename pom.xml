@@ -29,11 +29,23 @@
 
     <groupId>org.apache.fluss</groupId>
     <artifactId>fluss</artifactId>
-    <version>0.10-SNAPSHOT</version>
+    <version>1.0-SNAPSHOT</version>
 
-    <name>Fluss :</name>
+    <name>Apache Fluss (Incubating)</name>
     <packaging>pom</packaging>
-    <description>The Streaming Storage for Real-Time Analytics</description>
+    <description>
+        Apache Fluss (Incubating) is a streaming storage system built for
+        real-time analytics.
+
+        Apache Fluss is an effort undergoing incubation at The Apache Software
+        Foundation (ASF), sponsored by the Apache Incubator PMC. Incubation is
+        required of all newly accepted projects until a further review indicates
+        that the infrastructure, communications, and decision-making process have
+        stabilized in a manner consistent with other successful ASF projects.
+        While incubation status is not necessarily a reflection of the
+        completeness or stability of the code, it does indicate that the project
+        has yet to be fully endorsed by the ASF.
+    </description>
     <url>https://github.com/apache/fluss</url>
     <inceptionYear>2025</inceptionYear>
 
@@ -92,6 +104,7 @@
         <arrow.version>15.0.0</arrow.version>
         <paimon.version>1.3.1</paimon.version>
         <iceberg.version>1.10.1</iceberg.version>
+        <hudi.version>1.1.0</hudi.version>
         <roaringbitmap.version>1.3.0</roaringbitmap.version>
 
         <!-- spark & scala -->
@@ -104,11 +117,11 @@
         <fluss.hadoop.version>3.4.0</fluss.hadoop.version>
         <frocksdb.version>6.20.3-ververica-2.0</frocksdb.version>
         <slf4j.version>1.7.36</slf4j.version>
-        <log4j.version>2.17.1</log4j.version>
+        <log4j.version>2.25.4</log4j.version>
         <jaxb.api.version>2.3.1</jaxb.api.version>
         <junit5.version>5.9.1</junit5.version>
         <mockito.version>3.4.6</mockito.version>
-        <assertj.version>3.23.1</assertj.version>
+        <assertj.version>3.27.7</assertj.version>
 
         <protobuf.version>3.25.5</protobuf.version>
         <protostuff.version>1.7.2</protostuff.version>
@@ -472,6 +485,14 @@
             <id>test-coverage</id>
             <properties>
                 <test.skip.coverage>false</test.skip.coverage>
+            </properties>
+        </profile>
+
+        <profile>
+            <id>scala-2.13</id>
+            <properties>
+                <scala.binary.version>2.13</scala.binary.version>
+                <scala.version>${scala213.version}</scala.version>
             </properties>
         </profile>
 

@@ -18,6 +18,7 @@
 package org.apache.fluss.server.log.remote;
 
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
@@ -32,14 +33,19 @@ import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
+import org.apache.fluss.server.testutils.ServerTestTags;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.io.File;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -607,6 +613,28 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
+    void testLookupRemoteIndexThrowsWhenLocalLogMissing(boolean partitionTable) throws Exception {
+        TableBucket tb = makeTableBucket(partitionTable);
+        makeLogTableAsLeader(tb, partitionTable);
+        LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
+        long startTimestamp = manualClock.milliseconds();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        RemoteLogSegment remoteLogSegment =
+                remoteLogManager.relevantRemoteLogSegments(tb, 0L).get(0);
+        logManager.dropLog(tb);
+
+        assertThatThrownBy(() -> remoteLogManager.lookupPositionForOffset(remoteLogSegment, 2L))
+                .isInstanceOf(NotLeaderOrFollowerException.class)
+                .hasMessageContaining("Can't resolve remote log index cache for bucket " + tb);
+        assertThatThrownBy(() -> remoteLogManager.lookupOffsetForTimestamp(tb, startTimestamp))
+                .isInstanceOf(NotLeaderOrFollowerException.class)
+                .hasMessageContaining("Can't resolve remote log index cache for bucket " + tb);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
     void testAlterTableTieredLogLocalSegments(boolean partitionedTable) throws Exception {
         // 1. Create table with initial config tieredLogLocalSegments = 2
         long tableId =
@@ -664,6 +692,34 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         assertThat(logTablet.getSegments()).hasSize(3);
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testCopySegmentPartialFailureCommitsSuccessfulOnes(boolean partitionTable)
+            throws Exception {
+        TableBucket tb = makeTableBucket(partitionTable);
+        // Need to make leader by ReplicaManager.
+        makeLogTableAsLeader(tb, partitionTable);
+        addMultiSegmentsToLogTablet(replicaManager.getReplicaOrException(tb).getLogTablet(), 5);
+        // 5 segments total, 4 candidates (1 active segment excluded).
+
+        // Inject failure: let the first 2 segment copies succeed, then fail on the 3rd.
+        remoteLogStorage.copySegmentFailAfterNCopies.set(2);
+
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        // Verify: The manifest should contain exactly 2 segments (the successfully copied ones).
+        RemoteLogTablet remoteLog = remoteLogManager.remoteLogTablet(tb);
+        List<RemoteLogSegment> manifestSegments = remoteLog.allRemoteLogSegments();
+        assertThat(manifestSegments).hasSize(2);
+
+        // Verify: Remote storage should contain exactly the 2 committed segment files.
+        assertThat(listRemoteLogFiles(tb))
+                .isEqualTo(
+                        manifestSegments.stream()
+                                .map(s -> s.remoteLogSegmentId().toString())
+                                .collect(Collectors.toSet()));
+    }
+
     private TableBucket makeTableBucket(boolean partitionTable) {
         return makeTableBucket(DATA1_TABLE_ID, partitionTable);
     }
@@ -682,5 +738,50 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
                 Arguments.of(false, true),
                 Arguments.of(true, false),
                 Arguments.of(true, true));
+    }
+
+    // ---- JBOD multi-directory tests ----
+
+    @Test
+    @Tag(ServerTestTags.JBOD_MULTI_DIR_TAG)
+    void testRemoteIndexCacheFollowsReplicaDirectory() throws Exception {
+        File dataDir1 = new File(tempDir, "data-1");
+        File dataDir2 = new File(tempDir, "data-2");
+        makeLogTableAsLeader(0);
+        makeLogTableAsLeader(1);
+
+        TableBucket tableBucket1 = new TableBucket(DATA1_TABLE_ID, 0);
+        TableBucket tableBucket2 = new TableBucket(DATA1_TABLE_ID, 1);
+        Replica replica1 = replicaManager.getReplicaOrException(tableBucket1);
+        Replica replica2 = replicaManager.getReplicaOrException(tableBucket2);
+        assertThat(replica1.getLogTablet().getDataDir()).isEqualTo(dataDir1.getAbsoluteFile());
+        assertThat(replica2.getLogTablet().getDataDir()).isEqualTo(dataDir2.getAbsoluteFile());
+
+        addMultiSegmentsToLogTablet(replica1.getLogTablet(), 5);
+        addMultiSegmentsToLogTablet(replica2.getLogTablet(), 5);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+
+        RemoteLogSegment segment1 =
+                remoteLogManager.relevantRemoteLogSegments(tableBucket1, 0L).get(0);
+        RemoteLogSegment segment2 =
+                remoteLogManager.relevantRemoteLogSegments(tableBucket2, 0L).get(0);
+        remoteLogManager.lookupPositionForOffset(segment1, 2L);
+        remoteLogManager.lookupPositionForOffset(segment2, 2L);
+
+        List<String> dir1Files =
+                Arrays.stream(remoteLogManager.getRemoteLogIndexCache(dataDir1).cacheDir().list())
+                        .collect(Collectors.toList());
+        List<String> dir2Files =
+                Arrays.stream(remoteLogManager.getRemoteLogIndexCache(dataDir2).cacheDir().list())
+                        .collect(Collectors.toList());
+
+        assertThat(dir1Files)
+                .anyMatch(name -> name.contains(segment1.remoteLogSegmentId().toString()));
+        assertThat(dir1Files)
+                .noneMatch(name -> name.contains(segment2.remoteLogSegmentId().toString()));
+        assertThat(dir2Files)
+                .anyMatch(name -> name.contains(segment2.remoteLogSegmentId().toString()));
+        assertThat(dir2Files)
+                .noneMatch(name -> name.contains(segment1.remoteLogSegmentId().toString()));
     }
 }

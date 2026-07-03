@@ -32,6 +32,7 @@ import org.apache.fluss.client.write.WriterClient;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.metadata.TablePath;
@@ -48,7 +49,7 @@ import java.util.List;
 
 import static org.apache.fluss.client.utils.MetadataUtils.getOneAvailableTabletServerNode;
 import static org.apache.fluss.config.FlussConfigUtils.CLIENT_PREFIX;
-import static org.apache.fluss.utils.PropertiesUtils.extractPrefix;
+import static org.apache.fluss.utils.PropertiesUtils.extractAndRemovePrefix;
 
 /** A connection to Fluss cluster, and holds the client session resources. */
 public final class FlussConnection implements Connection {
@@ -70,18 +71,19 @@ public final class FlussConnection implements Connection {
 
     FlussConnection(Configuration conf, MetricRegistry metricRegistry) {
         this.conf = conf;
+        FlussConfigUtils.validateClientConfigs(conf);
         // init Filesystem with configuration from FlussConnection,
         // only pass options with 'client.fs.' prefix
         FileSystem.initialize(
                 Configuration.fromMap(
-                        extractPrefix(new HashMap<>(conf.toMap()), CLIENT_PREFIX + "fs.")),
+                        extractAndRemovePrefix(new HashMap<>(conf.toMap()), CLIENT_PREFIX + "fs.")),
                 null);
         // for client metrics.
         setupClientMetricsConfiguration();
         String clientId = conf.getString(ConfigOptions.CLIENT_ID);
         this.metricRegistry = metricRegistry;
         this.clientMetricGroup = new ClientMetricGroup(metricRegistry, clientId);
-        this.rpcClient = RpcClient.create(conf, clientMetricGroup, false);
+        this.rpcClient = RpcClient.create(conf, clientMetricGroup);
 
         // TODO this maybe remove after we introduce client metadata.
         this.metadataUpdater = new MetadataUpdater(conf, rpcClient);

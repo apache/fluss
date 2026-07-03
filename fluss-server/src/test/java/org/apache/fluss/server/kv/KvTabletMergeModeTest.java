@@ -121,6 +121,7 @@ class KvTabletMergeModeTest {
                         physicalTablePath.getTableName());
         logTablet =
                 LogTablet.create(
+                        tempLogDir,
                         physicalTablePath,
                         logTabletDir,
                         conf,
@@ -535,7 +536,7 @@ class KvTabletMergeModeTest {
 
     private LogRecords readLogRecords(long startOffset) throws Exception {
         return logTablet
-                .read(startOffset, Integer.MAX_VALUE, FetchIsolation.LOG_END, false, null)
+                .read(startOffset, Integer.MAX_VALUE, FetchIsolation.LOG_END, false, null, null)
                 .getRecords();
     }
 

@@ -78,6 +78,7 @@ public class LanceLakeCommitter implements LakeCommitter<LanceWriteResult, Lance
         properties.put(committerName, FLUSS_LAKE_TIERING_COMMIT_USER);
         long snapshotId =
                 LanceDatasetAdapter.commitAppend(config, committable.committable(), properties);
+        // Lance does not provide cumulative table stats API yet; leave stats as -1 (unknown).
         return LakeCommitResult.committedIsReadable(snapshotId);
     }
 

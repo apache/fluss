@@ -26,7 +26,7 @@ No additional configuration is required for this mode.
 ## SASL
 This mechanism is based on SASL (Simple Authentication and Security Layer) authentication. Currently, only SASL/PLAIN is supported, which involves authentication using a username and password. It is recommended for production environments.
 
-### SASL Client-Side Configuration
+### SASL Server-Side Configuration
 | Option                                                         | Type   | Default Value | Description                                                                                                                           |
 |----------------------------------------------------------------|--------|---------------|---------------------------------------------------------------------------------------------------------------------------------------|
 | security.sasl.enabled.mechanisms                               | List   | PLAIN         | Comma-separated list of enabled SASL mechanisms. Only support PLAIN(which involves authentication using a username and password) now. |

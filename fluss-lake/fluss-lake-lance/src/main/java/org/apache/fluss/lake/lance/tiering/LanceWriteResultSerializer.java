@@ -37,7 +37,7 @@ public class LanceWriteResultSerializer implements SimpleVersionedSerializer<Lan
     @Override
     public byte[] serialize(LanceWriteResult lanceWriteResult) throws IOException {
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                ObjectOutputStream oos = new ObjectOutputStream(baos); ) {
+                ObjectOutputStream oos = new ObjectOutputStream(baos)) {
             oos.writeObject(lanceWriteResult);
             return baos.toByteArray();
         }

@@ -17,6 +17,7 @@
 
 package org.apache.fluss.predicate;
 
+import org.apache.fluss.record.LogRecordBatchStatistics;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DecimalType;
@@ -87,11 +88,14 @@ public class LeafPredicate implements Predicate {
 
     @Override
     public boolean test(
-            long rowCount, InternalRow minValues, InternalRow maxValues, Long[] nullCounts) {
+            long rowCount, InternalRow minValues, InternalRow maxValues, int[] nullCounts) {
         Object min = get(minValues, fieldIndex, type);
         Object max = get(maxValues, fieldIndex, type);
-        Long nullCount = nullCounts != null ? nullCounts[fieldIndex] : null;
-        if (nullCount == null || rowCount != nullCount) {
+        long nullCount =
+                nullCounts != null
+                        ? nullCounts[fieldIndex]
+                        : LogRecordBatchStatistics.NULL_COUNT_UNAVAILABLE;
+        if (nullCount < 0 || rowCount != nullCount) {
             // not all null
             // min or max is null
             // unknown stats
@@ -171,7 +175,7 @@ public class LeafPredicate implements Predicate {
                 return internalRow.getTimestampNtz(pos, timestampType.getPrecision());
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 LocalZonedTimestampType lzTs = (LocalZonedTimestampType) fieldType;
-                return internalRow.getTimestampNtz(pos, lzTs.getPrecision());
+                return internalRow.getTimestampLtz(pos, lzTs.getPrecision());
             case FLOAT:
                 return internalRow.getFloat(pos);
             case DOUBLE:
@@ -184,6 +188,7 @@ public class LeafPredicate implements Predicate {
                 return internalRow.getDecimal(
                         pos, decimalType.getPrecision(), decimalType.getScale());
             case BINARY:
+            case BYTES:
                 return internalRow.getBytes(pos);
             default:
                 throw new UnsupportedOperationException("Unsupported type: " + fieldType);

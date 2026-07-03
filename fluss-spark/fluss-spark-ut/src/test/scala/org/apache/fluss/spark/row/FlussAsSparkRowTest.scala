@@ -17,11 +17,13 @@
 
 package org.apache.fluss.spark.row
 
-import org.apache.fluss.row.{BinaryString, Decimal => FlussDecimal, GenericArray, GenericRow, TimestampLtz, TimestampNtz}
+import org.apache.fluss.row.{BinaryString, Decimal => FlussDecimal, GenericArray, GenericMap, GenericRow, TimestampLtz, TimestampNtz}
 import org.apache.fluss.types.{ArrayType, BinaryType, DataTypes, LocalZonedTimestampType, RowType, TimestampType}
 
 import org.assertj.core.api.Assertions.assertThat
 import org.scalatest.funsuite.AnyFunSuite
+
+import scala.collection.JavaConverters._
 
 class FlussAsSparkRowTest extends AnyFunSuite {
 
@@ -230,7 +232,7 @@ class FlussAsSparkRowTest extends AnyFunSuite {
     val sparkRow = new FlussAsSparkRow(rowType).replace(flussRow)
 
     val sparkDecimal = sparkRow.getDecimal(0, 10, 2)
-    assertThat(sparkDecimal.toBigDecimal.doubleValue()).isEqualTo(123.45)
+    assertThat(sparkDecimal.toBigDecimal.doubleValue).isEqualTo(123.45)
   }
 
   test("getUTF8String: read string values") {
@@ -339,20 +341,24 @@ class FlussAsSparkRowTest extends AnyFunSuite {
     assertThat(sparkArray.getInt(4)).isEqualTo(5)
   }
 
-  test("getMap: unsupported operation") {
+  test("getMap: read map field") {
+    val mapType = DataTypes.MAP(DataTypes.INT, DataTypes.STRING)
     val rowType = RowType
       .builder()
-      .field("dummy", DataTypes.INT)
+      .field("map_col", mapType)
       .build()
 
+    val flussMap =
+      new GenericMap(Map(Integer.valueOf(1) -> BinaryString.fromString("value1")).asJava)
     val flussRow = new GenericRow(1)
-    flussRow.setField(0, Integer.valueOf(1))
+    flussRow.setField(0, flussMap)
 
     val sparkRow = new FlussAsSparkRow(rowType).replace(flussRow)
 
-    assertThrows[UnsupportedOperationException] {
-      sparkRow.getMap(0)
-    }
+    val sparkMap = sparkRow.getMap(0)
+    assertThat(sparkMap.numElements()).isEqualTo(1)
+    assertThat(sparkMap.keyArray().getInt(0)).isEqualTo(1)
+    assertThat(sparkMap.valueArray().getUTF8String(0).toString).isEqualTo("value1")
   }
 
   test("getInterval: unsupported operation") {
@@ -479,6 +485,6 @@ class FlussAsSparkRowTest extends AnyFunSuite {
     assertThat(sparkRow.getFloat(5)).isEqualTo(3.14f)
     assertThat(sparkRow.getDouble(6)).isEqualTo(2.718)
     assertThat(sparkRow.getUTF8String(7).toString).isEqualTo("test")
-    assertThat(sparkRow.getDecimal(8, 10, 2).toBigDecimal.doubleValue()).isEqualTo(99.99)
+    assertThat(sparkRow.getDecimal(8, 10, 2).toBigDecimal.doubleValue).isEqualTo(99.99)
   }
 }

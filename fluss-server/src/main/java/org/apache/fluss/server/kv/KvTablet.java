@@ -58,6 +58,8 @@ import org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer;
 import org.apache.fluss.server.kv.rocksdb.RocksDBStatistics;
 import org.apache.fluss.server.kv.rowmerger.DefaultRowMerger;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
+import org.apache.fluss.server.kv.scan.OpenScanResult;
+import org.apache.fluss.server.kv.scan.ScannerContext;
 import org.apache.fluss.server.kv.snapshot.KvFileHandleAndLocalPath;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataUploader;
 import org.apache.fluss.server.kv.snapshot.RocksIncrementalSnapshot;
@@ -70,12 +72,17 @@ import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.utils.FatalErrorHandler;
+import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.BytesUtils;
 import org.apache.fluss.utils.FileUtils;
+import org.apache.fluss.utils.IOUtils;
 
 import org.rocksdb.RateLimiter;
+import org.rocksdb.ReadOptions;
+import org.rocksdb.RocksIterator;
+import org.rocksdb.Snapshot;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -562,9 +569,10 @@ public final class KvTablet {
 
         byte[] oldValueBytes = getFromBufferOrKv(key);
         if (oldValueBytes == null) {
+            BinaryValue valueToInsert = currentMerger.merge(null, currentValue);
             return applyInsert(
                     key,
-                    currentValue,
+                    valueToInsert,
                     walBuilder,
                     latestSchemaRow,
                     logOffset,
@@ -679,7 +687,9 @@ public final class KvTablet {
                     } else {
                         try {
                             int rowCountDiff = kvPreWriteBuffer.flush(exclusiveUpToLogOffset);
-                            flushedLogOffset = exclusiveUpToLogOffset;
+                            if (exclusiveUpToLogOffset > flushedLogOffset) {
+                                flushedLogOffset = exclusiveUpToLogOffset;
+                            }
                             if (rowCount != ROW_COUNT_DISABLED) {
                                 // row count is enabled, we update the row count after flush.
                                 long currentRowCount = rowCount;
@@ -753,6 +763,74 @@ public final class KvTablet {
                 () -> {
                     rocksDBKv.checkIfRocksDBClosed();
                     return rocksDBKv.limitScan(limit);
+                });
+    }
+
+    /**
+     * Opens a new full-scan session under the {@code kvLock} read lock. Returns an empty-bucket
+     * result (context = {@code null}, all RocksDB resources released internally) when the bucket
+     * has no rows. The returned {@link ScannerContext} is unregistered; the caller owns
+     * registration and close.
+     *
+     * @param limit row-count cap across all batches ({@code ≤ 0} means unlimited)
+     * @throws IOException if RocksDB is shutting down
+     */
+    public OpenScanResult openScan(String scannerId, long limit, long initialAccessTimeMs)
+            throws IOException {
+        return inReadLock(
+                kvLock,
+                () -> {
+                    rocksDBKv.checkIfRocksDBClosed();
+                    ResourceGuard.Lease lease = rocksDBKv.getResourceGuard().acquireResource();
+                    Snapshot snapshot = null;
+                    ReadOptions readOptions = null;
+                    RocksIterator iterator = null;
+                    boolean success = false;
+                    try {
+                        snapshot = rocksDBKv.getDb().getSnapshot();
+                        // Capture under kvLock so the offset matches the data visible through
+                        // the snapshot.
+                        long capturedLogOffset = flushedLogOffset;
+                        readOptions = new ReadOptions().setSnapshot(snapshot);
+                        iterator =
+                                rocksDBKv
+                                        .getDb()
+                                        .newIterator(
+                                                rocksDBKv.getDefaultColumnFamilyHandle(),
+                                                readOptions);
+                        iterator.seekToFirst();
+                        if (!iterator.isValid()) {
+                            return new OpenScanResult(null, capturedLogOffset);
+                        }
+                        ScannerContext context =
+                                new ScannerContext(
+                                        scannerId,
+                                        tableBucket,
+                                        rocksDBKv,
+                                        iterator,
+                                        readOptions,
+                                        snapshot,
+                                        lease,
+                                        limit,
+                                        capturedLogOffset,
+                                        initialAccessTimeMs);
+                        success = true;
+                        return new OpenScanResult(context, capturedLogOffset);
+                    } finally {
+                        if (!success) {
+                            IOUtils.closeQuietly(iterator);
+                            IOUtils.closeQuietly(readOptions);
+                            if (snapshot != null) {
+                                try {
+                                    rocksDBKv.getDb().releaseSnapshot(snapshot);
+                                } catch (Throwable t) {
+                                    LOG.warn("Error releasing RocksDB snapshot.", t);
+                                }
+                                IOUtils.closeQuietly(snapshot);
+                            }
+                            IOUtils.closeQuietly(lease);
+                        }
+                    }
                 });
     }
 

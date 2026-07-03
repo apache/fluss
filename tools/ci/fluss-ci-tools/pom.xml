@@ -24,12 +24,12 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss</artifactId>
-        <version>0.10-SNAPSHOT</version>
+        <version>1.0-SNAPSHOT</version>
         <relativePath>../../../pom.xml</relativePath>
     </parent>
 
     <artifactId>fluss-ci-tools</artifactId>
-    <name>Fluss : CI : Tools</name>
+    <name>Apache Fluss (Incubating) : CI : Tools</name>
 
     <dependencies>
 

@@ -1120,6 +1120,80 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
     }
 
     @Test
+    void testPointLookupOnExpiredPartitionReadsFromLake() throws Exception {
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        boolean tieringCancelled = false;
+        try {
+            String tableName = "point_lookup_expired_partition_pk_table";
+            TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+            Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+            Function<String, List<InternalRow>> rowGenerator =
+                    (partition) ->
+                            Arrays.asList(
+                                    row(3, "string", partition),
+                                    row(30, "another_string", partition));
+            long tableId =
+                    prepareSimplePKTable(
+                            tablePath, DEFAULT_BUCKET_NUM, true, rowGenerator, bucketLogEndOffset);
+
+            waitUntilBucketSynced(tablePath, tableId, DEFAULT_BUCKET_NUM, true);
+
+            Map<Long, String> partitionNameByIds = waitUntilPartitions(tablePath);
+            assertThat(partitionNameByIds.size()).isGreaterThanOrEqualTo(2);
+
+            // stop tiering so the read is served from the lake snapshot; the per-job MiniCluster
+            // shuts down with the job, so cancel exactly once
+            jobClient.cancel().get();
+            tieringCancelled = true;
+
+            Iterator<String> partitionIterator = partitionNameByIds.values().iterator();
+            String expiredPartition = partitionIterator.next();
+            String livePartition = partitionIterator.next();
+
+            admin.dropPartition(
+                            tablePath,
+                            new PartitionSpec(Collections.singletonMap("c3", expiredPartition)),
+                            false)
+                    .get();
+            retry(
+                    Duration.ofSeconds(60),
+                    () ->
+                            assertThat(admin.listPartitionInfos(tablePath).get())
+                                    .noneMatch(p -> expiredPartition.equals(p.getPartitionName())));
+
+            List<String> expiredResult =
+                    collectBatchRows(
+                            batchTEnv
+                                    .executeSql(
+                                            String.format(
+                                                    "select * from %s where c1 = 3 and c3 = '%s'",
+                                                    tableName, expiredPartition))
+                                    .collect());
+            assertThat(expiredResult)
+                    .as("point query on a lake-only (expired) partition must read from the lake")
+                    .containsExactly(String.format("+I[3, string, %s]", expiredPartition));
+
+            List<String> liveResult =
+                    collectBatchRows(
+                            batchTEnv
+                                    .executeSql(
+                                            String.format(
+                                                    "select * from %s where c1 = 3 and c3 = '%s'",
+                                                    tableName, livePartition))
+                                    .collect());
+            assertThat(liveResult)
+                    .as("point query on a live partition must still return its row")
+                    .containsExactly(String.format("+I[3, string, %s]", livePartition));
+        } finally {
+            // only cancel here if setup failed before the intended cancel above
+            if (!tieringCancelled) {
+                jobClient.cancel().get();
+            }
+        }
+    }
+
+    @Test
     void testPartitionFilterOnPartitionedTableInBatch() throws Exception {
         // first of all, start tiering
         JobClient jobClient = buildTieringJob(execEnv);

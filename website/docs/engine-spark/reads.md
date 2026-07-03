@@ -12,12 +12,6 @@ Fluss supports batch read with [Apache Spark](https://spark.apache.org/)'s SQL A
 For streaming read, see the [Structured Streaming Read](structured-streaming.md#streaming-read) section.
 :::
 
-## Limitations
-
-:::caution
-- For tables with datalake enabled (`table.datalake.enabled = true`), batch read can only read data stored in the Fluss cluster and cannot read data that has been tiered to the underlying lake storage (e.g., Paimon, Iceberg). Reading the full dataset including lake data will be supported in a future release.
-:::
-
 ## Batch Read
 
 ### Log Table
@@ -201,6 +195,63 @@ ORDER BY order_id;
 SELECT * FROM part_pk_table
 WHERE dt IN ('2026-01-01', '2026-01-02')
 ORDER BY order_id;
+```
+
+### Lake-Enabled Tables (Union Read)
+
+When a table has the configuration `table.datalake.enabled = 'true'`, its data exists in two layers:
+
+- **Fresh data** is retained in Fluss (real-time layer, sub-second freshness)
+- **Historical data** is tiered to the lake storage (e.g., Paimon, Iceberg)
+
+Fluss Spark connector supports **union read** that combines both layers to provide a complete, up-to-date view of the data. This allows Fluss to store only a small portion of the dataset in the cluster (reducing costs), while the lake serves as the source of complete historical data.
+
+#### Union Read
+
+To read the full dataset, simply query the table directly. The Spark connector automatically unions data from Fluss and the lake storage:
+
+```sql title="Spark SQL"
+-- Query will union data from Fluss and lake
+SELECT SUM(total_price) AS total_revenue FROM fluss_order_with_lake;
+```
+
+The union read works for both **log tables** and **primary key tables**:
+
+- **Log tables**: Combines Fluss log data with lake historical data
+- **Primary key tables**: Combines lake snapshot data with recent KV log changes using sort-merge to provide the most up-to-date view
+
+#### Example
+
+1. Create a lake-enabled table:
+
+```sql title="Spark SQL"
+CREATE TABLE fluss_order_with_lake (
+  order_key BIGINT,
+  cust_key INT NOT NULL,
+  total_price DECIMAL(15, 2),
+  order_date DATE,
+  order_priority STRING,
+  clerk STRING
+) TBLPROPERTIES (
+  'table.datalake.enabled' = 'true',
+  'table.datalake.freshness' = '30s'
+);
+```
+
+2. Insert data (the datalake tiering service will continuously tier data to the lake):
+
+```sql title="Spark SQL"
+INSERT INTO fluss_order_with_lake VALUES
+  (1001, 101, 150.50, DATE '2026-01-01', 'HIGH', 'clerk_A'),
+  (1002, 102, 250.75, DATE '2026-01-01', 'MEDIUM', 'clerk_B'),
+  (1003, 103, 350.00, DATE '2026-01-02', 'LOW', 'clerk_C');
+```
+
+3. Query with union read:
+
+```sql title="Spark SQL"
+-- Returns complete view combining Fluss and lake data
+SELECT SUM(total_price) AS total_revenue FROM fluss_order_with_lake;
 ```
 
 ## All Data Types

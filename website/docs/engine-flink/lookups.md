@@ -268,6 +268,85 @@ ON `o`.`o_custkey` = `c`.`c_custkey` AND  `o`.`o_dt` = `c`.`dt`;
 
 For more details about Fluss partitioned table, see [Partitioned Tables](table-design/data-distribution/partitioning.md).
 
+## Insert If Not Exists
+
+### Overview
+
+When performing a lookup join, if the lookup key does not match any existing row in the dimension table, the default behavior is to skip the join (for `LEFT JOIN`, the dimension side returns `NULL`). By enabling the `lookup.insert-if-not-exists` option, Fluss will automatically insert a new row with the lookup key values when no match is found, and return the newly inserted row as the join result.
+
+This feature is particularly useful when combined with [Auto-Increment Columns](table-design/table-types/pk-table.md#auto-increment-column) to build dictionary tables on the fly during stream processing. A typical use case is mapping high-cardinality string identifiers (e.g., user IDs, device IDs) to compact integer IDs for efficient downstream aggregation, such as [RoaringBitmap-based count-distinct](table-design/merge-engines/aggregation.md).
+
+### Instructions
+
+- Only supported for primary key lookup. Prefix lookup with `insert-if-not-exists` is not supported.
+- The dimension table must not contain non-nullable columns other than the primary key columns and auto-increment columns. This is because Fluss cannot fill values for those columns when auto-inserting.
+- Enable via SQL Hint: `/*+ OPTIONS('lookup.insert-if-not-exists' = 'true') */`.
+
+### Example
+
+The following example demonstrates how to automatically build a UID dictionary table during a lookup join.
+
+1. Create a dictionary table with an auto-increment column.
+
+```sql title="Flink SQL"
+CREATE TABLE uid_mapping (
+  uid VARCHAR NOT NULL,
+  uid_int32 INT,
+  PRIMARY KEY (uid) NOT ENFORCED
+) WITH (
+  'auto-increment.fields' = 'uid_int32',
+  'bucket.num' = '1'
+);
+```
+
+2. Perform a lookup join with `insert-if-not-exists` enabled. When a `uid` is encountered for the first time, Fluss automatically inserts it into `uid_mapping` and assigns an auto-incremented `uid_int32` value.
+
+```sql title="Flink SQL"
+-- UIDs from the streaming table ods_events are automatically registered
+-- into the dictionary table uid_mapping, and the corresponding integer
+-- ID uid_int32 is returned for each lookup
+SELECT
+  ods.country,
+  ods.prov,
+  ods.city,
+  ods.ymd,
+  ods.uid,
+  dim.uid_int32
+FROM ods_events AS ods
+JOIN uid_mapping /*+ OPTIONS('lookup.insert-if-not-exists' = 'true') */
+  FOR SYSTEM_TIME AS OF ods.proctime AS dim
+  ON dim.uid = ods.uid;
+```
+
+Suppose `ods_events` contains the following data:
+
+| country | prov       | city    | ymd        | uid    |
+|---------|------------|---------|------------|--------|
+| CN      | Beijing    | Haidian | 2025-01-01 | user_a |
+| CN      | Shanghai   | Pudong  | 2025-01-02 | user_b |
+| US      | California | LA      | 2025-01-03 | user_a |
+| JP      | Tokyo      | Shibuya | 2025-01-04 | user_c |
+
+The join result will be:
+
+| country | prov       | city    | ymd        | uid    | uid_int32 |
+|---------|------------|---------|------------|--------|-----------|
+| CN      | Beijing    | Haidian | 2025-01-01 | user_a | 1         |
+| CN      | Shanghai   | Pudong  | 2025-01-02 | user_b | 2         |
+| US      | California | LA      | 2025-01-03 | user_a | 1         |
+| JP      | Tokyo      | Shibuya | 2025-01-04 | user_c | 3         |
+
+- `user_a` first appears and gets `uid_int32 = 1`; the second occurrence reuses the same value.
+- `user_b` and `user_c` each get a new auto-incremented ID.
+
+After the job runs, the `uid_mapping` dictionary table contains:
+
+| uid    | uid_int32 |
+|--------|-----------|
+| user_a | 1         |
+| user_b | 2         |
+| user_c | 3         |
+
 ## Lookup Options
 
 Fluss lookup join supports various configuration options. For more details, please refer to the [Connector Options](engine-flink/options.md#lookup-options) page.

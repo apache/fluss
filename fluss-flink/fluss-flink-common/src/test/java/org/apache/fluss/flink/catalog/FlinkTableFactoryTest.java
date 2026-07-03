@@ -23,7 +23,9 @@ import org.apache.fluss.flink.source.FlinkTableSource;
 import org.apache.fluss.flink.source.lookup.FlinkAsyncLookupFunction;
 import org.apache.fluss.flink.source.lookup.FlinkLookupFunction;
 
+import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.configuration.ExecutionOptions;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.ValidationException;
@@ -71,6 +73,12 @@ abstract class FlinkTableFactoryTest {
     public static final ObjectIdentifier OBJECT_IDENTIFIER =
             ObjectIdentifier.of("default", "default", "t1");
 
+    public static final ObjectIdentifier CHANGELOG_TABLE_IDENTIFIER =
+            ObjectIdentifier.of("default", "default", "t1" + FlinkCatalog.CHANGELOG_TABLE_SUFFIX);
+
+    public static final ObjectIdentifier BINLOG_TABLE_IDENTIFIER =
+            ObjectIdentifier.of("default", "default", "t1" + FlinkCatalog.BINLOG_TABLE_SUFFIX);
+
     @Test
     void testTableSourceOptions() {
         ResolvedSchema schema = createBasicSchema();
@@ -92,6 +100,18 @@ abstract class FlinkTableFactoryTest {
         scanModeProperties.put(
                 FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP.key(), "2023-12-09 23:09:12");
         createTableSource(schema, scanModeProperties);
+
+        // test split assignment batch size
+        Map<String, String> splitAssignmentBatchProperties = getBasicOptions();
+        splitAssignmentBatchProperties.put(
+                FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.key(), "0");
+        assertThatThrownBy(() -> createTableSource(schema, splitAssignmentBatchProperties))
+                .isInstanceOf(ValidationException.class)
+                .hasMessageContaining(
+                        "'scan.split.assignment.batch-size' must be positive, but was 0.");
+        splitAssignmentBatchProperties.put(
+                FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE.key(), "1");
+        createTableSource(schema, splitAssignmentBatchProperties);
 
         // test datalake options
         Map<String, String> datalakeProperties = getBasicOptions();
@@ -168,6 +188,36 @@ abstract class FlinkTableFactoryTest {
     }
 
     @Test
+    void testVirtualLogTableSourceDoesNotSupportBatchMode() {
+        ResolvedSchema schema = createBasicSchema();
+        Map<String, String> properties = getBasicOptions();
+        Configuration configuration = new Configuration();
+        configuration.set(ExecutionOptions.RUNTIME_MODE, RuntimeExecutionMode.BATCH);
+
+        assertThatThrownBy(
+                        () ->
+                                createTableSource(
+                                        CHANGELOG_TABLE_IDENTIFIER,
+                                        schema,
+                                        properties,
+                                        Collections.emptyMap(),
+                                        configuration))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("$changelog virtual tables only support streaming mode.");
+
+        assertThatThrownBy(
+                        () ->
+                                createTableSource(
+                                        BINLOG_TABLE_IDENTIFIER,
+                                        createBinlogSchema(),
+                                        properties,
+                                        Collections.emptyMap(),
+                                        configuration))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("$binlog virtual tables only support streaming mode.");
+    }
+
+    @Test
     void testSink() {
         ResolvedSchema schema = createBasicSchema();
         Map<String, String> properties = getBasicOptionsWithBucketKey();
@@ -192,6 +242,28 @@ abstract class FlinkTableFactoryTest {
                 UniqueConstraint.primaryKey("PK_first_third", Arrays.asList("first", "third")));
     }
 
+    private ResolvedSchema createBinlogSchema() {
+        return new ResolvedSchema(
+                Arrays.asList(
+                        Column.physical("_change_type", DataTypes.STRING().notNull()),
+                        Column.physical("_log_offset", DataTypes.BIGINT().notNull()),
+                        Column.physical("_commit_timestamp", DataTypes.TIMESTAMP_LTZ(3).notNull()),
+                        Column.physical(
+                                "before",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("first", DataTypes.STRING().notNull()),
+                                        DataTypes.FIELD("second", DataTypes.INT()),
+                                        DataTypes.FIELD("third", DataTypes.STRING().notNull()))),
+                        Column.physical(
+                                "after",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("first", DataTypes.STRING().notNull()),
+                                        DataTypes.FIELD("second", DataTypes.INT()),
+                                        DataTypes.FIELD("third", DataTypes.STRING().notNull())))),
+                Collections.emptyList(),
+                null);
+    }
+
     private static Map<String, String> getBasicOptions() {
         Map<String, String> options = new HashMap<>();
         options.put("connector", "fluss");
@@ -214,10 +286,20 @@ abstract class FlinkTableFactoryTest {
             ResolvedSchema schema,
             Map<String, String> options,
             Map<String, String> enrichmentOptions) {
+        return createTableSource(
+                OBJECT_IDENTIFIER, schema, options, enrichmentOptions, new Configuration());
+    }
+
+    private static DynamicTableSource createTableSource(
+            ObjectIdentifier objectIdentifier,
+            ResolvedSchema schema,
+            Map<String, String> options,
+            Map<String, String> enrichmentOptions,
+            Configuration configuration) {
         FlinkTableFactory tableFactory = createFlinkTableFactory();
         FactoryUtil.DefaultDynamicTableContext context =
                 new FactoryUtil.DefaultDynamicTableContext(
-                        OBJECT_IDENTIFIER,
+                        objectIdentifier,
                         new ResolvedCatalogTable(
                                 CatalogTable.of(
                                         Schema.newBuilder().fromResolvedSchema(schema).build(),
@@ -228,7 +310,7 @@ abstract class FlinkTableFactoryTest {
                                         options),
                                 schema),
                         enrichmentOptions,
-                        new Configuration(),
+                        configuration,
                         Thread.currentThread().getContextClassLoader(),
                         false);
         return tableFactory.createDynamicTableSource(context);

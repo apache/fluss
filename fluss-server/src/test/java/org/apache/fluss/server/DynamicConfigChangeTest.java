@@ -21,8 +21,13 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
+import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
+import org.apache.fluss.server.coordinator.remote.RoundRobinRemoteDirSelector;
+import org.apache.fluss.server.coordinator.remote.WeightedRoundRobinRemoteDirSelector;
+import org.apache.fluss.server.storage.LocalDiskManager;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
@@ -35,19 +40,26 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.File;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
+import static org.apache.fluss.config.ConfigOptions.DATALAKE_ENABLED;
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
+import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.within;
 
 /** Test for {@link DynamicConfigManager}. */
 public class DynamicConfigChangeTest {
@@ -61,6 +73,7 @@ public class DynamicConfigChangeTest {
     @BeforeAll
     static void beforeAll() {
         final Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.REMOTE_DATA_DIR, DEFAULT_REMOTE_DATA_DIR);
         configuration.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS,
                 zooKeeperExtensionWrapper.getCustomExtension().getConnectString());
@@ -178,6 +191,47 @@ public class DynamicConfigChangeTest {
 
             assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
                     .isNull();
+        }
+    }
+
+    @Test
+    void testDatalakePrefixValidationSkippedWhenFormatIsNull() throws Exception {
+        Configuration configuration = new Configuration();
+        try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
+                new LakeCatalogDynamicLoader(configuration, null, true)) {
+            DynamicConfigManager dynamicConfigManager =
+                    new DynamicConfigManager(zookeeperClient, configuration, true);
+            dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            dynamicConfigManager.startup();
+
+            // Setting `datalake.paimon.*` without setting `datalake.format` should pass because
+            // prefix validation is skipped.
+            assertThatCode(
+                            () ->
+                                    dynamicConfigManager.alterConfigs(
+                                            Collections.singletonList(
+                                                    new AlterConfig(
+                                                            "datalake.iceberg.type",
+                                                            "rest",
+                                                            AlterConfigOpType.SET))))
+                    .doesNotThrowAnyException();
+
+            assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
+                    .isNull();
+            assertThatThrownBy(
+                            () ->
+                                    dynamicConfigManager.alterConfigs(
+                                            Arrays.asList(
+                                                    new AlterConfig(
+                                                            "datalake.iceberg.type",
+                                                            "rest",
+                                                            AlterConfigOpType.SET),
+                                                    new AlterConfig(
+                                                            "datalake.format",
+                                                            "paimon",
+                                                            AlterConfigOpType.SET))))
+                    .hasMessageContaining(
+                            "Invalid configuration 'datalake.iceberg.type' for 'paimon' datalake format");
         }
     }
 
@@ -345,6 +399,302 @@ public class DynamicConfigChangeTest {
             assertThat(zkConfig.get(DATALAKE_FORMAT.key())).isEqualTo("paimon");
             assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
                     .isEqualTo(PAIMON);
+        }
+    }
+
+    @Test
+    void testPreventInvalidSnapshotInterval() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofMinutes(10));
+
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+        dynamicConfigManager.startup();
+
+        // Try to set snapshot interval to an invalid value - should be rejected by type validation
+        assertThatThrownBy(
+                        () ->
+                                dynamicConfigManager.alterConfigs(
+                                        Collections.singletonList(
+                                                new AlterConfig(
+                                                        ConfigOptions.KV_SNAPSHOT_INTERVAL.key(),
+                                                        "invalid_value",
+                                                        AlterConfigOpType.SET))))
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining(
+                        "Cannot parse 'invalid_value' as Duration for config 'kv.snapshot.interval'");
+    }
+
+    @Test
+    void testDynamicSnapshotIntervalChange() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofMinutes(10));
+
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+
+        AtomicReference<Duration> reconfiguredInterval = new AtomicReference<>();
+        dynamicConfigManager.register(
+                new ServerReconfigurable() {
+                    @Override
+                    public void validate(Configuration newConfig) throws ConfigException {}
+
+                    @Override
+                    public void reconfigure(Configuration newConfig) {
+                        reconfiguredInterval.set(newConfig.get(ConfigOptions.KV_SNAPSHOT_INTERVAL));
+                    }
+                });
+        dynamicConfigManager.startup();
+
+        // Change snapshot interval to 5 minutes - should succeed
+        assertThatCode(
+                        () ->
+                                dynamicConfigManager.alterConfigs(
+                                        Collections.singletonList(
+                                                new AlterConfig(
+                                                        ConfigOptions.KV_SNAPSHOT_INTERVAL.key(),
+                                                        "5min",
+                                                        AlterConfigOpType.SET))))
+                .doesNotThrowAnyException();
+
+        // Verify config was persisted to ZK
+        Map<String, String> zkConfig = zookeeperClient.fetchEntityConfig();
+        assertThat(zkConfig.get(ConfigOptions.KV_SNAPSHOT_INTERVAL.key())).isEqualTo("5min");
+
+        // Verify the reconfigurable was notified with the new value
+        assertThat(reconfiguredInterval.get()).isEqualTo(Duration.ofMinutes(5));
+    }
+
+    @Test
+    void testDynamicReconfigurationOfRemoteDataDirs() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.REMOTE_DATA_DIR, "hdfs://default-dir");
+        configuration.set(
+                ConfigOptions.REMOTE_DATA_DIRS, Arrays.asList("hdfs://dir1", "hdfs://dir2"));
+
+        try (RemoteDirDynamicLoader remoteDirDynamicLoader =
+                new RemoteDirDynamicLoader(configuration)) {
+            DynamicConfigManager dynamicConfigManager =
+                    new DynamicConfigManager(zookeeperClient, configuration, true);
+            dynamicConfigManager.register(remoteDirDynamicLoader);
+            dynamicConfigManager.startup();
+
+            // Verify initial selector is RoundRobin (default strategy)
+            assertThat(remoteDirDynamicLoader.getRemoteDirSelector())
+                    .isInstanceOf(RoundRobinRemoteDirSelector.class);
+
+            // Change multiple configs - generic validation applies to all
+            dynamicConfigManager.alterConfigs(
+                    Arrays.asList(
+                            new AlterConfig(
+                                    ConfigOptions.REMOTE_DATA_DIRS.key(),
+                                    "hdfs://dir1,hdfs://dir2,hdfs://dir3",
+                                    AlterConfigOpType.SET),
+                            new AlterConfig(
+                                    ConfigOptions.REMOTE_DATA_DIRS_STRATEGY.key(),
+                                    ConfigOptions.RemoteDataDirStrategy.WEIGHTED_ROUND_ROBIN.name(),
+                                    AlterConfigOpType.SET),
+                            new AlterConfig(
+                                    ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS.key(),
+                                    "1,2,3",
+                                    AlterConfigOpType.SET)));
+
+            // Verify both configs were applied
+            Map<String, String> zkConfig = zookeeperClient.fetchEntityConfig();
+            assertThat(zkConfig.get(ConfigOptions.REMOTE_DATA_DIRS.key()))
+                    .isEqualTo("hdfs://dir1,hdfs://dir2,hdfs://dir3");
+            assertThat(zkConfig.get(ConfigOptions.REMOTE_DATA_DIRS_STRATEGY.key()))
+                    .isEqualTo(ConfigOptions.RemoteDataDirStrategy.WEIGHTED_ROUND_ROBIN.name());
+            assertThat(zkConfig.get(ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS.key()))
+                    .isEqualTo("1,2,3");
+
+            // Wait for config change to propagate via ZK watcher
+            retry(
+                    Duration.ofMinutes(1),
+                    () ->
+                            assertThat(remoteDirDynamicLoader.getRemoteDirSelector())
+                                    .isInstanceOf(WeightedRoundRobinRemoteDirSelector.class));
+        }
+    }
+
+    @Test
+    void testPreventInvalidMinInSyncReplicas() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.setInt(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER, 1);
+
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+        dynamicConfigManager.startup();
+
+        // Try to set min-in-sync-replicas to an invalid value - should be rejected by type
+        // validation
+        assertThatThrownBy(
+                        () ->
+                                dynamicConfigManager.alterConfigs(
+                                        Collections.singletonList(
+                                                new AlterConfig(
+                                                        ConfigOptions
+                                                                .LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER
+                                                                .key(),
+                                                        "invalid_value",
+                                                        AlterConfigOpType.SET))))
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining(
+                        "Cannot parse 'invalid_value' as Integer for config"
+                                + " 'log.replica.min-in-sync-replicas-number'");
+    }
+
+    @Test
+    void testDynamicMinInSyncReplicasChange() throws Exception {
+        Configuration configuration = new Configuration();
+        configuration.setInt(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER, 1);
+
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+
+        AtomicInteger reconfiguredValue = new AtomicInteger();
+        dynamicConfigManager.register(
+                new ServerReconfigurable() {
+                    @Override
+                    public void validate(Configuration newConfig) throws ConfigException {}
+
+                    @Override
+                    public void reconfigure(Configuration newConfig) {
+                        reconfiguredValue.set(
+                                newConfig.get(
+                                        ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER));
+                    }
+                });
+        dynamicConfigManager.startup();
+
+        // Change min-in-sync-replicas to 2 - should succeed
+        assertThatCode(
+                        () ->
+                                dynamicConfigManager.alterConfigs(
+                                        Collections.singletonList(
+                                                new AlterConfig(
+                                                        ConfigOptions
+                                                                .LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER
+                                                                .key(),
+                                                        "2",
+                                                        AlterConfigOpType.SET))))
+                .doesNotThrowAnyException();
+
+        // Verify config was persisted to ZK
+        Map<String, String> zkConfig = zookeeperClient.fetchEntityConfig();
+        assertThat(zkConfig.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER.key()))
+                .isEqualTo("2");
+
+        // Verify the reconfigurable was notified with the new value
+        assertThat(reconfiguredValue.get()).isEqualTo(2);
+    }
+
+    @Test
+    void testExplicitDataLakeEnabledRequiresDataLakeFormat() throws Exception {
+        try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
+                new LakeCatalogDynamicLoader(new Configuration(), null, true)) {
+            DynamicConfigManager dynamicConfigManager =
+                    new DynamicConfigManager(zookeeperClient, new Configuration(), true);
+            dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            dynamicConfigManager.startup();
+
+            assertThatThrownBy(
+                            () ->
+                                    dynamicConfigManager.alterConfigs(
+                                            Collections.singletonList(
+                                                    new AlterConfig(
+                                                            DATALAKE_ENABLED.key(),
+                                                            "true",
+                                                            AlterConfigOpType.SET))))
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining(
+                            "'datalake.format' must be configured when 'datalake.enabled' is explicitly set to true.");
+        }
+    }
+
+    @Test
+    void testDynamicDiskWriteLimitRatioChange(@TempDir File tempDir) throws Exception {
+        File dataDir = new File(tempDir, "data-0");
+        assertThat(dataDir.mkdirs()).isTrue();
+
+        Configuration configuration = new Configuration();
+        configuration.setInt(ConfigOptions.TABLET_SERVER_ID, 0);
+        configuration.setString(ConfigOptions.DATA_DIR, dataDir.getAbsolutePath());
+        configuration.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 0.85);
+
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+
+        // Create LocalDiskManager and register it
+        try (LocalDiskManager localDiskManager = LocalDiskManager.create(configuration)) {
+            dynamicConfigManager.register(localDiskManager);
+            dynamicConfigManager.startup();
+
+            // Verify initial state
+            assertThat(localDiskManager.getDiskWriteLimitRatio()).isEqualTo(0.85);
+            assertThat(localDiskManager.getDiskUsageMonitor().getWriteLimitRatio()).isEqualTo(0.85);
+            assertThat(localDiskManager.getDiskUsageMonitor().getRecoverThreshold())
+                    .isEqualTo(0.75);
+
+            // Lower the limit to 0.70 via dynamic config
+            assertThatCode(
+                            () ->
+                                    dynamicConfigManager.alterConfigs(
+                                            Collections.singletonList(
+                                                    new AlterConfig(
+                                                            ConfigOptions
+                                                                    .SERVER_DATA_DISK_WRITE_LIMIT_RATIO
+                                                                    .key(),
+                                                            "0.70",
+                                                            AlterConfigOpType.SET))))
+                    .doesNotThrowAnyException();
+
+            // Verify the new ratio took effect immediately (reconfigure triggers runOnce)
+            assertThat(localDiskManager.getDiskWriteLimitRatio()).isEqualTo(0.70);
+            assertThat(localDiskManager.getDiskUsageMonitor().getWriteLimitRatio()).isEqualTo(0.70);
+            assertThat(localDiskManager.getDiskUsageMonitor().getRecoverThreshold())
+                    .isCloseTo(0.60, within(1e-9));
+
+            // Verify config was persisted to ZK
+            Map<String, String> zkConfig = zookeeperClient.fetchEntityConfig();
+            assertThat(zkConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key()))
+                    .isEqualTo("0.70");
+        }
+    }
+
+    @Test
+    void testPreventInvalidDiskWriteLimitRatio(@TempDir File tempDir) throws Exception {
+        File dataDir = new File(tempDir, "data-0");
+        assertThat(dataDir.mkdirs()).isTrue();
+
+        Configuration configuration = new Configuration();
+        configuration.setInt(ConfigOptions.TABLET_SERVER_ID, 0);
+        configuration.setString(ConfigOptions.DATA_DIR, dataDir.getAbsolutePath());
+        configuration.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 0.85);
+
+        DynamicConfigManager dynamicConfigManager =
+                new DynamicConfigManager(zookeeperClient, configuration, true);
+
+        try (LocalDiskManager localDiskManager = LocalDiskManager.create(configuration)) {
+            dynamicConfigManager.register(localDiskManager);
+            dynamicConfigManager.startup();
+
+            // Try to set to invalid value 0.0 - should be rejected
+            assertThatThrownBy(
+                            () ->
+                                    dynamicConfigManager.alterConfigs(
+                                            Collections.singletonList(
+                                                    new AlterConfig(
+                                                            ConfigOptions
+                                                                    .SERVER_DATA_DISK_WRITE_LIMIT_RATIO
+                                                                    .key(),
+                                                            "0.0",
+                                                            AlterConfigOpType.SET))))
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining("must be within (0.1, 1.0]");
+
+            // Verify the ratio was NOT changed
+            assertThat(localDiskManager.getDiskWriteLimitRatio()).isEqualTo(0.85);
         }
     }
 }

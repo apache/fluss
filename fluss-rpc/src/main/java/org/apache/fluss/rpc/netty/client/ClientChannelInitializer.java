@@ -26,16 +26,18 @@ import org.apache.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
  * will be used by the client to handle the init request for the server.
  */
 final class ClientChannelInitializer extends NettyChannelInitializer {
+    private final boolean preferHeap;
 
-    public ClientChannelInitializer(long maxIdleTimeSeconds) {
+    public ClientChannelInitializer(long maxIdleTimeSeconds, boolean preferHeap) {
         super(maxIdleTimeSeconds);
+        this.preferHeap = preferHeap;
     }
 
     @Override
     protected void initChannel(SocketChannel ch) throws Exception {
         // NettyClientHandler will be added dynamically when connection is built
         super.initChannel(ch);
-        addFrameDecoder(ch, Integer.MAX_VALUE, 0);
+        addFrameDecoder(ch, Integer.MAX_VALUE, 0, preferHeap);
         addIdleStateHandler(ch);
     }
 }

@@ -57,6 +57,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+import static org.apache.fluss.config.ConfigOptions.NoKeyAssigner.ROUND_ROBIN;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
@@ -70,9 +71,15 @@ public class FlinkTestBase extends AbstractTestBase {
                     .setClusterConf(
                             new Configuration()
                                     // not to clean snapshots for test purpose
+                                    .set(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, Integer.MAX_VALUE)
+                                    // use a short interval so that if the initial 0ms
+                                    // auto-partition
+                                    // task is skipped (e.g. transient ZK error in CI), the retry
+                                    // fires quickly and partitions are created within the
+                                    // waitUntilPartitionsCreated timeout
                                     .set(
-                                            ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS,
-                                            Integer.MAX_VALUE))
+                                            ConfigOptions.AUTO_PARTITION_CHECK_INTERVAL,
+                                            Duration.ofSeconds(5)))
                     .setNumOfTabletServers(3)
                     .build();
 
@@ -149,6 +156,7 @@ public class FlinkTestBase extends AbstractTestBase {
     @BeforeAll
     protected static void beforeAll() {
         clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+        clientConf.set(ConfigOptions.CLIENT_WRITER_BUCKET_NO_KEY_ASSIGNER, ROUND_ROBIN);
         bootstrapServers = FLUSS_CLUSTER_EXTENSION.getBootstrapServers();
         conn = ConnectionFactory.createConnection(clientConf);
         admin = conn.getAdmin();
@@ -237,6 +245,7 @@ public class FlinkTestBase extends AbstractTestBase {
                     partition,
                     new PartitionAssignment(
                             tableInfo.getTableId(), assignment.getBucketAssignments()),
+                    zkClient.getDefaultRemoteDataDir(),
                     tablePath,
                     tableInfo.getTableId());
         }

@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.utils;
 
+import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -28,6 +29,7 @@ import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.metadata.AggFunction;
 import org.apache.fluss.metadata.ChangelogImage;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
@@ -41,6 +43,8 @@ import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.AutoPartitionStrategy;
 import org.apache.fluss.utils.StringUtils;
 
+import javax.annotation.Nullable;
+
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -53,6 +57,7 @@ import java.util.stream.Collectors;
 import static org.apache.fluss.config.FlussConfigUtils.TABLE_OPTIONS;
 import static org.apache.fluss.config.FlussConfigUtils.isAlterableTableOption;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
+import static org.apache.fluss.config.StatisticsConfigUtils.validateStatisticsConfig;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.CHANGE_TYPE_COLUMN;
 import static org.apache.fluss.metadata.TableDescriptor.COMMIT_TIMESTAMP_COLUMN;
@@ -79,7 +84,10 @@ public class TableDescriptorValidation {
             Arrays.asList(DataTypeRoot.ARRAY, DataTypeRoot.MAP, DataTypeRoot.ROW);
 
     /** Validate table descriptor to create is valid and contain all necessary information. */
-    public static void validateTableDescriptor(TableDescriptor tableDescriptor, int maxBucketNum) {
+    public static void validateTableDescriptor(
+            TableDescriptor tableDescriptor,
+            int maxBucketNum,
+            @Nullable DataLakeFormat clusterDataLakeFormat) {
         Schema schema = tableDescriptor.getSchema();
         boolean hasPrimaryKey = schema.getPrimaryKey().isPresent();
         Configuration tableConf = Configuration.fromMap(tableDescriptor.getProperties());
@@ -118,39 +126,103 @@ public class TableDescriptorValidation {
         checkTieredLog(tableConf);
         checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema.getRowType());
         checkSystemColumns(schema.getRowType());
+        validateStatisticsConfig(tableDescriptor);
+        checkTableLakeFormatMatchesCluster(tableConf, clusterDataLakeFormat);
+    }
+
+    /** Validates the schema after altering table columns. */
+    @Internal
+    public static void validateAlterTableSchema(TableInfo table, Schema newSchema) {
+        if (table.getTableConfig()
+                .getMergeEngineType()
+                .map(MergeEngineType.AGGREGATION::equals)
+                .orElse(false)) {
+            validateAggregationFunctionParameters(newSchema);
+        } else {
+            validateNoAggregationFunctions(newSchema);
+        }
+    }
+
+    private static void checkTableLakeFormatMatchesCluster(
+            Configuration tableConf, @Nullable DataLakeFormat clusterDataLakeFormat) {
+        if (clusterDataLakeFormat == null) {
+            return;
+        }
+
+        if (!tableConf.get(ConfigOptions.TABLE_DATALAKE_ENABLED)) {
+            return;
+        }
+
+        Optional<DataLakeFormat> tableDataLakeFormat =
+                tableConf.getOptional(ConfigOptions.TABLE_DATALAKE_FORMAT);
+        if (tableDataLakeFormat.isPresent() && tableDataLakeFormat.get() != clusterDataLakeFormat) {
+            throw new InvalidConfigException(
+                    String.format(
+                            "'%s' ('%s') must match cluster '%s' ('%s') when '%s' is enabled.",
+                            ConfigOptions.TABLE_DATALAKE_FORMAT.key(),
+                            tableDataLakeFormat.get(),
+                            ConfigOptions.DATALAKE_FORMAT.key(),
+                            clusterDataLakeFormat,
+                            ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
+        }
     }
 
     public static void validateAlterTableProperties(
-            TableInfo currentTable, Set<String> tableKeysToChange, Set<String> customKeysToChange) {
+            TableInfo currentTable, Set<String> tableKeysToChange) {
         TableConfig currentConfig = currentTable.getTableConfig();
-        tableKeysToChange.forEach(
-                k -> {
-                    if (isTableStorageConfig(k) && !isAlterableTableOption(k)) {
-                        throw new InvalidAlterTableException(
-                                "The option '" + k + "' is not supported to alter yet.");
-                    }
 
-                    if (!currentConfig.getDataLakeFormat().isPresent()
-                            && ConfigOptions.TABLE_DATALAKE_ENABLED.key().equals(k)) {
-                        throw new InvalidAlterTableException(
-                                String.format(
-                                        "The option '%s' cannot be altered for tables that were"
-                                                + " created before the Fluss cluster enabled datalake.",
-                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
-                    }
-                });
+        List<String> unsupportedKeys =
+                tableKeysToChange.stream()
+                        .filter(k -> isTableStorageConfig(k) && !isAlterableTableOption(k))
+                        .collect(Collectors.toList());
+        if (!unsupportedKeys.isEmpty()) {
+            throw new InvalidAlterTableException(
+                    String.format(
+                            "The following options are not supported to alter yet: %s.",
+                            unsupportedKeys.stream()
+                                    .map(k -> "'" + k + "'")
+                                    .collect(Collectors.joining(", "))));
+        }
 
-        if (currentConfig.isDataLakeEnabled() && currentConfig.getDataLakeFormat().isPresent()) {
-            String format = currentConfig.getDataLakeFormat().get().toString();
-            customKeysToChange.forEach(
-                    k -> {
-                        if (k.startsWith(format + ".")) {
-                            throw new InvalidConfigException(
-                                    String.format(
-                                            "Property '%s' is not supported to alter which is for datalake table.",
-                                            k));
-                        }
-                    });
+        // Standby replica is only applicable to primary key tables
+        if (tableKeysToChange.contains(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key())
+                && !currentTable.hasPrimaryKey()) {
+            throw new InvalidAlterTableException(
+                    String.format(
+                            "'%s' can only be altered on primary key tables.",
+                            ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key()));
+        }
+
+        if (!currentConfig.getDataLakeFormat().isPresent()) {
+            List<String> datalakeKeys =
+                    tableKeysToChange.stream()
+                            .filter(k -> k.startsWith("table.datalake."))
+                            .collect(Collectors.toList());
+            if (!datalakeKeys.isEmpty()) {
+                // Allow log tables without bucket keys to enable datalake even when
+                // `table.datalake.format` was not recorded at creation time, because bucket
+                // distribution does not need to stay aligned with the lake format in this case.
+                boolean alterLegacyLogTableWithoutBucketKey =
+                        !currentTable.hasPrimaryKey()
+                                && !currentTable.hasBucketKey()
+                                && datalakeKeys.stream()
+                                        .allMatch(
+                                                k ->
+                                                        k.equals(
+                                                                ConfigOptions.TABLE_DATALAKE_ENABLED
+                                                                        .key()));
+                if (alterLegacyLogTableWithoutBucketKey) {
+                    return;
+                }
+
+                throw new InvalidAlterTableException(
+                        String.format(
+                                "The following options cannot be altered for tables that were"
+                                        + " created before the Fluss cluster enabled datalake: %s.",
+                                datalakeKeys.stream()
+                                        .map(k -> "'" + k + "'")
+                                        .collect(Collectors.joining(", "))));
+            }
         }
     }
 
@@ -265,6 +337,9 @@ public class TableDescriptorValidation {
     private static void checkMergeEngine(
             Configuration tableConf, boolean hasPrimaryKey, Schema schema) {
         MergeEngineType mergeEngine = tableConf.get(ConfigOptions.TABLE_MERGE_ENGINE);
+        if (mergeEngine != MergeEngineType.AGGREGATION) {
+            validateNoAggregationFunctions(schema);
+        }
         if (mergeEngine != null) {
             if (!hasPrimaryKey) {
                 throw new InvalidConfigException(
@@ -315,6 +390,20 @@ public class TableDescriptorValidation {
                 }
                 // Validate aggregation function parameters for aggregation merge engine
                 validateAggregationFunctionParameters(schema);
+            }
+        }
+    }
+
+    /** Validates that the schema doesn't contain any aggregation functions. */
+    private static void validateNoAggregationFunctions(Schema schema) {
+        for (Schema.Column column : schema.getColumns()) {
+            Optional<AggFunction> aggFunction = column.getAggFunction();
+            if (aggFunction.isPresent()) {
+                throw new InvalidConfigException(
+                        String.format(
+                                "Aggregation function is only supported for aggregation merge engine table, "
+                                        + "but column '%s' has aggregation function '%s'.",
+                                column.getName(), aggFunction.get()));
             }
         }
     }

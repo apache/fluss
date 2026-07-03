@@ -1,0 +1,108 @@
+---
+title: Apache Fluss vs Apache Kafka
+description: How Apache Fluss compares to Apache Kafka. When each is the right tool for your real-time analytics, AI/ML, and lakehouse stack.
+---
+
+# Apache Fluss vs Apache Kafka
+
+Apache Kafka and Apache Fluss occupy different layers of the real-time data
+stack. Kafka is a **streaming transport**: a durable, distributed commit log
+built to move events between systems. Fluss is **streaming storage**: a
+columnar table substrate built to serve large-scale stream processing,
+real-time analytics, AI/ML, and lakehouse queries from the same data, in
+seconds.
+
+This page covers when each tool is the right pick and how they differ.
+
+## TL;DR
+
+- **Use Kafka** when your primary need is durable event transport between
+  services or systems: pub/sub, log ingestion, microservice fan-out,
+  cross-language messaging.
+- **Use Fluss** when your primary need is large-scale stream processing with
+  Apache Flink, real-time analytics, or AI/ML pipelines. Fluss is one shared
+  streaming storage substrate for all of them, so analytics jobs and AI/ML
+  workloads read from the same data without copies and without separate
+  feature, context, or analytical stores.
+
+## The real distinction
+
+Kafka treats data as **rows in an append-only log** addressable by partition
+and offset. That model is excellent for transport. Every consumer gets a
+strictly ordered, replayable stream, but it pushes the cost of analytical
+access (filtering, joining, aggregating, deduplicating) onto the consuming
+application. State for those operations ends up on the consumer side, typically
+in RocksDB inside Flink, which makes recovery slow and scaling state-bound.
+
+Fluss treats data as **tables**. Two kinds: **Log Tables** for append-only
+streams, and **Primary Key Tables** that support native upserts, partial
+updates, and deletes, with a column-oriented Arrow log and an LSM-based KV
+index sitting behind the same table. Reads are server-side: column projection,
+predicate pushdown, and partition pruning happen on the TabletServer before
+bytes hit the wire. PK lookups are a first-class operation. And cold data tiers
+automatically into Iceberg, Paimon, or Lance in their native open format,
+queryable as the same logical table from Spark, Trino, StarRocks, or DuckDB.
+
+## When Kafka is the right tool
+
+Pick Kafka when these are your dominant needs:
+
+- **Event-driven systems.** Services publish events; many services subscribe.
+  Kafka's at-least-once / exactly-once delivery, consumer groups, and rich
+  ecosystem of clients in every language make this its strongest fit.
+- **Log ingestion and edge transport.** Application logs, click streams,
+  device telemetry. Funnel them through Kafka before they fan out to
+  downstream stores.
+- **Microservice pub/sub.** Asynchronous decoupling between services.
+- **Cross-system, cross-language messaging.** Kafka's broad client support
+  remains unmatched.
+
+## When Fluss is the right tool
+
+Pick Fluss when these are your dominant needs:
+
+- **Large-scale stream processing with Apache Flink.** Stateless compute,
+  with join and aggregation state externalised onto Fluss via Delta Joins
+  and the Aggregation Merge Engine. Recovery drops from minutes to seconds
+  and compute scales independently of state size.
+- **Real-time analytics on wide tables.** Server-side column projection,
+  predicate pushdown, and partition pruning compound into order-of-magnitude
+  I/O and network savings. A query reading 10 columns out of 200 transfers
+  about 5% of the bytes a row-log-based pipeline would.
+- **AI / ML on streaming data.** Row, columnar, and vector formats sit on the
+  same substrate. Online feature serving, RAG-ready semantic context, and
+  structured analytics collapse into one PK Table accessed through different
+  views. No separate feature store, no separate context store.
+- **Dimension joins and stream enrichment.** PK lookups are native and
+  sub-millisecond. Flink Lookup Joins against Fluss PK Tables consolidate
+  the online KV store (Redis, HBase, Cassandra) into the same substrate that
+  holds the streaming log, so there is one source of truth for both the
+  serving lookup and the changelog instead of a separate cache in front of
+  the pipeline.
+- **CDC-heavy pipelines.** Primary Key Tables handle upserts, partial updates,
+  and deletes natively, and emit a `$changelog` virtual table that is
+  replayable by design. No external Schema Registry and no Connect/Debezium
+  layer needed for CDC patterns within Fluss.
+- **Real-time lakehouse.** Fluss is the hot tier; Iceberg or Paimon is the
+  cold tier. They share a schema and are queryable as one logical table
+  through Union Read, so streaming jobs and historical queries hit the same
+  source of truth with sub-second freshness. Lance is supported as a tiering
+  target for AI / vector workloads (Union Read on Lance is on the roadmap).
+
+## Side-by-side
+
+| Dimension | Apache Kafka | Apache Fluss |
+| --- | --- | --- |
+| **Positioning** | Distributed event streaming platform / durable commit log | Streaming storage for real-time analytics, AI/ML, and the lakehouse |
+| **Storage model** | Append-only row log | Columnar Arrow log & KV index; tiers to Paimon · Iceberg · Lance |
+| **Logical unit** | Topic (log only) | Log Tables & Primary Key Tables with native upserts, partial updates, deletes |
+| **Metadata plane** | KRaft controllers · keyed topic partitions | CoordinatorServer & TabletServers · buckets & first-class partitioned tables |
+| **Schema · CDC** | External Schema Registry; CDC via Connect / Debezium | First-class schemas with evolution; native `$changelog` · `$binlog` virtual tables |
+| **Read path** | No server-side pruning; no native PK lookup | Zero-copy column · partition · predicate pushdown; PK lookup via LSM |
+| **State externalisation** (with Flink) | App holds join & aggregation state in RocksDB | Delta Joins & Aggregation Merge Engine externalise state to Fluss |
+| **Lakehouse integration** | External (via Connect sinks) | Native (shared schema and Union Read across Iceberg & Paimon; Lance for AI / vector tiering) |
+| **Engines that read** (the storage layer) | Kafka clients only | Flink · Spark · DuckDB· **_planned:** Trino · StarRocks |
+| **Strong fit** | Event-driven systems · log ingestion · microservice pub/sub · cross-language transport | Large-scale Flink stream processing · real-time analytics · AI/ML · streaming lakehouse · dimension joins · CDC |
+
+Ready to try Fluss? [Get started with the Flink quickstart](/docs/quickstart/flink),
+or read the [architecture overview](/docs/concepts/architecture).

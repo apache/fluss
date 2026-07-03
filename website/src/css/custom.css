@@ -21,45 +21,216 @@
  * work well for content-centric websites.
  */
 
-/* Import Inter font from Google Fonts */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+/* Self-hosted variable fonts via @fontsource (no external requests).
+ * Geist is OFL-licensed (https://vercel.com/font); the variable bundles
+ * carry the full 100-900 weight axis in a single woff2 per family, so
+ * picking weights becomes a styling decision rather than a load decision. */
+@import '@fontsource-variable/geist';
+@import '@fontsource-variable/geist-mono';
 
-/* You can override the default Infima variables here. */
+/* =========================================================================
+   Fluss Design Tokens (2026 redesign)
+   ========================================================================= */
 :root {
-  --ifm-color-primary: #0071e3;
-  --ifm-color-primary-dark: #0066cc;
-  --ifm-color-primary-darker: #0060c1;
-  --ifm-color-primary-darkest: #004f9f;
-  --ifm-color-primary-light: #007cfa;
-  --ifm-color-primary-lighter: #0682ff;
-  --ifm-color-primary-lightest: #2893ff;
-  --ifm-code-font-size: 90%;
-  --ifm-font-family-base: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
-  --docusaurus-highlighted-code-line-bg: #E2E9F3;
+  /* --- Brand: Navy scale (2026 palette refresh) ---
+     Anchored on six user-provided palette stops:
+       #0A1745 · #102856 · #12325C · #194670 · #1C5078 · #266D95
+     The 300/100/50 stops are derived lighter tints in the same hue family
+     so we keep enough light surfaces / light-text accents on dark grounds. */
+  --fluss-blue-950: #0A1745;
+  --fluss-blue-900: #102856;
+  --fluss-blue-800: #12325C;
+  --fluss-blue-700: #194670;
+  --fluss-blue-600: #1C5078;
+  --fluss-blue-500: #266D95;
+  --fluss-blue-300: #7AAFCB;
+  --fluss-blue-100: #D6E4ED;
+  --fluss-blue-50:  #ECF3F7;
 
-  --ifm-menu-color-background-active: #edeefa99;
-  --ifm-menu-color-background-hover: #edeefa99;
+  /* --- Accents (use sparingly) ---
+     The previous bright cyan is replaced with the palette's brightest stop
+     so accents stay within the new navy/teal family. */
+  --fluss-cyan:    #266D95;
+  --fluss-violet:  #7C3AED;
+  --fluss-lime:    #A3E635;
+
+  /* --- Link (docs body prose) ---
+     A brighter, more saturated blue than the navy text/heading palette so
+     in-prose links visibly stand out from body copy ("QuickStart",
+     "Architecture", etc. on the docs intro page). Hover deepens to navy. */
+  --fluss-link:       #0E76C2;
+  --fluss-link-hover: #094E83;
+
+  /* --- Neutrals --- */
+  --fluss-ink-950: #0A0F1C;
+  --fluss-ink-700: #334155;
+  --fluss-ink-500: #64748B;
+  --fluss-ink-300: #CBD5E1;
+  --fluss-ink-100: #E6ECF5;
+  --fluss-paper:   #FFFFFF;
+  --fluss-canvas:  #FFFFFF;
+  --fluss-canvas-soft: #ECF3F7;
+
+  /* --- Semantic --- */
+  --fluss-success: #10B981;
+  --fluss-warning: #F59E0B;
+  --fluss-danger:  #EF4444;
+
+  /* --- Spacing (8px base) --- */
+  --fluss-space-1:  4px;
+  --fluss-space-2:  8px;
+  --fluss-space-3:  12px;
+  --fluss-space-4:  16px;
+  --fluss-space-5:  20px;
+  --fluss-space-6:  24px;
+  --fluss-space-8:  32px;
+  --fluss-space-10: 40px;
+  --fluss-space-12: 48px;
+  --fluss-space-16: 64px;
+  --fluss-space-20: 80px;
+  --fluss-space-24: 96px;
+  --fluss-space-32: 128px;
+
+  /* --- Radius --- */
+  --fluss-radius-sm: 6px;
+  --fluss-radius-md: 10px;
+  --fluss-radius-lg: 14px;
+  --fluss-radius-xl: 20px;
+  --fluss-radius-2xl: 28px;
+  --fluss-radius-pill: 999px;
+
+  /* --- Shadows (cool navy-tinted, palette-driven) --- */
+  --fluss-shadow-sm:   0 1px 2px rgba(10, 23, 69, 0.06), 0 2px 6px rgba(10, 23, 69, 0.04);
+  --fluss-shadow-md:   0 6px 20px rgba(10, 23, 69, 0.10), 0 2px 6px rgba(10, 23, 69, 0.05);
+  --fluss-shadow-lg:   0 24px 60px rgba(10, 23, 69, 0.14), 0 6px 16px rgba(10, 23, 69, 0.06);
+  --fluss-shadow-glow: 0 0 0 1px rgba(28, 80, 120, 0.30), 0 16px 48px rgba(38, 109, 149, 0.28);
+
+  /* --- Motion --- */
+  --fluss-motion-fast: 120ms;
+  --fluss-motion-base: 240ms;
+  --fluss-motion-slow: 480ms;
+  --fluss-ease-out:    cubic-bezier(0.2, 0.8, 0.2, 1);
+  --fluss-ease-inout:  cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* --- Typography --- */
+  --fluss-font-sans:    'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --fluss-font-display: 'Inter', var(--fluss-font-sans);
+  --fluss-font-mono:    ui-monospace, 'JetBrains Mono', 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /* --- Layout --- */
+  --fluss-container-max: 1240px;
+  --fluss-container-pad: 24px;
+
+  /* =====================================================================
+     Infima overrides : wire tokens into Docusaurus
+     ===================================================================== */
+  --ifm-font-family-base: var(--fluss-font-sans);
+  --ifm-heading-font-family: var(--fluss-font-display);
+  --ifm-font-family-monospace: var(--fluss-font-mono);
+  --ifm-line-height-base: 1.6;
+  --ifm-heading-font-weight: 600;
+  --ifm-heading-color: var(--fluss-ink-950);
+  --ifm-font-color-base: var(--fluss-ink-700);
+
+  --ifm-color-primary:          #1C5078;
+  --ifm-color-primary-dark:     #194670;
+  --ifm-color-primary-darker:   #12325C;
+  --ifm-color-primary-darkest:  #102856;
+  --ifm-color-primary-light:    #266D95;
+  --ifm-color-primary-lighter:  #7AAFCB;
+  --ifm-color-primary-lightest: #D6E4ED;
+
+  --ifm-code-font-size: 90%;
+  --docusaurus-highlighted-code-line-bg: #DDE6EE;
+
+  --ifm-menu-color-background-active: #ECF3F7;
+  --ifm-menu-color-background-hover:  #ECF3F7;
+
+  /* Navbar: a single dark Fluss palette across the WHOLE site (homepage,
+     docs, blog, community) so the navbar reads identically on every
+     page — no per-route transparent / frosted variants.
+     Background uses the deepest palette stop (#0A1745) for a quiet,
+     premium feel. */
+  --ifm-navbar-background-color: rgba(10, 23, 69, 0.92);
+  --ifm-navbar-link-color: #CBD5E1;
+  --ifm-navbar-link-hover-color: #FFFFFF;
+  --ifm-navbar-shadow: 0 1px 0 rgba(255, 255, 255, 0.06);
+  --ifm-footer-background-color: var(--fluss-blue-950);
+  --ifm-footer-color: var(--fluss-ink-300);
+  --ifm-footer-link-color: var(--fluss-ink-300);
+  --ifm-footer-title-color: #FFFFFF;
 }
 
+/* =========================================================================
+   Base typographic refinement
+   ========================================================================= */
+html {
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Match the body bg so the browser's default white html surface
+   * doesn't show as a thin line at the top during overscroll / before
+   * the body paint. The variable flips with theme via tokens above. */
+  background: var(--fluss-canvas);
+}
+
+body {
+  background: var(--fluss-canvas);
+}
+
+/* Page scrollbar — keep the thumb bright in dark mode so it stays
+ * visible against the deep-blue canvas. We use only the standard
+ * `scrollbar-color` property (no `::-webkit-scrollbar-*` width rules),
+ * because defining a width on `::-webkit-scrollbar` forces Chrome out
+ * of macOS overlay-scrollbar mode and into a 12px space-taking
+ * scrollbar — which would only apply in dark mode and cause the page
+ * (and the navbar's right-aligned items) to shift 12px on every theme
+ * toggle. */
+[data-theme='dark'] html {
+  scrollbar-color: rgba(255, 255, 255, 0.42) rgba(255, 255, 255, 0.06);
+}
+[data-theme='dark'] body::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.04);
+}
+[data-theme='dark'] body::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.32);
+    border-radius: 8px;
+    border: 3px solid transparent;
+    background-clip: padding-box;
+}
+[data-theme='dark'] body::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.55);
+    background-clip: padding-box;
+}
+
+/* Subtle dot-grid texture on the homepage canvas in light mode.
+   Mirrors the dark-mode docs-canvas treatment so the page reads as
+   "designed" instead of flat white. The pattern fades behind hero
+   and dark sections because they paint their own backgrounds. */
+body.fluss-home {
+  background-color: var(--fluss-canvas);
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(28, 80, 120, 0.10) 1px, transparent 0);
+  background-size: 28px 28px;
+  background-attachment: fixed;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  letter-spacing: -0.011em;
+}
 
 .source_code_button {
   margin-left: 20px;
 }
 
-
+/* =========================================================================
+   Navbar
+   ========================================================================= */
 .navbar__brand {
-  font-family: monaco;
-  color: inherit;
-}
-
-.hero__title {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: var(--fluss-font-display);
   font-weight: 700;
-  letter-spacing: -0.03em;
-}
-
-.hero__subtitle {
-  padding-bottom: 2rem;
+  letter-spacing: -0.01em;
+  color: inherit;
 }
 
 .header-github-link:hover {
@@ -71,53 +242,61 @@
   width: 24px;
   height: 24px;
   display: flex;
-  background: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12'/%3E%3C/svg%3E")
+  background: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' fill='%23E2E8F0' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12'/%3E%3C/svg%3E")
   no-repeat;
 }
 
-
+/* =========================================================================
+   Sidebar / menu
+   ========================================================================= */
 .menu__list-item {
   font-size: 0.95rem;
   font-weight: 500;
+}
+
+.menu__link {
+  font-weight: 500;
+  color: var(--fluss-ink-500);
+}
+
+.menu__link--active {
+  color: var(--ifm-color-primary);
+  font-weight: 600;
 }
 
 .menu__link--sublist-caret:after {
   background: var(--ifm-menu-link-sublist-icon) 50% / 1.5rem 1.5rem;
 }
 
-
+/* =========================================================================
+   Markdown content
+   ========================================================================= */
 .markdown {
     padding-left: 1rem;
-    h1,
-    h2,
-    h3,
-    h4,
-    h5,
-    h6 {
-        color: #1d1d1d;
+    h1, h2, h3, h4, h5, h6 {
+        color: var(--fluss-ink-950);
         margin-bottom: 0.3125rem;
-        font-weight: 700;
+        font-weight: 600;
     }
 
-    b,
-    strong {
+    b, strong {
         font-weight: 700;
-        color: #1d1d1d;
+        color: var(--fluss-ink-950);
     }
 
-    h1,
-    h1:first-child {
+    h1, h1:first-child {
         font-size: 2.5rem;
         margin-bottom: 1.5rem;
         margin-top: 0;
     }
 
     h2 {
-        font-size: 2rem;
-        margin-bottom: 1.25rem;
-        margin-top: 2rem;
-        padding-top: 2rem;
-        border-top: 1px solid #e6e7e9;
+        font-size: 1.875rem;
+        margin-bottom: 1rem;
+        margin-top: 2.5rem;
+        padding-top: 0;
+        border-top: none;
+        letter-spacing: -0.018em;
     }
 
     h3 {
@@ -125,12 +304,13 @@
         margin-bottom: 1.25rem;
         margin-top: 1rem;
     }
+
     p {
-        line-height: 1.875;
+        line-height: 1.8;
 
         code {
           border-radius: 4px;
-          background-color: #edf2fa;
+          background-color: #afb8c133;
           border: none;
           padding: 3px 4px;
           font-size: 14px;
@@ -140,28 +320,30 @@
 
     li > code {
         border-radius: 4px;
-        background-color: #edf2fa;
+        background-color: #afb8c133;
         border: none;
         padding: 3px 4px;
         font-size: 14px;
         color: #4c576c;
     }
 
-/*    pre {
-        code {
-            padding: 0.725rem 1.25rem;
-            background-color: #262a37;
-            line-height: 1.875;
-        }
-    }*/
+    table {
+        display: table;
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        border: 1px solid #e1e4e8;
+        border-radius: 8px;
+        overflow: hidden;
+    }
 
     table thead tr {
-        background-color: #f7f9fe;
+        background-color: #f6f8fa;
     }
 
     table thead th {
-        background-color: #f7f9fe;
-        color: #1d1d1d;
+        background-color: #f6f8fa;
+        color: #1a1a1a;
         font-size: 1rem;
         font-weight: 500;
     }
@@ -173,7 +355,7 @@
 
         code {
             border-radius: 4px;
-            background-color: #edf2fa;
+            background-color: #afb8c133;
             border: none;
             padding: 3px 4px;
             font-size: 14px;
@@ -189,6 +371,7 @@
     table tr td {
         padding: 0.65rem 0.8125rem;
         border-color: #dfe5f0;
+        word-break: break-word;
     }
     a {
         color: var(--ifm-color-primary);
@@ -200,31 +383,29 @@
             position: relative;
             list-style: initial;
         }
-        /*
+
         code {
             border-radius: 4px;
-            background-color: #edf2fa;
+            background-color: #afb8c133;
             border: none;
             padding: 3px 4px;
             font-size: 14px;
             color: #4c576c;
-        }*/
+        }
     }
     ol {
         padding-left: 20px;
         li {
             list-style: decimal;
         }
-        /*
         code {
             border-radius: 4px;
-            background-color: #edf2fa;
+            background-color: #afb8c133;
             border: none;
             padding: 3px 4px;
             font-size: 14px;
             color: #4c576c;
         }
-        */
     }
 }
 
@@ -242,15 +423,2886 @@
   background: var(--ifm-menu-color-background-active);
 }
 
+/* =========================================================================
+   Footer
+   ========================================================================= */
+.footer {
+  padding: var(--fluss-space-20) 0 var(--fluss-space-12);
+}
+
+.footer__title {
+  font-family: var(--fluss-font-display);
+  font-weight: 600;
+  font-size: 0.875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #FFFFFF;
+  margin-bottom: var(--fluss-space-4);
+}
+
+.footer__link-item {
+  color: #FFFFFF;
+  opacity: 0.88;
+  transition: opacity var(--fluss-motion-fast) var(--fluss-ease-out), color var(--fluss-motion-fast) var(--fluss-ease-out);
+}
+
+.footer__link-item:hover {
+  color: #FFFFFF;
+  opacity: 1;
+  text-decoration: none;
+}
+
 .footer__copyright {
-    color: #dfe5f0;
+    color: #FFFFFF;
     font-size: .75rem;
     line-height: 1.8;
-    opacity: .6;
+    opacity: .78;
     text-align: center;
     width: 98%;
 }
 
+/* =========================================================================
+   Blog post layout
+   ========================================================================= */
+.blog-post-page-no-sidebar aside.col.col--3 {
+    display: none;
+}
+
+.blog-post-page-no-sidebar main.col.col--7 {
+    flex-basis: calc(9 / 12 * 100%);
+    max-width: calc(9 / 12 * 100%);
+}
+
+.blog-post-page-no-sidebar .col.col--2 {
+    flex-basis: calc(3 / 12 * 100%);
+    max-width: calc(3 / 12 * 100%);
+}
+
+/* Blog list page: widen the main column from col--7 to col--9
+   so that cards (next to the col--3 sidebar) get more room. */
+.blog-list-page main.col.col--7 {
+    flex-basis: calc(9 / 12 * 100%);
+    max-width: calc(9 / 12 * 100%);
+}
+
+/* MDX pages (e.g. /downloads, /learn/talks, /learn/videos): widen the
+   right-side TOC column from col--2 to col--3 for better readability. */
+.mdx-page .col.col--2 {
+    flex-basis: calc(3 / 12 * 100%);
+    max-width: calc(3 / 12 * 100%);
+}
+
 .hidden {
     display: none !important;
+}
+
+/* =========================================================================
+   Kapa AI widget hide rules
+   ========================================================================= */
+/* Hide every trigger element Kapa injects into its container so the only
+   visible AI entry point is the custom .navbar-ask-ai pill (defined below).
+   Kapa periodically changes its injected DOM, so we use a broad rule and
+   then re-show the actual modal dialog explicitly. */
+#kapa-widget-container > button,
+#kapa-widget-container > div:not([role="dialog"]),
+#kapa-widget-container > a {
+    display: none !important;
+}
+
+/* Belt-and-braces: make sure the modal dialog (when open) is never hidden. */
+#kapa-widget-container > div[role="dialog"] {
+    display: revert !important;
+}
+
+/* =========================================================================
+   "Ask AI" navbar pill
+   ========================================================================= */
+.navbar-ask-ai {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    margin: 0 8px;
+    padding: 7px 16px;
+    border: 0;
+    border-radius: var(--fluss-radius-pill);
+    background: linear-gradient(120deg, var(--fluss-cyan) 0%, var(--fluss-blue-600) 50%, var(--fluss-blue-500) 100%);
+    background-size: 180% 180%;
+    color: #ffffff;
+    font-family: inherit;
+    font-size: 0.9rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    box-shadow: 0 2px 10px rgba(6, 182, 212, 0.45),
+                0 0 0 1px rgba(255, 255, 255, 0.1) inset;
+    animation: navbar-ask-ai-shimmer 5s ease-in-out infinite,
+               navbar-ask-ai-pulse 2.6s ease-in-out infinite;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+}
+
+.navbar-ask-ai::before {
+    content: '';
+    width: 14px;
+    height: 14px;
+    background-color: #ffffff;
+    -webkit-mask-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 1.5 L13.6 8.4 L20.5 10 L13.6 11.6 L12 18.5 L10.4 11.6 L3.5 10 L10.4 8.4 Z M19 15 L19.8 17.2 L22 18 L19.8 18.8 L19 21 L18.2 18.8 L16 18 L18.2 17.2 Z' fill='white'/%3E%3C/svg%3E");
+    mask-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 1.5 L13.6 8.4 L20.5 10 L13.6 11.6 L12 18.5 L10.4 11.6 L3.5 10 L10.4 8.4 Z M19 15 L19.8 17.2 L22 18 L19.8 18.8 L19 21 L18.2 18.8 L16 18 L18.2 17.2 Z' fill='white'/%3E%3C/svg%3E");
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-size: contain;
+    mask-size: contain;
+    flex-shrink: 0;
+}
+
+.navbar-ask-ai:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(6, 182, 212, 0.65),
+                0 0 0 1px rgba(255, 255, 255, 0.18) inset;
+    filter: brightness(1.08) saturate(1.1);
+    animation-play-state: paused;
+}
+
+.navbar-ask-ai:focus-visible {
+    outline: 2px solid #ffffff;
+    outline-offset: 2px;
+    box-shadow: 0 0 0 4px rgba(6, 182, 212, 0.5);
+}
+
+@keyframes navbar-ask-ai-shimmer {
+    0%, 100% { background-position: 0% 50%; }
+    50%      { background-position: 100% 50%; }
+}
+
+@keyframes navbar-ask-ai-pulse {
+    0%, 100% { box-shadow: 0 2px 10px rgba(6, 182, 212, 0.45),
+                           0 0 0 1px rgba(255, 255, 255, 0.1) inset; }
+    50%      { box-shadow: 0 2px 18px rgba(6, 182, 212, 0.75),
+                           0 0 0 1px rgba(255, 255, 255, 0.14) inset; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .navbar-ask-ai { animation: none; }
+}
+
+@media (max-width: 996px) {
+    .navbar-ask-ai {
+        padding: 5px 10px;
+        font-size: 0.85rem;
+    }
+}
+
+/* =========================================================================
+   Global focus ring (accessibility)
+   ========================================================================= */
+*:focus-visible {
+  outline: 2px solid var(--fluss-blue-500);
+  outline-offset: 2px;
+  border-radius: var(--fluss-radius-sm);
+}
+
+/* =========================================================================
+   Reduced-motion safety net
+   ========================================================================= */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* =========================================================================
+   ========================================================================
+   SITE-WIDE CHROME (docs, blog, community, learn, 404)
+   Below this line: theming for everything that is NOT the homepage.
+   ========================================================================
+   ========================================================================= */
+
+/* -------------------------------------------------------------------------
+   Navbar (non-homepage solid state)
+   -------------------------------------------------------------------------
+   Previously had a hard 1px white separator below the navbar which read
+   as a disconnect between the chrome and the page body (Jark feedback,
+   PR #3226). Replaced with a subtle drop shadow so the navbar still has
+   visual separation but flows into the page content. */
+.navbar {
+  height: 64px;
+  border-bottom: 0;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.04), 0 2px 8px rgba(15, 23, 42, 0.03);
+}
+
+/* Navbar inner now spans the full viewport width on every page, with the
+   same side padding as page content. Previously capped at 1240px, which
+   left the navbar items visibly inset on docs and other full-width pages
+   (Jark feedback, PR #3226). Same treatment on the homepage so the
+   navbar is visually consistent across the whole site. */
+.navbar__inner {
+  max-width: none;
+  margin: 0;
+  padding: 0 var(--fluss-container-pad);
+}
+
+.navbar__items {
+  gap: 2px;
+}
+
+.navbar__link {
+  font-size: 0.9375rem;
+  font-weight: 500;
+  color: var(--fluss-ink-700);
+  padding: 0 12px;
+  border-radius: var(--fluss-radius-md);
+  transition: color var(--fluss-motion-fast) var(--fluss-ease-out),
+              background-color var(--fluss-motion-fast) var(--fluss-ease-out);
+}
+
+.navbar__link:hover {
+  color: var(--fluss-blue-500);
+  text-decoration: none;
+}
+
+.navbar__link--active {
+  color: var(--fluss-blue-500);
+  font-weight: 600;
+}
+
+.navbar__title {
+  font-family: var(--fluss-font-display);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--fluss-ink-950);
+}
+
+/* Dropdown menus */
+.dropdown__menu {
+  border: 1px solid var(--fluss-ink-100);
+  border-radius: var(--fluss-radius-lg);
+  box-shadow: var(--fluss-shadow-lg);
+  padding: 8px;
+  min-width: 200px;
+  background: var(--fluss-paper);
+}
+
+.dropdown__link {
+  border-radius: var(--fluss-radius-sm);
+  padding: 8px 12px;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  color: var(--fluss-ink-700);
+  transition: color var(--fluss-motion-fast) var(--fluss-ease-out),
+              background-color var(--fluss-motion-fast) var(--fluss-ease-out);
+}
+
+.dropdown__link:hover,
+.dropdown__link--active {
+  color: var(--fluss-blue-700);
+  background: var(--fluss-blue-50);
+}
+
+/* Algolia DocSearch button */
+.DocSearch-Button {
+  height: 36px;
+  padding: 0 12px;
+  border-radius: var(--fluss-radius-md);
+  background: var(--fluss-ink-100);
+  border: 1px solid transparent;
+  transition: border-color var(--fluss-motion-fast) var(--fluss-ease-out),
+              background-color var(--fluss-motion-fast) var(--fluss-ease-out);
+}
+
+.DocSearch-Button:hover {
+  border-color: var(--fluss-blue-300);
+  background: var(--fluss-paper);
+  box-shadow: none;
+}
+
+.DocSearch-Button-Placeholder {
+  font-size: 0.875rem;
+  color: var(--fluss-ink-500);
+}
+
+.DocSearch-Search-Icon {
+  color: var(--fluss-ink-500);
+}
+
+/* Unify right-side navbar spacing so theme-toggle, search button, version
+   dropdown and GitHub icon align on a single baseline with consistent gap
+   (Michael feedback, PR #3226).
+
+   `!important` is required on the margin reset to defeat the
+   `button[class*='colorModeToggle']` selector below, which would
+   otherwise re-introduce a stray horizontal margin on the toggle and
+   throw off the gap. */
+.navbar__items--right {
+  gap: var(--fluss-space-2);
+  align-items: center;
+}
+
+.navbar__items--right > * {
+  margin: 0 !important;
+}
+
+/* Tighten the version dropdown link's horizontal padding when it lives in
+   the right-side cluster, so the visible gap between "Next ▾" and the
+   GitHub icon matches the gap between every other pair of items. */
+.navbar__items--right .navbar__link {
+  padding: 0 4px;
+}
+
+/* Version dropdown badge */
+.navbar .navbar__item--version,
+.navbar .badge {
+  font-family: var(--fluss-font-display);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+/* -------------------------------------------------------------------------
+   Mobile navbar drawer
+   -------------------------------------------------------------------------
+   The drawer is a light surface (var(--fluss-paper)), so inherited styles
+   from the dark navbar — the white Fluss wordmark, the light-tinted GitHub
+   icon, and the #E2E8F0 navbar link colour — would all be invisible inside
+   it. Re-tint everything for the light drawer below (borzoni feedback,
+   PR #3226). */
+.navbar-sidebar {
+  background: var(--fluss-paper);
+}
+
+.navbar-sidebar__brand {
+  border-bottom: 1px solid var(--fluss-ink-100);
+  background: var(--fluss-paper);
+}
+
+.navbar-sidebar__items .menu__link {
+  font-size: 0.9375rem;
+}
+
+/* Drawer brand: re-tint the white wordmark to brand navy (≈ --fluss-blue-600)
+   so it reads on the light paper background. The leading `brightness(0)`
+   collapses the source to black, the rest of the chain shifts it to the
+   target hue. */
+.navbar-sidebar__brand .navbar__logo img {
+  filter: brightness(0) saturate(100%) invert(13%) sepia(53%) saturate(2243%) hue-rotate(193deg) brightness(96%) contrast(95%);
+}
+
+.navbar-sidebar__brand .navbar__title,
+.navbar-sidebar__brand .navbar__brand {
+  color: var(--fluss-ink-950);
+}
+
+/* Drawer navbar links (e.g. items dropped into the drawer on mobile)
+   inherit color: #E2E8F0 from the dark navbar. Re-tint for the light
+   drawer so the labels are readable. */
+.navbar-sidebar .navbar__link,
+.navbar-sidebar .menu__link {
+  color: var(--fluss-ink-700);
+}
+
+.navbar-sidebar .navbar__link:hover,
+.navbar-sidebar .menu__link:hover {
+  color: var(--fluss-blue-700);
+}
+
+.navbar-sidebar .navbar__link--active,
+.navbar-sidebar .menu__link--active {
+  color: var(--fluss-blue-700);
+}
+
+/* GitHub icon in the drawer: the navbar variant uses fill='#E2E8F0',
+   which vanishes on the light drawer. Swap to a brand-blue fill. The
+   `.navbar-sidebar` ancestor selector already wins on specificity, no
+   `!important` needed. */
+.navbar-sidebar .header-github-link::before {
+  background: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill='%231C5078' d='M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12'/%3E%3C/svg%3E") no-repeat;
+}
+
+/* Drawer close button (the X) — keep it readable on the light surface. */
+.navbar-sidebar__close {
+  color: var(--fluss-ink-700);
+}
+
+.navbar-sidebar__close:hover {
+  color: var(--fluss-blue-700);
+}
+
+/* -------------------------------------------------------------------------
+   Announcement bar
+   ------------------------------------------------------------------------- */
+div[class*='announcementBar'] {
+  background: linear-gradient(120deg, var(--fluss-blue-700) 0%, var(--fluss-blue-600) 100%);
+  color: #FFFFFF;
+  font-weight: 500;
+  border-bottom: none;
+}
+
+div[class*='announcementBar'] a {
+  color: var(--fluss-blue-100);
+  text-decoration: underline;
+}
+
+/* -------------------------------------------------------------------------
+   Doc page layout : sidebar / main / TOC
+   ------------------------------------------------------------------------- */
+.theme-doc-sidebar-container {
+  border-right: 1px solid var(--fluss-ink-100);
+  background: var(--fluss-canvas-soft);
+}
+
+.theme-doc-sidebar-menu {
+  padding: var(--fluss-space-3) var(--fluss-space-2);
+}
+
+.menu {
+  background: transparent;
+  font-size: 0.9375rem;
+}
+
+.menu__list .menu__list {
+  margin-left: 8px;
+  padding-left: 8px;
+  border-left: 1px solid var(--fluss-ink-100);
+}
+
+.menu__link {
+  border-radius: var(--fluss-radius-sm);
+  padding: 6px 10px;
+  font-weight: 500;
+  color: var(--fluss-ink-700);
+  transition: color var(--fluss-motion-fast) var(--fluss-ease-out),
+              background-color var(--fluss-motion-fast) var(--fluss-ease-out);
+}
+
+.menu__link:hover {
+  background: var(--fluss-blue-50);
+  color: var(--fluss-blue-700);
+}
+
+.menu__link--active {
+  color: var(--fluss-blue-700);
+  background: var(--fluss-blue-50);
+  font-weight: 600;
+}
+
+.menu__link--sublist {
+  font-weight: 600;
+  color: var(--fluss-ink-950);
+}
+
+.menu__caret:hover {
+  background: var(--fluss-blue-50);
+}
+
+/* Sidebar toggle button at the bottom */
+.theme-doc-sidebar-container button {
+  border-color: var(--fluss-ink-100);
+  color: var(--fluss-ink-500);
+  border-radius: var(--fluss-radius-sm);
+}
+
+.theme-doc-sidebar-container button:hover {
+  border-color: var(--fluss-blue-300);
+  background: var(--fluss-blue-50);
+}
+
+/* -------------------------------------------------------------------------
+   Doc breadcrumbs
+   ------------------------------------------------------------------------- */
+.breadcrumbs__link {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--fluss-ink-500);
+  border-radius: var(--fluss-radius-sm);
+  padding: 4px 8px;
+  transition: color var(--fluss-motion-fast) var(--fluss-ease-out),
+              background-color var(--fluss-motion-fast) var(--fluss-ease-out);
+}
+
+/* Anchor-only hover styles. Category breadcrumb segments without a target
+   page render as a plain element (no <a>); those should not look clickable
+   (borzoni feedback, PR #3226). */
+a.breadcrumbs__link:hover {
+  color: var(--fluss-blue-700);
+  background: var(--fluss-blue-50);
+}
+
+/* Non-link breadcrumb segment (parent category without an index page):
+   render as static text so users don't try to click it. */
+.breadcrumbs__link:not(a) {
+  color: var(--fluss-ink-700);
+  cursor: default;
+}
+
+.breadcrumbs__item--active .breadcrumbs__link {
+  color: var(--fluss-ink-950);
+  font-weight: 600;
+  background: var(--fluss-ink-100);
+}
+
+.breadcrumbs__item:not(:last-child)::after {
+  color: var(--fluss-ink-300);
+}
+
+/* -------------------------------------------------------------------------
+   Table of contents (right rail)
+   ------------------------------------------------------------------------- */
+.table-of-contents {
+  border-left: 1px solid var(--fluss-ink-100);
+  font-size: 0.8125rem;
+  padding-left: var(--fluss-space-3);
+}
+
+.table-of-contents__title,
+.table-of-contents > *:first-child {
+  font-family: var(--fluss-font-display);
+  font-weight: 600;
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  color: var(--fluss-ink-500);
+  margin-bottom: var(--fluss-space-3);
+}
+
+.table-of-contents__link {
+  color: var(--fluss-ink-500);
+  font-weight: 500;
+  padding: 4px 0;
+  display: block;
+  transition: color var(--fluss-motion-fast) var(--fluss-ease-out);
+}
+
+.table-of-contents__link:hover {
+  color: var(--fluss-blue-700);
+  text-decoration: none;
+}
+
+.table-of-contents__link--active {
+  color: var(--fluss-blue-700);
+  font-weight: 600;
+}
+
+/* -------------------------------------------------------------------------
+   Doc content typography polish
+   ------------------------------------------------------------------------- */
+.theme-doc-markdown {
+  font-size: 1rem;
+  line-height: 1.7;
+  color: var(--fluss-ink-700);
+}
+
+.theme-doc-markdown a:not(.button):not(.card) {
+  color: var(--fluss-blue-700);
+  text-decoration-color: rgba(28, 80, 120, 0.3);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: text-decoration-color var(--fluss-motion-fast) var(--fluss-ease-out);
+}
+
+.theme-doc-markdown a:not(.button):not(.card):hover {
+  text-decoration-color: var(--fluss-blue-700);
+}
+
+.markdown a.hash-link {
+  color: var(--fluss-ink-300);
+  text-decoration: none;
+  transition: color var(--fluss-motion-fast) var(--fluss-ease-out);
+}
+
+.markdown a.hash-link:hover {
+  color: var(--fluss-blue-600);
+}
+
+/* Doc page title (h1) : refined */
+header.theme-doc-markdown h1,
+.theme-doc-markdown > article > header > h1 {
+  font-family: var(--fluss-font-display);
+  font-size: 2.5rem;
+  font-weight: 700;
+  letter-spacing: -0.022em;
+  line-height: 1.1;
+  color: var(--fluss-ink-950);
+}
+
+/* "Edit this page" / last updated row */
+.theme-doc-footer {
+  margin-top: var(--fluss-space-12);
+  padding-top: var(--fluss-space-6);
+  border-top: 1px solid var(--fluss-ink-100);
+}
+
+.theme-edit-this-page {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fluss-blue-700);
+  font-weight: 500;
+  font-size: 0.875rem;
+}
+
+.theme-edit-this-page:hover {
+  color: var(--fluss-blue-600);
+  text-decoration: underline;
+}
+
+.theme-last-updated {
+  font-size: 0.8125rem;
+  color: var(--fluss-ink-500);
+}
+
+/* -------------------------------------------------------------------------
+   Pagination (prev / next at the bottom of doc pages)
+   ------------------------------------------------------------------------- */
+.pagination-nav__link {
+  border: 1px solid var(--fluss-ink-100);
+  border-radius: var(--fluss-radius-lg);
+  padding: var(--fluss-space-4) var(--fluss-space-5);
+  background: var(--fluss-paper);
+  transition: transform var(--fluss-motion-base) var(--fluss-ease-out),
+              border-color var(--fluss-motion-base) var(--fluss-ease-out),
+              box-shadow var(--fluss-motion-base) var(--fluss-ease-out);
+}
+
+.pagination-nav__link:hover {
+  border-color: var(--fluss-blue-300);
+  box-shadow: var(--fluss-shadow-sm);
+  transform: translateY(-1px);
+  text-decoration: none;
+}
+
+.pagination-nav__sublabel {
+  font-family: var(--fluss-font-display);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fluss-ink-500);
+  margin-bottom: 4px;
+}
+
+.pagination-nav__label {
+  color: var(--fluss-ink-950);
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+/* -------------------------------------------------------------------------
+   Admonitions (note, tip, info, warning, danger, caution)
+   ------------------------------------------------------------------------- */
+.theme-admonition,
+.alert,
+[class*='admonition_'] {
+  border-radius: var(--fluss-radius-lg);
+  border: 1px solid var(--fluss-ink-100);
+  border-left-width: 4px;
+  background: var(--fluss-paper);
+  padding: var(--fluss-space-4) var(--fluss-space-5);
+  box-shadow: var(--fluss-shadow-sm);
+  margin: var(--fluss-space-6) 0;
+}
+
+.alert--secondary,
+.theme-admonition-note {
+  background: var(--fluss-ink-100);
+  border-color: var(--fluss-ink-300);
+  border-left-color: var(--fluss-ink-500);
+}
+
+.alert--info,
+.theme-admonition-info {
+  background: var(--fluss-blue-50);
+  border-color: var(--fluss-blue-300);
+  border-left-color: var(--fluss-blue-600);
+}
+
+.alert--success,
+.theme-admonition-tip {
+  background: #ECFDF5;
+  border-color: #A7F3D0;
+  border-left-color: var(--fluss-success);
+}
+
+.alert--warning,
+.theme-admonition-warning,
+.theme-admonition-caution {
+  background: #FFFBEB;
+  border-color: #FCD34D;
+  border-left-color: var(--fluss-warning);
+}
+
+.alert--danger,
+.theme-admonition-danger {
+  background: #FEF2F2;
+  border-color: #FCA5A5;
+  border-left-color: var(--fluss-danger);
+}
+
+/* Admonition heading row */
+[class*='admonitionHeading'] {
+  font-family: var(--fluss-font-display);
+  font-weight: 600;
+  font-size: 0.8125rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+  color: var(--fluss-ink-950);
+}
+
+/* -------------------------------------------------------------------------
+   Inline code and code blocks
+   ------------------------------------------------------------------------- */
+code {
+  font-family: var(--fluss-font-mono);
+  font-size: 0.875em;
+  background: var(--fluss-blue-50);
+  border: 1px solid rgba(28, 80, 120, 0.12);
+  color: var(--fluss-blue-800);
+  padding: 1px 6px;
+  border-radius: var(--fluss-radius-sm);
+}
+
+a code,
+.theme-doc-markdown a code {
+  color: inherit;
+  background: rgba(28, 80, 120, 0.12);
+  border-color: transparent;
+}
+
+/* Code block container */
+.theme-code-block,
+div[class*='codeBlockContainer'] {
+  border-radius: var(--fluss-radius-lg);
+  border: 1px solid var(--fluss-ink-100);
+  box-shadow: var(--fluss-shadow-sm);
+  overflow: hidden;
+  margin: var(--fluss-space-5) 0;
+}
+
+div[class*='codeBlockTitle'] {
+  background: var(--fluss-ink-100);
+  border-bottom: 1px solid var(--fluss-ink-300);
+  font-family: var(--fluss-font-mono);
+  font-size: 0.8125rem;
+  color: var(--fluss-ink-700);
+  padding: 8px 14px;
+}
+
+div[class*='codeBlockContent'] pre {
+  background: #F8FAFC;
+}
+
+pre[class*='language-'] {
+  font-size: 0.875rem;
+  line-height: 1.65;
+  padding: var(--fluss-space-4) var(--fluss-space-5);
+}
+
+/* Copy-to-clipboard button */
+button[class*='copyButton'] {
+  background: var(--fluss-paper);
+  border: 1px solid var(--fluss-ink-100);
+  color: var(--fluss-ink-500);
+  border-radius: var(--fluss-radius-sm);
+  transition: color var(--fluss-motion-fast) var(--fluss-ease-out),
+              background-color var(--fluss-motion-fast) var(--fluss-ease-out),
+              border-color var(--fluss-motion-fast) var(--fluss-ease-out);
+}
+
+button[class*='copyButton']:hover {
+  color: var(--fluss-blue-700);
+  background: var(--fluss-blue-50);
+  border-color: var(--fluss-blue-300);
+}
+
+/* Word-wrap toggle */
+button[class*='wordWrapButton'] {
+  background: var(--fluss-paper);
+  border: 1px solid var(--fluss-ink-100);
+  color: var(--fluss-ink-500);
+  border-radius: var(--fluss-radius-sm);
+}
+
+/* Highlighted lines */
+.theme-code-block-highlighted-line,
+.docusaurus-highlight-code-line {
+  background: rgba(28, 80, 120, 0.08);
+  border-left: 3px solid var(--fluss-blue-600);
+  padding-left: calc(var(--fluss-space-5) - 3px);
+  display: block;
+  margin: 0 calc(-1 * var(--fluss-space-5));
+}
+
+/* Language label corner */
+div[class*='codeBlockTitle']::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fluss-cyan);
+  margin-right: 8px;
+  vertical-align: middle;
+}
+
+/* -------------------------------------------------------------------------
+   Tabs (used in docs for SQL / Java / etc. examples)
+   ------------------------------------------------------------------------- */
+.tabs {
+  border-bottom: 1px solid var(--fluss-ink-100);
+  margin-bottom: 0;
+  gap: 4px;
+}
+
+.tabs__item {
+  font-family: var(--fluss-font-display);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--fluss-ink-500);
+  padding: 10px 14px;
+  border-radius: var(--fluss-radius-sm) var(--fluss-radius-sm) 0 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color var(--fluss-motion-fast) var(--fluss-ease-out),
+              border-color var(--fluss-motion-fast) var(--fluss-ease-out);
+}
+
+.tabs__item:hover {
+  background: var(--fluss-blue-50);
+  color: var(--fluss-blue-700);
+}
+
+.tabs__item--active {
+  color: var(--fluss-blue-700);
+  border-bottom-color: var(--fluss-blue-600);
+  background: transparent;
+}
+
+/* -------------------------------------------------------------------------
+   Details / Summary (collapsibles)
+   ------------------------------------------------------------------------- */
+details {
+  border: 1px solid var(--fluss-ink-100);
+  border-radius: var(--fluss-radius-md);
+  background: var(--fluss-paper);
+  padding: var(--fluss-space-3) var(--fluss-space-4);
+  margin: var(--fluss-space-4) 0;
+}
+
+details > summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--fluss-ink-950);
+  font-family: var(--fluss-font-display);
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+details > summary::-webkit-details-marker {
+  display: none;
+}
+
+details > summary::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--fluss-ink-500);
+  border-bottom: 2px solid var(--fluss-ink-500);
+  transform: rotate(-45deg);
+  transition: transform var(--fluss-motion-base) var(--fluss-ease-out);
+}
+
+details[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+/* -------------------------------------------------------------------------
+   Headings : anchor offset for sticky navbar
+   ------------------------------------------------------------------------- */
+.theme-doc-markdown h1,
+.theme-doc-markdown h2,
+.theme-doc-markdown h3,
+.theme-doc-markdown h4 {
+  scroll-margin-top: 80px;
+}
+
+/* -------------------------------------------------------------------------
+   Doc cards (used in some index pages)
+   ------------------------------------------------------------------------- */
+article.card,
+.theme-doc-card {
+  border: 1px solid var(--fluss-ink-100);
+  border-radius: var(--fluss-radius-lg);
+  background: var(--fluss-paper);
+  box-shadow: var(--fluss-shadow-sm);
+  transition: transform var(--fluss-motion-base) var(--fluss-ease-out),
+              box-shadow var(--fluss-motion-base) var(--fluss-ease-out),
+              border-color var(--fluss-motion-base) var(--fluss-ease-out);
+}
+
+article.card:hover,
+.theme-doc-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--fluss-shadow-md);
+  border-color: var(--fluss-blue-300);
+}
+
+/* -------------------------------------------------------------------------
+   Version banner (unmaintained / unreleased)
+   -------------------------------------------------------------------------
+   Previously rendered as a centred rounded card, which on docs pages
+   (full-width main column) sat visibly inset from the page edges and
+   read as disconnected (Jark feedback, PR #3226). Now rendered as a
+   full-bleed strip across the doc content column: no rounded corners,
+   no side border, top/bottom borders only — aligns with the page chrome
+   above and below it. */
+div[class*='docVersionBanner'] {
+  border: 0;
+  border-top: 1px solid var(--fluss-blue-300);
+  border-bottom: 1px solid var(--fluss-blue-300);
+  border-radius: 0;
+  background: var(--fluss-blue-50);
+  color: var(--fluss-ink-950);
+  padding: var(--fluss-space-3) var(--fluss-space-5);
+  margin: 0 0 var(--fluss-space-6);
+  font-size: 0.9375rem;
+}
+
+div[class*='docVersionBanner'] b {
+  color: var(--fluss-blue-700);
+}
+
+div[class*='docVersionBanner'] a {
+  color: var(--fluss-blue-700);
+  font-weight: 600;
+}
+
+/* -------------------------------------------------------------------------
+   Blog : list page (cards)
+   ------------------------------------------------------------------------- */
+.blog-list-page article,
+article[itemtype='https://schema.org/BlogPosting'] {
+  border: 1px solid var(--fluss-ink-100);
+  border-radius: var(--fluss-radius-lg);
+  padding: var(--fluss-space-8);
+  background: var(--fluss-paper);
+  margin-bottom: var(--fluss-space-6);
+  box-shadow: var(--fluss-shadow-sm);
+  transition: transform var(--fluss-motion-base) var(--fluss-ease-out),
+              box-shadow var(--fluss-motion-base) var(--fluss-ease-out),
+              border-color var(--fluss-motion-base) var(--fluss-ease-out);
+}
+
+.blog-list-page article:hover,
+article[itemtype='https://schema.org/BlogPosting']:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--fluss-shadow-md);
+  border-color: var(--fluss-blue-300);
+}
+
+article[itemtype='https://schema.org/BlogPosting'] header h2 a,
+.blog-list-page article header h2 a {
+  font-family: var(--fluss-font-display);
+  font-weight: 700;
+  color: var(--fluss-ink-950);
+  letter-spacing: -0.01em;
+  text-decoration: none;
+}
+
+article[itemtype='https://schema.org/BlogPosting'] header h2 a:hover,
+.blog-list-page article header h2 a:hover {
+  color: var(--fluss-blue-700);
+}
+
+/* Blog post meta line */
+.blog-post-page-no-sidebar .blog-post-page,
+article[itemtype='https://schema.org/BlogPosting'] header > div {
+  color: var(--fluss-ink-500);
+  font-size: 0.875rem;
+}
+
+/* Blog tags */
+a.tag,
+a[class*='tag_'] {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: var(--fluss-radius-pill);
+  background: var(--fluss-blue-50);
+  border: 1px solid transparent;
+  color: var(--fluss-blue-700);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background-color var(--fluss-motion-fast) var(--fluss-ease-out),
+              border-color var(--fluss-motion-fast) var(--fluss-ease-out);
+}
+
+a.tag:hover,
+a[class*='tag_']:hover {
+  background: var(--fluss-blue-100);
+  border-color: var(--fluss-blue-300);
+  color: var(--fluss-blue-800);
+  text-decoration: none;
+}
+
+/* Blog "Read more" button */
+.button.button--secondary {
+  background: var(--fluss-blue-600);
+  color: #FFFFFF;
+  border: none;
+  border-radius: var(--fluss-radius-md);
+  font-weight: 600;
+  padding: 10px 16px;
+  box-shadow: var(--fluss-shadow-sm);
+  transition: background-color var(--fluss-motion-fast) var(--fluss-ease-out),
+              transform var(--fluss-motion-fast) var(--fluss-ease-out);
+}
+
+.button.button--secondary:hover {
+  background: var(--fluss-blue-700);
+  color: #FFFFFF;
+  transform: translateY(-1px);
+}
+
+/* -------------------------------------------------------------------------
+   Blog sidebar (recent posts)
+   ------------------------------------------------------------------------- */
+aside.col[class*='blogSidebar'],
+nav[class*='sidebar'] aside {
+  font-size: 0.875rem;
+}
+
+nav[class*='sidebar'] h3 {
+  font-family: var(--fluss-font-display);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fluss-ink-500);
+  margin-bottom: var(--fluss-space-3);
+}
+
+/* -------------------------------------------------------------------------
+   Blog authors row
+   ------------------------------------------------------------------------- */
+[class*='authorPhoto'] img,
+[class*='authorAvatar'] img {
+  border: 2px solid var(--fluss-paper);
+  box-shadow: 0 0 0 1px var(--fluss-ink-100);
+}
+
+/* -------------------------------------------------------------------------
+   Blog post page header
+   ------------------------------------------------------------------------- */
+.blog-post-page-no-sidebar h1,
+.blog-post-page article > header h1 {
+  font-family: var(--fluss-font-display);
+  font-size: clamp(2rem, 3vw + 1rem, 3rem);
+  font-weight: 700;
+  letter-spacing: -0.022em;
+  line-height: 1.1;
+  color: var(--fluss-ink-950);
+}
+
+/* -------------------------------------------------------------------------
+   Markdown tables in docs / blog (override Infima default for dark headers)
+   ------------------------------------------------------------------------- */
+.theme-doc-markdown table,
+.markdown table {
+  border: 1px solid var(--fluss-ink-100);
+  border-radius: var(--fluss-radius-md);
+  overflow: hidden;
+  box-shadow: var(--fluss-shadow-sm);
+}
+
+.theme-doc-markdown thead,
+.markdown thead {
+  background: var(--fluss-blue-50);
+}
+
+.theme-doc-markdown thead th,
+.markdown thead th {
+  font-family: var(--fluss-font-display);
+  font-weight: 600;
+  color: var(--fluss-ink-950);
+  border-color: var(--fluss-blue-100);
+}
+
+.theme-doc-markdown tbody tr:nth-child(even),
+.markdown tbody tr:nth-child(even) {
+  background: var(--fluss-blue-50);
+}
+
+/* -------------------------------------------------------------------------
+   Block-quote
+   ------------------------------------------------------------------------- */
+.theme-doc-markdown blockquote,
+.markdown blockquote {
+  border-left: 3px solid var(--fluss-blue-600);
+  background: var(--fluss-blue-50);
+  border-radius: var(--fluss-radius-md);
+  padding: var(--fluss-space-4) var(--fluss-space-5);
+  color: var(--fluss-ink-700);
+  margin: var(--fluss-space-5) 0;
+}
+
+/* -------------------------------------------------------------------------
+   404 page
+   ------------------------------------------------------------------------- */
+main.container .row .col h1.hero__title {
+  font-family: var(--fluss-font-display);
+  font-size: 4rem;
+  font-weight: 700;
+  letter-spacing: -0.022em;
+  color: var(--fluss-ink-950);
+}
+
+/* -------------------------------------------------------------------------
+   Buttons (Infima primary / outline) : global refresh
+   ------------------------------------------------------------------------- */
+.button.button--primary {
+  background: var(--fluss-blue-600);
+  border: none;
+  color: #FFFFFF;
+  border-radius: var(--fluss-radius-md);
+  font-weight: 600;
+  padding: 10px 18px;
+  box-shadow: var(--fluss-shadow-sm);
+  transition: background-color var(--fluss-motion-fast) var(--fluss-ease-out),
+              transform var(--fluss-motion-fast) var(--fluss-ease-out),
+              box-shadow var(--fluss-motion-fast) var(--fluss-ease-out);
+}
+
+.button.button--primary:hover {
+  background: var(--fluss-blue-700);
+  color: #FFFFFF;
+  transform: translateY(-1px);
+  box-shadow: var(--fluss-shadow-md);
+}
+
+.button.button--outline.button--primary {
+  background: transparent;
+  border: 1px solid var(--fluss-blue-600);
+  color: var(--fluss-blue-700);
+}
+
+.button.button--outline.button--primary:hover {
+  background: var(--fluss-blue-50);
+  color: var(--fluss-blue-800);
+}
+
+/* -------------------------------------------------------------------------
+   Selection
+   ------------------------------------------------------------------------- */
+::selection {
+  background: rgba(28, 80, 120, 0.18);
+  color: var(--fluss-ink-950);
+}
+
+/* -------------------------------------------------------------------------
+   Scrollbars (subtle, consistent across content areas)
+   ------------------------------------------------------------------------- */
+.theme-doc-markdown pre::-webkit-scrollbar,
+.theme-doc-sidebar-container::-webkit-scrollbar,
+.table-of-contents::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.theme-doc-markdown pre::-webkit-scrollbar-thumb,
+.theme-doc-sidebar-container::-webkit-scrollbar-thumb,
+.table-of-contents::-webkit-scrollbar-thumb {
+  background: var(--fluss-ink-300);
+  border-radius: var(--fluss-radius-pill);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.theme-doc-markdown pre::-webkit-scrollbar-thumb:hover,
+.theme-doc-sidebar-container::-webkit-scrollbar-thumb:hover,
+.table-of-contents::-webkit-scrollbar-thumb:hover {
+  background: var(--fluss-ink-500);
+  background-clip: padding-box;
+}
+
+/* -------------------------------------------------------------------------
+   Skip-to-content link (accessibility)
+   ------------------------------------------------------------------------- */
+.skipToContent_node_modules-\@docusaurus-theme-classic-lib-theme-SkipToContent-styles-module {
+  background: var(--fluss-blue-700);
+  color: #FFFFFF;
+}
+
+/* =========================================================================
+   ========================================================================
+   PREMIUM POLISH LAYER
+   Targeted enhancements so docs/blog stop feeling like default Docusaurus.
+   ========================================================================
+   ========================================================================= */
+
+/* -------------------------------------------------------------------------
+   Subtle page background (very faint dot grid for warmth)
+   ------------------------------------------------------------------------- */
+main[class*='docMainContainer'],
+main[class*='blogPostPage'],
+main[class*='docItemContainer'],
+.docs-wrapper,
+.blog-wrapper {
+  position: relative;
+  background:
+    radial-gradient(circle at 1px 1px, rgba(16, 40, 86, 0.04) 1px, transparent 0) 0 0 / 32px 32px,
+    var(--fluss-canvas);
+}
+
+/* -------------------------------------------------------------------------
+   Doc / blog-post page header band (eyebrow + title + breadcrumbs).
+   Scoped to single doc/post pages, NOT to the blog list (where each card
+   also has its own <header> and we don't want this treatment on cards).
+   ------------------------------------------------------------------------- */
+
+
+main[class*='docMainContainer'] article > header:first-of-type h1,
+main[class*='docItemContainer'] article > header:first-of-type h1,
+main[class*='blogPostPage'] article > header:first-of-type h1,
+.blog-post-page-no-sidebar article > header:first-of-type h1,
+.theme-doc-markdown header h1 {
+  font-family: var(--fluss-font-display);
+  font-size: clamp(2.25rem, 2.5vw + 1.5rem, 3.25rem);
+  font-weight: 700;
+  letter-spacing: -0.022em;
+  line-height: 1.08;
+  color: var(--fluss-ink-950);
+  margin: var(--fluss-space-3) 0 0;
+}
+
+/* Inline ifm h1 inside the first markdown block also gets the display treatment */
+.markdown > h1:first-child {
+  font-family: var(--fluss-font-display);
+  font-size: clamp(2.25rem, 2.5vw + 1.5rem, 3.25rem);
+  font-weight: 700;
+  letter-spacing: -0.022em;
+  line-height: 1.08;
+}
+
+/* -------------------------------------------------------------------------
+   Markdown body : generous reading rhythm
+   ------------------------------------------------------------------------- */
+.theme-doc-markdown,
+.markdown {
+  font-size: 1.0625rem;
+  line-height: 1.75;
+  color: var(--fluss-ink-700);
+}
+
+.markdown p,
+.theme-doc-markdown p {
+  margin-bottom: 1.25em;
+}
+
+.markdown ul,
+.markdown ol,
+.theme-doc-markdown ul,
+.theme-doc-markdown ol {
+  margin-bottom: 1.25em;
+}
+
+.markdown li + li {
+  margin-top: 6px;
+}
+
+/* Heading rhythm + display family */
+.markdown h2,
+.theme-doc-markdown h2 {
+  font-family: var(--fluss-font-display);
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.018em;
+  line-height: 1.2;
+  color: var(--fluss-ink-950);
+  margin-top: 3rem;
+  margin-bottom: 1rem;
+  position: relative;
+}
+
+.markdown h2::before,
+.theme-doc-markdown h2::before {
+  content: '';
+  position: absolute;
+  left: -16px;
+  top: 0.55em;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fluss-blue-600);
+  opacity: 0;
+  transition: opacity var(--fluss-motion-base) var(--fluss-ease-out);
+}
+
+.markdown h2:hover::before,
+.theme-doc-markdown h2:hover::before {
+  opacity: 0.8;
+}
+
+.markdown h3,
+.theme-doc-markdown h3 {
+  font-family: var(--fluss-font-display);
+  font-size: 1.375rem;
+  font-weight: 600;
+  letter-spacing: -0.014em;
+  color: var(--fluss-ink-950);
+  margin-top: 2.25rem;
+  margin-bottom: 0.625rem;
+}
+
+.markdown h4,
+.theme-doc-markdown h4 {
+  font-family: var(--fluss-font-display);
+  font-size: 1.0625rem;
+  font-weight: 600;
+  color: var(--fluss-ink-950);
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+/* Anchor link reveal on heading hover */
+.markdown h2 .hash-link,
+.markdown h3 .hash-link,
+.markdown h4 .hash-link,
+.theme-doc-markdown h2 .hash-link,
+.theme-doc-markdown h3 .hash-link,
+.theme-doc-markdown h4 .hash-link {
+  margin-left: 6px;
+  opacity: 0;
+  font-weight: 400;
+  transition: opacity var(--fluss-motion-base) var(--fluss-ease-out),
+              transform var(--fluss-motion-base) var(--fluss-ease-out);
+  transform: translateX(-4px);
+  display: inline-block;
+}
+
+.markdown h2:hover .hash-link,
+.markdown h3:hover .hash-link,
+.markdown h4:hover .hash-link,
+.theme-doc-markdown h2:hover .hash-link,
+.theme-doc-markdown h3:hover .hash-link,
+.theme-doc-markdown h4:hover .hash-link {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+/* Animated link underline in body prose. Color is explicit (not inherited
+   from --ifm-color-primary) so docs links read clearly as links against
+   the dark-gray body text. */
+.theme-doc-markdown a:not(.button):not(.card):not(.hash-link),
+.markdown a:not(.button):not(.card):not(.hash-link),
+.mdx-page article a:not(.button):not(.card):not(.hash-link) {
+  color: var(--fluss-link);
+  font-weight: 500;
+  background-image: linear-gradient(0deg, var(--fluss-link) 0, var(--fluss-link) 100%);
+  background-position: 0 100%;
+  background-repeat: no-repeat;
+  background-size: 100% 1px;
+  transition: background-size var(--fluss-motion-base) var(--fluss-ease-out),
+              color var(--fluss-motion-fast) var(--fluss-ease-out);
+  text-decoration: none;
+}
+
+.theme-doc-markdown a:not(.button):not(.card):not(.hash-link):hover,
+.markdown a:not(.button):not(.card):not(.hash-link):hover,
+.mdx-page article a:not(.button):not(.card):not(.hash-link):hover {
+  color: var(--fluss-link-hover);
+  background-image: linear-gradient(0deg, var(--fluss-link-hover) 0, var(--fluss-link-hover) 100%);
+  background-size: 100% 2px;
+  text-decoration: none;
+}
+
+/* External-link indicator (auto, before the link) */
+.theme-doc-markdown a[href^='http']:not([href*='fluss.apache.org'])::after,
+.markdown a[href^='http']:not([href*='fluss.apache.org'])::after,
+.mdx-page article a[href^='http']:not([href*='fluss.apache.org'])::after {
+  content: '';
+  display: inline-block;
+  width: 0.7em;
+  height: 0.7em;
+  margin-left: 4px;
+  background-color: currentColor;
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 17L17 7M17 7H8M17 7V16'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 17L17 7M17 7H8M17 7V16'/%3E%3C/svg%3E");
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  opacity: 0.65;
+  vertical-align: 0.05em;
+}
+
+/* -------------------------------------------------------------------------
+   <kbd> styling
+   ------------------------------------------------------------------------- */
+kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: var(--fluss-radius-sm);
+  background: var(--fluss-paper);
+  border: 1px solid var(--fluss-ink-300);
+  border-bottom-width: 2px;
+  color: var(--fluss-ink-700);
+  font-family: var(--fluss-font-mono);
+  font-size: 0.8125em;
+  line-height: 1.4;
+  vertical-align: 0.05em;
+  box-shadow: var(--fluss-shadow-sm);
+}
+
+/* -------------------------------------------------------------------------
+   Premium sidebar : sliding active indicator
+   ------------------------------------------------------------------------- */
+.theme-doc-sidebar-container {
+  background:
+    linear-gradient(180deg, transparent 0, transparent 64px, var(--fluss-canvas-soft) 64px),
+    var(--fluss-canvas-soft);
+}
+
+.menu__list {
+  position: relative;
+}
+
+.menu__link {
+  position: relative;
+  font-size: 0.9rem;
+}
+
+.menu__link--active {
+  background: linear-gradient(90deg, var(--fluss-blue-50) 0%, transparent 100%);
+}
+
+.menu__link--active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 0 var(--fluss-radius-sm) var(--fluss-radius-sm) 0;
+  background: linear-gradient(180deg, var(--fluss-blue-600), var(--fluss-cyan));
+  box-shadow: 0 0 12px rgba(28, 80, 120, 0.4);
+}
+
+/* Top-level items: always bold regardless of whether they are collapsible
+   categories or plain leaf links. Title-Case retained from `_category_.json`
+   (Jark feedback, PR #3226). This is the only visually heavier tier in the
+   sidebar; everything below it is normalized to a single uniform style. */
+.theme-doc-sidebar-menu > .menu__list-item > .menu__link,
+.theme-doc-sidebar-menu > .menu__list-item > .menu__list-item-collapsible > .menu__link {
+  font-family: var(--fluss-font-display);
+  font-weight: 700;
+  font-size: 0.9375rem;
+  letter-spacing: 0;
+  color: var(--fluss-ink-950);
+  padding-top: 14px;
+  padding-bottom: 6px;
+}
+
+/* Nested items at any depth: uniform non-bold styling, regardless of whether
+   the item is a collapsible sub-category or a leaf link. Infima's default
+   makes `.menu__link--sublist` bold, which created an inconsistent hierarchy
+   where nested sub-categories looked as heavy as top-level entries. Match a
+   single weight/size/padding so the only visually distinct tier is the
+   top-level row. */
+.theme-doc-sidebar-menu .menu__list .menu__link,
+.theme-doc-sidebar-menu .menu__list .menu__list-item-collapsible > .menu__link {
+  font-family: inherit;
+  font-weight: 500;
+  font-size: 0.9375rem;
+  letter-spacing: 0;
+  color: var(--fluss-ink-700);
+  padding: 6px 10px;
+}
+
+/* Preserve the active-state highlight for nested items (declared after the
+   uniform nested rule so it wins on equal specificity). */
+.theme-doc-sidebar-menu .menu__list .menu__link--active,
+.theme-doc-sidebar-menu .menu__list .menu__list-item-collapsible > .menu__link--active {
+  color: var(--fluss-blue-700);
+  background: var(--fluss-blue-50);
+  font-weight: 600;
+}
+
+.theme-doc-sidebar-menu > .menu__list-item:not(:first-child) {
+  margin-top: 4px;
+  border-top: 1px dashed var(--fluss-ink-100);
+  padding-top: 4px;
+}
+
+/* -------------------------------------------------------------------------
+   Sticky TOC card (right rail)
+   ------------------------------------------------------------------------- */
+.theme-doc-toc-desktop,
+[class*='tableOfContents'] {
+  border-radius: var(--fluss-radius-lg);
+  background: var(--fluss-paper);
+  border: 1px solid var(--fluss-ink-100);
+  padding: var(--fluss-space-5);
+  box-shadow: var(--fluss-shadow-sm);
+  position: sticky;
+  top: 96px;
+}
+
+.theme-doc-toc-desktop .table-of-contents,
+[class*='tableOfContents'] .table-of-contents {
+  border-left: none;
+  padding-left: 0;
+  margin: 0;
+}
+
+.theme-doc-toc-desktop::before,
+[class*='tableOfContents']::before {
+  content: 'On this page';
+  display: block;
+  font-family: var(--fluss-font-display);
+  font-weight: 700;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fluss-ink-500);
+  margin-bottom: var(--fluss-space-3);
+  padding-bottom: var(--fluss-space-3);
+  border-bottom: 1px solid var(--fluss-ink-100);
+}
+
+.table-of-contents__link {
+  position: relative;
+  padding-left: var(--fluss-space-3);
+  border-left: 2px solid transparent;
+  transition: color var(--fluss-motion-fast) var(--fluss-ease-out),
+              border-color var(--fluss-motion-fast) var(--fluss-ease-out);
+}
+
+.table-of-contents__link--active {
+  border-left-color: var(--fluss-blue-600);
+  background: var(--fluss-blue-50);
+  border-radius: 0 var(--fluss-radius-sm) var(--fluss-radius-sm) 0;
+}
+
+/* -------------------------------------------------------------------------
+   Doc footer : "edit this page" + last-updated as buttons
+   ------------------------------------------------------------------------- */
+.theme-doc-footer {
+  padding: var(--fluss-space-5);
+  border: 1px solid var(--fluss-ink-100);
+  border-radius: var(--fluss-radius-lg);
+  background: var(--fluss-paper);
+  margin-top: var(--fluss-space-12);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--fluss-space-3);
+}
+
+.theme-edit-this-page {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: var(--fluss-radius-md);
+  background: var(--fluss-blue-50);
+  color: var(--fluss-blue-700) !important;
+  font-weight: 600;
+  font-size: 0.875rem;
+  text-decoration: none !important;
+  border: 1px solid transparent;
+  transition: background-color var(--fluss-motion-fast) var(--fluss-ease-out),
+              border-color var(--fluss-motion-fast) var(--fluss-ease-out);
+}
+
+.theme-edit-this-page:hover {
+  background: var(--fluss-blue-100);
+  border-color: var(--fluss-blue-300);
+}
+
+/* -------------------------------------------------------------------------
+   Premium code blocks
+   ------------------------------------------------------------------------- */
+div[class*='codeBlockContainer'] {
+  position: relative;
+  box-shadow: var(--fluss-shadow-sm);
+  transition: box-shadow var(--fluss-motion-base) var(--fluss-ease-out);
+}
+
+div[class*='codeBlockContainer']:hover {
+  box-shadow: var(--fluss-shadow-md);
+}
+
+/* Always-visible copy button (instead of fade-on-hover) */
+button[class*='copyButton'] {
+  opacity: 0.85;
+  transition: opacity var(--fluss-motion-fast) var(--fluss-ease-out),
+              color var(--fluss-motion-fast) var(--fluss-ease-out),
+              background-color var(--fluss-motion-fast) var(--fluss-ease-out),
+              border-color var(--fluss-motion-fast) var(--fluss-ease-out);
+}
+
+div[class*='codeBlockContainer'] button[class*='copyButton']:not(:hover) {
+  opacity: 0.85;
+}
+
+/* Language label in the corner : synthetic via data-attr if title not set */
+div[class*='codeBlockContainer']::before {
+  content: attr(data-language);
+  position: absolute;
+  top: 8px;
+  right: 56px;
+  font-family: var(--fluss-font-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fluss-ink-500);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* -------------------------------------------------------------------------
+   Blog list : featured first post + editorial polish
+   ------------------------------------------------------------------------- */
+main[class*='blogListPage'] article:first-of-type,
+.blog-list-page > article:first-of-type {
+  padding: var(--fluss-space-10);
+  background:
+    radial-gradient(800px 300px at 100% 0%, rgba(38, 109, 149, 0.06), transparent 60%),
+    radial-gradient(600px 300px at 0% 100%, rgba(28, 80, 120, 0.06), transparent 60%),
+    var(--fluss-paper);
+  border-color: var(--fluss-blue-100);
+}
+
+main[class*='blogListPage'] article:first-of-type header h2,
+.blog-list-page > article:first-of-type header h2 {
+  font-size: 2.25rem;
+  font-weight: 700;
+  letter-spacing: -0.022em;
+  line-height: 1.1;
+}
+
+/* "Featured" eyebrow on the first card */
+main[class*='blogListPage'] article:first-of-type::before,
+.blog-list-page > article:first-of-type::before {
+  content: 'Latest post';
+  display: inline-block;
+  margin-bottom: var(--fluss-space-3);
+  padding: 4px 10px;
+  background: linear-gradient(120deg, var(--fluss-blue-600), var(--fluss-cyan));
+  color: #FFFFFF;
+  border-radius: var(--fluss-radius-pill);
+  font-family: var(--fluss-font-display);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Blog post titles : display font in cards */
+article[itemtype='https://schema.org/BlogPosting'] header h2,
+.blog-list-page article header h2 {
+  font-family: var(--fluss-font-display);
+  letter-spacing: -0.018em;
+}
+
+/* Blog post meta row : compact, calm */
+.blog-list-page article header > div:not([class*='blogPostTags']),
+article[itemtype='https://schema.org/BlogPosting'] header > div:not([class*='blogPostTags']) {
+  font-size: 0.85rem;
+  color: var(--fluss-ink-500);
+}
+
+/* "Read more" link with arrow */
+.button.button--secondary::after,
+a[class*='readMore']::after {
+  content: ' →';
+  display: inline-block;
+  margin-left: 4px;
+  transition: transform var(--fluss-motion-base) var(--fluss-ease-out);
+}
+
+.button.button--secondary:hover::after,
+a[class*='readMore']:hover::after {
+  transform: translateX(3px);
+}
+
+/* -------------------------------------------------------------------------
+   Blog post page : editorial header
+   ------------------------------------------------------------------------- */
+.blog-post-page-no-sidebar article > header h1,
+main[class*='blogPostPage'] article > header h1 {
+  font-family: var(--fluss-font-display);
+  font-size: clamp(2.25rem, 3vw + 1rem, 3.5rem);
+  font-weight: 700;
+  letter-spacing: -0.022em;
+  line-height: 1.05;
+  margin-top: var(--fluss-space-3);
+  color: var(--fluss-ink-950);
+}
+
+/* Author row : bigger, card-like */
+.blog-post-page-no-sidebar article > header > div[class*='authorRow'],
+main[class*='blogPostPage'] article > header > div[class*='authorRow'] {
+  margin-top: var(--fluss-space-5);
+  padding-top: var(--fluss-space-4);
+  border-top: 1px solid var(--fluss-ink-100);
+}
+
+/* -------------------------------------------------------------------------
+   Pagination card refinement
+   ------------------------------------------------------------------------- */
+.pagination-nav {
+  margin-top: var(--fluss-space-12);
+}
+
+.pagination-nav__link {
+  position: relative;
+  overflow: hidden;
+}
+
+.pagination-nav__link::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 3px;
+  height: 100%;
+  background: linear-gradient(180deg, var(--fluss-blue-600), var(--fluss-cyan));
+  opacity: 0;
+  transition: opacity var(--fluss-motion-base) var(--fluss-ease-out);
+}
+
+.pagination-nav__link:hover::before {
+  opacity: 1;
+}
+
+.pagination-nav__link--prev .pagination-nav__sublabel::before {
+  content: '← ';
+}
+
+.pagination-nav__link--next .pagination-nav__sublabel::after {
+  content: ' →';
+}
+
+/* -------------------------------------------------------------------------
+   Admonition icons (color tinting)
+   ------------------------------------------------------------------------- */
+[class*='admonitionIcon'] svg {
+  filter: saturate(1.1);
+}
+
+/* -------------------------------------------------------------------------
+   Featured quote / pull-quote (use blockquote with .pull class via mdx)
+   Falls back gracefully for any blockquote.
+   ------------------------------------------------------------------------- */
+.markdown blockquote,
+.theme-doc-markdown blockquote {
+  position: relative;
+  padding-left: var(--fluss-space-8);
+}
+
+.markdown blockquote::before,
+.theme-doc-markdown blockquote::before {
+  content: '\201C';
+  position: absolute;
+  left: var(--fluss-space-3);
+  top: -0.1em;
+  font-family: var(--fluss-font-display);
+  font-size: 3rem;
+  font-weight: 700;
+  color: var(--fluss-blue-300);
+  line-height: 1;
+}
+
+/* -------------------------------------------------------------------------
+   Page-load fade-in for main content
+   ------------------------------------------------------------------------- */
+@keyframes flussFadeUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+main[class*='docMainContainer'] article,
+main[class*='blogPostPage'] article,
+main[class*='blogListPage'] article {
+  animation: flussFadeUp var(--fluss-motion-slow) var(--fluss-ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  main[class*='docMainContainer'] article,
+  main[class*='blogPostPage'] article,
+  main[class*='blogListPage'] article {
+    animation: none;
+  }
+}
+
+/* -------------------------------------------------------------------------
+   Increase content max-width slightly for editorial breathability
+   (only inside docs / blog, not on the homepage)
+   ------------------------------------------------------------------------- */
+@media (min-width: 997px) {
+  main[class*='docItemContainer'] article,
+  main[class*='blogPostPage'] article {
+    max-width: 760px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
+
+/* -------------------------------------------------------------------------
+   Inline code refinements (override generic Infima)
+   ------------------------------------------------------------------------- */
+.markdown p code,
+.markdown li code,
+.theme-doc-markdown p code,
+.theme-doc-markdown li code {
+  font-size: 0.85em;
+  padding: 1px 6px;
+  background: var(--fluss-blue-50);
+  border: 1px solid rgba(28, 80, 120, 0.15);
+  color: var(--fluss-blue-800);
+  border-radius: var(--fluss-radius-sm);
+}
+
+/* Code blocks (pre > code) should never inherit inline-code box styling
+   even when nested inside list/paragraph/table elements. */
+.markdown pre code,
+.theme-doc-markdown pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+  color: inherit;
+  border-radius: 0;
+}
+
+/* -------------------------------------------------------------------------
+   Tag cloud / blog tags page
+   ------------------------------------------------------------------------- */
+ul[class*='tag'] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--fluss-space-2);
+  list-style: none;
+  padding-left: 0;
+}
+
+ul[class*='tag'] li {
+  margin: 0;
+  list-style: none;
+}
+
+/* =========================================================================
+   ========================================================================
+   GLOBAL NAVBAR : same look on every page (homepage, docs, blog, etc.)
+   No transparent-on-hero variant, no homepage-frosted variant — the
+   navbar is rendered as a single consistent dark pane site-wide.
+   ========================================================================
+   ========================================================================= */
+
+.navbar {
+  background-color: var(--ifm-navbar-background-color);
+  box-shadow: var(--ifm-navbar-shadow);
+}
+
+.navbar__brand,
+.navbar__title,
+.navbar__link {
+  color: #E2E8F0;
+}
+
+.navbar__link:hover {
+  color: var(--fluss-blue-300);
+}
+
+.navbar__link--active {
+  color: var(--fluss-blue-300);
+}
+
+/* Hide the navbar hamburger / toggle button on desktop. Explicit product
+   decision: the icon to the left of the Fluss logo is not desired on any
+   page (homepage, docs, blog, community, learn). On docs pages the
+   in-doc sidebar toggle is a separate element and remains available. */
+@media (min-width: 997px) {
+    .navbar__toggle {
+        display: none !important;
+    }
+}
+
+/* On mobile, keep the navbar toggle in its natural flex position at the
+   start of the navbar so it stays reachable at every viewport width.
+   Previously it was `position: absolute; right: 4rem` which made it
+   disappear on intermediate widths where the right-side cluster pushed
+   past 4rem (borzoni feedback, PR #3226). */
+@media (max-width: 996px) {
+    .navbar__toggle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 36px;
+        height: 36px;
+        margin-right: var(--fluss-space-2);
+        padding: 0;
+        border-radius: var(--fluss-radius-md);
+        background: transparent;
+        border: 1px solid transparent;
+        color: #E2E8F0;
+        transition: background-color var(--fluss-motion-fast) var(--fluss-ease-out),
+                    border-color var(--fluss-motion-fast) var(--fluss-ease-out);
+    }
+
+    .navbar__toggle:hover,
+    .navbar__toggle:focus-visible {
+        background: rgba(255, 255, 255, 0.08);
+        border-color: rgba(255, 255, 255, 0.16);
+    }
+}
+
+/* =========================================================================
+   ========================================================================
+   COLOR MODE TOGGLE : branded sun/moon button
+   ========================================================================
+   ========================================================================= */
+
+.theme-toggle,
+button[class*='colorModeToggle'],
+button.clean-btn[class*='toggle'] {
+  border-radius: var(--fluss-radius-pill);
+  background: var(--fluss-ink-100);
+  border: 1px solid transparent;
+  color: var(--fluss-ink-700);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 6px;
+  transition: background-color var(--fluss-motion-fast) var(--fluss-ease-out),
+              border-color var(--fluss-motion-fast) var(--fluss-ease-out),
+              transform var(--fluss-motion-fast) var(--fluss-ease-out),
+              color var(--fluss-motion-fast) var(--fluss-ease-out);
+}
+
+button[class*='colorModeToggle']:hover,
+button.clean-btn[class*='toggle']:hover {
+  background: var(--fluss-blue-50);
+  border-color: var(--fluss-blue-300);
+  color: var(--fluss-blue-700);
+  transform: translateY(-1px);
+}
+
+button[class*='colorModeToggle'] svg,
+button.clean-btn[class*='toggle'] svg {
+  width: 18px;
+  height: 18px;
+}
+
+/* The colour-mode toggle is omitted from the DOM on the landing page via
+   the swizzled `src/theme/ColorModeToggle/index.js` wrapper, so no CSS
+   hiding rule is needed here. Docs / blog / community pages keep the
+   toggle. */
+
+/* =========================================================================
+   ========================================================================
+   DARK MODE : full token remap + component overrides
+   Triggered by [data-theme='dark'] on <html>.
+   ========================================================================
+   ========================================================================= */
+
+[data-theme='dark'] {
+  /* Surfaces : deepest two palette stops give a quiet, premium dark canvas. */
+  --fluss-canvas: #0A1745;
+  --fluss-paper:  #102856;
+
+  /* Inks (inverted) */
+  --fluss-ink-950: #F8FAFC;
+  --fluss-ink-700: #CBD5E1;
+  --fluss-ink-500: #94A3B8;
+  --fluss-ink-300: rgba(203, 213, 225, 0.22);
+  --fluss-ink-100: rgba(203, 213, 225, 0.10);
+
+  /* Blue tints recalibrated for legibility on dark, anchored on the new
+     navy/teal palette. */
+  --fluss-blue-50:  rgba(38, 109, 149, 0.14);
+  --fluss-blue-100: rgba(38, 109, 149, 0.22);
+  --fluss-blue-300: #7AAFCB;
+  --fluss-blue-500: #266D95;
+  --fluss-blue-600: #1C5078;
+  --fluss-blue-700: #7AAFCB;
+  --fluss-blue-800: #D6E4ED;
+
+  --fluss-link: #7AAFCB;
+  --fluss-link-hover: #D6E4ED;
+
+  /* Shadows on dark : softer, warmer */
+  --fluss-shadow-sm:   0 1px 2px rgba(0, 0, 0, 0.4);
+  --fluss-shadow-md:   0 4px 16px rgba(0, 0, 0, 0.4);
+  --fluss-shadow-lg:   0 16px 48px rgba(0, 0, 0, 0.5);
+  --fluss-shadow-glow: 0 0 0 1px rgba(122, 175, 203, 0.35), 0 12px 40px rgba(38, 109, 149, 0.35);
+
+  /* Wire into Infima dark vars */
+  --ifm-background-color: #0A1745;
+  --ifm-background-surface-color: #102856;
+  --ifm-color-primary:          #7AAFCB;
+  --ifm-color-primary-dark:     #266D95;
+  --ifm-color-primary-darker:   #1C5078;
+  --ifm-color-primary-darkest:  #194670;
+  --ifm-color-primary-light:    #7AAFCB;
+  --ifm-color-primary-lighter:  #B1CEDF;
+  --ifm-color-primary-lightest: #D6E4ED;
+
+  --ifm-heading-color: #F8FAFC;
+  /* Body text bumped from #CBD5E1 (slate-300) to #F1F5F9 (slate-100) for
+     stronger readability in dark mode without going to pure white, which
+     causes halation on dark backgrounds in long-form reading. */
+  --ifm-font-color-base: #F1F5F9;
+
+  --ifm-navbar-background-color: rgba(10, 23, 69, 0.92);
+  --ifm-navbar-shadow: 0 1px 0 rgba(255, 255, 255, 0.06);
+  --ifm-navbar-link-color: #CBD5E1;
+
+  --ifm-toc-border-color: rgba(255, 255, 255, 0.08);
+  --ifm-color-emphasis-200: rgba(255, 255, 255, 0.08);
+  --ifm-color-emphasis-300: rgba(255, 255, 255, 0.12);
+  --ifm-color-emphasis-600: #94A3B8;
+  --ifm-color-emphasis-700: #CBD5E1;
+  --ifm-color-emphasis-800: #F8FAFC;
+
+  --ifm-menu-color-background-active: rgba(28, 80, 120, 0.14);
+  --ifm-menu-color-background-hover:  rgba(28, 80, 120, 0.1);
+
+  --docusaurus-highlighted-code-line-bg: rgba(28, 80, 120, 0.18);
+}
+
+/* ----- Backgrounds & body ----- */
+[data-theme='dark'] body,
+[data-theme='dark'] body.fluss-home {
+  background: var(--fluss-canvas);
+  background-image: none;
+  color: var(--fluss-ink-700);
+}
+
+[data-theme='dark'] main[class*='docMainContainer'],
+[data-theme='dark'] main[class*='blogPostPage'],
+[data-theme='dark'] main[class*='docItemContainer'] {
+  background:
+    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.04) 1px, transparent 0) 0 0 / 32px 32px,
+    var(--fluss-canvas);
+}
+
+/* ----- Navbar ----- */
+[data-theme='dark'] .navbar {
+  border-bottom: 0;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04), 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme='dark'] .navbar__link {
+  color: #CBD5E1;
+}
+
+[data-theme='dark'] .navbar__link:hover {
+  color: var(--fluss-blue-300);
+}
+
+[data-theme='dark'] .navbar__link--active {
+  color: var(--fluss-blue-300);
+}
+
+[data-theme='dark'] .navbar__title {
+  color: #F8FAFC;
+}
+
+/* DocSearch button (dark) */
+[data-theme='dark'] .DocSearch-Button {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme='dark'] .DocSearch-Button:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(122, 175, 203, 0.4);
+}
+
+[data-theme='dark'] .DocSearch-Button-Placeholder,
+[data-theme='dark'] .DocSearch-Search-Icon {
+  color: #94A3B8;
+}
+
+[data-theme='dark'] .DocSearch-Button-Keys {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #CBD5E1;
+}
+
+/* GitHub icon (dark) */
+[data-theme='dark'] .header-github-link::before {
+  background: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill='%23F8FAFC' d='M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12'/%3E%3C/svg%3E") no-repeat !important;
+}
+
+/* ----- Sidebar (dark) ----- */
+[data-theme='dark'] .theme-doc-sidebar-container {
+  background: var(--fluss-canvas);
+  border-right-color: rgba(255, 255, 255, 0.06);
+}
+
+[data-theme='dark'] .menu__link {
+  color: #CBD5E1;
+}
+
+[data-theme='dark'] .menu__link:hover {
+  background: rgba(122, 175, 203, 0.12);
+  color: #D6E4ED;
+}
+
+[data-theme='dark'] .menu__link--active {
+  background: linear-gradient(90deg, rgba(122, 175, 203, 0.18) 0%, transparent 100%);
+  color: #D6E4ED;
+}
+
+[data-theme='dark'] .menu__list .menu__list {
+  border-left-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme='dark'] .theme-doc-sidebar-menu > .menu__list-item:not(:first-child) {
+  border-top-color: rgba(255, 255, 255, 0.06);
+}
+
+/* ----- Breadcrumbs (dark) ----- */
+[data-theme='dark'] .breadcrumbs__link {
+  color: #94A3B8;
+}
+
+[data-theme='dark'] a.breadcrumbs__link:hover {
+  color: #D6E4ED;
+  background: rgba(122, 175, 203, 0.12);
+}
+
+[data-theme='dark'] .breadcrumbs__link:not(a) {
+  color: #CBD5E1;
+}
+
+[data-theme='dark'] .breadcrumbs__item--active .breadcrumbs__link {
+  color: #F8FAFC;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* ----- TOC card (dark) ----- */
+[data-theme='dark'] .theme-doc-toc-desktop,
+[data-theme='dark'] [class*='tableOfContents'] {
+  background: var(--fluss-paper);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme='dark'] .table-of-contents__link {
+  color: #94A3B8;
+}
+
+[data-theme='dark'] .table-of-contents__link:hover {
+  color: #D6E4ED;
+}
+
+[data-theme='dark'] .table-of-contents__link--active {
+  color: #D6E4ED;
+  background: rgba(122, 175, 203, 0.12);
+}
+
+/* ----- Doc body (dark) ----- */
+[data-theme='dark'] .theme-doc-markdown,
+[data-theme='dark'] .markdown {
+  color: #F1F5F9;
+}
+
+[data-theme='dark'] .markdown h1,
+[data-theme='dark'] .markdown h2,
+[data-theme='dark'] .markdown h3,
+[data-theme='dark'] .markdown h4,
+[data-theme='dark'] .markdown h5,
+[data-theme='dark'] .markdown h6,
+[data-theme='dark'] .theme-doc-markdown h1,
+[data-theme='dark'] .theme-doc-markdown h2,
+[data-theme='dark'] .theme-doc-markdown h3 {
+  color: #F8FAFC;
+}
+
+[data-theme='dark'] .markdown b,
+[data-theme='dark'] .markdown strong {
+  color: #F8FAFC;
+}
+
+[data-theme='dark'] .theme-doc-markdown a:not(.button):not(.card):not(.hash-link),
+[data-theme='dark'] .markdown a:not(.button):not(.card):not(.hash-link),
+[data-theme='dark'] .mdx-page article a:not(.button):not(.card):not(.hash-link) {
+  color: #B1CEDF;
+  background-image: linear-gradient(0deg, #B1CEDF 0, #B1CEDF 100%);
+}
+
+[data-theme='dark'] .markdown a.hash-link {
+  color: rgba(255, 255, 255, 0.18);
+}
+
+[data-theme='dark'] .markdown a.hash-link:hover {
+  color: #B1CEDF;
+}
+
+/* ----- Tables (dark) ----- */
+[data-theme='dark'] .markdown table,
+[data-theme='dark'] .theme-doc-markdown table {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: var(--fluss-paper);
+}
+
+[data-theme='dark'] .markdown thead,
+[data-theme='dark'] .theme-doc-markdown thead {
+  background: rgba(122, 175, 203, 0.1);
+}
+
+/* The nested .markdown rule (light section) sets `table thead tr` bg to
+   #f6f8fa, which has higher specificity than the dark `thead` rule above
+   and therefore bleeds into dark mode, producing a near-white header row.
+   Override the `tr` explicitly for dark mode. */
+[data-theme='dark'] .markdown table thead tr,
+[data-theme='dark'] .theme-doc-markdown table thead tr {
+  background: rgba(122, 175, 203, 0.1);
+}
+
+[data-theme='dark'] .markdown thead th,
+[data-theme='dark'] .theme-doc-markdown thead th,
+[data-theme='dark'] .markdown table thead th,
+[data-theme='dark'] .theme-doc-markdown table thead th {
+  color: #F8FAFC;
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.08);
+  font-weight: 600;
+}
+
+[data-theme='dark'] .markdown tbody tr,
+[data-theme='dark'] .theme-doc-markdown tbody tr {
+  background: transparent;
+}
+
+[data-theme='dark'] .markdown tbody tr:nth-child(even),
+[data-theme='dark'] .theme-doc-markdown tbody tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+[data-theme='dark'] .markdown table tr td,
+[data-theme='dark'] .markdown table tr th {
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+[data-theme='dark'] .markdown p code,
+[data-theme='dark'] .markdown li code,
+[data-theme='dark'] .markdown td code,
+[data-theme='dark'] .theme-doc-markdown p code,
+[data-theme='dark'] .theme-doc-markdown li code,
+[data-theme='dark'] .theme-doc-markdown td code,
+[data-theme='dark'] code {
+  border-color: rgba(122, 175, 203, 0.25);
+  color: #D6E4ED;
+}
+
+/* ----- Blockquotes (dark) ----- */
+[data-theme='dark'] .markdown blockquote,
+[data-theme='dark'] .theme-doc-markdown blockquote {
+  background: rgba(122, 175, 203, 0.08);
+  border-left-color: #7AAFCB;
+  color: #CBD5E1;
+}
+
+[data-theme='dark'] .markdown blockquote::before,
+[data-theme='dark'] .theme-doc-markdown blockquote::before {
+  color: rgba(122, 175, 203, 0.4);
+}
+
+/* ----- Admonitions (dark) ----- */
+[data-theme='dark'] .theme-admonition,
+[data-theme='dark'] .alert,
+[data-theme='dark'] [class*='admonition_'] {
+  background: var(--fluss-paper);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #CBD5E1;
+}
+
+[data-theme='dark'] .alert--secondary,
+[data-theme='dark'] .theme-admonition-note {
+  background: rgba(255, 255, 255, 0.04);
+  border-left-color: #94A3B8;
+}
+
+[data-theme='dark'] .alert--info,
+[data-theme='dark'] .theme-admonition-info {
+  background: rgba(28, 80, 120, 0.12);
+  border-left-color: #7AAFCB;
+}
+
+[data-theme='dark'] .alert--success,
+[data-theme='dark'] .theme-admonition-tip {
+  background: rgba(16, 185, 129, 0.12);
+  border-left-color: #34D399;
+}
+
+[data-theme='dark'] .alert--warning,
+[data-theme='dark'] .theme-admonition-warning,
+[data-theme='dark'] .theme-admonition-caution {
+  background: rgba(245, 158, 11, 0.12);
+  border-left-color: #FBBF24;
+}
+
+[data-theme='dark'] .alert--danger,
+[data-theme='dark'] .theme-admonition-danger {
+  background: rgba(239, 68, 68, 0.12);
+  border-left-color: #F87171;
+}
+
+/* ----- Code blocks (dark) ----- */
+[data-theme='dark'] div[class*='codeBlockContainer'] {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme='dark'] div[class*='codeBlockContent'] pre {
+  background: #102856;
+}
+
+[data-theme='dark'] div[class*='codeBlockTitle'] {
+  background: rgba(122, 175, 203, 0.08);
+  border-bottom: 1px solid rgba(122, 175, 203, 0.18);
+  color: #F1F5F9;
+  font-weight: 500;
+}
+
+/* The cyan-dot ::before is defined in the light section and inherits into
+   dark; bump its luminance so it stays visible on the darker title bg. */
+[data-theme='dark'] div[class*='codeBlockTitle']::before {
+  background: var(--fluss-cyan);
+  box-shadow: 0 0 0 2px rgba(122, 175, 203, 0.18);
+}
+
+[data-theme='dark'] button[class*='copyButton'] {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #CBD5E1;
+}
+
+[data-theme='dark'] button[class*='copyButton']:hover {
+  background: rgba(122, 175, 203, 0.18);
+  border-color: rgba(122, 175, 203, 0.45);
+  color: #D6E4ED;
+}
+
+[data-theme='dark'] .theme-code-block-highlighted-line,
+[data-theme='dark'] .docusaurus-highlight-code-line {
+  background: rgba(122, 175, 203, 0.14);
+  border-left-color: #7AAFCB;
+}
+
+/* ----- Tabs (dark) ----- */
+[data-theme='dark'] .tabs {
+  border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme='dark'] .tabs__item {
+  color: #94A3B8;
+}
+
+[data-theme='dark'] .tabs__item:hover {
+  background: rgba(122, 175, 203, 0.12);
+  color: #D6E4ED;
+}
+
+[data-theme='dark'] .tabs__item--active {
+  color: #D6E4ED;
+  border-bottom-color: #7AAFCB;
+}
+
+/* ----- Pagination (dark) ----- */
+[data-theme='dark'] .pagination-nav__link {
+  background: var(--fluss-paper);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme='dark'] .pagination-nav__link:hover {
+  border-color: rgba(122, 175, 203, 0.45);
+}
+
+[data-theme='dark'] .pagination-nav__sublabel {
+  color: #94A3B8;
+}
+
+[data-theme='dark'] .pagination-nav__label {
+  color: #F8FAFC;
+}
+
+/* ----- Doc footer (dark) ----- */
+[data-theme='dark'] .theme-doc-footer {
+  background: var(--fluss-paper);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme='dark'] .theme-edit-this-page {
+  background: rgba(122, 175, 203, 0.12);
+  color: #B1CEDF !important;
+}
+
+[data-theme='dark'] .theme-edit-this-page:hover {
+  background: rgba(122, 175, 203, 0.2);
+  border-color: rgba(122, 175, 203, 0.4);
+}
+
+[data-theme='dark'] .theme-last-updated {
+  color: #94A3B8;
+}
+
+/* ----- Blog list / blog post (dark) ----- */
+[data-theme='dark'] article[itemtype='https://schema.org/BlogPosting'],
+[data-theme='dark'] .blog-list-page article {
+  background: var(--fluss-paper);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme='dark'] article[itemtype='https://schema.org/BlogPosting'] header h2 a,
+[data-theme='dark'] .blog-list-page article header h2 a {
+  color: #F8FAFC;
+}
+
+[data-theme='dark'] article[itemtype='https://schema.org/BlogPosting'] header h2 a:hover,
+[data-theme='dark'] .blog-list-page article header h2 a:hover {
+  color: #B1CEDF;
+}
+
+[data-theme='dark'] main[class*='blogListPage'] article:first-of-type,
+[data-theme='dark'] .blog-list-page > article:first-of-type {
+  background:
+    radial-gradient(800px 300px at 100% 0%, rgba(38, 109, 149, 0.1), transparent 60%),
+    radial-gradient(600px 300px at 0% 100%, rgba(28, 80, 120, 0.12), transparent 60%),
+    var(--fluss-paper);
+  border-color: rgba(122, 175, 203, 0.3);
+}
+
+[data-theme='dark'] a.tag,
+[data-theme='dark'] a[class*='tag_'] {
+  background: rgba(122, 175, 203, 0.14);
+  color: #D6E4ED;
+  border-color: transparent;
+}
+
+[data-theme='dark'] a.tag:hover,
+[data-theme='dark'] a[class*='tag_']:hover {
+  background: rgba(122, 175, 203, 0.22);
+  border-color: rgba(122, 175, 203, 0.4);
+  color: #D6E4ED;
+}
+
+/* ----- Doc cards (dark) ----- */
+[data-theme='dark'] article.card,
+[data-theme='dark'] .theme-doc-card {
+  background: var(--fluss-paper);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme='dark'] article.card:hover,
+[data-theme='dark'] .theme-doc-card:hover {
+  border-color: rgba(122, 175, 203, 0.45);
+}
+
+/* ----- Version banner (dark) ----- */
+[data-theme='dark'] div[class*='docVersionBanner'] {
+  background: rgba(122, 175, 203, 0.12);
+  border-color: rgba(122, 175, 203, 0.4);
+  color: #D6E4ED;
+}
+
+[data-theme='dark'] div[class*='docVersionBanner'] b,
+[data-theme='dark'] div[class*='docVersionBanner'] a {
+  color: #D6E4ED;
+}
+
+/* ----- Dropdown menus (dark) ----- */
+[data-theme='dark'] .dropdown__menu {
+  background: var(--fluss-paper);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+[data-theme='dark'] .dropdown__link {
+  color: #CBD5E1;
+}
+
+[data-theme='dark'] .dropdown__link:hover,
+[data-theme='dark'] .dropdown__link--active {
+  background: rgba(122, 175, 203, 0.14);
+  color: #D6E4ED;
+}
+
+/* ----- KBD (dark) ----- */
+[data-theme='dark'] kbd {
+  background: var(--fluss-paper);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: #D6E4ED;
+}
+
+/* ----- Color toggle (dark) ----- */
+[data-theme='dark'] button[class*='colorModeToggle'],
+[data-theme='dark'] button.clean-btn[class*='toggle'] {
+  background: rgba(255, 255, 255, 0.08);
+  color: #D6E4ED;
+}
+
+[data-theme='dark'] button[class*='colorModeToggle']:hover,
+[data-theme='dark'] button.clean-btn[class*='toggle']:hover {
+  background: rgba(122, 175, 203, 0.18);
+  border-color: rgba(122, 175, 203, 0.4);
+  color: #D6E4ED;
+}
+
+/* ----- Mobile drawer (dark) ----- */
+[data-theme='dark'] .navbar-sidebar {
+  background: var(--fluss-canvas);
+}
+
+[data-theme='dark'] .navbar-sidebar__brand {
+  border-bottom-color: rgba(255, 255, 255, 0.06);
+  background: var(--fluss-canvas);
+}
+
+/* In dark mode the drawer is dark again, so undo the light-mode inversion
+   on the brand wordmark and restore the light-on-dark GitHub icon. */
+[data-theme='dark'] .navbar-sidebar__brand .navbar__logo img {
+  filter: none;
+}
+
+[data-theme='dark'] .navbar-sidebar__brand .navbar__title,
+[data-theme='dark'] .navbar-sidebar__brand .navbar__brand {
+  color: #F8FAFC;
+}
+
+[data-theme='dark'] .navbar-sidebar .navbar__link,
+[data-theme='dark'] .navbar-sidebar .menu__link {
+  color: #CBD5E1;
+}
+
+[data-theme='dark'] .navbar-sidebar .navbar__link:hover,
+[data-theme='dark'] .navbar-sidebar .menu__link:hover {
+  color: var(--fluss-blue-300);
+}
+
+[data-theme='dark'] .navbar-sidebar .header-github-link::before {
+  background: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath fill='%23F8FAFC' d='M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12'/%3E%3C/svg%3E") no-repeat;
+}
+
+/* ----- Footer logo invert if needed (dark) ----- */
+[data-theme='dark'] .footer__logo {
+  filter: brightness(1.1);
+}
+
+/* ----- Scrollbars (dark) ----- */
+[data-theme='dark'] .theme-doc-markdown pre::-webkit-scrollbar-thumb,
+[data-theme='dark'] .theme-doc-sidebar-container::-webkit-scrollbar-thumb,
+[data-theme='dark'] .table-of-contents::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+[data-theme='dark'] .theme-doc-markdown pre::-webkit-scrollbar-thumb:hover,
+[data-theme='dark'] .theme-doc-sidebar-container::-webkit-scrollbar-thumb:hover,
+[data-theme='dark'] .table-of-contents::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* ----- Selection (dark) ----- */
+[data-theme='dark'] ::selection {
+  background: rgba(122, 175, 203, 0.32);
+  color: #F8FAFC;
+}
+
+/* =========================================================================
+   ========================================================================
+   RESPONSIVE : small viewport refinements (any device)
+   ========================================================================
+   ========================================================================= */
+
+@media (max-width: 996px) {
+  /* Sidebar / TOC card padding tightened */
+  .theme-doc-toc-desktop,
+  [class*='tableOfContents'] {
+    padding: var(--fluss-space-4);
+  }
+
+  /* Doc/blog content has full width on mobile */
+  main[class*='docItemContainer'] article,
+  main[class*='blogPostPage'] article {
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 768px) {
+  /* Tighten section vertical padding on small screens */
+  .theme-doc-markdown,
+  .markdown {
+    font-size: 1rem;
+    line-height: 1.7;
+  }
+
+  /* Heading dot indicator hidden on mobile (no margin-room) */
+  .markdown h2::before,
+  .theme-doc-markdown h2::before {
+    display: none;
+  }
+
+  /* Pagination cards stack neatly */
+  .pagination-nav {
+    grid-template-columns: 1fr;
+    gap: var(--fluss-space-3);
+  }
+
+  /* Let long labels wrap & shrink instead of overflowing the card on
+     narrow viewports (borzoni feedback, PR #3226). */
+  .pagination-nav__link {
+    min-width: 0;
+    padding: var(--fluss-space-3) var(--fluss-space-4);
+  }
+
+  .pagination-nav__label {
+    font-size: 0.9375rem;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+
+  /* Footer columns: tighter gap */
+  .footer .col {
+    margin-bottom: var(--fluss-space-6);
+  }
+
+  /* Doc footer wraps */
+  .theme-doc-footer {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  /* Smaller anchor offset */
+  .theme-doc-markdown h1,
+  .theme-doc-markdown h2,
+  .theme-doc-markdown h3,
+  .theme-doc-markdown h4 {
+    scroll-margin-top: 72px;
+  }
+}
+
+@media (max-width: 600px) {
+  /* Smaller hero internal title in case window is very narrow */
+  .navbar__title {
+    font-size: 0.95rem;
+  }
+
+  /* Hide kbd from being too cramped */
+  kbd {
+    font-size: 0.75em;
+  }
+
+  /* Tag pill smaller */
+  a.tag,
+  a[class*='tag_'] {
+    height: 22px;
+    font-size: 0.75rem;
+    padding: 0 8px;
+  }
+
+  /* Compare/markdown tables become horizontally scrollable comfortably */
+  .markdown table,
+  .theme-doc-markdown table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+}
+
+/* Very small screens : squeeze the navbar items so they don't overflow */
+@media (max-width: 480px) {
+  .navbar__items--right .navbar-ask-ai {
+    padding: 4px 8px;
+    font-size: 0.75rem;
+  }
+}
+
+/* =========================================================================
+   ========================================================================
+   HOMEPAGE : dark-mode adjustments for sections that hardcode blue-950
+   ========================================================================
+   ========================================================================= */
+
+/* In dark mode, the canvas itself is --fluss-blue-950, so sections that
+   intentionally use that color blend in. Lift them slightly so they read
+   as distinct surfaces. CSS module class names are matched by suffix. */
+[data-theme='dark'] section[class*='sectionDark'] {
+  background: linear-gradient(180deg, #102856 0%, #0A1745 100%);
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Comparison table on dark mode: paper bg, refined column highlight */
+[data-theme='dark'] div[class*='compareWrap'] {
+  background: var(--fluss-paper);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+[data-theme='dark'] table[class*='compareTable'] thead th {
+  background: rgba(255, 255, 255, 0.04);
+  color: #F8FAFC;
+  border-bottom-color: rgba(255, 255, 255, 0.1);
+}
+
+[data-theme='dark'] table[class*='compareTable'] thead th[class*='colHighlight'] {
+  background: linear-gradient(180deg, var(--fluss-blue-700) 0%, var(--fluss-blue-600) 100%);
+}
+
+[data-theme='dark'] table[class*='compareTable'] tbody td {
+  border-top-color: rgba(255, 255, 255, 0.05);
+  color: #CBD5E1;
+}
+
+[data-theme='dark'] table[class*='compareTable'] tbody td:first-child {
+  background: rgba(255, 255, 255, 0.03);
+  color: #F8FAFC;
+}
+
+[data-theme='dark'] table[class*='compareTable'] tbody td[class*='colHighlight'] {
+  background: rgba(122, 175, 203, 0.1);
+  color: #D6E4ED;
+}
+
+/* Code card in dark mode : slightly lifted so it stands above canvas */
+[data-theme='dark'] div[class*='codeCard'] {
+  background: linear-gradient(180deg, #102856 0%, #0A1745 100%);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Section eyebrows / titles / leads in dark mode */
+[data-theme='dark'] span[class*='eyebrow'] {
+  color: #B1CEDF;
+}
+
+[data-theme='dark'] h2[class*='sectionTitle'] {
+  color: #F8FAFC;
+}
+
+[data-theme='dark'] p[class*='sectionLead'] {
+  color: #CBD5E1;
+}
+
+/* Dark-mode hover/border on hover-lift cards */
+[data-theme='dark'] div[class*='card']:hover,
+[data-theme='dark'] article[class*='card']:hover {
+  border-color: rgba(122, 175, 203, 0.45);
+}
+
+[data-theme='dark'] div[class*='cardIcon'],
+[data-theme='dark'] div[class*='iconWrap'] {
+  background: rgba(122, 175, 203, 0.14);
+  color: #D6E4ED;
+}
+
+/* Version-badge chips on Flink section */
+[data-theme='dark'] span[class*='badge'] {
+  background: rgba(122, 175, 203, 0.18);
+  color: #D6E4ED;
+}
+
+/* Multiple Systems Tax section in dark mode */
+[data-theme='dark'] section[class*='taxSection'] {
+  background:
+    radial-gradient(900px 500px at 50% 0%, rgba(122, 175, 203, 0.14), transparent 60%),
+    var(--fluss-canvas);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+[data-theme='dark'] div[class*='taxStackItem'] {
+  background: var(--fluss-paper);
+  border-color: rgba(255, 255, 255, 0.08);
+  border-left-color: #FB7185;
+}
+
+[data-theme='dark'] div[class*='taxStackTitle'] {
+  color: #F8FAFC;
+}
+
+[data-theme='dark'] div[class*='taxStackSub'] {
+  color: #94A3B8;
+}
+
+[data-theme='dark'] span[class*='taxStackIndex'] {
+  color: rgba(255, 255, 255, 0.22);
+}
+
+[data-theme='dark'] span[class*='taxLabelBefore'] {
+  background: rgba(244, 63, 94, 0.14);
+  color: #FDA4AF;
+  border-color: rgba(244, 63, 94, 0.3);
+}
+
+[data-theme='dark'] p[class*='taxFootnote'] {
+}
+
+/* =========================================================================
+   Light-mode-only enhancements that need to be neutralised in dark mode
+   ========================================================================= */
+
+/* The card resting white-tint gradient is meant for light mode. In dark
+   mode it would lighten the card top awkwardly — strip it. */
+[data-theme='dark'] section[class*='introduce'] div[class*='card'],
+[data-theme='dark'] section[class*='features'] article[class*='card'] {
+  background: var(--fluss-paper);
+}
+
+/* Section background washes use white-leaning gradients in light mode.
+   In dark mode the canvas already provides the deep blue, but we want
+   subtle blue-tinted radial highlights on plain sections instead. */
+[data-theme='dark'] section[class*='introduce'],
+[data-theme='dark'] section[class*='features'] {
+  background:
+    radial-gradient(1100px 480px at 100% 0%, rgba(122, 175, 203, 0.1), transparent 60%),
+    radial-gradient(900px 460px at 0% 100%, rgba(122, 175, 203, 0.08), transparent 60%),
+    var(--fluss-canvas);
+  border-top-color: rgba(255, 255, 255, 0.06);
+}
+
+/* Generic .section radial wash on light mode — recolour for dark */
+[data-theme='dark'] section[class*='section'][class*='index_section'],
+[data-theme='dark'] section[class*='index_section'] {
+  background:
+    radial-gradient(1100px 480px at 80% 0%, rgba(122, 175, 203, 0.08), transparent 60%),
+    radial-gradient(900px 460px at 0% 100%, rgba(122, 175, 203, 0.08), transparent 60%),
+    var(--fluss-canvas);
+}
+
+/* Eyebrow chip override for dark mode — the auto-mapped background is
+   already a translucent blue, but the border needs darkening too. */
+[data-theme='dark'] span[class*='eyebrow'] {
+  border-color: rgba(122, 175, 203, 0.28);
+}
+
+/* Card icon gradient is meant for light. Re-tone for dark. */
+[data-theme='dark'] div[class*='cardIcon'],
+[data-theme='dark'] div[class*='iconWrap'] {
+  background: linear-gradient(135deg, rgba(122, 175, 203, 0.18) 0%, rgba(38, 109, 149, 0.18) 100%);
+  box-shadow: inset 0 0 0 1px rgba(122, 175, 203, 0.22);
+  color: #D6E4ED;
+}
+
+/* Comparison-table accent bar visible against dark surface */
+[data-theme='dark'] div[class*='compareWrap']::before {
+  background: linear-gradient(90deg, var(--fluss-blue-500), var(--fluss-cyan));
+}
+
+[data-theme='dark'] table[class*='compareTable'] tbody tr:hover td {
+  background-color: rgba(122, 175, 203, 0.08);
+}
+
+[data-theme='dark'] table[class*='compareTable'] tbody tr:hover td:first-child {
+  background-color: rgba(122, 175, 203, 0.12);
+}
+
+[data-theme='dark'] table[class*='compareTable'] tbody tr:hover td[class*='colHighlight'] {
+  background-color: rgba(122, 175, 203, 0.2);
 }

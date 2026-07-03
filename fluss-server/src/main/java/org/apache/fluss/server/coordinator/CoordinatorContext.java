@@ -28,6 +28,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.statemachine.BucketState;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
 import org.apache.fluss.server.metadata.ServerInfo;
+import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -55,6 +56,7 @@ public class CoordinatorContext {
     private static final Logger LOG = LoggerFactory.getLogger(CoordinatorContext.class);
 
     public static final int INITIAL_COORDINATOR_EPOCH = 0;
+    public static final int INITIAL_COORDINATOR_EPOCH_ZK_VERSION = 0;
 
     // for simplicity, we just use retry time, may consider make it a configurable value
     // and use combine retry times and retry delay
@@ -67,6 +69,7 @@ public class CoordinatorContext {
     // a success deletion.
     private final Map<TableBucketReplica, Integer> failDeleteNumbers = new HashMap<>();
 
+    private final Set<String> liveCoordinatorServers = new HashSet<>();
     private final Map<Integer, ServerInfo> liveTabletServers = new HashMap<>();
     private final Set<Integer> shuttingDownTabletServers = new HashSet<>();
 
@@ -103,16 +106,58 @@ public class CoordinatorContext {
      */
     private final Map<Integer, Set<TableBucket>> replicasOnOffline = new HashMap<>();
 
+    /**
+     * Tracks buckets where a leader change has been dispatched (via NotifyLeaderAndIsr) but not yet
+     * confirmed by the target server. A bucket enters this set when we send the notification and
+     * leaves it when the target server successfully responds confirming it is the leader.
+     */
+    private final Set<TableBucket> pendingLeaderActivationBuckets = new HashSet<>();
+
     /** A mapping from tabletServers to server tag. */
     private final Map<Integer, ServerTag> serverTags = new HashMap<>();
 
-    private ServerInfo coordinatorServerInfo = null;
-    private int coordinatorEpoch = INITIAL_COORDINATOR_EPOCH;
+    /**
+     * The epoch of the coordinator, which will be incremented whenever the coordinator is elected
+     * or re-elected.
+     */
+    private final int coordinatorEpoch;
 
-    public CoordinatorContext() {}
+    /**
+     * The coordinator epoch zk version is the zk version when the coordinator epoch is updated in
+     * Zookeeper.
+     */
+    private final int coordinatorEpochZkVersion;
+
+    private ServerInfo coordinatorServerInfo = null;
+
+    public CoordinatorContext(ZkEpoch zkEpoch) {
+        this.coordinatorEpoch = zkEpoch.getCoordinatorEpoch();
+        this.coordinatorEpochZkVersion = zkEpoch.getCoordinatorEpochZkVersion();
+    }
 
     public int getCoordinatorEpoch() {
         return coordinatorEpoch;
+    }
+
+    public int getCoordinatorZkVersion() {
+        return coordinatorEpochZkVersion;
+    }
+
+    public Set<String> getLiveCoordinatorServers() {
+        return liveCoordinatorServers;
+    }
+
+    public void setLiveCoordinators(Set<String> servers) {
+        liveCoordinatorServers.clear();
+        liveCoordinatorServers.addAll(servers);
+    }
+
+    public void addLiveCoordinator(String serverId) {
+        this.liveCoordinatorServers.add(serverId);
+    }
+
+    public void removeLiveCoordinator(String serverId) {
+        this.liveCoordinatorServers.remove(serverId);
     }
 
     public Map<Integer, ServerInfo> getLiveTabletServers() {
@@ -178,6 +223,48 @@ public class CoordinatorContext {
 
     public void removeOfflineBucketInServer(int serverId) {
         replicasOnOffline.remove(serverId);
+    }
+
+    // ---- Pending leader activation tracking (for Cluster Health API) ----
+
+    public void addPendingLeaderActivation(TableBucket bucket) {
+        pendingLeaderActivationBuckets.add(bucket);
+    }
+
+    public void addPendingLeaderActivations(Collection<TableBucket> buckets) {
+        pendingLeaderActivationBuckets.addAll(buckets);
+    }
+
+    public void clearPendingLeaderActivation(TableBucket bucket) {
+        pendingLeaderActivationBuckets.remove(bucket);
+    }
+
+    /**
+     * Returns whether the given bucket has an active leader. A leader is considered active when:
+     *
+     * <ul>
+     *   <li>A LeaderAndIsr record exists for the bucket
+     *   <li>The leader is not {@link LeaderAndIsr#NO_LEADER}
+     *   <li>The leader's tablet server is alive
+     *   <li>The bucket is not pending leader activation confirmation
+     * </ul>
+     */
+    public boolean isLeaderActive(TableBucket bucket) {
+        return getBucketLeaderAndIsr(bucket)
+                .map(
+                        lai ->
+                                lai.leader() != LeaderAndIsr.NO_LEADER
+                                        && liveTabletServers.containsKey(lai.leader())
+                                        && !pendingLeaderActivationBuckets.contains(bucket))
+                .orElse(false);
+    }
+
+    public Set<TableBucket> getPendingLeaderActivationBuckets() {
+        return Collections.unmodifiableSet(pendingLeaderActivationBuckets);
+    }
+
+    public void removeFromPendingLeaderActivations(Set<TableBucket> buckets) {
+        pendingLeaderActivationBuckets.removeAll(buckets);
     }
 
     public Map<Long, TablePath> allTables() {
@@ -618,10 +705,16 @@ public class CoordinatorContext {
         tablesToBeDeleted.remove(tableId);
         Map<Integer, List<Integer>> assignment = tableAssignments.remove(tableId);
         if (assignment != null) {
-            // remove leadership info for each bucket from the context
+            Set<TableBucket> removedBuckets = new HashSet<>();
             assignment
                     .keySet()
-                    .forEach(bucket -> bucketLeaderAndIsr.remove(new TableBucket(tableId, bucket)));
+                    .forEach(
+                            bucket -> {
+                                TableBucket tb = new TableBucket(tableId, bucket);
+                                bucketLeaderAndIsr.remove(tb);
+                                removedBuckets.add(tb);
+                            });
+            removeFromPendingLeaderActivations(removedBuckets);
         }
 
         TablePath tablePath = tablePathById.remove(tableId);
@@ -635,16 +728,20 @@ public class CoordinatorContext {
         partitionsToBeDeleted.remove(tablePartition);
         Map<Integer, List<Integer>> assignment = partitionAssignments.remove(tablePartition);
         if (assignment != null) {
-            // remove leadership info for each bucket from the context
+            Set<TableBucket> removedBuckets = new HashSet<>();
             assignment
                     .keySet()
                     .forEach(
-                            bucket ->
-                                    bucketLeaderAndIsr.remove(
-                                            new TableBucket(
-                                                    tablePartition.getTableId(),
-                                                    tablePartition.getPartitionId(),
-                                                    bucket)));
+                            bucket -> {
+                                TableBucket tb =
+                                        new TableBucket(
+                                                tablePartition.getTableId(),
+                                                tablePartition.getPartitionId(),
+                                                bucket);
+                                bucketLeaderAndIsr.remove(tb);
+                                removedBuckets.add(tb);
+                            });
+            removeFromPendingLeaderActivations(removedBuckets);
         }
 
         PhysicalTablePath physicalTablePath =
@@ -679,6 +776,7 @@ public class CoordinatorContext {
         partitionAssignments.clear();
         bucketLeaderAndIsr.clear();
         replicasOnOffline.clear();
+        pendingLeaderActivationBuckets.clear();
         bucketStates.clear();
         replicaStates.clear();
         tablePathById.clear();
@@ -690,10 +788,9 @@ public class CoordinatorContext {
 
     public void resetContext() {
         tablesToBeDeleted.clear();
-        coordinatorEpoch = 0;
         clearTablesState();
-        // clear the live tablet servers
         liveTabletServers.clear();
+        liveCoordinatorServers.clear();
         shuttingDownTabletServers.clear();
         serverTags.clear();
     }

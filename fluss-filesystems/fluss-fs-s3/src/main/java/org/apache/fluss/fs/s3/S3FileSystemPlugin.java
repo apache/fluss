@@ -17,6 +17,7 @@
 
 package org.apache.fluss.fs.s3;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigBuilder;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.FileSystem;
@@ -44,6 +45,9 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
     private static final String HADOOP_CONFIG_PREFIX = "fs.s3a.";
 
     private static final String ACCESS_KEY_ID = "fs.s3a.access.key";
+    private static final String ACCESS_KEY_SECRET = "fs.s3a.secret.key";
+
+    private static final String ROLE_ARN_KEY = "fs.s3a.assumed.role.arn";
 
     private static final String[][] MIRRORED_CONFIG_KEYS = {
         {"fs.s3a.access-key", "fs.s3a.access.key"},
@@ -58,16 +62,20 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
 
     @Override
     public FileSystem create(URI fsUri, Configuration flussConfig) throws IOException {
-        org.apache.hadoop.conf.Configuration hadoopConfig =
-                mirrorCertainHadoopConfig(getHadoopConfiguration(flussConfig));
-
-        // set credential provider
-        setCredentialProvider(hadoopConfig);
+        org.apache.hadoop.conf.Configuration hadoopConfig = buildHadoopConfiguration(flussConfig);
 
         // create the Hadoop FileSystem
         org.apache.hadoop.fs.FileSystem fs = new S3AFileSystem();
         fs.initialize(getInitURI(fsUri, hadoopConfig), hadoopConfig);
         return new S3FileSystem(getScheme(), fs, hadoopConfig);
+    }
+
+    @VisibleForTesting
+    org.apache.hadoop.conf.Configuration buildHadoopConfiguration(Configuration flussConfig) {
+        org.apache.hadoop.conf.Configuration hadoopConfig =
+                mirrorCertainHadoopConfig(getHadoopConfiguration(flussConfig));
+        setCredentialProvider(hadoopConfig);
+        return hadoopConfig;
     }
 
     org.apache.hadoop.conf.Configuration getHadoopConfiguration(Configuration flussConfig) {
@@ -122,7 +130,17 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
     }
 
     private void setCredentialProvider(org.apache.hadoop.conf.Configuration hadoopConfig) {
-        if (hadoopConfig.get(ACCESS_KEY_ID) == null) {
+        boolean hasStaticKeys =
+                hadoopConfig.get(ACCESS_KEY_ID) != null
+                        && hadoopConfig.get(ACCESS_KEY_SECRET) != null;
+        boolean hasRoleArn = hadoopConfig.get(ROLE_ARN_KEY) != null;
+
+        if (hasStaticKeys || hasRoleArn) {
+            LOG.info(
+                    hasStaticKeys
+                            ? "Using provided static credentials."
+                            : "Using default AWS credential chain with AssumeRole.");
+        } else {
             if (Objects.equals(getScheme(), "s3")) {
                 S3DelegationTokenReceiver.updateHadoopConfig(hadoopConfig);
             } else if (Objects.equals(getScheme(), "s3a")) {
@@ -131,11 +149,8 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
                 throw new IllegalArgumentException("Unsupported scheme: " + getScheme());
             }
             LOG.info(
-                    "{} is not set, using credential provider {}.",
-                    ACCESS_KEY_ID,
+                    "Using credential provider {} for delegated tokens.",
                     hadoopConfig.get(PROVIDER_CONFIG_NAME));
-        } else {
-            LOG.info("{} is set, using provided access key id and secret.", ACCESS_KEY_ID);
         }
     }
 }

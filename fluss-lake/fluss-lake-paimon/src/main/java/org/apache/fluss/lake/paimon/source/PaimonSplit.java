@@ -30,6 +30,8 @@ import java.util.List;
 /** Split for paimon table. */
 public class PaimonSplit implements LakeSplit {
 
+    private static final long serialVersionUID = 1L;
+
     private final DataSplit dataSplit;
 
     private final boolean isBucketUnAware;

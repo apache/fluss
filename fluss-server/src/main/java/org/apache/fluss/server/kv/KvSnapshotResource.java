@@ -113,7 +113,7 @@ public class KvSnapshotResource {
         // shutdown asyncOperationsThreadPool now
         asyncOperationsThreadPool.shutdownNow();
         // close kvSnapshotScheduler, also stop any actively executing task immediately
-        // otherwise, a snapshot will still be take although it's closed, which will case exception
+        // otherwise, a snapshot will still be take although it's closed, which will cause exception
         kvSnapshotScheduler.shutdownNow();
     }
 }

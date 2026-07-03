@@ -23,6 +23,8 @@ import org.apache.fluss.rpc.messages.AddServerTagRequest;
 import org.apache.fluss.rpc.messages.AddServerTagResponse;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsResponse;
+import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
+import org.apache.fluss.rpc.messages.AlterDatabaseResponse;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.AlterTableResponse;
 import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
@@ -49,8 +51,12 @@ import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.DropTableResponse;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsRequest;
 import org.apache.fluss.rpc.messages.GetProducerOffsetsResponse;
+import org.apache.fluss.rpc.messages.ListKvSnapshotsRequest;
+import org.apache.fluss.rpc.messages.ListKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressRequest;
 import org.apache.fluss.rpc.messages.ListRebalanceProgressResponse;
+import org.apache.fluss.rpc.messages.ListRemoteLogManifestsRequest;
+import org.apache.fluss.rpc.messages.ListRemoteLogManifestsResponse;
 import org.apache.fluss.rpc.messages.RebalanceRequest;
 import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.RegisterProducerOffsetsRequest;
@@ -73,6 +79,14 @@ public interface AdminGateway extends AdminReadOnlyGateway {
      */
     @RPC(api = ApiKeys.CREATE_DATABASE)
     CompletableFuture<CreateDatabaseResponse> createDatabase(CreateDatabaseRequest request);
+
+    /**
+     * Alter a database.
+     *
+     * @param request the request to alter a database.
+     */
+    @RPC(api = ApiKeys.ALTER_DATABASE)
+    CompletableFuture<AlterDatabaseResponse> alterDatabase(AlterDatabaseRequest request);
 
     /**
      * Drop a database.
@@ -206,4 +220,29 @@ public interface AdminGateway extends AdminReadOnlyGateway {
 
     // todo: rename table & alter table
 
+    // ==================================================================================
+    // Orphan Cleanup RPCs (coordinator-only, internal)
+    // ==================================================================================
+
+    /**
+     * List remote log manifest entries for all buckets of a table or single partition.
+     *
+     * @param request request with table_id and optional partition_id
+     * @return per-bucket manifest path and end offset
+     */
+    @RPC(api = ApiKeys.LIST_REMOTE_LOG_MANIFESTS)
+    CompletableFuture<ListRemoteLogManifestsResponse> listRemoteLogManifests(
+            ListRemoteLogManifestsRequest request);
+
+    /**
+     * List active KV snapshot ids for a (tableId, partitionId) unit. The response is the union of
+     * (a) snapshots currently held by the in-memory {@code CompletedSnapshotStore} for each bucket
+     * and (b) snapshots still pinned by an active KV snapshot lease. No retention truncation is
+     * applied — every snapshot the coordinator has not yet pruned from ZK is reported as active so
+     * orphan cleanup never misdeletes a still-referenced snapshot. The server emits one entry per
+     * active {@code (bucket_id, snapshot_id)} pair with no source discriminator; callers must treat
+     * the entire response as the active set.
+     */
+    @RPC(api = ApiKeys.LIST_KV_SNAPSHOTS)
+    CompletableFuture<ListKvSnapshotsResponse> listKvSnapshots(ListKvSnapshotsRequest request);
 }

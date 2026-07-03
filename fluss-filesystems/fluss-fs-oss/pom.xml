@@ -24,11 +24,11 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss-filesystems</artifactId>
-        <version>0.10-SNAPSHOT</version>
+        <version>1.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-fs-oss</artifactId>
-    <name>Fluss : FileSystems : OSS FS</name>
+    <name>Apache Fluss (Incubating) : FileSystems : OSS FS</name>
 
     <properties>
         <fs.oss.sdk.version>3.17.4</fs.oss.sdk.version>

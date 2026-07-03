@@ -69,6 +69,14 @@ public final class LocalLog {
 
     public static final long UNKNOWN_OFFSET = -1L;
 
+    /**
+     * Maximum number of segments to scan per fetch request when a record batch filter is active.
+     * This prevents a single fetch from scanning the entire log when the filter rejects all data,
+     * which could cause latency spikes. When the limit is reached, the client receives a filtered
+     * empty response with the current skip offset and retries from there.
+     */
+    static final int MAX_FILTER_SCAN_SEGMENTS = 16;
+
     private final Configuration config;
     private final LogSegments segments;
     private final TableBucket tableBucket;
@@ -337,7 +345,7 @@ public final class LocalLog {
      * offset is out of range, throw an OffsetOutOfRangeException.
      */
     LogOffsetMetadata convertToOffsetMetadataOrThrow(long offset) throws IOException {
-        FetchDataInfo fetchDataInfo = read(offset, 1, false, nextOffsetMetadata, null);
+        FetchDataInfo fetchDataInfo = read(offset, 1, false, nextOffsetMetadata, null, null);
         return fetchDataInfo.getFetchOffsetMetadata();
     }
 
@@ -349,6 +357,12 @@ public final class LocalLog {
      * @param minOneMessage If this is true, the first message will be returned even if it exceeds
      *     `maxLength` (if one exists)
      * @param maxOffsetMetadata The metadata of the maximum offset to be fetched
+     * @param projection The column projection to apply to the log records
+     * @param recordBatchFilter The filter to apply to the log records (must be null if readContext
+     *     is null). Note: filter pushdown only takes effect for ARROW format tables whose batches
+     *     include statistics (V1+ magic). For INDEXED/COMPACTED formats, all batches pass through.
+     * @param readContext The read context for batch filtering (must be null if recordBatchFilter is
+     *     null)
      * @throws LogOffsetOutOfRangeException If startOffset is beyond the log start and end offset
      * @return The fetch data information including fetch starting offset metadata and messages
      *     read.
@@ -358,8 +372,10 @@ public final class LocalLog {
             int maxLength,
             boolean minOneMessage,
             LogOffsetMetadata maxOffsetMetadata,
-            @Nullable FileLogProjection projection)
+            @Nullable FileLogProjection projection,
+            @Nullable FilterContext filterContext)
             throws IOException {
+
         if (LOG.isTraceEnabled()) {
             LOG.trace(
                     "Reading maximum {} bytes at offset {} from log with total length {} bytes for bucket {}",
@@ -396,6 +412,14 @@ public final class LocalLog {
             // read from successive segments until we get some messages, or we reach the end of the
             // log
             FetchDataInfo fetchDataInfo = null;
+            // Track the latest filteredEndOffset across segments when filter is active.
+            // When a segment's batches are all filtered out, readWithFilter returns a non-null
+            // "filtered empty" FetchDataInfo (filteredEndOffset > 0, empty records).
+            // We must continue scanning subsequent segments instead of returning immediately.
+            long lastFilteredEndOffset = -1L;
+            // Limit the number of segments scanned when filtering to prevent a single fetch
+            // request from scanning the entire log when the filter rejects all data.
+            int filteredSegmentsScanned = 0;
             while (fetchDataInfo == null && segmentOpt.isPresent()) {
                 LogSegment segment = segmentOpt.get();
                 long baseOffset = segment.getBaseOffset();
@@ -406,8 +430,37 @@ public final class LocalLog {
                                 ? maxOffsetMetadata.getRelativePositionInSegment()
                                 : segment.getSizeInBytes();
                 fetchDataInfo =
-                        segment.read(readOffset, maxLength, maxPosition, minOneMessage, projection);
+                        segment.read(
+                                readOffset,
+                                maxLength,
+                                maxPosition,
+                                minOneMessage,
+                                projection,
+                                filterContext);
                 if (fetchDataInfo == null) {
+                    segmentOpt = segments.higherSegment(baseOffset);
+                } else if (filterContext != null
+                        && fetchDataInfo.hasFilteredEndOffset()
+                        && fetchDataInfo.getRecords().sizeInBytes() == 0) {
+                    // All batches in this segment were filtered out. Record the skip offset
+                    // and continue scanning the next segment for matching data.
+                    lastFilteredEndOffset = fetchDataInfo.getFilteredEndOffset();
+                    if (LOG.isDebugEnabled()) {
+                        LOG.debug(
+                                "All batches filtered out in segment base={} for {}, advancing readOffset from {} to {}",
+                                segment.getBaseOffset(),
+                                tableBucket,
+                                readOffset,
+                                lastFilteredEndOffset);
+                    }
+                    readOffset = lastFilteredEndOffset;
+                    fetchDataInfo = null;
+                    filteredSegmentsScanned++;
+                    if (filteredSegmentsScanned >= MAX_FILTER_SCAN_SEGMENTS) {
+                        // Stop scanning to bound the I/O cost per fetch request.
+                        // The client will retry from lastFilteredEndOffset.
+                        break;
+                    }
                     segmentOpt = segments.higherSegment(baseOffset);
                 }
             }
@@ -418,7 +471,18 @@ public final class LocalLog {
                 // start offset is in range, this can happen when all messages with offset larger
                 // than start offsets have been deleted. In this case, we will return the empty set
                 // with log end offset metadata
-                return new FetchDataInfo(nextOffsetMetadata, MemoryLogRecords.EMPTY);
+                if (lastFilteredEndOffset >= 0) {
+                    // All segments were scanned but every batch was filtered out.
+                    // Return a filtered empty response with the final skip offset so the client
+                    // advances past all the filtered data.
+                    return FetchDataInfo.createFilteredEmptyResponse(
+                            nextOffsetMetadata, lastFilteredEndOffset);
+                } else if (filterContext != null) {
+                    return FetchDataInfo.createFilteredEmptyResponse(
+                            nextOffsetMetadata, nextOffsetMetadata.getMessageOffset());
+                } else {
+                    return new FetchDataInfo(nextOffsetMetadata, MemoryLogRecords.EMPTY);
+                }
             }
         }
     }

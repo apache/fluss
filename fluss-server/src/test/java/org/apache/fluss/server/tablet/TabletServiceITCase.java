@@ -51,6 +51,9 @@ import org.apache.fluss.rpc.messages.PbPrefixLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.ScanKvRequest;
+import org.apache.fluss.rpc.messages.ScanKvResponse;
+import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
@@ -113,6 +116,7 @@ import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newProduceLo
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLeaderAndIsrResponseData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeNotifyBucketLeaderAndIsr;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeStopBucketReplica;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
@@ -866,6 +870,7 @@ public class TabletServiceITCase {
                                                 leader,
                                                 1,
                                                 originLeaderAndIsr.isr(),
+                                                originLeaderAndIsr.standbyReplicas(),
                                                 originLeaderAndIsr.coordinatorEpoch(),
                                                 originLeaderAndIsr.bucketEpoch())))
                         .get();
@@ -890,6 +895,7 @@ public class TabletServiceITCase {
                 .updateMetadata(
                         makeUpdateMetadataRequest(
                                 coordinatorServerInfo,
+                                null,
                                 newTabletServerInfos,
                                 Collections.emptyList(),
                                 Collections.emptyList()))
@@ -908,6 +914,7 @@ public class TabletServiceITCase {
                                                 leader,
                                                 2,
                                                 originLeaderAndIsr.isr(),
+                                                originLeaderAndIsr.standbyReplicas(),
                                                 originLeaderAndIsr.coordinatorEpoch(),
                                                 originLeaderAndIsr.bucketEpoch())))
                         .get();
@@ -1071,5 +1078,391 @@ public class TabletServiceITCase {
         InternalRow newRow = valueDecoder.decodeValue(resp2.getValuesList().get(1).getValues()).row;
         assertThat(existingRow.getLong(1)).isEqualTo(1L);
         assertThat(newRow.getLong(1)).isEqualTo(3L);
+    }
+
+    @Test
+    void testScanKv_newScan_happyPath() throws Exception {
+        long tableId =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK);
+        TableBucket tb = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateWay =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+
+        assertPutKvResponse(
+                leaderGateWay
+                        .putKv(
+                                newPutKvRequest(
+                                        tableId, 0, 1, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)))
+                        .get());
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tb);
+
+        ScanKvResponse response =
+                leaderGateWay.scanKv(newScanKvOpenRequest(tableId, 0, 1024 * 1024)).get();
+
+        assertThat(response.hasErrorCode()).isFalse();
+        assertThat(response.getScannerId()).isNotEmpty();
+        assertThat(response.isHasMoreResults()).isFalse();
+        assertThat(response.hasLogOffset()).isTrue();
+        assertThat(response.getLogOffset()).isGreaterThanOrEqualTo(0L);
+        assertThat(response.hasRecords()).isTrue();
+        DefaultValueRecordBatch batch = DefaultValueRecordBatch.pointToBytes(response.getRecords());
+        assertThat(batch.getRecordCount()).isEqualTo(2);
+    }
+
+    @Test
+    void testScanKv_multiBatchContinuation() throws Exception {
+        long tableId =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK);
+        TableBucket tb = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateWay =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+
+        assertPutKvResponse(
+                leaderGateWay
+                        .putKv(
+                                newPutKvRequest(
+                                        tableId, 0, 1, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)))
+                        .get());
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tb);
+
+        // batch_size_bytes=1 forces one record per batch via the appendedAny progress guard.
+        ScanKvResponse first = leaderGateWay.scanKv(newScanKvOpenRequest(tableId, 0, 1)).get();
+        assertThat(first.hasErrorCode()).isFalse();
+        byte[] scannerId = first.getScannerId();
+        long firstLogOffset = first.getLogOffset();
+        int totalRecords =
+                DefaultValueRecordBatch.pointToBytes(first.getRecords()).getRecordCount();
+
+        ScanKvResponse current = first;
+        int seq = 1;
+        while (current.isHasMoreResults()) {
+            current =
+                    leaderGateWay
+                            .scanKv(newScanKvContinueRequest(scannerId, seq++, /*batch=*/ 1))
+                            .get();
+            assertThat(current.hasErrorCode()).isFalse();
+            assertThat(current.getScannerId()).isEqualTo(scannerId);
+            // log_offset is carried only on the open response.
+            assertThat(current.hasLogOffset()).isFalse();
+            if (current.hasRecords()) {
+                totalRecords +=
+                        DefaultValueRecordBatch.pointToBytes(current.getRecords()).getRecordCount();
+            }
+        }
+        assertThat(totalRecords).isEqualTo(2);
+        // After draining, the session is auto-closed.
+        ScanKvResponse afterDrain =
+                leaderGateWay.scanKv(newScanKvContinueRequest(scannerId, seq, 1024)).get();
+        assertThat(afterDrain.getErrorCode()).isEqualTo(Errors.UNKNOWN_SCANNER_ID.code());
+        assertThat(firstLogOffset).isGreaterThanOrEqualTo(0L);
+    }
+
+    @Test
+    void testScanKv_explicitClose() throws Exception {
+        long tableId =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK);
+        TableBucket tb = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateWay =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+
+        assertPutKvResponse(
+                leaderGateWay
+                        .putKv(
+                                newPutKvRequest(
+                                        tableId, 0, 1, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)))
+                        .get());
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tb);
+
+        // Tiny batch keeps the session open after the first response.
+        ScanKvResponse open = leaderGateWay.scanKv(newScanKvOpenRequest(tableId, 0, 1)).get();
+        assertThat(open.hasErrorCode()).isFalse();
+        assertThat(open.isHasMoreResults()).isTrue();
+        byte[] scannerId = open.getScannerId();
+
+        ScanKvResponse close = leaderGateWay.scanKv(newScanKvCloseRequest(scannerId)).get();
+        assertThat(close.hasErrorCode()).isFalse();
+        assertThat(close.getScannerId()).isEqualTo(scannerId);
+        assertThat(close.isHasMoreResults()).isFalse();
+        assertThat(close.hasRecords()).isFalse();
+    }
+
+    @Test
+    void testScanKv_closeOnAlreadyGoneScannerIsNoOp() throws Exception {
+        long tableId =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK);
+        TableBucket tb = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateWay =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+
+        assertPutKvResponse(
+                leaderGateWay
+                        .putKv(
+                                newPutKvRequest(
+                                        tableId, 0, 1, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)))
+                        .get());
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tb);
+
+        ScanKvResponse open = leaderGateWay.scanKv(newScanKvOpenRequest(tableId, 0, 1)).get();
+        byte[] scannerId = open.getScannerId();
+
+        leaderGateWay.scanKv(newScanKvCloseRequest(scannerId)).get();
+
+        // Second close on the already-gone session must be a benign no-op.
+        ScanKvResponse second = leaderGateWay.scanKv(newScanKvCloseRequest(scannerId)).get();
+        assertThat(second.hasErrorCode()).isFalse();
+        assertThat(second.getScannerId()).isEqualTo(scannerId);
+        assertThat(second.isHasMoreResults()).isFalse();
+    }
+
+    @Test
+    void testScanKv_unknownScannerId() throws Exception {
+        long tableId =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK);
+        TableBucket tb = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateWay =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+
+        byte[] fakeId = "not-a-real-scanner-id".getBytes();
+        ScanKvResponse response =
+                leaderGateWay.scanKv(newScanKvContinueRequest(fakeId, 0, 1024)).get();
+        assertThat(response.getErrorCode()).isEqualTo(Errors.UNKNOWN_SCANNER_ID.code());
+        assertThat(response.getErrorMessage()).contains("Unknown scanner ID");
+    }
+
+    @Test
+    void testScanKv_expiredOnRecentlyEvicted() throws Exception {
+        long tableId =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK);
+        TableBucket tb = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateWay =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+
+        assertPutKvResponse(
+                leaderGateWay
+                        .putKv(
+                                newPutKvRequest(
+                                        tableId, 0, 1, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)))
+                        .get());
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tb);
+
+        ScanKvResponse open = leaderGateWay.scanKv(newScanKvOpenRequest(tableId, 0, 1)).get();
+        assertThat(open.hasErrorCode()).isFalse();
+        assertThat(open.isHasMoreResults()).isTrue();
+        byte[] scannerId = open.getScannerId();
+
+        // stopReplica(delete=false) routes through closeScannersForBucket, which records
+        // the id in recentlyExpiredIds.
+        LeaderAndIsr la = FLUSS_CLUSTER_EXTENSION.waitLeaderAndIsrReady(tb);
+        stopReplicaWithLatestEpoch(leaderGateWay, tb, la);
+
+        ScanKvResponse cont =
+                leaderGateWay.scanKv(newScanKvContinueRequest(scannerId, 0, 1024)).get();
+        assertThat(cont.getErrorCode()).isEqualTo(Errors.SCANNER_EXPIRED.code());
+        assertThat(cont.getErrorMessage()).contains("expired");
+    }
+
+    @Test
+    void testScanKv_leadershipFlipMidScan() throws Exception {
+        long tableId =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK);
+        TableBucket tb = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateWay =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+
+        assertPutKvResponse(
+                leaderGateWay
+                        .putKv(
+                                newPutKvRequest(
+                                        tableId, 0, 1, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)))
+                        .get());
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tb);
+
+        ScanKvResponse open = leaderGateWay.scanKv(newScanKvOpenRequest(tableId, 0, 1)).get();
+        assertThat(open.hasErrorCode()).isFalse();
+        assertThat(open.isHasMoreResults()).isTrue();
+        byte[] scannerId = open.getScannerId();
+
+        LeaderAndIsr la = FLUSS_CLUSTER_EXTENSION.waitLeaderAndIsrReady(tb);
+        stopReplicaWithLatestEpoch(leaderGateWay, tb, la);
+
+        ScanKvResponse cont =
+                leaderGateWay.scanKv(newScanKvContinueRequest(scannerId, 0, 1024)).get();
+        assertThat(cont.getErrorCode())
+                .isIn(Errors.SCANNER_EXPIRED.code(), Errors.NOT_LEADER_OR_FOLLOWER.code());
+    }
+
+    @Test
+    void testScanKv_callSeqIdMismatch() throws Exception {
+        long tableId =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK);
+        TableBucket tb = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateWay =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+
+        assertPutKvResponse(
+                leaderGateWay
+                        .putKv(
+                                newPutKvRequest(
+                                        tableId, 0, 1, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)))
+                        .get());
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tb);
+
+        ScanKvResponse open = leaderGateWay.scanKv(newScanKvOpenRequest(tableId, 0, 1)).get();
+        byte[] scannerId = open.getScannerId();
+
+        ScanKvResponse bad =
+                leaderGateWay.scanKv(newScanKvContinueRequest(scannerId, 5, 1024)).get();
+        assertThat(bad.getErrorCode()).isEqualTo(Errors.INVALID_SCAN_REQUEST.code());
+        assertThat(bad.getErrorMessage()).contains("Out-of-order");
+    }
+
+    @Test
+    void testScanKv_missingCallSeqIdIsRejected() throws Exception {
+        long tableId =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK);
+        TableBucket tb = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateWay =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+
+        assertPutKvResponse(
+                leaderGateWay
+                        .putKv(
+                                newPutKvRequest(
+                                        tableId, 0, 1, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)))
+                        .get());
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tb);
+
+        // Open request without call_seq_id should be rejected.
+        ScanKvRequest openWithoutSeqId = new ScanKvRequest();
+        openWithoutSeqId.setBucketScanReq().setTableId(tableId).setBucketId(0);
+        openWithoutSeqId.setBatchSizeBytes(1024);
+        ScanKvResponse openResp = leaderGateWay.scanKv(openWithoutSeqId).get();
+        assertThat(openResp.getErrorCode()).isEqualTo(Errors.INVALID_SCAN_REQUEST.code());
+        assertThat(openResp.getErrorMessage()).contains("call_seq_id is required");
+
+        // Continuation request without call_seq_id should also be rejected.
+        ScanKvResponse open = leaderGateWay.scanKv(newScanKvOpenRequest(tableId, 0, 1)).get();
+        assertThat(open.hasErrorCode()).isFalse();
+        byte[] scannerId = open.getScannerId();
+
+        ScanKvRequest contWithoutSeqId = new ScanKvRequest();
+        contWithoutSeqId.setScannerId(scannerId);
+        contWithoutSeqId.setBatchSizeBytes(1024);
+        ScanKvResponse contResp = leaderGateWay.scanKv(contWithoutSeqId).get();
+        assertThat(contResp.getErrorCode()).isEqualTo(Errors.INVALID_SCAN_REQUEST.code());
+        assertThat(contResp.getErrorMessage()).contains("call_seq_id is required");
+    }
+
+    @Test
+    void testScanKv_oversizeBatchSizeBytesIsClamped() throws Exception {
+        long tableId =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK);
+        TableBucket tb = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateWay =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+
+        assertPutKvResponse(
+                leaderGateWay
+                        .putKv(
+                                newPutKvRequest(
+                                        tableId, 0, 1, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)))
+                        .get());
+        FLUSS_CLUSTER_EXTENSION.triggerAndWaitSnapshot(tb);
+
+        ScanKvResponse response =
+                leaderGateWay.scanKv(newScanKvOpenRequest(tableId, 0, Integer.MAX_VALUE)).get();
+        assertThat(response.hasErrorCode()).isFalse();
+        assertThat(response.hasRecords()).isTrue();
+        assertThat(DefaultValueRecordBatch.pointToBytes(response.getRecords()).getRecordCount())
+                .isEqualTo(2);
+    }
+
+    @Test
+    void testScanKv_bucketScanReqAndScannerIdRejected() throws Exception {
+        long tableId =
+                createTable(
+                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH_PK, DATA1_TABLE_DESCRIPTOR_PK);
+        TableBucket tb = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateWay =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+
+        ScanKvRequest bad = new ScanKvRequest();
+        bad.setBucketScanReq().setTableId(tableId).setBucketId(0);
+        bad.setScannerId("ambiguous".getBytes());
+        bad.setBatchSizeBytes(1024);
+        ScanKvResponse response = leaderGateWay.scanKv(bad).get();
+        assertThat(response.getErrorCode()).isEqualTo(Errors.INVALID_SCAN_REQUEST.code());
+        assertThat(response.getErrorMessage())
+                .contains("must not set both bucket_scan_req and scanner_id");
+    }
+
+    private static ScanKvRequest newScanKvOpenRequest(long tableId, int bucketId, int batchSize) {
+        ScanKvRequest req = new ScanKvRequest();
+        req.setBucketScanReq().setTableId(tableId).setBucketId(bucketId);
+        req.setBatchSizeBytes(batchSize);
+        req.setCallSeqId(0);
+        return req;
+    }
+
+    private static ScanKvRequest newScanKvContinueRequest(
+            byte[] scannerId, int callSeqId, int batchSize) {
+        ScanKvRequest req = new ScanKvRequest();
+        req.setScannerId(scannerId);
+        req.setCallSeqId(callSeqId);
+        req.setBatchSizeBytes(batchSize);
+        return req;
+    }
+
+    private static ScanKvRequest newScanKvCloseRequest(byte[] scannerId) {
+        ScanKvRequest req = new ScanKvRequest();
+        req.setScannerId(scannerId);
+        req.setCloseScanner(true);
+        return req;
+    }
+
+    /** Sends stopReplica using the current coordinator epoch (vs. the helper's hardcoded 0). */
+    private static void stopReplicaWithLatestEpoch(
+            TabletServerGateway leaderGateWay, TableBucket tb, LeaderAndIsr la) throws Exception {
+        leaderGateWay
+                .stopReplica(
+                        new StopReplicaRequest()
+                                .setCoordinatorEpoch(la.coordinatorEpoch())
+                                .addAllStopReplicasReqs(
+                                        Collections.singleton(
+                                                makeStopBucketReplica(
+                                                        tb, false, false, la.leaderEpoch()))))
+                .get();
     }
 }

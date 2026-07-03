@@ -23,11 +23,11 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss-spark</artifactId>
-        <version>0.10-SNAPSHOT</version>
+        <version>1.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-spark-3.5_${scala.binary.version}</artifactId>
-    <name>Fluss : Engine Spark : 3.5</name>
+    <name>Apache Fluss (Incubating) : Engine Spark : 3.5</name>
 
     <properties>
         <spark.version>3.5.7</spark.version>
@@ -119,6 +119,14 @@
                                     <include>org.apache.fluss:fluss-client</include>
                                 </includes>
                             </artifactSet>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>org/slf4j/**</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
                         </configuration>
                     </execution>
                 </executions>

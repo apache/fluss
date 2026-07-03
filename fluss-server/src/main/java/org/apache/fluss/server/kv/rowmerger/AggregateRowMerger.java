@@ -85,7 +85,7 @@ public class AggregateRowMerger implements RowMerger {
     }
 
     @Override
-    public BinaryValue merge(BinaryValue oldValue, BinaryValue newValue) {
+    public BinaryValue merge(@Nullable BinaryValue oldValue, BinaryValue newValue) {
         // First write: no existing row
         if (oldValue == null || oldValue.row == null) {
             return newValue;
@@ -268,7 +268,7 @@ public class AggregateRowMerger implements RowMerger {
         }
 
         @Override
-        public BinaryValue merge(BinaryValue oldValue, BinaryValue newValue) {
+        public BinaryValue merge(@Nullable BinaryValue oldValue, BinaryValue newValue) {
             // First write: no existing row
             if (oldValue == null || oldValue.row == null) {
                 return newValue;

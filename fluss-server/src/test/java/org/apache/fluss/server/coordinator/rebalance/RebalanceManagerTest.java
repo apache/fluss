@@ -17,8 +17,12 @@
 
 package org.apache.fluss.server.coordinator.rebalance;
 
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.coordinator.AutoPartitionManager;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.CoordinatorEventProcessor;
@@ -26,14 +30,20 @@ import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.LakeTableTieringManager;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.coordinator.TestCoordinatorChannelManager;
+import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
+import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.coordinator.event.RebalanceTaskTimeoutEvent;
 import org.apache.fluss.server.coordinator.lease.KvSnapshotLeaseManager;
+import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.zk.NOPErrorHandler;
+import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.RebalanceTask;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
@@ -44,11 +54,17 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
+import static org.apache.fluss.cluster.rebalance.RebalanceStatus.TIMEOUT;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link RebalanceManager}. */
@@ -60,6 +76,7 @@ public class RebalanceManagerTest {
 
     private static ZooKeeperClient zookeeperClient;
     private static MetadataManager metadataManager;
+    private static ZkEpoch zkEpoch;
 
     private CoordinatorMetadataCache serverMetadataCache;
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
@@ -69,19 +86,22 @@ public class RebalanceManagerTest {
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
 
     @BeforeAll
-    static void baseBeforeAll() {
+    static void baseBeforeAll() throws Exception {
         zookeeperClient =
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+        zkEpoch = zookeeperClient.fenceBecomeCoordinatorLeader("1");
     }
 
     @BeforeEach
     void beforeEach() {
         serverMetadataCache = new CoordinatorMetadataCache();
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
-
         String remoteDataDir = "/tmp/fluss/remote-data";
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
+
         kvSnapshotLeaseManager =
                 new KvSnapshotLeaseManager(
                         Duration.ofMinutes(10).toMillis(),
@@ -92,15 +112,27 @@ public class RebalanceManagerTest {
         kvSnapshotLeaseManager.start();
 
         autoPartitionManager =
-                new AutoPartitionManager(serverMetadataCache, metadataManager, new Configuration());
-        lakeTableTieringManager = new LakeTableTieringManager();
-        CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor();
-        rebalanceManager = new RebalanceManager(eventProcessor, zookeeperClient);
+                new AutoPartitionManager(
+                        serverMetadataCache,
+                        metadataManager,
+                        new RemoteDirDynamicLoader(conf),
+                        conf);
+        lakeTableTieringManager =
+                new LakeTableTieringManager(TestingMetricGroups.LAKE_TIERING_METRICS);
+        CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor(conf);
+        RecordingEventManager recordingEventManager = new RecordingEventManager();
+        rebalanceManager =
+                new RebalanceManager(
+                        eventProcessor,
+                        zookeeperClient,
+                        recordingEventManager,
+                        SystemClock.getInstance());
         rebalanceManager.startup();
     }
 
     @AfterEach
     void afterEach() throws Exception {
+        rebalanceManager.close();
         zookeeperClient.deleteRebalanceTask();
         metadataManager =
                 new MetadataManager(
@@ -130,18 +162,186 @@ public class RebalanceManagerTest {
                 .hasValue(new RebalanceTask(rebalanceId, COMPLETED, new HashMap<>()));
     }
 
-    private CoordinatorEventProcessor buildCoordinatorEventProcessor() {
+    @Test
+    void testTimeoutEnqueuesEvent() throws Exception {
+        ManualClock clock = new ManualClock(0L);
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        CoordinatorEventProcessor eventProcessor =
+                buildCoordinatorEventProcessor(new Configuration());
+
+        RebalanceManager manager =
+                new RebalanceManager(
+                        eventProcessor, zookeeperClient, eventManager, clock, executor);
+        manager.startup();
+
+        TableBucket tb1 = new TableBucket(1L, 0);
+        TableBucket tb2 = new TableBucket(1L, 1);
+        Map<TableBucket, RebalancePlanForBucket> plan = new HashMap<>();
+        plan.put(
+                tb1,
+                new RebalancePlanForBucket(
+                        tb1, 0, 0, Arrays.asList(0, 1, 2), Arrays.asList(0, 1, 2)));
+        plan.put(
+                tb2,
+                new RebalancePlanForBucket(
+                        tb2, 0, 0, Arrays.asList(0, 1, 2), Arrays.asList(0, 1, 2)));
+
+        zookeeperClient.registerRebalanceTask(new RebalanceTask("timeout-test", NOT_STARTED, plan));
+        manager.registerRebalance("timeout-test", plan, NOT_STARTED);
+
+        // Not yet timed out.
+        clock.advanceTime(Duration.ofMillis(100_000));
+        manager.checkTimeout();
+        assertThat(eventManager.events).isEmpty();
+
+        // Cross the 2-minute boundary.
+        clock.advanceTime(Duration.ofMillis(30_000));
+        manager.checkTimeout();
+
+        assertThat(eventManager.events).hasSize(1);
+        assertThat(eventManager.events.get(0)).isInstanceOf(RebalanceTaskTimeoutEvent.class);
+        RebalanceTaskTimeoutEvent timeoutEvent =
+                (RebalanceTaskTimeoutEvent) eventManager.events.get(0);
+        assertThat(timeoutEvent.getTableBucket()).isEqualTo(tb1);
+
+        // A second checkTimeout() should NOT enqueue another event because the
+        // inflight state was cleared after the first timeout.
+        clock.advanceTime(Duration.ofMillis(30_000));
+        manager.checkTimeout();
+        assertThat(eventManager.events).hasSize(1);
+
+        manager.close();
+    }
+
+    @Test
+    void testTimeoutAfterCompletionIsNoOp() throws Exception {
+        ManualClock clock = new ManualClock(0L);
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        CoordinatorEventProcessor eventProcessor =
+                buildCoordinatorEventProcessor(new Configuration());
+
+        RebalanceManager manager =
+                new RebalanceManager(
+                        eventProcessor, zookeeperClient, eventManager, clock, executor);
+        manager.startup();
+
+        TableBucket tb1 = new TableBucket(1L, 0);
+        Map<TableBucket, RebalancePlanForBucket> plan = new HashMap<>();
+        plan.put(
+                tb1,
+                new RebalancePlanForBucket(
+                        tb1, 0, 0, Arrays.asList(0, 1, 2), Arrays.asList(0, 1, 2)));
+
+        zookeeperClient.registerRebalanceTask(
+                new RebalanceTask("completion-test", NOT_STARTED, plan));
+        manager.registerRebalance("completion-test", plan, NOT_STARTED);
+
+        // The task completes normally before timeout.
+        manager.finishRebalanceTask(tb1, COMPLETED);
+
+        // Now the timeout fires, but the task is already done.
+        clock.advanceTime(Duration.ofMillis(130_000));
+        manager.checkTimeout();
+
+        // No timeout event should be enqueued because inflightTaskStartMs was cleared.
+        assertThat(eventManager.events).isEmpty();
+
+        manager.close();
+    }
+
+    @Test
+    void testTimeoutTreatsTaskAsCompleted() throws Exception {
+        ManualClock clock = new ManualClock(0L);
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        CoordinatorEventProcessor eventProcessor =
+                buildCoordinatorEventProcessor(new Configuration());
+
+        RebalanceManager manager =
+                new RebalanceManager(
+                        eventProcessor, zookeeperClient, eventManager, clock, executor);
+        manager.startup();
+
+        TableBucket tb1 = new TableBucket(1L, 0);
+        TableBucket tb2 = new TableBucket(1L, 1);
+        Map<TableBucket, RebalancePlanForBucket> plan = new HashMap<>();
+        plan.put(
+                tb1,
+                new RebalancePlanForBucket(
+                        tb1, 0, 0, Arrays.asList(0, 1, 2), Arrays.asList(0, 1, 2)));
+        plan.put(
+                tb2,
+                new RebalancePlanForBucket(
+                        tb2, 0, 0, Arrays.asList(0, 1, 2), Arrays.asList(0, 1, 2)));
+
+        zookeeperClient.registerRebalanceTask(
+                new RebalanceTask("completed-test", NOT_STARTED, plan));
+        manager.registerRebalance("completed-test", plan, NOT_STARTED);
+
+        // Timeout fires.
+        clock.advanceTime(Duration.ofMillis(130_000));
+        manager.checkTimeout();
+
+        // Simulate the coordinator event thread processing the timeout event.
+        assertThat(eventManager.events).hasSize(1);
+        RebalanceTaskTimeoutEvent timeoutEvent =
+                (RebalanceTaskTimeoutEvent) eventManager.events.get(0);
+        manager.finishRebalanceTask(timeoutEvent.getTableBucket(), TIMEOUT);
+
+        // The timed-out task should be in finishedRebalanceTasks as TIMEOUT.
+        assertThat(manager.hasInProgressRebalance()).isTrue();
+        RebalanceResultForBucket result =
+                manager.listRebalanceProgress(null).progressForBucketMap().get(tb1);
+        assertThat(result.status()).isEqualTo(TIMEOUT);
+
+        manager.close();
+    }
+
+    private CoordinatorEventProcessor buildCoordinatorEventProcessor(Configuration conf) {
         return new CoordinatorEventProcessor(
                 zookeeperClient,
                 serverMetadataCache,
                 testCoordinatorChannelManager,
-                new CoordinatorContext(),
+                new CoordinatorContext(zkEpoch),
                 autoPartitionManager,
                 lakeTableTieringManager,
                 TestingMetricGroups.COORDINATOR_METRICS,
-                new Configuration(),
+                conf,
                 Executors.newFixedThreadPool(1, new ExecutorThreadFactory("test-coordinator-io")),
                 metadataManager,
-                kvSnapshotLeaseManager);
+                kvSnapshotLeaseManager,
+                SystemClock.getInstance());
+    }
+
+    /** Records events put into the coordinator event queue. */
+    private static final class RecordingEventManager implements EventManager {
+        final List<CoordinatorEvent> events = new ArrayList<>();
+
+        @Override
+        public void put(CoordinatorEvent event) {
+            events.add(event);
+        }
+    }
+
+    /**
+     * A scheduled executor that never actually runs scheduled tasks, so tests retain full control
+     * over when {@link RebalanceManager#checkTimeout()} is invoked.
+     */
+    private static final class NoOpScheduledExecutor extends ScheduledThreadPoolExecutor {
+
+        NoOpScheduledExecutor() {
+            super(0);
+        }
+
+        @Override
+        public java.util.concurrent.ScheduledFuture<?> scheduleWithFixedDelay(
+                Runnable command,
+                long initialDelay,
+                long delay,
+                java.util.concurrent.TimeUnit unit) {
+            return null;
+        }
     }
 }

@@ -18,4 +18,4 @@ This project bundles the following dependencies under the Apache Software Licens
 This project bundles the following dependencies under BSD-3 License (https://opensource.org/licenses/BSD-3-Clause).
 See bundled license files for details.
 
-- com.google.protobuf:protobuf-java:2.5.0
+- com.google.protobuf:protobuf-java:3.25.5

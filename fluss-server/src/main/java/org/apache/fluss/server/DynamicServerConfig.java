@@ -21,10 +21,10 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.ConfigurationUtils;
 import org.apache.fluss.config.cluster.ConfigValidator;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
-import org.apache.fluss.utils.MapUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,12 +37,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.config.ConfigOptions.KV_SHARED_RATE_LIMITER_BYTES_PER_SEC;
+import static org.apache.fluss.config.ConfigOptions.KV_SNAPSHOT_INTERVAL;
+import static org.apache.fluss.config.ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER;
+import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS;
+import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS_STRATEGY;
+import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS;
+import static org.apache.fluss.config.ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO;
 import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
 import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 
@@ -59,16 +66,24 @@ class DynamicServerConfig {
     private static final Set<String> ALLOWED_CONFIG_KEYS =
             new HashSet<>(
                     Arrays.asList(
-                            DATALAKE_FORMAT.key(), KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key()));
+                            DATALAKE_FORMAT.key(),
+                            LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER.key(),
+                            KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key(),
+                            KV_SNAPSHOT_INTERVAL.key(),
+                            SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
+                            // Config options for remote.data.dirs
+                            REMOTE_DATA_DIRS.key(),
+                            REMOTE_DATA_DIRS_STRATEGY.key(),
+                            REMOTE_DATA_DIRS_WEIGHTS.key()));
     private static final Set<String> ALLOWED_CONFIG_PREFIXES = Collections.singleton("datalake.");
 
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
     private final Map<Class<? extends ServerReconfigurable>, ServerReconfigurable>
-            serverReconfigures = MapUtils.newConcurrentHashMap();
+            serverReconfigures = new ConcurrentHashMap<>();
 
     /** Registered stateless config validators, organized by config key for efficient lookup. */
     private final Map<String, List<ConfigValidator<?>>> configValidatorsByKey =
-            MapUtils.newConcurrentHashMap();
+            new ConcurrentHashMap<>();
 
     /** The initial configuration items when the server starts from server.yaml. */
     private final Map<String, String> initialConfigMap;
@@ -154,12 +169,14 @@ class DynamicServerConfig {
 
         // Early return if no effective changes
         if (effectiveChanges.isEmpty()) {
-            LOG.info("No effective config changes detected for: {}", newDynamicConfigs);
+            LOG.info(
+                    "No effective config changes detected for: {}",
+                    ConfigurationUtils.hideSensitiveValues(newDynamicConfigs));
             return;
         }
 
         // Build new configuration by merging initial + dynamic configs
-        Map<String, String> newConfigMap = buildConfigMap(effectiveChanges);
+        Map<String, String> newConfigMap = buildConfigMap(newDynamicConfigs);
         Configuration newConfig = Configuration.fromMap(newConfigMap);
 
         // Apply changes to all registered ServerReconfigurable instances
@@ -167,7 +184,9 @@ class DynamicServerConfig {
 
         // Update internal state
         updateInternalState(newConfig, newConfigMap, newDynamicConfigs);
-        LOG.info("Dynamic configs changed: {}", effectiveChanges);
+        LOG.info(
+                "Dynamic configs changed: {}",
+                ConfigurationUtils.hideSensitiveValues(effectiveChanges));
     }
 
     /**
@@ -205,6 +224,7 @@ class DynamicServerConfig {
             throws ConfigException {
         for (String configKey : dynamicConfigs.keySet()) {
             if (newDynamicConfigs.containsKey(configKey)) {
+                effectiveChanges.put(configKey, newDynamicConfigs.get(configKey));
                 continue; // Not deleted
             }
 
@@ -272,8 +292,8 @@ class DynamicServerConfig {
             LOG.error(
                     "Config validation failed for '{}': {} -> {}. {}",
                     configKey,
-                    oldValue,
-                    newValue,
+                    ConfigurationUtils.hideSensitiveValue(configKey, oldValue),
+                    ConfigurationUtils.hideSensitiveValue(configKey, newValue),
                     e.getMessage());
             if (skipErrorConfig) {
                 skippedConfigs.add(configKey);
@@ -351,7 +371,7 @@ class DynamicServerConfig {
                 throw new ConfigException(
                         String.format(
                                 "Cannot parse '%s' as %s for config '%s': %s",
-                                newValueStr,
+                                ConfigurationUtils.hideSensitiveValue(configKey, newValueStr),
                                 configOption.isList()
                                         ? "List<" + configOption.getClazz().getSimpleName() + ">"
                                         : configOption.getClazz().getSimpleName(),

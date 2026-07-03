@@ -18,6 +18,7 @@
 
 package org.apache.fluss.lake.iceberg.source;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.iceberg.utils.IcebergCatalogUtils;
 import org.apache.fluss.lake.source.Planner;
@@ -29,7 +30,10 @@ import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.TableScan;
 import org.apache.iceberg.catalog.Catalog;
+import org.apache.iceberg.expressions.BoundPredicate;
 import org.apache.iceberg.expressions.Expression;
+import org.apache.iceberg.expressions.ExpressionVisitors;
+import org.apache.iceberg.expressions.UnboundPredicate;
 import org.apache.iceberg.io.CloseableIterable;
 
 import javax.annotation.Nullable;
@@ -37,7 +41,9 @@ import javax.annotation.Nullable;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -68,8 +74,12 @@ public class IcebergSplitPlanner implements Planner<IcebergSplit> {
         Table table = catalog.loadTable(toIceberg(tablePath));
         Function<FileScanTask, List<String>> partitionExtract = createPartitionExtractor(table);
         Function<FileScanTask, Integer> bucketExtractor = createBucketExtractor(table);
-        TableScan tableScan = table.newScan().useSnapshot(snapshotId).includeColumnStats();
+        TableScan tableScan = table.newScan().useSnapshot(snapshotId);
         if (filter != null) {
+            Set<String> filterColumns = referencedColumns(filter);
+            if (!filterColumns.isEmpty()) {
+                tableScan = tableScan.includeColumnStats(filterColumns);
+            }
             tableScan = tableScan.filter(filter);
         }
         try (CloseableIterable<FileScanTask> tasks = tableScan.planFiles()) {
@@ -82,6 +92,54 @@ public class IcebergSplitPlanner implements Planner<IcebergSplit> {
                                             partitionExtract.apply(task))));
         }
         return splits;
+    }
+
+    @VisibleForTesting
+    Set<String> referencedColumns(Expression expression) {
+        return ExpressionVisitors.visit(
+                expression,
+                new ExpressionVisitors.ExpressionVisitor<Set<String>>() {
+                    @Override
+                    public Set<String> alwaysTrue() {
+                        return Collections.emptySet();
+                    }
+
+                    @Override
+                    public Set<String> alwaysFalse() {
+                        return Collections.emptySet();
+                    }
+
+                    @Override
+                    public Set<String> not(Set<String> result) {
+                        return result;
+                    }
+
+                    @Override
+                    public Set<String> and(Set<String> leftResult, Set<String> rightResult) {
+                        return union(leftResult, rightResult);
+                    }
+
+                    @Override
+                    public Set<String> or(Set<String> leftResult, Set<String> rightResult) {
+                        return union(leftResult, rightResult);
+                    }
+
+                    @Override
+                    public <T> Set<String> predicate(BoundPredicate<T> pred) {
+                        return Collections.singleton(pred.ref().name());
+                    }
+
+                    @Override
+                    public <T> Set<String> predicate(UnboundPredicate<T> pred) {
+                        return Collections.singleton(pred.ref().name());
+                    }
+                });
+    }
+
+    private Set<String> union(Set<String> left, Set<String> right) {
+        Set<String> result = new LinkedHashSet<>(left);
+        result.addAll(right);
+        return result;
     }
 
     private Function<FileScanTask, Integer> createBucketExtractor(Table table) {

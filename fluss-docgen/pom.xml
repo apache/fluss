@@ -24,11 +24,11 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss</artifactId>
-        <version>0.10-SNAPSHOT</version>
+        <version>1.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-docgen</artifactId>
-    <name>Fluss : Documentation Generator</name>
+    <name>Apache Fluss (Incubating) : Documentation Generator</name>
 
     <dependencies>
         <dependency>

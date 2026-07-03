@@ -338,7 +338,8 @@ public class CompactedRowReader {
                 fieldReader = (reader, pos) -> reader.readRow(nestedFieldTypes);
                 break;
             default:
-                throw new IllegalArgumentException("Unsupported type for IndexedRow: " + fieldType);
+                throw new IllegalArgumentException(
+                        "Unsupported type for CompatedRow: " + fieldType);
         }
         if (!fieldType.isNullable()) {
             return fieldReader;

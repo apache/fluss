@@ -36,7 +36,7 @@ the installation documentation provides instructions for deploying one using Bit
 
 ### Running Fluss locally with Minikube
 
-For local testing and development, you can deploy Fluss on Minikube. This is ideal for development, testing, and learning purposes.
+For local testing and development, you can deploy Fluss on Minikube. This is ideal for development, testing and learning purposes.
 
 #### Prerequisites
 
@@ -139,7 +139,7 @@ The Fluss Helm chart deploys the following Kubernetes resources:
 - **CoordinatorServer**: 1x StatefulSet with Headless Service for cluster coordination
 - **TabletServer**: 3x StatefulSet with Headless Service for data storage and processing
 - **ConfigMap**: Configuration management for `server.yaml` settings
-- **Services**: Headless services providing stable pod DNS names
+- **Services**: Headless services providing stable pod DNS names, plus optional dedicated headless services when metrics are enabled
 
 ### Step 3: Verify Installation
 
@@ -157,7 +157,7 @@ kubectl logs -l app.kubernetes.io/component=tablet
 
 ## Configuration Parameters
 
-The following table lists the configurable parameters of the Fluss chart and their default values.
+The following table lists the configurable parameters of the Fluss chart, and their default values.
 
 ### Global Parameters
 
@@ -183,6 +183,194 @@ The following table lists the configurable parameters of the Fluss chart and the
 | `listeners.internal.port` | Internal communication port | `9123` |
 | `listeners.client.port` | Client port (intra-cluster) | `9124` |
 
+### Security Configuration
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `security.client.sasl.mechanism` | Client listener SASL mechanism (`""`, `plain`) | `""` |
+| `security.internal.sasl.mechanism` | Internal listener SASL mechanism (`""`, `plain`) | `""` |
+| `security.client.sasl.plain.users` | Client listener username and password pairs for PLAIN | `[]` |
+| `security.internal.sasl.plain.username` | Internal listener PLAIN username | `""` |
+| `security.internal.sasl.plain.password` | Internal listener PLAIN password | `""` |
+| `security.internal.sasl.plain.existingSecret` | Reference to a pre-existing Secret for internal SASL credentials | `{}` |
+
+Only `plain` mechanism is supported for now. An empty string disables the SASL authentication, and maps to the `PLAINTEXT` protocol.
+
+If the internal SASL username or password is left empty, the chart automatically generates credentials based on the Helm release name:
+
+- Username is set to the `"fluss-internal-user-<release-name>"`
+- Password is set to the SHA-256 hash of `"fluss-internal-password-<release-name>"`
+
+It is recommended to set these explicitly in production.
+
+#### ZooKeeper SASL Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `security.zookeeper.sasl.mechanism` | ZooKeeper SASL mechanism (`""`, `plain`) | `""` |
+| `security.zookeeper.sasl.plain.username` | ZooKeeper SASL username | `""` |
+| `security.zookeeper.sasl.plain.password` | ZooKeeper SASL password | `""` |
+| `security.zookeeper.sasl.plain.loginModuleClass` | JAAS login module class for ZooKeeper | `org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.server.auth.DigestLoginModule` |
+| `security.zookeeper.sasl.plain.existingSecret` | Reference to a pre-existing Secret for ZooKeeper SASL credentials | `{}` |
+
+#### Sourcing SASL Credentials from a Pre-existing Secret
+
+To keep SASL passwords out of `values.yaml` and the Helm release storage, reference a Secret managed separately — e.g., via External Secrets Operator, Sealed Secrets, or a CI pipeline.
+
+For internal and ZooKeeper listeners, set `existingSecret` on the listener:
+
+```yaml
+security:
+  internal:
+    sasl:
+      mechanism: plain
+      plain:
+        existingSecret:
+          name: fluss-internal-sasl   # required
+          usernameKey: username       # optional, defaults to "username"
+          passwordKey: password       # optional, defaults to "password"
+  zookeeper:
+    sasl:
+      mechanism: plain
+      plain:
+        existingSecret:
+          name: fluss-zk-sasl
+```
+
+Client users follow the same shape as internal/ZooKeeper listeners: each entry is either a literal `{username, password}` pair or an `existingSecret` reference that sources both fields from a Secret.
+
+```yaml
+security:
+  client:
+    sasl:
+      mechanism: plain
+      plain:
+        users:
+          - username: alice
+            password: alice-literal-password   # literal — visible in values.yaml
+          - existingSecret:                    # or resolved at pod startup
+              name: fluss-client-sasl-bob
+              usernameKey: username            # optional, defaults to "username"
+              passwordKey: password            # optional, defaults to "password"
+```
+
+Whenever JAAS is required, the chart renders a ConfigMap (`<release>-fluss-sasl-jaas-config`) containing a `jaas.conf` *template* with `${FLUSS_JAAS_…}` placeholders — no credentials. An init container mounts that template, runs `envsubst` with credentials supplied via env vars (either literal `value:` entries from `values.yaml` or `valueFrom.secretKeyRef` to a pre-existing Secret), and writes the resolved `jaas.conf` to an in-memory `emptyDir` that the main Fluss container reads.
+
+- Literal and Secret-sourced credentials can be mixed across listeners.
+- When every credential comes from a Secret, no plaintext password lives in the Helm release.
+- The init container reuses the main Fluss image (already present on the node), keeping zero extra image dependencies.
+
+##### Example: External Secrets Operator
+
+If you use [External Secrets Operator](https://external-secrets.io) to sync credentials from an upstream secret manager (AWS Secrets Manager, Vault, GCP Secret Manager, etc.), the flow is: upstream → `ExternalSecret` CR → a Kubernetes `Secret` → the chart.
+
+For internal listener credentials stored at `prod/fluss/internal` in AWS Secrets Manager with fields `username` and `password`:
+
+```yaml
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: fluss-internal-sasl
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: aws-secretsmanager
+    kind: SecretStore
+  target:
+    name: fluss-internal-sasl
+  data:
+    - secretKey: username
+      remoteRef:
+        key: prod/fluss/internal
+        property: username
+    - secretKey: password
+      remoteRef:
+        key: prod/fluss/internal
+        property: password
+```
+
+Then in `values.yaml`:
+
+```yaml
+security:
+  internal:
+    sasl:
+      mechanism: plain
+      plain:
+        existingSecret:
+          name: fluss-internal-sasl
+```
+
+For the multi-user client listener, provision one Secret per user with `username` and `password` keys:
+
+```yaml
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: fluss-client-sasl-alice
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: aws-secretsmanager
+    kind: SecretStore
+  target:
+    name: fluss-client-sasl-alice
+  data:
+    - secretKey: username
+      remoteRef:
+        key: prod/fluss/clients/alice
+        property: username
+    - secretKey: password
+      remoteRef:
+        key: prod/fluss/clients/alice
+        property: password
+---
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: fluss-client-sasl-bob
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: aws-secretsmanager
+    kind: SecretStore
+  target:
+    name: fluss-client-sasl-bob
+  data:
+    - secretKey: username
+      remoteRef:
+        key: prod/fluss/clients/bob
+        property: username
+    - secretKey: password
+      remoteRef:
+        key: prod/fluss/clients/bob
+        property: password
+```
+
+```yaml
+security:
+  client:
+    sasl:
+      mechanism: plain
+      plain:
+        users:
+          - existingSecret: { name: fluss-client-sasl-alice }
+          - existingSecret: { name: fluss-client-sasl-bob }
+```
+
+The same pattern works with Sealed Secrets, HashiCorp Vault Agent Injector (producing a native Secret), or any other controller that lands credentials in a `Secret` — the chart only cares about the final `Secret`, not how it got there.
+
+### Metrics Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `metrics.reporters` | Comma-separated reporter selector; use `""` to disable metrics | `""` |
+| `metrics.jmx.port` | JMX reporter port range | `9250` |
+| `metrics.prometheus.port` | Prometheus reporter port | `9249` |
+| `metrics.prometheus.service.portName` | Named port exposed on metrics services | `metrics` |
+| `metrics.prometheus.service.labels` | Additional labels added to metrics services | `{}` |
+| `metrics.prometheus.service.annotations` | Optional annotations added to metrics services | `{}` |
+
 ### Fluss Configuration Overrides
 
 | Parameter | Description | Default |
@@ -200,6 +388,19 @@ The following table lists the configurable parameters of the Fluss chart and the
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `tablet.numberOfReplicas` | Number of TabletServer replicas to deploy | `3` |
+
+### Scheduling Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `tablet.affinity` | Affinity rules for TabletServer pods | `{}` |
+| `tablet.nodeSelector` | Node selector for TabletServer pods | `{}` |
+| `tablet.tolerations` | Tolerations for TabletServer pods | `[]` |
+| `tablet.topologySpreadConstraints` | Topology spread constraints for TabletServer pods | `[]` |
+| `coordinator.affinity` | Affinity rules for CoordinatorServer pods | `{}` |
+| `coordinator.nodeSelector` | Node selector for CoordinatorServer pods | `{}` |
+| `coordinator.tolerations` | Tolerations for CoordinatorServer pods | `[]` |
+| `coordinator.topologySpreadConstraints` | Topology spread constraints for CoordinatorServer pods | `[]` |
 
 ### Storage Parameters
 
@@ -225,8 +426,61 @@ The following table lists the configurable parameters of the Fluss chart and the
 | `resources.tabletServer.limits.cpu` | CPU limits for tablet servers | Not set |
 | `resources.tabletServer.limits.memory` | Memory limits for tablet servers | Not set |
 
+### Pod Extension Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `coordinator.extraVolumes` | Extra volumes to add to the CoordinatorServer pod spec | `[]` |
+| `coordinator.extraVolumeMounts` | Extra volume mounts to add to the coordinator container | `[]` |
+| `coordinator.initContainers` | Init containers to run before the coordinator container starts | `[]` |
+| `coordinator.extraEnv` | Additional environment variables for the coordinator container | `[]` |
+| `coordinator.envFrom` | Additional envFrom sources (e.g., Secrets, ConfigMaps) for the coordinator container | `[]` |
+| `coordinator.podAnnotations` | Annotations to add to CoordinatorServer pods | `{}` |
+| `coordinator.podLabels` | Additional labels to add to CoordinatorServer pods | `{}` |
+| `coordinator.podDisruptionBudget.enabled` | Enable PodDisruptionBudget for CoordinatorServer | `false` |
+| `coordinator.podDisruptionBudget.minAvailable` | Minimum available coordinator pods during disruption | Not set |
+| `coordinator.podDisruptionBudget.maxUnavailable` | Maximum unavailable coordinator pods during disruption | Not set |
+| `tablet.extraVolumes` | Extra volumes to add to TabletServer pod specs | `[]` |
+| `tablet.extraVolumeMounts` | Extra volume mounts to add to the tablet container | `[]` |
+| `tablet.initContainers` | Init containers to run before the tablet container starts | `[]` |
+| `tablet.extraEnv` | Additional environment variables for the tablet container | `[]` |
+| `tablet.envFrom` | Additional envFrom sources (e.g., Secrets, ConfigMaps) for the tablet container | `[]` |
+| `tablet.podAnnotations` | Annotations to add to TabletServer pods | `{}` |
+| `tablet.podLabels` | Additional labels to add to TabletServer pods | `{}` |
+| `tablet.podDisruptionBudget.enabled` | Enable PodDisruptionBudget for TabletServer | `false` |
+| `tablet.podDisruptionBudget.minAvailable` | Minimum available tablet server pods during disruption | Not set |
+| `tablet.podDisruptionBudget.maxUnavailable` | Maximum unavailable tablet server pods during disruption | Not set |
 
 ## Advanced Configuration
+
+### Injecting Environment Variables from External Secrets
+
+You can inject environment variables from Kubernetes Secrets or ConfigMaps using `envFrom`. This is useful when combined with the [External Secrets Operator](https://external-secrets.io/) or similar tools that provision Secrets from external stores (AWS Secrets Manager, HashiCorp Vault, etc.).
+
+```yaml
+tablet:
+  envFrom:
+    - secretRef:
+        name: aws-credentials
+coordinator:
+  envFrom:
+    - secretRef:
+        name: aws-credentials
+```
+
+You can also set individual environment variables using `extraEnv`:
+
+```yaml
+tablet:
+  extraEnv:
+    - name: AWS_REGION
+      value: us-east-1
+    - name: MY_SECRET
+      valueFrom:
+        secretKeyRef:
+          name: my-secret
+          key: password
+```
 
 ### Custom ZooKeeper Configuration
 
@@ -253,6 +507,120 @@ listeners:
     port: 9123
   client:
     port: 9124
+
+security:
+  client:
+    sasl:
+      mechanism: ""
+  internal:
+    sasl:
+      mechanism: ""
+```
+
+### Enabling Secure Connection
+
+With the helm deployment, you can specify authentication mechanisms when connecting to the Fluss cluster.
+
+The following table shows the supported mechanisms and security they provide:
+
+| Mechanism | Method      | Authentication | TLS Encryption     |
+|:---------:|:-----------:|:--------------:|:------------------:|
+| `""`      | `PLAINTEXT` | No             | No                 |
+| `plain`   | `SASL`      | Yes            | No                 |
+
+By default, the `PLAINTEXT` protocol is used.
+
+You can set the SASL authentication by enabling `plain` mechanism.
+
+```yaml
+security:
+  client:
+    sasl:
+      mechanism: plain
+      plain:
+        users:
+          - username: client-user
+            password: client-password
+  internal:
+    sasl:
+      mechanism: plain
+      plain:
+        username: internal-user
+        password: internal-password
+```
+
+### Enabling ZooKeeper SASL Authentication
+
+You can enable ZooKeeper ensemble SASL authentication, with the following values in the Fluss Helm chart:
+
+```yaml
+security:
+  zookeeper:
+    sasl:
+      mechanism: plain
+      plain:
+        username: fluss-zk-user
+        password: fluss-zk-password
+```
+
+The `security.zookeeper.sasl.plain.username` and `security.zookeeper.sasl.plain.password` fields are required when `security.zookeeper.sasl.mechanism` is set to `plain`.
+
+ZooKeeper SASL can be enabled independently or together with the listeners SASL authentication.
+
+### Metrics and Monitoring
+
+When `metrics.reporters` is set, the chart adds the following `server.yaml` configuration entries:
+
+- `metrics.reporters`: comma-separated reporter names from `metrics.reporters`
+- `metrics.reporter.<name>.port`: port value from `metrics.<name>.port`
+
+These values are managed by the chart and cannot be set via `configurationOverrides`. All other metrics reporter options (refer to the [Fluss configuration](https://fluss.apache.org/docs/maintenance/configuration/#metrics)) should be specified via `configurationOverrides`.
+
+#### Prometheus Annotation Based Scraping
+
+The example values below show how to add annotations to the metrics services so that a Prometheus server can discover and scrape them automatically based on the annotations:
+
+```yaml
+metrics:
+  reporters: prometheus
+  prometheus:
+    port: 9249
+    service:
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "9249"
+```
+
+#### Prometheus ServiceMonitor Based Scraping
+
+Similarly, if using the [Prometheus Operator](https://prometheus-operator.dev/), use the values below to add labels to the metrics services:
+
+```yaml
+metrics:
+  reporters: prometheus
+  prometheus:
+    port: 9249
+    service:
+      portName: metrics
+      labels:
+        monitoring: enabled
+```
+
+Then create a [`ServiceMonitor`](https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.ServiceMonitor) that selects them matching the labels:
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: fluss-metrics
+spec:
+  selector:
+    matchLabels:
+      monitoring: enabled
+  endpoints:
+    # Matches `metrics.prometheus.service.portName`
+    - port: metrics
 ```
 
 ### Storage Configuration
@@ -281,6 +649,112 @@ configurationOverrides:
   remote.data.dir: "s3://my-bucket/fluss-data"
 ```
 
+### Pod Scheduling
+
+By default, Kubernetes may schedule all tablet server pods on the same node. Even with replication factor 3, a single node failure could take out all replicas simultaneously, causing data loss for segments not yet tiered to remote storage.
+
+Use pod anti-affinity to spread tablet server pods across availability zones and nodes:
+
+```yaml
+tablet:
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            topologyKey: topology.kubernetes.io/zone
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/instance: <release-name>
+                app.kubernetes.io/component: tablet
+        - weight: 50
+          podAffinityTerm:
+            topologyKey: kubernetes.io/hostname
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/instance: <release-name>
+                app.kubernetes.io/component: tablet
+```
+
+Replace `<release-name>` with your Helm release name (the value passed to `helm install`) so the selector scopes to pods of this release only. This matters when multiple Fluss releases share the cluster — otherwise anti-affinity would count pods across releases.
+
+This configuration prioritizes zone-level spreading (weight 100) while also avoiding co-location on the same node (weight 50). For stricter guarantees, use `requiredDuringSchedulingIgnoredDuringExecution` instead — but note that pods will stay pending if no suitable node is available.
+
+Alternatively, use `topologySpreadConstraints` for even distribution across failure domains:
+
+```yaml
+tablet:
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/instance: <release-name>
+          app.kubernetes.io/component: tablet
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/instance: <release-name>
+          app.kubernetes.io/component: tablet
+```
+
+You can also pin pods to specific nodes using `nodeSelector` or allow scheduling on tainted nodes with `tolerations`:
+
+```yaml
+tablet:
+  nodeSelector:
+    workload: fluss
+  tolerations:
+    - key: dedicated
+      operator: Equal
+      value: fluss
+      effect: NoSchedule
+```
+
+The same scheduling fields are available for coordinator servers under `coordinator.affinity`, `coordinator.nodeSelector`, `coordinator.tolerations`, and `coordinator.topologySpreadConstraints`.
+
+### Loading Filesystem Plugins via Init Containers
+
+Fluss discovers filesystem plugins at startup by scanning subdirectories under `$FLUSS_HOME/plugins/`.  
+To load a plugin that is not bundled in the base image, you can use an init container to download the plugin jar
+into a shared `emptyDir` volume before the main container starts.
+
+The example below loads the Azure filesystem plugin (`fluss-fs-azure`)
+so that Fluss can read and write remote data to Azure Blob Storage
+(the example is for version `0.9`, adapt to your necessities):
+
+```yaml
+_fsAzurePlugin: &fsAzurePlugin
+  extraVolumes:
+    - name: azure-plugin
+      emptyDir: {}
+  extraVolumeMounts:
+    - name: azure-plugin
+      mountPath: /opt/fluss/plugins/azure
+      subPath: azure
+  initContainers:
+    - name: download-fs-azure
+      image: alpine:3.20
+      command:
+        - sh
+        - -c
+        - |
+          wget -O /plugins/azure/fluss-fs-azure-$FLUSS_VERSION$.jar \
+            $FLUSS_MAVEN_REPO_URL$/org/apache/fluss/fluss-fs-azure/$FLUSS_VERSION$/fluss-fs-azure-$FLUSS_VERSION$.jar
+      volumeMounts:
+        - name: azure-plugin
+          mountPath: /plugins
+
+coordinator:
+  <<: *fsAzurePlugin
+
+tablet:
+  <<: *fsAzurePlugin
+```
+
 ## Upgrading
 
 ### Upgrade the Chart
@@ -296,6 +770,43 @@ helm upgrade fluss ./helm -f values-new.yaml
 ### Rolling Updates
 
 The StatefulSets support rolling updates. When you update the configuration, pods will be restarted one by one to maintain availability.
+
+#### Cluster Health Readiness Probe
+
+The TabletServer readiness probe performs a two-step check to ensure safe rolling upgrades:
+
+1. **Local TCP port check** — confirms the TabletServer process is up and listening.
+2. **Cluster health check** — calls the Coordinator's Cluster Health API to confirm cluster status is GREEN (all replicas
+   in-sync, all leaders active) across the cluster.
+
+Only when both steps pass is the pod marked as Ready, allowing the StatefulSet controller to proceed to the next pod.
+If the Coordinator does not support the Cluster Health API (e.g., during a mixed-version upgrade from an older version),
+the probe immediately falls back to TCP-only port readiness.
+
+You can tune the probe parameters in your values:
+
+```yaml
+tablet:
+  readinessProbe:
+    # Timeout in ms for the RPC call to Coordinator (default: 5000)
+    rpcTimeoutMs: 5000
+    # Standard Kubernetes probe parameters (tuned for recovery checks)
+    failureThreshold: 200
+    timeoutSeconds: 10
+    initialDelaySeconds: 15
+    periodSeconds: 5
+```
+
+| Parameter          | Default | Description                                                                                                                                    |
+|--------------------|---------|------------------------------------------------------------------------------------------------------------------------------------------------|
+| `rpcTimeoutMs`     | `5000`  | Timeout in milliseconds for the RPC call to the Coordinator.                                                                                   |
+| `failureThreshold` | `200`   | Max consecutive probe failures before marking the pod as unready. With `periodSeconds=5`, this allows up to ~16 minutes for recovery.          |
+| `periodSeconds`    | `5`     | How often the probe runs.                                                                                                                      |
+
+:::note
+The CoordinatorServer does not need the Cluster Health API probe — it does not host data replicas, so a simple TCP check is sufficient.
+The Coordinator should be upgraded **after** all TabletServers are fully upgraded and recovered.
+:::
 
 ## Custom Container Images
 
@@ -331,7 +842,7 @@ image:
 
 ### Health Checks
 
-The chart includes liveness and readiness probes:
+The chart includes liveness and readiness probes. By default, both use TCP socket checks:
 
 ```yaml
 livenessProbe:
@@ -348,6 +859,9 @@ readinessProbe:
   periodSeconds: 3
   failureThreshold: 100
 ```
+
+For TabletServers, you can enable the Cluster Health readiness probe for safe rolling upgrades.
+See [Cluster Health Readiness Probe](#cluster-health-readiness-probe) for details.
 
 ### Logs
 

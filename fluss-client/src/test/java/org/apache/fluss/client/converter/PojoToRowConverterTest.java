@@ -18,6 +18,9 @@
 package org.apache.fluss.client.converter;
 
 import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypes;
@@ -27,6 +30,8 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -158,23 +163,6 @@ public class PojoToRowConverterTest {
     }
 
     @Test
-    public void testUnsupportedSchemaFieldTypeThrows() {
-        RowType table =
-                RowType.builder()
-                        .field("mapField", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()))
-                        .build();
-        RowType proj = table;
-        assertThatThrownBy(
-                        () ->
-                                PojoToRowConverter.of(
-                                        ConvertersTestFixtures.MapPojo.class, table, proj))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("Unsupported field type")
-                .hasMessageContaining("MAP")
-                .hasMessageContaining("mapField");
-    }
-
-    @Test
     public void testTimestampPrecision3() {
         // Test with precision 3 milliseconds
         RowType table =
@@ -296,6 +284,52 @@ public class PojoToRowConverterTest {
                 .isEqualTo(expectedInstant);
     }
 
+    @Test
+    public void testMapType() {
+        RowType table =
+                RowType.builder()
+                        .field("mapField", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()))
+                        .build();
+
+        PojoToRowConverter<MapPojo> writer = PojoToRowConverter.of(MapPojo.class, table, table);
+
+        MapPojo pojo = MapPojo.sample();
+        GenericRow row = writer.toRow(pojo);
+
+        // Verify map field
+        InternalMap mapField = row.getMap(0);
+        assertThat(mapField.size()).isEqualTo(2);
+
+        InternalArray keyArray = mapField.keyArray();
+        InternalArray valueArray = mapField.valueArray();
+
+        Map<String, Integer> resultMap = new HashMap<>();
+        resultMap.put(keyArray.getString(0).toString(), valueArray.getInt(0));
+        resultMap.put(keyArray.getString(1).toString(), valueArray.getInt(1));
+
+        assertThat(resultMap).containsEntry("test_1", 1);
+        assertThat(resultMap).containsEntry("test_2", 2);
+    }
+
+    /** POJO for testing map type. */
+    public static class MapPojo {
+        public Map<String, Integer> mapField;
+
+        public MapPojo() {}
+
+        public static MapPojo sample() {
+            MapPojo pojo = new MapPojo();
+            pojo.mapField =
+                    new HashMap<String, Integer>() {
+                        {
+                            put("test_1", 1);
+                            put("test_2", 2);
+                        }
+                    };
+            return pojo;
+        }
+    }
+
     private LocalDateTime truncateLocalDateTime(LocalDateTime ldt, int precision) {
         if (precision >= 9) {
             return ldt;
@@ -325,5 +359,92 @@ public class PojoToRowConverterTest {
             this.timestampNtzField = timestampNtzField;
             this.timestampLtzField = timestampLtzField;
         }
+    }
+
+    // ==================== Nested ROW Write Tests ====================
+
+    @Test
+    public void testSimpleNestedRowWrite() {
+        RowType table =
+                RowType.builder()
+                        .field("id", DataTypes.INT())
+                        .field(
+                                "address",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("city", DataTypes.STRING()),
+                                        DataTypes.FIELD("zipCode", DataTypes.INT())))
+                        .build();
+
+        PojoToRowConverter<ConvertersTestFixtures.PersonPojo> writer =
+                PojoToRowConverter.of(ConvertersTestFixtures.PersonPojo.class, table, table);
+
+        ConvertersTestFixtures.PersonPojo pojo = new ConvertersTestFixtures.PersonPojo();
+        pojo.id = 1;
+        pojo.address = new ConvertersTestFixtures.AddressPojo();
+        pojo.address.city = "Beijing";
+        pojo.address.zipCode = 100000;
+
+        GenericRow row = writer.toRow(pojo);
+        assertThat(row.getInt(0)).isEqualTo(1);
+        InternalRow nestedRow = row.getRow(1, 2);
+        assertThat(nestedRow).isNotNull();
+        assertThat(nestedRow.getString(0).toString()).isEqualTo("Beijing");
+        assertThat(nestedRow.getInt(1)).isEqualTo(100000);
+    }
+
+    @Test
+    public void testNullNestedRowWrite() {
+        RowType table =
+                RowType.builder()
+                        .field("id", DataTypes.INT())
+                        .field(
+                                "address",
+                                DataTypes.ROW(
+                                        DataTypes.FIELD("city", DataTypes.STRING()),
+                                        DataTypes.FIELD("zipCode", DataTypes.INT())))
+                        .build();
+
+        PojoToRowConverter<ConvertersTestFixtures.PersonPojo> writer =
+                PojoToRowConverter.of(ConvertersTestFixtures.PersonPojo.class, table, table);
+
+        ConvertersTestFixtures.PersonPojo pojo = new ConvertersTestFixtures.PersonPojo();
+        pojo.id = 2;
+        pojo.address = null;
+
+        GenericRow row = writer.toRow(pojo);
+        assertThat(row.getInt(0)).isEqualTo(2);
+        assertThat(row.isNullAt(1)).isTrue();
+    }
+
+    @Test
+    public void testRowFieldWithIncompatibleType() {
+        RowType table =
+                RowType.builder()
+                        .field("badField", DataTypes.ROW(DataTypes.FIELD("x", DataTypes.INT())))
+                        .build();
+
+        assertThatThrownBy(
+                        () ->
+                                PojoToRowConverter.of(
+                                        ConvertersTestFixtures.PrimitiveArrayFieldPojo.class,
+                                        table,
+                                        table))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must be a POJO class for ROW type");
+    }
+
+    @Test
+    public void testRowFieldWithMapType() {
+        RowType table =
+                RowType.builder()
+                        .field("badField", DataTypes.ROW(DataTypes.FIELD("x", DataTypes.INT())))
+                        .build();
+
+        assertThatThrownBy(
+                        () ->
+                                PojoToRowConverter.of(
+                                        ConvertersTestFixtures.MapFieldPojo.class, table, table))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must be a POJO class for ROW type");
     }
 }

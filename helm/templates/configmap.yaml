@@ -27,3 +27,35 @@ data:
     {{- range $key, $val := .Values.configurationOverrides }}
     {{ $key }}: {{ tpl (printf "%v" $val) $ }}
     {{- end }}
+
+    ### Security
+
+    {{- $internalProtocol := include "fluss.security.listener.protocol" (dict "context" .Values "listener" "internal") | trim -}}
+    {{- $clientProtocol := include "fluss.security.listener.protocol" (dict "context" .Values "listener" "client") | trim -}}
+    {{- $enabledMechanisms := include "fluss.security.sasl.enabledMechanisms" . | trim -}}
+    {{- $internalMechanism := include "fluss.security.listener.mechanism" (dict "context" .Values "listener" "internal") -}}
+    {{- if (include "fluss.security.sasl.enabled" .) }}
+    security.protocol.map: INTERNAL:{{ $internalProtocol }},CLIENT:{{ $clientProtocol }}
+    security.sasl.enabled.mechanisms: {{ $enabledMechanisms }}
+    {{- if ne $internalMechanism "" }}
+    client.security.protocol: SASL
+    client.security.sasl.mechanism: {{ upper $internalMechanism }}
+    {{- end }}
+
+    {{- end }}
+
+    {{- if include "fluss.metrics.enabled" . }}
+    ### Metrics
+
+    metrics.reporters: {{ .Values.metrics.reporters }}
+    {{- range $name := (include "fluss.metrics.reporterNames" . | fromYamlArray) }}
+    {{ printf "metrics.reporter.%s.port" $name }}: {{ (index $.Values.metrics $name).port }}
+    {{- end }}
+
+    {{- end }}
+
+    ### Zookeeper
+
+    {{- if (include "fluss.security.zookeeper.sasl.enabled" .) }}
+    zookeeper.client.config-path: /etc/fluss/conf/zookeeper-client.properties
+    {{- end }}

@@ -61,23 +61,38 @@ public class LakeCommitResult {
     // 2: committedIsReadable is true, committed snapshot is just also readable
     @Nullable private final ReadableSnapshot readableSnapshot;
 
+    @Nullable private final TieringStats tieringStats;
+
     private LakeCommitResult(
             long committedSnapshotId,
             boolean committedIsReadable,
             @Nullable ReadableSnapshot readableSnapshot,
-            @Nullable Long earliestSnapshotIDToKeep) {
+            @Nullable Long earliestSnapshotIDToKeep,
+            @Nullable TieringStats tieringStats) {
         this.committedSnapshotId = committedSnapshotId;
         this.committedIsReadable = committedIsReadable;
         this.readableSnapshot = readableSnapshot;
         this.earliestSnapshotIDToKeep = earliestSnapshotIDToKeep;
+        this.tieringStats = tieringStats;
     }
 
     public static LakeCommitResult committedIsReadable(long committedSnapshotId) {
-        return new LakeCommitResult(committedSnapshotId, true, null, KEEP_LATEST);
+        return committedIsReadable(committedSnapshotId, null);
+    }
+
+    public static LakeCommitResult committedIsReadable(
+            long committedSnapshotId, @Nullable TieringStats tieringStats) {
+        return new LakeCommitResult(committedSnapshotId, true, null, KEEP_LATEST, tieringStats);
     }
 
     public static LakeCommitResult unknownReadableSnapshot(long committedSnapshotId) {
-        return new LakeCommitResult(committedSnapshotId, false, null, KEEP_ALL_PREVIOUS);
+        return unknownReadableSnapshot(committedSnapshotId, null);
+    }
+
+    public static LakeCommitResult unknownReadableSnapshot(
+            long committedSnapshotId, @Nullable TieringStats tieringStats) {
+        return new LakeCommitResult(
+                committedSnapshotId, false, null, KEEP_ALL_PREVIOUS, tieringStats);
     }
 
     public static LakeCommitResult withReadableSnapshot(
@@ -89,12 +104,29 @@ public class LakeCommitResult {
             // the readable log end offset for readable snapshot
             Map<TableBucket, Long> readableLogEndOffsets,
             @Nullable Long earliestSnapshotIDToKeep) {
+        return withReadableSnapshot(
+                committedSnapshotId,
+                readableSnapshotId,
+                tieredLogEndOffsets,
+                readableLogEndOffsets,
+                earliestSnapshotIDToKeep,
+                null);
+    }
+
+    public static LakeCommitResult withReadableSnapshot(
+            long committedSnapshotId,
+            long readableSnapshotId,
+            Map<TableBucket, Long> tieredLogEndOffsets,
+            Map<TableBucket, Long> readableLogEndOffsets,
+            @Nullable Long earliestSnapshotIDToKeep,
+            @Nullable TieringStats tieringStats) {
         return new LakeCommitResult(
                 committedSnapshotId,
                 false,
                 new ReadableSnapshot(
                         readableSnapshotId, tieredLogEndOffsets, readableLogEndOffsets),
-                earliestSnapshotIDToKeep);
+                earliestSnapshotIDToKeep,
+                tieringStats);
     }
 
     public long getCommittedSnapshotId() {
@@ -108,6 +140,16 @@ public class LakeCommitResult {
     @Nullable
     public ReadableSnapshot getReadableSnapshot() {
         return readableSnapshot;
+    }
+
+    /**
+     * Gets the tiering stats.
+     *
+     * @return the tiering stats
+     */
+    @Nullable
+    public TieringStats getTieringStats() {
+        return tieringStats;
     }
 
     /**

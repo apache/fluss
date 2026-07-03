@@ -24,7 +24,7 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss</artifactId>
-        <version>0.10-SNAPSHOT</version>
+        <version>1.0-SNAPSHOT</version>
     </parent>
 
     <properties>
@@ -42,6 +42,11 @@
             <dependency>
                 <groupId>org.apache.flink</groupId>
                 <artifactId>flink-table-common</artifactId>
+                <version>${flink.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.flink</groupId>
+                <artifactId>flink-table-api-java</artifactId>
                 <version>${flink.version}</version>
             </dependency>
             <dependency>
@@ -74,11 +79,12 @@
 
 
     <artifactId>fluss-lake</artifactId>
-    <name>Fluss : Lake :</name>
+    <name>Apache Fluss (Incubating) : Lake :</name>
     <modules>
         <module>fluss-lake-paimon</module>
         <module>fluss-lake-iceberg</module>
         <module>fluss-lake-lance</module>
+        <module>fluss-lake-hudi</module>
     </modules>
     <packaging>pom</packaging>
 </project>

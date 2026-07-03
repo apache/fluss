@@ -20,6 +20,7 @@ package org.apache.fluss.lake.paimon.tiering.mergetree;
 import org.apache.fluss.lake.paimon.tiering.RecordWriter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.types.RowType;
 
 import org.apache.paimon.KeyValue;
 import org.apache.paimon.disk.IOManager;
@@ -45,21 +46,42 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
 
     private final RowKeyExtractor rowKeyExtractor;
 
+    private final IOManager ioManager;
+
     public MergeTreeWriter(
             FileStoreTable fileStoreTable,
             TableBucket tableBucket,
             @Nullable String partition,
-            List<String> partitionKeys) {
+            List<String> partitionKeys,
+            RowType flussRowType) {
+        this(
+                fileStoreTable,
+                createIOManager(fileStoreTable),
+                tableBucket,
+                partition,
+                partitionKeys,
+                flussRowType);
+    }
+
+    MergeTreeWriter(
+            FileStoreTable fileStoreTable,
+            IOManager ioManager,
+            TableBucket tableBucket,
+            @Nullable String partition,
+            List<String> partitionKeys,
+            RowType flussRowType) {
         super(
-                createTableWrite(fileStoreTable),
+                createTableWrite(fileStoreTable, ioManager),
                 fileStoreTable.rowType(),
                 tableBucket,
                 partition,
-                partitionKeys);
+                partitionKeys,
+                flussRowType);
         this.rowKeyExtractor = fileStoreTable.createRowKeyExtractor();
+        this.ioManager = ioManager;
     }
 
-    private static TableWriteImpl<KeyValue> createTableWrite(FileStoreTable fileStoreTable) {
+    private static IOManager createIOManager(FileStoreTable fileStoreTable) {
         // we allow users to configure the temporary directory used by fluss tiering
         // since the default java.io.tmpdir may not be suitable.
         // currently, we don't expose the option, as a workaround way, maybe in the future we can
@@ -67,21 +89,28 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
         Map<String, String> props = fileStoreTable.options();
         String tmpDir =
                 props.getOrDefault(FLUSS_TIERING_TMP_DIR_KEY, System.getProperty("java.io.tmpdir"));
+        return IOManager.create(tmpDir);
+    }
+
+    private static TableWriteImpl<KeyValue> createTableWrite(
+            FileStoreTable fileStoreTable, IOManager ioManager) {
         //noinspection unchecked
         return (TableWriteImpl<KeyValue>)
-                fileStoreTable
-                        .newWrite(FLUSS_LAKE_TIERING_COMMIT_USER)
-                        .withIOManager(IOManager.create(tmpDir));
+                fileStoreTable.newWrite(FLUSS_LAKE_TIERING_COMMIT_USER).withIOManager(ioManager);
+    }
+
+    @Override
+    public void close() throws Exception {
+        try {
+            super.close();
+        } finally {
+            ioManager.close();
+        }
     }
 
     @Override
     public void write(LogRecord record) throws Exception {
         flussRecordAsPaimonRow.setFlussRecord(record);
-
-        // get partition once
-        if (partition == null) {
-            partition = tableWrite.getPartition(flussRecordAsPaimonRow);
-        }
 
         rowKeyExtractor.setRecord(flussRecordAsPaimonRow);
         keyValue.replace(

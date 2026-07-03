@@ -28,7 +28,10 @@ import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.utils.AutoPartitionStrategy;
 
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Helper class to get table configs (prefixed with "table.*" properties).
@@ -72,6 +75,14 @@ public class TableConfig {
      */
     public Optional<Integer> getKvFormatVersion() {
         return config.getOptional(ConfigOptions.TABLE_KV_FORMAT_VERSION);
+    }
+
+    /**
+     * Whether standby replicas are enabled for this primary key table. Returns false for legacy
+     * tables that were created before this option was introduced.
+     */
+    public boolean isStandbyReplicaEnabled() {
+        return config.getOptional(ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED).orElse(false);
     }
 
     /** Gets the log TTL of the table. */
@@ -153,5 +164,32 @@ public class TableConfig {
     /** Gets the number of auto-increment IDs cached per segment. */
     public long getAutoIncrementCacheSize() {
         return config.get(ConfigOptions.TABLE_AUTO_INCREMENT_CACHE_SIZE);
+    }
+
+    /** Gets whether statistics collection is enabled for the table. */
+    public boolean isStatisticsEnabled() {
+        return getStatisticsColumns().isEnabled();
+    }
+
+    /**
+     * Gets the statistics columns configuration of the table.
+     *
+     * @return a {@link StatisticsColumnsConfig} representing the statistics collection mode:
+     *     DISABLED if not configured, ALL if "*", or SPECIFIED with the list of column names.
+     */
+    public StatisticsColumnsConfig getStatisticsColumns() {
+        String columnsStr = config.get(ConfigOptions.TABLE_STATISTICS_COLUMNS);
+        if (columnsStr == null) {
+            return StatisticsColumnsConfig.disabled();
+        }
+        if ("*".equals(columnsStr)) {
+            return StatisticsColumnsConfig.all();
+        }
+        List<String> columns =
+                Arrays.stream(columnsStr.split(","))
+                        .map(String::trim)
+                        .filter(s -> !s.isEmpty())
+                        .collect(Collectors.toList());
+        return StatisticsColumnsConfig.of(columns);
     }
 }

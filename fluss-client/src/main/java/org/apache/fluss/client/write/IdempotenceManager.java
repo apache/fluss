@@ -294,6 +294,23 @@ public class IdempotenceManager {
         return false;
     }
 
+    /**
+     * Returns true if the batch has already been committed on the server.
+     *
+     * <p>If the batch's sequence is less than or equal to {@code lastAckedBatchSequence}, it means
+     * a higher-sequence batch has already been acknowledged. This implies the previous batch was
+     * also successfully written on the server (otherwise the higher-sequence batch could not have
+     * been committed).
+     *
+     * @param batch the batch to check
+     * @param tableBucket the target table-bucket
+     * @return true if the batch is already committed on the server
+     */
+    synchronized boolean isAlreadyCommitted(WriteBatch batch, TableBucket tableBucket) {
+        Optional<Integer> lastAcked = lastAckedBatchSequence(tableBucket);
+        return lastAcked.isPresent() && batch.batchSequence() <= lastAcked.get();
+    }
+
     void maybeWaitForWriterId(Set<PhysicalTablePath> tablePaths) throws Throwable {
         if (isWriterIdValid()) {
             return;
