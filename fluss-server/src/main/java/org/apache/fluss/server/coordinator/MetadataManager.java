@@ -522,7 +522,9 @@ public class MetadataManager {
             validateAlterTableProperties(
                     tableInfo,
                     tablePropertyChanges.tableKeysToChange(),
-                    tablePropertyChanges.customKeysToChange());
+                    tablePropertyChanges.customKeysToChange(),
+                    lakeCatalogDynamicLoader.getLakeCatalogContainer(),
+                    flussPrincipal);
 
             TableDescriptor tableDescriptor = tableInfo.toTableDescriptor();
             TableDescriptor newDescriptor =

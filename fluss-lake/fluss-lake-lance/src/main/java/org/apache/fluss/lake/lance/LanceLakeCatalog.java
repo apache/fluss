@@ -43,6 +43,11 @@ public class LanceLakeCatalog implements LakeCatalog {
     }
 
     @Override
+    public boolean tableExists(TablePath tablePath, Context context) {
+        throw new UnsupportedOperationException("tableExists is not supported for Lance.");
+    }
+
+    @Override
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor, Context context) {
         // currently, we don't support primary key table for lance
         if (tableDescriptor.hasPrimaryKey()) {

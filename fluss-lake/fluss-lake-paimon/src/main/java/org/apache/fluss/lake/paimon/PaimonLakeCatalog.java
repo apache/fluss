@@ -86,6 +86,16 @@ public class PaimonLakeCatalog implements LakeCatalog {
     }
 
     @Override
+    public boolean tableExists(TablePath tablePath, Context context) {
+        try {
+            paimonCatalog.getTable(toPaimon(tablePath));
+            return true;
+        } catch (Catalog.TableNotExistException e) {
+            return false;
+        }
+    }
+
+    @Override
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor, Context context)
             throws TableAlreadyExistException {
         // then, create the table

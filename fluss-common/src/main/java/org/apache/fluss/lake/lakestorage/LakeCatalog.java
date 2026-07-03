@@ -49,6 +49,15 @@ public interface LakeCatalog extends AutoCloseable {
             throws TableAlreadyExistException;
 
     /**
+     * Check whether a table exists in lake.
+     *
+     * @param tablePath path of the table to check
+     * @param context contextual information needed for checking table existence
+     * @return true if the table exists, false otherwise
+     */
+    boolean tableExists(TablePath tablePath, Context context);
+
+    /**
      * Alter a table in lake.
      *
      * @param tablePath path of the table to be altered

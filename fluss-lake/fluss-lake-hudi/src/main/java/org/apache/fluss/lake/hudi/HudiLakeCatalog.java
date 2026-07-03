@@ -88,6 +88,11 @@ public class HudiLakeCatalog implements LakeCatalog {
     }
 
     @Override
+    public boolean tableExists(TablePath tablePath, Context context) {
+        throw new UnsupportedOperationException("tableExists is not supported for Hudi.");
+    }
+
+    @Override
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor, Context context)
             throws org.apache.fluss.exception.TableAlreadyExistException {
         LOG.info("create the lake table for : {} with props: {}", tablePath, tableDescriptor);

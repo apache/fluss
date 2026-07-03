@@ -107,6 +107,11 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
         }
 
         @Override
+        public boolean tableExists(TablePath tablePath, Context context) {
+            return tableByPath.containsKey(tablePath);
+        }
+
+        @Override
         public void alterTable(TablePath tablePath, List<TableChange> tableChanges, Context context)
                 throws TableNotExistException {
             // do nothing

@@ -101,6 +101,11 @@ public class IcebergLakeCatalog implements LakeCatalog {
     }
 
     @Override
+    public boolean tableExists(TablePath tablePath, Context context) {
+        throw new UnsupportedOperationException("tableExists is not supported for Iceberg.");
+    }
+
+    @Override
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor, Context context)
             throws TableAlreadyExistException {
         // convert Fluss table path to iceberg table
