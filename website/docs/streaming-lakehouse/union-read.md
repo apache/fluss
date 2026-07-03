@@ -102,9 +102,11 @@ Key behavior for data retention with Union Read:
 | Engine | Union Read | Lake-Only Read |
 |--------|------------|----------------|
 | Apache Flink | ✅ | ✅ Via `$lake` suffix |
-| Apache Spark | ❌ | ✅ Via native lake connectors |
+| Apache Spark | ✅ | ✅ Via native lake connectors |
 | Trino | ❌ | ✅ Via native lake connectors |
 | StarRocks | ❌ | ✅ Via native lake connectors |
+
+For Spark union read usage, see [Spark - Reads](../engine-spark/reads.md#lake-enabled-tables-union-read).
 
 External engines can access the tiered lake data directly through native lake format connectors. See the specific data lake format documentation for examples:
 - [Paimon - Reading with other Engines](datalake-formats/paimon.md#reading-with-other-engines)
