@@ -314,36 +314,6 @@ public class DynamicConfigChangeTest {
     }
 
     @Test
-    void testLateRegisteredReconfigurableReceivesCurrentDynamicConfig() throws Exception {
-        Configuration configuration = new Configuration();
-        Map<String, String> config = new HashMap<>();
-        config.put(ConfigOptions.SERVER_SASL_USERS.key(), "admin:admin-secret,bob:bob-secret");
-        zookeeperClient.upsertServerEntityConfig(config);
-
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, configuration, true);
-        dynamicConfigManager.startup();
-
-        AtomicReference<List<String>> validatedUsers = new AtomicReference<>();
-        AtomicReference<List<String>> reconfiguredUsers = new AtomicReference<>();
-        dynamicConfigManager.register(
-                new ServerReconfigurable() {
-                    @Override
-                    public void validate(Configuration newConfig) throws ConfigException {
-                        validatedUsers.set(newConfig.get(ConfigOptions.SERVER_SASL_USERS));
-                    }
-
-                    @Override
-                    public void reconfigure(Configuration newConfig) {
-                        reconfiguredUsers.set(newConfig.get(ConfigOptions.SERVER_SASL_USERS));
-                    }
-                });
-
-        assertThat(validatedUsers.get()).containsExactly("admin:admin-secret", "bob:bob-secret");
-        assertThat(reconfiguredUsers.get()).containsExactly("admin:admin-secret", "bob:bob-secret");
-    }
-
-    @Test
     void testPreventInvalidConfig() throws Exception {
         // Test that generic type validation prevents invalid config values
         Configuration configuration = new Configuration();
@@ -743,7 +713,7 @@ public class DynamicConfigChangeTest {
 
                     @Override
                     public void reconfigure(Configuration newConfig) {
-                        reconfiguredUsers.set(newConfig.get(ConfigOptions.SERVER_SASL_USERS));
+                        reconfiguredUsers.set(newConfig.get(ConfigOptions.SERVER_SASL_CREDENTIALS));
                     }
                 });
         dynamicConfigManager.startup();
@@ -752,12 +722,12 @@ public class DynamicConfigChangeTest {
         dynamicConfigManager.alterConfigs(
                 Collections.singletonList(
                         new AlterConfig(
-                                ConfigOptions.SERVER_SASL_USERS.key(),
+                                ConfigOptions.SERVER_SASL_CREDENTIALS.key(),
                                 "admin:admin-secret",
                                 AlterConfigOpType.APPEND)));
 
         Map<String, String> zkConfig = zookeeperClient.fetchEntityConfig();
-        assertThat(zkConfig.get(ConfigOptions.SERVER_SASL_USERS.key()))
+        assertThat(zkConfig.get(ConfigOptions.SERVER_SASL_CREDENTIALS.key()))
                 .isEqualTo("admin:admin-secret");
         assertThat(reconfiguredUsers.get()).containsExactly("admin:admin-secret");
 
@@ -765,12 +735,12 @@ public class DynamicConfigChangeTest {
         dynamicConfigManager.alterConfigs(
                 Collections.singletonList(
                         new AlterConfig(
-                                ConfigOptions.SERVER_SASL_USERS.key(),
+                                ConfigOptions.SERVER_SASL_CREDENTIALS.key(),
                                 "bob:bob-secret",
                                 AlterConfigOpType.APPEND)));
 
         zkConfig = zookeeperClient.fetchEntityConfig();
-        assertThat(zkConfig.get(ConfigOptions.SERVER_SASL_USERS.key()))
+        assertThat(zkConfig.get(ConfigOptions.SERVER_SASL_CREDENTIALS.key()))
                 .isEqualTo("admin:admin-secret,bob:bob-secret");
         assertThat(reconfiguredUsers.get()).containsExactly("admin:admin-secret", "bob:bob-secret");
 
@@ -778,25 +748,26 @@ public class DynamicConfigChangeTest {
         dynamicConfigManager.alterConfigs(
                 Collections.singletonList(
                         new AlterConfig(
-                                ConfigOptions.SERVER_SASL_USERS.key(),
+                                ConfigOptions.SERVER_SASL_CREDENTIALS.key(),
                                 "admin:admin-secret",
                                 AlterConfigOpType.SUBTRACT)));
 
         zkConfig = zookeeperClient.fetchEntityConfig();
-        assertThat(zkConfig.get(ConfigOptions.SERVER_SASL_USERS.key())).isEqualTo("bob:bob-secret");
+        assertThat(zkConfig.get(ConfigOptions.SERVER_SASL_CREDENTIALS.key()))
+                .isEqualTo("bob:bob-secret");
         assertThat(reconfiguredUsers.get()).containsExactly("bob:bob-secret");
 
         // SUBTRACT last user - should write null to override static config
         dynamicConfigManager.alterConfigs(
                 Collections.singletonList(
                         new AlterConfig(
-                                ConfigOptions.SERVER_SASL_USERS.key(),
+                                ConfigOptions.SERVER_SASL_CREDENTIALS.key(),
                                 "bob:bob-secret",
                                 AlterConfigOpType.SUBTRACT)));
 
         zkConfig = zookeeperClient.fetchEntityConfig();
-        assertThat(zkConfig.containsKey(ConfigOptions.SERVER_SASL_USERS.key())).isTrue();
-        assertThat(zkConfig.get(ConfigOptions.SERVER_SASL_USERS.key())).isNull();
+        assertThat(zkConfig.containsKey(ConfigOptions.SERVER_SASL_CREDENTIALS.key())).isTrue();
+        assertThat(zkConfig.get(ConfigOptions.SERVER_SASL_CREDENTIALS.key())).isNull();
         assertThat(reconfiguredUsers.get()).isNull();
     }
 
@@ -839,7 +810,7 @@ public class DynamicConfigChangeTest {
     void testAppendReadsStaticConfig() throws Exception {
         Configuration configuration = new Configuration();
         // Pre-configure a static user in server.yaml equivalent
-        configuration.setString(ConfigOptions.SERVER_SASL_USERS.key(), "admin:admin-secret");
+        configuration.setString(ConfigOptions.SERVER_SASL_CREDENTIALS.key(), "admin:admin-secret");
 
         DynamicConfigManager dynamicConfigManager =
                 new DynamicConfigManager(zookeeperClient, configuration, true);
@@ -852,7 +823,7 @@ public class DynamicConfigChangeTest {
 
                     @Override
                     public void reconfigure(Configuration newConfig) {
-                        reconfiguredUsers.set(newConfig.get(ConfigOptions.SERVER_SASL_USERS));
+                        reconfiguredUsers.set(newConfig.get(ConfigOptions.SERVER_SASL_CREDENTIALS));
                     }
                 });
         dynamicConfigManager.startup();
@@ -861,12 +832,12 @@ public class DynamicConfigChangeTest {
         dynamicConfigManager.alterConfigs(
                 Collections.singletonList(
                         new AlterConfig(
-                                ConfigOptions.SERVER_SASL_USERS.key(),
+                                ConfigOptions.SERVER_SASL_CREDENTIALS.key(),
                                 "bob:bob-secret",
                                 AlterConfigOpType.APPEND)));
 
         Map<String, String> zkConfig = zookeeperClient.fetchEntityConfig();
-        assertThat(zkConfig.get(ConfigOptions.SERVER_SASL_USERS.key()))
+        assertThat(zkConfig.get(ConfigOptions.SERVER_SASL_CREDENTIALS.key()))
                 .isEqualTo("admin:admin-secret,bob:bob-secret");
         assertThat(reconfiguredUsers.get()).containsExactly("admin:admin-secret", "bob:bob-secret");
     }
@@ -875,7 +846,7 @@ public class DynamicConfigChangeTest {
     void testSubtractFromStaticConfigWritesNull() throws Exception {
         Configuration configuration = new Configuration();
         // Pre-configure a static user in server.yaml equivalent
-        configuration.setString(ConfigOptions.SERVER_SASL_USERS.key(), "admin:admin-secret");
+        configuration.setString(ConfigOptions.SERVER_SASL_CREDENTIALS.key(), "admin:admin-secret");
 
         DynamicConfigManager dynamicConfigManager =
                 new DynamicConfigManager(zookeeperClient, configuration, true);
@@ -888,7 +859,7 @@ public class DynamicConfigChangeTest {
 
                     @Override
                     public void reconfigure(Configuration newConfig) {
-                        reconfiguredUsers.set(newConfig.get(ConfigOptions.SERVER_SASL_USERS));
+                        reconfiguredUsers.set(newConfig.get(ConfigOptions.SERVER_SASL_CREDENTIALS));
                     }
                 });
         dynamicConfigManager.startup();
@@ -897,13 +868,13 @@ public class DynamicConfigChangeTest {
         dynamicConfigManager.alterConfigs(
                 Collections.singletonList(
                         new AlterConfig(
-                                ConfigOptions.SERVER_SASL_USERS.key(),
+                                ConfigOptions.SERVER_SASL_CREDENTIALS.key(),
                                 "admin:admin-secret",
                                 AlterConfigOpType.SUBTRACT)));
 
         Map<String, String> zkConfig = zookeeperClient.fetchEntityConfig();
-        assertThat(zkConfig.containsKey(ConfigOptions.SERVER_SASL_USERS.key())).isTrue();
-        assertThat(zkConfig.get(ConfigOptions.SERVER_SASL_USERS.key())).isNull();
+        assertThat(zkConfig.containsKey(ConfigOptions.SERVER_SASL_CREDENTIALS.key())).isTrue();
+        assertThat(zkConfig.get(ConfigOptions.SERVER_SASL_CREDENTIALS.key())).isNull();
         assertThat(reconfiguredUsers.get()).isNull();
     }
 
@@ -918,23 +889,24 @@ public class DynamicConfigChangeTest {
         dynamicConfigManager.alterConfigs(
                 Collections.singletonList(
                         new AlterConfig(
-                                ConfigOptions.SERVER_SASL_USERS.key(),
+                                ConfigOptions.SERVER_SASL_CREDENTIALS.key(),
                                 "admin:admin-secret, bob:bob-secret, admin:admin-secret",
                                 AlterConfigOpType.SET)));
 
         Map<String, String> zkConfig = zookeeperClient.fetchEntityConfig();
-        assertThat(zkConfig.get(ConfigOptions.SERVER_SASL_USERS.key()))
+        assertThat(zkConfig.get(ConfigOptions.SERVER_SASL_CREDENTIALS.key()))
                 .isEqualTo("admin:admin-secret, bob:bob-secret, admin:admin-secret");
 
         // SUBTRACT should trim elements and remove ALL matches
         dynamicConfigManager.alterConfigs(
                 Collections.singletonList(
                         new AlterConfig(
-                                ConfigOptions.SERVER_SASL_USERS.key(),
+                                ConfigOptions.SERVER_SASL_CREDENTIALS.key(),
                                 "admin:admin-secret",
                                 AlterConfigOpType.SUBTRACT)));
 
         zkConfig = zookeeperClient.fetchEntityConfig();
-        assertThat(zkConfig.get(ConfigOptions.SERVER_SASL_USERS.key())).isEqualTo("bob:bob-secret");
+        assertThat(zkConfig.get(ConfigOptions.SERVER_SASL_CREDENTIALS.key()))
+                .isEqualTo("bob:bob-secret");
     }
 }

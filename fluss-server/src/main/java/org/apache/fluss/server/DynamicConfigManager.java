@@ -68,7 +68,7 @@ public class DynamicConfigManager {
         try {
             configChangeListener.start();
             Map<String, String> entityConfigs = zooKeeperClient.fetchEntityConfig();
-            dynamicServerConfig.initializeDynamicConfig(entityConfigs, true);
+            dynamicServerConfig.updateDynamicConfig(entityConfigs, true);
         } catch (Exception e) {
             LOG.error("Failed to update dynamic configs from zookeeper", e);
         }
@@ -131,74 +131,74 @@ public class DynamicConfigManager {
             List<AlterConfig> alterConfigs, Map<String, String> configsProps) {
         alterConfigs.forEach(
                 alterConfigOp -> {
-                    String configPropName = alterConfigOp.key();
-                    if (!dynamicServerConfig.isAllowedConfig(configPropName)) {
+                    String configKey = alterConfigOp.key();
+                    if (!dynamicServerConfig.isAllowedConfig(configKey)) {
                         throw new ConfigException(
                                 String.format(
                                         "The config key %s is not allowed to be changed dynamically.",
-                                        configPropName));
+                                        configKey));
                     }
 
-                    String configPropValue = alterConfigOp.value();
+                    String configValue = alterConfigOp.value();
                     switch (alterConfigOp.opType()) {
                         case SET:
-                            configsProps.put(configPropName, configPropValue);
+                            configsProps.put(configKey, configValue);
                             break;
                         case DELETE:
-                            configsProps.remove(configPropName);
+                            configsProps.remove(configKey);
                             break;
                         case APPEND:
-                            validateListType(configPropName);
-                            String existingAppend;
-                            if (configsProps.containsKey(configPropName)) {
-                                existingAppend = configsProps.get(configPropName);
-                            } else {
-                                // Fall back to static config
-                                existingAppend =
-                                        dynamicServerConfig
-                                                .getInitialServerConfigs()
-                                                .get(configPropName);
-                            }
-                            if (existingAppend == null || existingAppend.isEmpty()) {
-                                configsProps.put(configPropName, configPropValue);
-                            } else {
-                                configsProps.put(
-                                        configPropName, existingAppend + "," + configPropValue);
-                            }
+                            validateListType(configKey);
+                            appendListConfig(configsProps, configKey, configValue);
                             break;
                         case SUBTRACT:
-                            validateListType(configPropName);
-                            String existingSubtract;
-                            if (configsProps.containsKey(configPropName)) {
-                                existingSubtract = configsProps.get(configPropName);
-                            } else {
-                                // Fall back to static config
-                                existingSubtract =
-                                        dynamicServerConfig
-                                                .getInitialServerConfigs()
-                                                .get(configPropName);
-                            }
-                            if (existingSubtract != null && !existingSubtract.isEmpty()) {
-                                List<String> items = new ArrayList<>();
-                                for (String item : existingSubtract.split(",")) {
-                                    String trimmed = item.trim();
-                                    if (!trimmed.isEmpty()) {
-                                        items.add(trimmed);
-                                    }
-                                }
-                                items.removeIf(v -> v.equals(configPropValue));
-                                if (items.isEmpty()) {
-                                    configsProps.put(configPropName, null);
-                                } else {
-                                    configsProps.put(configPropName, String.join(",", items));
-                                }
-                            }
+                            validateListType(configKey);
+                            subtractListConfig(configsProps, configKey, configValue);
                             break;
                         default:
                             throw new ConfigException(
                                     "Unsupported config operation type " + alterConfigOp.opType());
                     }
                 });
+    }
+
+    private void appendListConfig(
+            Map<String, String> dynamicConfigs, String configKey, String configValue) {
+        String existingValue = getExistingConfigValue(dynamicConfigs, configKey);
+        if (existingValue == null || existingValue.isEmpty()) {
+            dynamicConfigs.put(configKey, configValue);
+        } else {
+            dynamicConfigs.put(configKey, existingValue + "," + configValue);
+        }
+    }
+
+    private void subtractListConfig(
+            Map<String, String> dynamicConfigs, String configKey, String configValue) {
+        String existingValue = getExistingConfigValue(dynamicConfigs, configKey);
+        if (existingValue == null || existingValue.isEmpty()) {
+            return;
+        }
+
+        List<String> items = new ArrayList<>();
+        for (String item : existingValue.split(",")) {
+            String trimmed = item.trim();
+            if (!trimmed.isEmpty()) {
+                items.add(trimmed);
+            }
+        }
+        items.removeIf(v -> v.equals(configValue));
+        if (items.isEmpty()) {
+            dynamicConfigs.put(configKey, null);
+        } else {
+            dynamicConfigs.put(configKey, String.join(",", items));
+        }
+    }
+
+    private String getExistingConfigValue(Map<String, String> dynamicConfigs, String configKey) {
+        if (dynamicConfigs.containsKey(configKey)) {
+            return dynamicConfigs.get(configKey);
+        }
+        return dynamicServerConfig.getInitialServerConfigs().get(configKey);
     }
 
     @VisibleForTesting

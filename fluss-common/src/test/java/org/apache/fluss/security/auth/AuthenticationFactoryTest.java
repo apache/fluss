@@ -49,9 +49,7 @@ public class AuthenticationFactoryTest {
                 .isExactlyInstanceOf(ValidationException.class)
                 .hasMessageContaining(errorMsg);
         assertThatThrownBy(
-                        () ->
-                                AuthenticationFactory.loadServerAuthenticatorSuppliers(
-                                        () -> configuration))
+                        () -> AuthenticationFactory.loadServerAuthenticatorSuppliers(configuration))
                 .isExactlyInstanceOf(ValidationException.class)
                 .hasMessageContaining(errorMsg);
     }
@@ -68,9 +66,7 @@ public class AuthenticationFactoryTest {
                 .isExactlyInstanceOf(ValidationException.class)
                 .hasMessageContaining(errorMsg);
         assertThatThrownBy(
-                        () ->
-                                AuthenticationFactory.loadServerAuthenticatorSuppliers(
-                                        () -> configuration))
+                        () -> AuthenticationFactory.loadServerAuthenticatorSuppliers(configuration))
                 .isExactlyInstanceOf(ValidationException.class)
                 .hasMessageContaining(errorMsg);
     }
@@ -83,7 +79,7 @@ public class AuthenticationFactoryTest {
         assertThat(AuthenticationFactory.loadClientAuthenticatorSupplier(configuration).get())
                 .isInstanceOf(TestIdentifierClientAuthenticator.class);
         assertThat(
-                        AuthenticationFactory.loadServerAuthenticatorSuppliers(() -> configuration)
+                        AuthenticationFactory.loadServerAuthenticatorSuppliers(configuration)
                                 .values()
                                 .stream()
                                 .findAny()
@@ -97,7 +93,7 @@ public class AuthenticationFactoryTest {
         assertThat(AuthenticationFactory.loadClientAuthenticatorSupplier(configuration2).get())
                 .isInstanceOf(TestIdentifierClientAuthenticator.class);
         assertThat(
-                        AuthenticationFactory.loadServerAuthenticatorSuppliers(() -> configuration)
+                        AuthenticationFactory.loadServerAuthenticatorSuppliers(configuration)
                                 .values()
                                 .stream()
                                 .findAny()

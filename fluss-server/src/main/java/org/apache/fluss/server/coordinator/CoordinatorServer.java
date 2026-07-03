@@ -27,7 +27,6 @@ import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.RpcServer;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
-import org.apache.fluss.rpc.netty.server.NettyServer;
 import org.apache.fluss.rpc.netty.server.RequestsMetrics;
 import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.ServerBase;
@@ -233,16 +232,6 @@ public class CoordinatorServer extends ServerBase {
             this.remoteDirDynamicLoader = new RemoteDirDynamicLoader(conf);
 
             this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf, true);
-
-            // Register server reconfigurable components
-            dynamicConfigManager.register(lakeCatalogDynamicLoader);
-            dynamicConfigManager.register(remoteDirDynamicLoader);
-
-            // Register stateless validators for coordinator-side upfront validation
-            dynamicConfigManager.registerValidator(new DiskWriteLimitRatioValidator());
-
-            dynamicConfigManager.startup();
-
             this.metadataCache = new CoordinatorMetadataCache();
 
             this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);
@@ -296,8 +285,14 @@ public class CoordinatorServer extends ServerBase {
                             serverMetricGroup,
                             RequestsMetrics.createCoordinatorServerRequestMetrics(
                                     serverMetricGroup));
-            // Register FlussProtocolPlugin for dynamic SASL config updates
-            dynamicConfigManager.register(((NettyServer) rpcServer).getFlussProtocolPlugin());
+            // Register server reconfigurable components
+            dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            dynamicConfigManager.register(remoteDirDynamicLoader);
+            // Register stateless validators for coordinator-side upfront validation
+            dynamicConfigManager.registerValidator(new DiskWriteLimitRatioValidator());
+            rpcServer.getServerReconfigurables().forEach(dynamicConfigManager::register);
+            dynamicConfigManager.startup();
+
             rpcServer.start();
 
             registerCoordinatorServer();

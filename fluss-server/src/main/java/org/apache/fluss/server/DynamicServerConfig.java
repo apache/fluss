@@ -49,7 +49,7 @@ import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS;
 import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS_STRATEGY;
 import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS;
 import static org.apache.fluss.config.ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO;
-import static org.apache.fluss.config.ConfigOptions.SERVER_SASL_USERS;
+import static org.apache.fluss.config.ConfigOptions.SERVER_SASL_CREDENTIALS;
 import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
 import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 
@@ -75,13 +75,12 @@ class DynamicServerConfig {
                             REMOTE_DATA_DIRS.key(),
                             REMOTE_DATA_DIRS_STRATEGY.key(),
                             REMOTE_DATA_DIRS_WEIGHTS.key(),
-                            SERVER_SASL_USERS.key()));
+                            SERVER_SASL_CREDENTIALS.key()));
     private static final Set<String> ALLOWED_CONFIG_PREFIXES = Collections.singleton("datalake.");
 
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
     private final Map<Class<? extends ServerReconfigurable>, ServerReconfigurable>
             serverReconfigures = new ConcurrentHashMap<>();
-    private boolean initialized;
 
     /** Registered stateless config validators, organized by config key for efficient lookup. */
     private final Map<String, List<ConfigValidator<?>>> configValidatorsByKey =
@@ -111,15 +110,7 @@ class DynamicServerConfig {
     }
 
     void register(ServerReconfigurable serverReconfigurable) {
-        inWriteLock(
-                lock,
-                () -> {
-                    if (initialized) {
-                        Configuration configToApply = new Configuration(currentConfig);
-                        applyToServerReconfigurable(serverReconfigurable, configToApply);
-                    }
-                    serverReconfigures.put(serverReconfigurable.getClass(), serverReconfigurable);
-                });
+        serverReconfigures.put(serverReconfigurable.getClass(), serverReconfigurable);
     }
 
     /**
@@ -139,20 +130,6 @@ class DynamicServerConfig {
         configValidatorsByKey
                 .computeIfAbsent(configKey, k -> new CopyOnWriteArrayList<>())
                 .add(validator);
-    }
-
-    /**
-     * Initialize dynamic configuration and enable current config replay for later registrations. If
-     * skipping error config, only the error one will be ignored.
-     */
-    void initializeDynamicConfig(Map<String, String> newDynamicConfigs, boolean skipErrorConfig)
-            throws Exception {
-        inWriteLock(
-                lock,
-                () -> {
-                    updateCurrentConfig(newDynamicConfigs, skipErrorConfig);
-                    initialized = true;
-                });
     }
 
     /**
@@ -465,31 +442,6 @@ class DynamicServerConfig {
         if (throwable != null) {
             appliedSet.forEach(r -> r.reconfigure(oldConfig));
             throw throwable;
-        }
-    }
-
-    private void applyToServerReconfigurable(
-            ServerReconfigurable reconfigurable, Configuration newConfig) throws ConfigException {
-        try {
-            reconfigurable.validate(newConfig);
-        } catch (ConfigException e) {
-            LOG.error(
-                    "Validation failed for {}: {}",
-                    reconfigurable.getClass().getSimpleName(),
-                    e.getMessage(),
-                    e);
-            throw e;
-        }
-
-        try {
-            reconfigurable.reconfigure(newConfig);
-        } catch (ConfigException e) {
-            LOG.error(
-                    "Reconfiguration failed for {}: {}",
-                    reconfigurable.getClass().getSimpleName(),
-                    e.getMessage(),
-                    e);
-            throw e;
         }
     }
 

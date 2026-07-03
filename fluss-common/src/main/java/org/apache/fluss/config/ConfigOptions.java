@@ -529,8 +529,8 @@ public class ConfigOptions {
                                     + "Each listener can be associated with a specific authentication protocol. "
                                     + "Listeners not included in the map will use PLAINTEXT by default, which does not require authentication.");
 
-    public static final ConfigOption<List<String>> SERVER_SASL_USERS =
-            key("security.sasl.plain.users")
+    public static final ConfigOption<List<String>> SERVER_SASL_CREDENTIALS =
+            key("security.sasl.plain.credentials")
                     .stringType()
                     .asList()
                     .noDefaultValue()

@@ -21,6 +21,7 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.rpc.RpcGateway;
 import org.apache.fluss.rpc.RpcGatewayService;
@@ -272,14 +273,12 @@ public final class NettyServer implements RpcServer {
                         protocolName, protocols.keySet()));
     }
 
-    /** Returns the FlussProtocolPlugin instance used by this server. */
-    public FlussProtocolPlugin getFlussProtocolPlugin() {
-        for (NetworkProtocolPlugin protocol : protocols) {
-            if (protocol instanceof FlussProtocolPlugin) {
-                return (FlussProtocolPlugin) protocol;
-            }
-        }
-        throw new IllegalStateException("FlussProtocolPlugin not found in loaded protocols.");
+    @Override
+    public List<ServerReconfigurable> getServerReconfigurables() {
+        return protocols.stream()
+                .filter(protocol -> protocol instanceof ServerReconfigurable)
+                .map(protocol -> (ServerReconfigurable) protocol)
+                .collect(Collectors.toList());
     }
 
     @Override
