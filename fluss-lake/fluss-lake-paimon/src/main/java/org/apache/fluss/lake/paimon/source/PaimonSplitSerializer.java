@@ -20,6 +20,7 @@ package org.apache.fluss.lake.paimon.source;
 
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 
+import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.io.DataOutputViewStreamWrapper;
 import org.apache.paimon.table.source.DataSplit;
 import org.apache.paimon.utils.InstantiationUtil;
@@ -68,10 +69,8 @@ public class PaimonSplitSerializer implements SimpleVersionedSerializer<PaimonSp
             DataInputStream dis = new DataInputStream(in);
             boolean isBucketUnAware = dis.readBoolean();
             if (version == VERSION_1) {
-                // VERSION_1 payloads do not contain partition values. Keep them readable, but
-                // don't try to reconstruct partition names from DataSplit because non-string
-                // partition columns require type information that is not present in the payload.
-                return new PaimonSplit(dataSplit, isBucketUnAware, Collections.emptyList());
+                return new PaimonSplit(
+                        dataSplit, isBucketUnAware, readStringPartition(dataSplit.partition()));
             } else if (version == VERSION_2) {
                 int size = dis.readInt();
                 List<String> partition = new ArrayList<>(size);
@@ -85,5 +84,17 @@ public class PaimonSplitSerializer implements SimpleVersionedSerializer<PaimonSp
         } catch (ClassNotFoundException e) {
             throw new IOException("Failed to deserialize PaimonSplit", e);
         }
+    }
+
+    private List<String> readStringPartition(BinaryRow partition) {
+        if (partition == null || partition.getFieldCount() == 0) {
+            return Collections.emptyList();
+        }
+
+        List<String> partitions = new ArrayList<>(partition.getFieldCount());
+        for (int i = 0; i < partition.getFieldCount(); i++) {
+            partitions.add(partition.getString(i).toString());
+        }
+        return partitions;
     }
 }
