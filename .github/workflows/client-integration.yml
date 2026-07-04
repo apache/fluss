@@ -135,7 +135,7 @@ jobs:
           docker save fluss:dev -o /tmp/fluss-dev.tar
 
       - name: Upload server image
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fluss-dev-image
           path: /tmp/fluss-dev.tar
@@ -232,7 +232,7 @@ jobs:
           for c in $(docker ps -a --filter "name=shared-test" --format '{{.Names}}'); do
             docker logs "$c" > "cluster-logs/$c.log" 2>&1 || true
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: cluster-logs-${{ matrix.python }}
