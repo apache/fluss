@@ -5,7 +5,7 @@ sidebar_position: 2
 
 # Tiering Service
 
-The Tiering Service continuously compacts real-time data from Fluss (stored in Arrow format) into data lake formats (Parquet) for cost-efficient long-term storage and analytics.
+The Tiering Service continuously compacts real-time data from Fluss into the configured lake format (Paimon, Iceberg, or Lance) for cost-efficient long-term storage and analytics.
 
 ## Overview
 
@@ -47,11 +47,34 @@ The Tiering Service consists of three Flink operators:
 
 ### Tiering Service Options
 
+The tiering job is a standalone Flink job, and its arguments fall into three groups:
+
+- `--fluss.*` — Fluss client configuration, e.g. `--fluss.bootstrap.servers localhost:9123`
+- `--datalake.<format>.*` — lake catalog/storage configuration; Fluss strips the `datalake.<format>.` prefix before passing the remaining keys to the lake connector
+- `--lake.tiering.*` — tiering job-level configuration, e.g. `--lake.tiering.auto-expire-snapshot true`
+
+For example:
+
+```shell
+${FLINK_HOME}/bin/flink run \
+    -Dparallelism.default=3 \
+    /path/to/fluss-flink-tiering-$FLUSS_VERSION$.jar \
+    --fluss.bootstrap.servers localhost:9123 \
+    --datalake.format paimon \
+    --datalake.paimon.metastore filesystem \
+    --datalake.paimon.warehouse /tmp/paimon \
+    --lake.tiering.auto-expire-snapshot true
+```
+
+The following `--lake.tiering.*` options are set when starting the tiering job:
+
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `lake.tiering.auto-expire-snapshot` | Boolean | false | Auto-trigger snapshot expiration on commit |
 
 ### Table-Level Options
+
+The following `table.datalake.*` options are configured per table when creating or altering tables, not on the tiering job:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -76,4 +99,4 @@ Multiple tiering service jobs can run simultaneously. They are coordinated by th
 
 ## Monitoring
 
-Key metrics for monitoring the Tiering Service are available through Flink's metrics system. See [Monitoring Metrics](../maintenance/observability/monitor-metrics.md) for details on lakehouse tiering metrics.
+Key metrics for monitoring the Tiering Service are available through Flink's metrics system. See [Monitoring Metrics](../maintenance/observability/monitor-metrics.md#tiering-service-metrics) for details on lakehouse tiering metrics.

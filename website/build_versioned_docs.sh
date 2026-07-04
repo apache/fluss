@@ -126,7 +126,7 @@ for branch in $branches; do
     # Fix absolute links in versioned docs (convert /docs/maintenance/filesystems/hdfs.md to relative path)
     lakehouse_file="$version_dir/maintenance/tiered-storage/lakehouse-storage.md"
     if [ -f "$lakehouse_file" ]; then
-      sed -i.bak 's|/docs/maintenance/filesystems/hdfs\.md|../../filesystems/hdfs|g' "$lakehouse_file"
+      sed -i.bak 's|/docs/maintenance/filesystems/hdfs\.md|../filesystems/hdfs.md|g' "$lakehouse_file"
       rm -f "$lakehouse_file.bak"
       echo "Fixed absolute links in '$lakehouse_file'"
     fi

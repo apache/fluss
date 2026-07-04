@@ -197,19 +197,38 @@ const config: Config = {
             if (!existingPath.startsWith('/docs/')) {
               return undefined;
             }
-            
+
             // Extract the relative path after /docs/
-            const relativeDocsPath = existingPath.substring(6); 
+            const relativeDocsPath = existingPath.substring(6);
             const firstSegment = relativeDocsPath.split('/')[0];
-            
+
             // Exclude any known version identifiers aligned with existing routes
             const existingVersionedRoutes = ['next', ...Object.keys(versionsMap)];
             if (existingVersionedRoutes.includes(firstSegment)) {
               return undefined;
             }
-            
-            // Redirect the explicit versioned path to the implicit unversioned path
-            return [`/docs/${latestVersion}${existingPath.replace('/docs', '')}`];
+
+            const redirects = [
+              // Redirect the explicit versioned path to the implicit unversioned path
+              `/docs/${latestVersion}${existingPath.replace('/docs', '')}`,
+            ];
+
+            // Preserve the previously published URLs for docs pages that were
+            // moved/renamed. These are keyed off the new (existing) route, so the
+            // redirect target is always valid, and the old URL is preserved once
+            // the restructured version becomes the latest unversioned release.
+            const renameRules = [
+              { from: '/maintenance/filesystems/', to: '/maintenance/tiered-storage/filesystems/' },
+              { from: '/streaming-lakehouse/integrate-data-lakes/formats/', to: '/streaming-lakehouse/datalake-formats/' },
+              { from: '/streaming-lakehouse/integrate-data-lakes/catalogs/', to: '/streaming-lakehouse/datalake-catalogs/' },
+            ];
+            for (const rule of renameRules) {
+              if (existingPath.includes(rule.to)) {
+                redirects.push(existingPath.replace(rule.to, rule.from));
+              }
+            }
+
+            return redirects;
         },
       },
     ],

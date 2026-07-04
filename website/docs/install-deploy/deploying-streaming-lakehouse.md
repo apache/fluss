@@ -26,10 +26,22 @@ You can enable Lakehouse storage through:
 
 Configure lakehouse settings in `server.yaml` on all Fluss servers (CoordinatorServer and TabletServer).
 
+Fluss follows a simple convention for these keys:
+
+- `datalake.enabled: true` explicitly enables lakehouse capability for the cluster. If it is left unset, configuring `datalake.format` alone also enables it; whenever `datalake.enabled` is `true`, `datalake.format` must also be set.
+- `datalake.format` selects the lake format for the cluster (`paimon`, `iceberg`, or `lance`).
+- Format-specific options use the `datalake.<format>.*` prefix. Fluss strips this prefix and passes the remaining keys straight to the corresponding lake catalog/client — for example `datalake.paimon.metastore` becomes `metastore` and `datalake.iceberg.type` becomes `type`. Any option supported by the lake catalog can be set this way.
+- Only configure options for the format selected by `datalake.format`.
+
+:::note
+The [Tiering Service](../streaming-lakehouse/tiering-service.md) is an independent Flink job and needs the same `datalake.*` options passed as job arguments (see [Starting the Tiering Service](#starting-the-tiering-service)).
+:::
+
 <Tabs groupId="datalake-format">
 <TabItem value="paimon" label="Paimon" default>
 
 ```yaml title="server.yaml"
+datalake.enabled: true
 datalake.format: paimon
 datalake.paimon.metastore: filesystem
 datalake.paimon.warehouse: /path/to/paimon/warehouse
@@ -37,6 +49,7 @@ datalake.paimon.warehouse: /path/to/paimon/warehouse
 
 For Hive catalog:
 ```yaml title="server.yaml"
+datalake.enabled: true
 datalake.format: paimon
 datalake.paimon.metastore: hive
 datalake.paimon.uri: thrift://<hive-metastore-host>:<port>
@@ -47,6 +60,7 @@ datalake.paimon.warehouse: hdfs:///path/to/warehouse
 <TabItem value="iceberg" label="Iceberg">
 
 ```yaml title="server.yaml"
+datalake.enabled: true
 datalake.format: iceberg
 datalake.iceberg.catalog-impl: org.apache.iceberg.jdbc.JdbcCatalog
 datalake.iceberg.name: fluss_catalog
@@ -61,6 +75,7 @@ datalake.iceberg.io-impl: org.apache.iceberg.aws.s3.S3FileIO
 <TabItem value="lance" label="Lance">
 
 ```yaml title="server.yaml"
+datalake.enabled: true
 datalake.format: lance
 datalake.lance.warehouse: s3://bucket/lance
 ```
@@ -95,16 +110,16 @@ Add JARs to `${FLUSS_HOME}/plugins/<format>/` based on your configuration:
 
 | Scenario | Required JAR |
 |----------|--------------|
-| Paimon with S3 | `paimon-s3-<version>.jar` |
-| Paimon with OSS | `paimon-oss-<version>.jar` |
-| Paimon Hive catalog | Flink SQL Hive connector JAR |
+| Paimon with S3 | [`paimon-s3-<version>.jar`](https://paimon.apache.org/docs/$PAIMON_VERSION_SHORT$/project/download/), matching your Paimon version |
+| Paimon with OSS | [`paimon-oss-<version>.jar`](https://paimon.apache.org/docs/$PAIMON_VERSION_SHORT$/project/download/), matching your Paimon version |
+| Paimon Hive catalog | [Flink SQL Hive connector JAR](https://nightlies.apache.org/flink/flink-docs-stable/docs/connectors/table/hive/overview/#using-bundled-hive-jar) |
 
 </TabItem>
 <TabItem value="iceberg" label="Iceberg">
 
 | Scenario | Required JAR |
 |----------|--------------|
-| Iceberg with S3 | `iceberg-aws-<version>.jar`, `iceberg-aws-bundle-<version>.jar` |
+| Iceberg with S3 | [`iceberg-aws-<version>.jar`, `iceberg-aws-bundle-<version>.jar`](https://iceberg.apache.org/docs/1.10.1/aws/), matching your Iceberg version |
 | Iceberg JDBC catalog | PostgreSQL/MySQL JDBC driver |
 
 </TabItem>
@@ -114,8 +129,6 @@ Lance support is built into the Fluss distribution. Cloud storage credentials ar
 
 </TabItem>
 </Tabs>
-
-For HDFS, see the [HDFS setup guide](../maintenance/tiered-storage/filesystems/hdfs.md).
 
 ## Starting the Tiering Service
 
@@ -144,7 +157,7 @@ Add the following to `${FLINK_HOME}/lib`:
 - [fluss-flink-1.20-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar)
 - [fluss-lake-iceberg-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-iceberg/$FLUSS_VERSION$/fluss-lake-iceberg-$FLUSS_VERSION$.jar)
 - [iceberg-flink-runtime-1.20-*.jar](https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-flink-runtime-1.20/)
-- Hadoop client JARs
+- Hadoop client JARs — export `HADOOP_CLASSPATH`, download the pre-bundled [`hadoop-apache-3.3.5-2.jar`](https://repo1.maven.org/maven2/io/trino/hadoop/hadoop-apache/3.3.5-2/hadoop-apache-3.3.5-2.jar), or install a full Hadoop package (see [Iceberg Hadoop Dependencies](../streaming-lakehouse/datalake-formats/iceberg.md#prerequisites-hadoop-dependencies))
 - JDBC driver (if using JDBC catalog)
 
 </TabItem>
