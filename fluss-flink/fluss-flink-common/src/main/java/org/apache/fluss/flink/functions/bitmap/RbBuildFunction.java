@@ -25,21 +25,21 @@ import javax.annotation.Nullable;
 import java.io.IOException;
 
 /**
- * {@code rb_build(v1 INT, v2 INT, ...) -> BYTES}
+ * {@code rb_build(values ARRAY<INT>) -> BYTES}
  *
- * <p>Builds a serialized {@link RoaringBitmap} from a variadic list of 32-bit integer values within
- * a single row. Unlike {@code rb_build_agg}, this function operates on individual column values in
- * the same row rather than aggregating across rows. Null values are ignored. Returns {@code null}
- * if all inputs are null or no inputs are provided.
+ * <p>Builds a serialized {@link RoaringBitmap} from an array of 32-bit integer values. Unlike
+ * {@code rb_build_agg}, this function operates on a single array value within a row rather than
+ * aggregating across rows. Null elements in the array are ignored. Returns {@code null} if the
+ * input is null or all elements are null.
  */
 public class RbBuildFunction extends ScalarFunction {
 
     /**
-     * @param values variadic integer values to add to the bitmap; null values are ignored
-     * @return serialized bitmap, or null if all inputs are null
+     * @param values array of integer values to add to the bitmap; null elements are ignored
+     * @return serialized bitmap, or null if input is null or all elements are null
      */
     @Nullable
-    public byte[] eval(@Nullable Integer... values) throws IOException {
+    public byte[] eval(@Nullable Integer[] values) throws IOException {
         if (values == null || values.length == 0) {
             return null;
         }

@@ -213,7 +213,7 @@ class RbFunctionsCatalogITCase {
 
     @Test
     void testRbBuildResolvedFromCatalog() throws Exception {
-        TableResult result = tEnv.executeSql("SELECT rb_cardinality(rb_build(1, 2, 3, 2))");
+        TableResult result = tEnv.executeSql("SELECT rb_cardinality(rb_build(ARRAY[1, 2, 3, 2]))");
         List<Row> rows = CollectionUtil.iteratorToList(result.collect());
 
         assertThat(rows).hasSize(1);
@@ -319,5 +319,13 @@ class RbFunctionsCatalogITCase {
         assertThat(rows).hasSize(1);
         assertThat(rows.get(0).getField(0)).isEqualTo(3L);
         assertThat(rows.get(0).getField(1)).isEqualTo(true);
+    }
+
+    @Test
+    void testRbBuildFromArrayResolvedFromCatalog() throws Exception {
+        TableResult result = tEnv.executeSql("SELECT rb_cardinality(rb_build(ARRAY[1, 2, 3, 2]))");
+        List<Row> rows = CollectionUtil.iteratorToList(result.collect());
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getField(0)).isEqualTo(3L); // duplicate 2 ignored
     }
 }

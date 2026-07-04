@@ -27,8 +27,9 @@ import java.io.IOException;
 /**
  * {@code rb_or(left BYTES, right BYTES) -> BYTES}
  *
- * <p>Returns the bitwise OR (union) of two serialized {@link RoaringBitmap} values. If one argument
- * is null, the other is returned as-is. Returns {@code null} only if both are null.
+ * <p>Returns the bitwise OR (union) of two serialized {@link RoaringBitmap} values. Returns {@code
+ * null} if either argument is null. To union bitmaps while ignoring nulls across rows, use {@code
+ * rb_or_agg} instead.
  */
 public class RbOrFunction extends ScalarFunction {
 
@@ -39,14 +40,8 @@ public class RbOrFunction extends ScalarFunction {
      */
     @Nullable
     public byte[] eval(@Nullable byte[] leftBytes, @Nullable byte[] rightBytes) throws IOException {
-        if (leftBytes == null && rightBytes == null) {
+        if (leftBytes == null || rightBytes == null) {
             return null;
-        }
-        if (leftBytes == null) {
-            return rightBytes;
-        }
-        if (rightBytes == null) {
-            return leftBytes;
         }
         RoaringBitmap left = BitmapUtils.fromBytes(leftBytes);
         RoaringBitmap right = BitmapUtils.fromBytes(rightBytes);

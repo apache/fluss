@@ -63,7 +63,7 @@ class RbScalarFunctionsTest {
     @Test
     void testBuildBasic() throws IOException {
         RbBuildFunction fn = new RbBuildFunction();
-        byte[] result = fn.eval(1, 2, 3, 2); // duplicate 2 ignored
+        byte[] result = fn.eval(new Integer[] {1, 2, 3, 2});
         assertThat(result).isNotNull();
         RoaringBitmap bitmap = BitmapUtils.fromBytes(result);
         assertThat(bitmap.getLongCardinality()).isEqualTo(3L);
@@ -76,16 +76,25 @@ class RbScalarFunctionsTest {
         RbBuildFunction fn = new RbBuildFunction();
         assertThat(fn.eval((Integer[]) null)).isNull();
         assertThat(fn.eval(new Integer[0])).isNull();
-        assertThat(fn.eval(null, null)).isNull(); // all null values
+        assertThat(fn.eval(new Integer[] {null, null})).isNull(); // all null values
     }
 
     @Test
     void testBuildNullValuesIgnored() throws IOException {
         RbBuildFunction fn = new RbBuildFunction();
-        byte[] result = fn.eval(1, null, 3);
+        byte[] result = fn.eval(new Integer[] {1, null, 3});
         RoaringBitmap bitmap = BitmapUtils.fromBytes(result);
         assertThat(bitmap.getLongCardinality()).isEqualTo(2L);
         assertThat(bitmap.contains(2)).isFalse();
+    }
+
+    @Test
+    void testBuildFromArray() throws IOException {
+        RbBuildFunction fn = new RbBuildFunction();
+        byte[] result = fn.eval(new Integer[] {1, 2, 3, 2}); // duplicate ignored
+        assertThat(result).isNotNull();
+        RoaringBitmap bitmap = BitmapUtils.fromBytes(result);
+        assertThat(bitmap.getLongCardinality()).isEqualTo(3L);
     }
 
     // -------------------------------------------------------------------------
@@ -171,14 +180,14 @@ class RbScalarFunctionsTest {
     void testOrLeftNull() throws IOException {
         RbOrFunction fn = new RbOrFunction();
         byte[] right = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2));
-        assertThat(fn.eval(null, right)).isEqualTo(right);
+        assertThat(fn.eval(null, right)).isNull(); // was: isEqualTo(right)
     }
 
     @Test
     void testOrRightNull() throws IOException {
         RbOrFunction fn = new RbOrFunction();
         byte[] left = BitmapUtils.toBytes(RoaringBitmap.bitmapOf(1, 2));
-        assertThat(fn.eval(left, null)).isEqualTo(left);
+        assertThat(fn.eval(left, null)).isNull(); // was: isEqualTo(left)
     }
 
     @Test
