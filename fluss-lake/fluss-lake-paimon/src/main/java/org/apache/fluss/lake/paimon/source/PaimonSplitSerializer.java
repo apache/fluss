@@ -69,6 +69,8 @@ public class PaimonSplitSerializer implements SimpleVersionedSerializer<PaimonSp
             DataInputStream dis = new DataInputStream(in);
             boolean isBucketUnAware = dis.readBoolean();
             if (version == VERSION_1) {
+                // VERSION_1 did not store partition values separately, but string partitions were
+                // exposed through DataSplit.partition(). Preserve that old behavior.
                 return new PaimonSplit(
                         dataSplit, isBucketUnAware, readStringPartition(dataSplit.partition()));
             } else if (version == VERSION_2) {
