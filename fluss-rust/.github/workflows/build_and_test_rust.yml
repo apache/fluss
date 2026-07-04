@@ -1,0 +1,90 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: Rust Build and Tests
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'website/**'
+      - '**/*.md'
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - 'website/**'
+      - '**/*.md'
+      - 'bindings/python/**'
+      - 'bindings/cpp/**'
+      - 'bindings/elixir/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-unit-test:
+    timeout-minutes: 60
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Build
+        run: cargo build --workspace --all-targets --exclude fluss_python --exclude fluss-cpp --exclude fluss_nif
+
+      - name: Unit Test
+        run: cargo test --all-targets --workspace --exclude fluss_python --exclude fluss-cpp --exclude fluss_nif
+        env:
+          RUST_LOG: DEBUG
+          RUST_BACKTRACE: full
+
+  integration-test:
+    needs: build-and-unit-test
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Integration Test
+        run: cargo test --features integration_tests --test test_fluss -p fluss-rs
+        env:
+          RUST_LOG: DEBUG
+          RUST_BACKTRACE: full

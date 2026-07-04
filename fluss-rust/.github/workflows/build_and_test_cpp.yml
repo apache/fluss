@@ -1,0 +1,90 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: C++ Build and Tests
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'website/**'
+      - '**/*.md'
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - 'website/**'
+      - '**/*.md'
+      - 'bindings/python/**'
+      - 'bindings/elixir/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    env:
+      FLUSS_TEST_CLUSTER_BIN: ${{ github.workspace }}/target/debug/fluss-test-cluster
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Apache Arrow C++
+        run: |
+          sudo apt-get install -y -V ca-certificates lsb-release wget
+          wget https://apache.jfrog.io/artifactory/arrow/$(lsb_release --id --short | tr 'A-Z' 'a-z')/apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
+          sudo apt-get install -y -V ./apache-arrow-apt-source-latest-$(lsb_release --codename --short).deb
+          sudo apt-get update
+          sudo apt-get install -y -V libarrow-dev
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+
+      - name: Build fluss-test-cluster binary
+        run: cargo build -p fluss-test-cluster
+
+      - name: Build C++ bindings and tests
+        working-directory: bindings/cpp
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+        run: |
+          cmake -B build \
+            -DFLUSS_ENABLE_TESTING=ON \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          cmake --build build --parallel
+          sccache --show-stats
+
+      - name: Run C++ integration tests (parallel)
+        working-directory: bindings/cpp
+        run: cd build && ctest -j$(nproc) --output-on-failure --timeout 300
+        env:
+          RUST_LOG: DEBUG
+          RUST_BACKTRACE: full
