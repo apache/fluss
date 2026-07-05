@@ -18,12 +18,14 @@
 
 package org.apache.fluss.server.zk.data.lake;
 
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.fs.FSDataOutputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.json.TableBucketOffsets;
 import org.apache.fluss.utils.types.Tuple2;
@@ -70,8 +72,12 @@ public class LakeTableHelper {
                                     tableId, lakeTableSnapshot.getBucketLogEndOffset()));
             lakeTableSnapshot = new LakeTableSnapshot(tableId, tableBucketOffsets.getOffsets());
         }
-        zkClient.upsertLakeTable(
-                tableId, new LakeTable(lakeTableSnapshot), optPreviousLakeTable.isPresent());
+        try {
+            zkClient.upsertLakeTable(
+                    tableId, new LakeTable(lakeTableSnapshot), optPreviousLakeTable.isPresent());
+        } catch (KeeperException.NoNodeException e) {
+            throw new TableNotExistException("Table " + tableId + " does not exist.", e);
+        }
     }
 
     public void registerLakeTableSnapshotV2(
@@ -113,6 +119,8 @@ public class LakeTableHelper {
         try {
             // First, upsert to ZK. Only after success, we discard old snapshots.
             zkClient.upsertLakeTable(tableId, lakeTable, optPreviousTable.isPresent());
+        } catch (KeeperException.NoNodeException e) {
+            throw new TableNotExistException("Table " + tableId + " does not exist.", e);
         } catch (Exception e) {
             LOG.warn("Failed to upsert lake table snapshot to zk.", e);
             throw e;

@@ -1415,7 +1415,7 @@ public class ZooKeeperClient implements AutoCloseable {
         if (isUpdate) {
             zkClient.setData().forPath(zkPath, zkData);
         } else {
-            zkClient.create().creatingParentsIfNeeded().forPath(zkPath, zkData);
+            zkClient.create().forPath(zkPath, zkData);
         }
     }
 
