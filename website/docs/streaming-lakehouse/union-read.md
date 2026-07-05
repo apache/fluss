@@ -11,7 +11,7 @@ Union Read is a core feature of Fluss's Streaming Lakehouse that combines real-t
 
 For a table with `'table.datalake.enabled' = 'true'`, data exists in two layers:
 - **Fluss (hot data)**: Sub-second fresh data stored in Arrow format
-- **Data Lake (cold data)**: Historical data stored in Parquet format
+- **Data Lake (cold data)**: Historical data stored in the configured lake format
 
 Union Read transparently merges data from both sources, providing sub-second freshness with full historical coverage.
 

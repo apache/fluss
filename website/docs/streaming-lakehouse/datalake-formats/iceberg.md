@@ -262,7 +262,7 @@ CREATE TABLE fluss_order_with_lake (
  ) WITH (
      'table.datalake.enabled' = 'true',
      'table.datalake.freshness' = '30s',
-     'table.datalake.auto-maintenance' = 'true',
+     'table.datalake.auto-compaction' = 'true',
      'iceberg.write.format.default' = 'orc',
      'iceberg.commit.retry.num-retries' = '5'
 );

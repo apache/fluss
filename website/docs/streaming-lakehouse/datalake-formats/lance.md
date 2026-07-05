@@ -125,7 +125,7 @@ ds = lance.dataset("<warehouse_path>/<database_name>/<table_name>.lance")
 
 Lance internally stores data in Arrow format.
 When integrating with Lance, Fluss automatically converts between Fluss data types and Lance data types.  
-The following table shows the mapping between [Fluss data types](table-design/data-types.md) and Lance data types:
+The following table shows the mapping between [Fluss data types](../../table-design/data-types.md) and Lance data types:
 
 | Fluss Data Type               | Lance Data Type           |
 |-------------------------------|---------------------------|
