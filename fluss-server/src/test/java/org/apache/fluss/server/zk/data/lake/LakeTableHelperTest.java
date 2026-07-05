@@ -20,6 +20,7 @@ package org.apache.fluss.server.zk.data.lake;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.local.LocalFileSystem;
@@ -31,6 +32,8 @@ import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.ZooKeeperUtils;
+import org.apache.fluss.server.zk.data.BucketAssignment;
+import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.utils.json.TableBucketOffsets;
@@ -50,6 +53,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** The UT for {@link LakeTableHelper}. */
 class LakeTableHelperTest {
@@ -96,6 +100,7 @@ class LakeTableHelperTest {
             TablePath tablePath = TablePath.of("test_db", "test_table");
             TableRegistration tableReg = createTableReg(tableId);
             zookeeperClient.registerTable(tablePath, tableReg);
+            zookeeperClient.registerTableAssignment(tableId, createTableAssignment());
 
             // Create a legacy version 1 LakeTableSnapshot (full data in ZK)
             long snapshotId = 1L;
@@ -177,6 +182,7 @@ class LakeTableHelperTest {
 
         // --- Setup: Register table and initialize filesystem ---
         zookeeperClient.registerTable(tablePath, createTableReg(tableId));
+        zookeeperClient.registerTableAssignment(tableId, createTableAssignment());
         FileSystem fs = LocalFileSystem.getSharedInstance();
 
         // 1. Create Snapshot 1 (ID=1)
@@ -253,6 +259,25 @@ class LakeTableHelperTest {
                 .containsExactly(4L, 5L, 6L);
     }
 
+    @Test
+    void testRegisterLakeTableSnapshotV2DoesNotRecreateDeletedTableAssignment() throws Exception {
+        LakeTableHelper lakeTableHelper = new LakeTableHelper(zookeeperClient, remoteDataDir);
+        long tableId = 1L;
+        TablePath tablePath = TablePath.of("test_db", "deleted_assignment_test");
+        zookeeperClient.registerTable(tablePath, createTableReg(tableId));
+        zookeeperClient.registerTableAssignment(tableId, createTableAssignment());
+        zookeeperClient.deleteTableAssignment(tableId);
+
+        LakeTable.LakeSnapshotMetadata metadata =
+                new LakeTable.LakeSnapshotMetadata(1L, new FsPath("/tmp/fake/path.offsets"), null);
+
+        assertThatThrownBy(() -> lakeTableHelper.registerLakeTableSnapshotV2(tableId, metadata))
+                .isInstanceOf(TableNotExistException.class)
+                .hasMessageContaining("Table " + tableId + " does not exist");
+        assertThat(zookeeperClient.getTableAssignment(tableId)).isEmpty();
+        assertThat(zookeeperClient.getLakeTable(tableId)).isEmpty();
+    }
+
     /** Helper to store offset files and return the FsPath. */
     private FsPath storeOffsetFile(
             LakeTableHelper helper, TablePath path, long tableId, long offset) throws Exception {
@@ -273,5 +298,9 @@ class LakeTableHelperTest {
                 remoteDataDir,
                 System.currentTimeMillis(),
                 System.currentTimeMillis());
+    }
+
+    private TableAssignment createTableAssignment() {
+        return TableAssignment.builder().add(0, BucketAssignment.of(0)).build();
     }
 }
