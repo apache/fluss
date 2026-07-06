@@ -92,6 +92,8 @@ import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
+import org.apache.fluss.utils.concurrent.FlussScheduler;
+import org.apache.fluss.utils.concurrent.Scheduler;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.AfterEach;
@@ -171,6 +173,7 @@ class CoordinatorEventProcessorTest {
     private CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private CoordinatorMetadataCache serverMetadataCache;
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
+    private Scheduler scheduler;
     private String remoteDataDir;
 
     @BeforeAll
@@ -228,6 +231,9 @@ class CoordinatorEventProcessorTest {
                         TestingMetricGroups.COORDINATOR_METRICS);
         kvSnapshotLeaseManager.start();
 
+        scheduler = new FlussScheduler(1);
+        scheduler.startup();
+
         eventProcessor = buildCoordinatorEventProcessor();
         eventProcessor.startup();
         metadataManager.createDatabase(
@@ -236,8 +242,13 @@ class CoordinatorEventProcessorTest {
     }
 
     @AfterEach
-    void afterEach() {
-        eventProcessor.shutdown();
+    void afterEach() throws Exception {
+        if (eventProcessor != null) {
+            eventProcessor.shutdown();
+        }
+        if (scheduler != null) {
+            scheduler.shutdown();
+        }
         metadataManager.dropDatabase(defaultDatabase, false, true);
         // clear the assignment info for all tables;
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupPath(TableIdsZNode.path());
@@ -1166,6 +1177,7 @@ class CoordinatorEventProcessorTest {
 
     @Test
     void testRetryOfflineLeaderEventRetriesOfflineReplicaOnLiveServer() throws Exception {
+        assertThat(eventProcessor.hasOfflineLeaderRetryTaskScheduled()).isFalse();
         initCoordinatorChannel();
         TablePath tablePath = TablePath.of(defaultDatabase, "retry_offline_leader_on_live_server");
         int nBuckets = 3;
@@ -1207,6 +1219,7 @@ class CoordinatorEventProcessorTest {
                     assertThat(ctx.getBucketState(tableBucket)).isEqualTo(OfflineBucket);
                     assertThat(ctx.isReplicaOnline(leader, tableBucket)).isFalse();
                 });
+        assertThat(eventProcessor.hasOfflineLeaderRetryTaskScheduled()).isTrue();
 
         eventProcessor.getCoordinatorEventManager().put(new RetryOfflineLeaderEvent());
 
@@ -1218,6 +1231,7 @@ class CoordinatorEventProcessorTest {
                     assertThat(ctx.getBucketLeaderAndIsr(tableBucket).get().leader())
                             .isEqualTo(leader);
                 });
+        assertThat(eventProcessor.hasOfflineLeaderRetryTaskScheduled()).isFalse();
     }
 
     @Test
@@ -1262,6 +1276,7 @@ class CoordinatorEventProcessorTest {
                     assertThat(ctx.getReplicaState(tableBucketReplica)).isEqualTo(OfflineReplica);
                     assertThat(ctx.isReplicaOnline(leader, tableBucket)).isFalse();
                 });
+        assertThat(eventProcessor.hasOfflineLeaderRetryTaskScheduled()).isTrue();
 
         CountingFailingNotifyGateway failingGateway = new CountingFailingNotifyGateway();
         testCoordinatorChannelManager.setGateways(Collections.singletonMap(leader, failingGateway));
@@ -1277,6 +1292,7 @@ class CoordinatorEventProcessorTest {
                     assertThat(ctx.getBucketState(tableBucket)).isEqualTo(OfflineBucket);
                     assertThat(ctx.isReplicaOnline(leader, tableBucket)).isFalse();
                 });
+        assertThat(eventProcessor.hasOfflineLeaderRetryTaskScheduled()).isTrue();
     }
 
     @Test
@@ -1338,6 +1354,7 @@ class CoordinatorEventProcessorTest {
                             .contains(tableBucketReplica);
                     return null;
                 });
+        assertThat(eventProcessor.hasOfflineLeaderRetryTaskScheduled()).isFalse();
     }
 
     @Test
@@ -1832,7 +1849,7 @@ class CoordinatorEventProcessorTest {
     private CoordinatorEventProcessor buildCoordinatorEventProcessor() {
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.REMOTE_DATA_DIR, remoteDataDir);
-        conf.set(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_INTERVAL, Duration.ofDays(1));
+        conf.set(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY, Duration.ofDays(1));
         return new CoordinatorEventProcessor(
                 zookeeperClient,
                 serverMetadataCache,
@@ -1845,6 +1862,7 @@ class CoordinatorEventProcessorTest {
                 Executors.newFixedThreadPool(1, new ExecutorThreadFactory("test-coordinator-io")),
                 metadataManager,
                 kvSnapshotLeaseManager,
+                scheduler,
                 SystemClock.getInstance());
     }
 

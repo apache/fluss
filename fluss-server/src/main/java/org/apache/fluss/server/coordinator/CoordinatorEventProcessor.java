@@ -127,7 +127,7 @@ import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.AutoPartitionStrategy;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
-import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
+import org.apache.fluss.utils.concurrent.Scheduler;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -148,9 +148,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ScheduledFuture;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
@@ -193,10 +191,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final String internalListenerName;
     private final CoordinatorMetricGroup coordinatorMetricGroup;
     private final RebalanceManager rebalanceManager;
-    private final ScheduledExecutorService offlineLeaderRetryScheduler;
-    private final long offlineLeaderRetryIntervalMs;
+    private final Scheduler scheduler;
+    private final long offlineLeaderRetryDelayMs;
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private final LakeTableHelper lakeTableHelper;
+    private ScheduledFuture<?> offlineLeaderRetryTask;
 
     public CoordinatorEventProcessor(
             ZooKeeperClient zooKeeperClient,
@@ -210,6 +209,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
             ExecutorService ioExecutor,
             MetadataManager metadataManager,
             KvSnapshotLeaseManager kvSnapshotLeaseManager,
+            Scheduler scheduler,
             Clock clock) {
         this.zooKeeperClient = zooKeeperClient;
         this.serverMetadataCache = serverMetadataCache;
@@ -269,18 +269,16 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.rebalanceManager =
                 new RebalanceManager(
                         this, zooKeeperClient, coordinatorEventManager, SystemClock.getInstance());
-        this.offlineLeaderRetryIntervalMs =
-                conf.get(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_INTERVAL).toMillis();
-        if (offlineLeaderRetryIntervalMs <= 0) {
+        this.offlineLeaderRetryDelayMs =
+                conf.get(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY).toMillis();
+        if (offlineLeaderRetryDelayMs <= 0) {
             throw new IllegalArgumentException(
                     String.format(
                             "%s must be positive, but was %d ms.",
-                            ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_INTERVAL.key(),
-                            offlineLeaderRetryIntervalMs));
+                            ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY.key(),
+                            offlineLeaderRetryDelayMs));
         }
-        this.offlineLeaderRetryScheduler =
-                Executors.newSingleThreadScheduledExecutor(
-                        new ExecutorThreadFactory("offline-leader-retry"));
+        this.scheduler = scheduler;
         this.ioExecutor = ioExecutor;
         this.lakeTableHelper =
                 new LakeTableHelper(zooKeeperClient, conf.getString(ConfigOptions.REMOTE_DATA_DIR));
@@ -301,6 +299,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
     @VisibleForTesting
     TableLifecycleThrottler getLifecycleThrottler() {
         return lifecycleThrottler;
+    }
+
+    @VisibleForTesting
+    boolean hasOfflineLeaderRetryTaskScheduled() {
+        return offlineLeaderRetryTask != null;
     }
 
     public void startup() {
@@ -341,12 +344,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // start rebalance manager.
         rebalanceManager.startup();
         rebalanceManager.start();
-
-        startOfflineLeaderRetryScheduler();
     }
 
     public void shutdown() {
-        offlineLeaderRetryScheduler.shutdownNow();
+        clearOfflineLeaderRetryTask();
         // close the event manager
         coordinatorEventManager.close();
         rebalanceManager.close();
@@ -609,15 +610,29 @@ public class CoordinatorEventProcessor implements EventProcessor {
         tabletServerChangeWatcher.stop();
     }
 
-    private void startOfflineLeaderRetryScheduler() {
-        offlineLeaderRetryScheduler.scheduleWithFixedDelay(
-                this::enqueueRetryOfflineLeaderEventSafely,
-                offlineLeaderRetryIntervalMs,
-                offlineLeaderRetryIntervalMs,
-                TimeUnit.MILLISECONDS);
+    private void scheduleOfflineLeaderRetryIfNeeded() {
+        if (offlineLeaderRetryTask != null) {
+            return;
+        }
+
+        // Keep CoordinatorContext access on the coordinator event thread. The scheduled task only
+        // enqueues a retry event.
+        Set<TableBucketReplica> retryableOfflineReplicas =
+                retryableOfflineReplicasOnLiveTabletServers();
+        if (retryableOfflineReplicas.isEmpty()) {
+            return;
+        }
+
+        offlineLeaderRetryTask =
+                scheduler.scheduleOnce(
+                        "offline-leader-retry",
+                        this::enqueueRetryOfflineLeaderEventSafely,
+                        offlineLeaderRetryDelayMs);
         LOG.info(
-                "Offline leader retry scheduler started: retryIntervalMs={}",
-                offlineLeaderRetryIntervalMs);
+                "Offline leader retry task scheduled after {} ms for {} replicas: {}.",
+                offlineLeaderRetryDelayMs,
+                retryableOfflineReplicas.size(),
+                retryableOfflineReplicas);
     }
 
     private void enqueueRetryOfflineLeaderEventSafely() {
@@ -746,16 +761,12 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     private void processRetryOfflineLeader() {
-        Set<TableBucketReplica> offlineReplicas =
-                coordinatorContext.offlineReplicasOnLiveTabletServers().stream()
-                        .filter(
-                                replica ->
-                                        !coordinatorContext.isToBeDeleted(replica.getTableBucket()))
-                        .filter(
-                                replica ->
-                                        coordinatorContext.getReplicaState(replica)
-                                                == OfflineReplica)
-                        .collect(Collectors.toSet());
+        // This event consumes the currently scheduled one-shot retry. If the NotifyLeaderAndIsr
+        // request sent below is rejected by the target tablet server again, its response handler
+        // will call onReplicaBecomeOffline(), put the offline marker back, and schedule the next
+        // one-shot retry.
+        clearOfflineLeaderRetryTask();
+        Set<TableBucketReplica> offlineReplicas = retryableOfflineReplicasOnLiveTabletServers();
 
         if (offlineReplicas.isEmpty()) {
             return;
@@ -779,6 +790,24 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         replicaStateMachine.handleStateChanges(offlineReplicas, OnlineReplica);
         tableBucketStateMachine.triggerOnlineBucketStateChange();
+    }
+
+    private Set<TableBucketReplica> retryableOfflineReplicasOnLiveTabletServers() {
+        // offlineReplicasOnLiveTabletServers() returns replicas from replicasOnOffline, which is
+        // only a leader-election exclusion marker. The replica state may have changed after the
+        // marker was added, for example because deletion or migration started. Retry only replicas
+        // that are still OfflineReplica in the state machine.
+        return coordinatorContext.offlineReplicasOnLiveTabletServers().stream()
+                .filter(replica -> !coordinatorContext.isToBeDeleted(replica.getTableBucket()))
+                .filter(replica -> coordinatorContext.getReplicaState(replica) == OfflineReplica)
+                .collect(Collectors.toSet());
+    }
+
+    private void clearOfflineLeaderRetryTask() {
+        if (offlineLeaderRetryTask != null) {
+            offlineLeaderRetryTask.cancel(false);
+            offlineLeaderRetryTask = null;
+        }
     }
 
     private void processCreateTable(CreateTableEvent createTableEvent) {
@@ -1193,6 +1222,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // kafka, todo: but we may need to select another tablet server to put
         // replica
         replicaStateMachine.handleStateChanges(offlineReplicas, OfflineReplica);
+        scheduleOfflineLeaderRetryIfNeeded();
     }
 
     private void processNewCoordinator(NewCoordinatorEvent newCoordinatorEvent) {

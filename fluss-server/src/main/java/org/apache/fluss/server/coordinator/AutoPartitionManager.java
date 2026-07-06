@@ -122,6 +122,8 @@ public class AutoPartitionManager implements AutoCloseable {
                 remoteDirDynamicLoader,
                 conf,
                 SystemClock.getInstance(),
+                // TODO: Reuse the CoordinatorServer shared scheduler for this lightweight
+                // coordinator periodic task instead of creating a component-owned scheduler.
                 Executors.newScheduledThreadPool(
                         1, new ExecutorThreadFactory("periodic-auto-partition-manager")));
     }

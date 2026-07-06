@@ -242,8 +242,7 @@ public class CoordinatorContext {
      *
      * <p>The {@code replicasOnOffline} map is part of {@link #isReplicaOnline(int, TableBucket)},
      * so replicas in it are filtered out from leader election even when their tablet server is
-     * still live. The coordinator periodically probes these replicas again because some failures,
-     * such as disk write protection, can recover without a tablet-server restart.
+     * still live.
      */
     public Set<TableBucketReplica> offlineReplicasOnLiveTabletServers() {
         Set<Integer> liveTabletServers = liveTabletServerSet();

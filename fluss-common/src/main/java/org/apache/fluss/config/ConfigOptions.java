@@ -221,15 +221,16 @@ public class ConfigOptions {
                                             + "TableLifecycleThrottler scans in-flight drops for "
                                             + "timeouts.");
 
-    public static final ConfigOption<Duration> COORDINATOR_OFFLINE_LEADER_RETRY_INTERVAL =
-            key("coordinator.offline-leader.retry-interval")
+    public static final ConfigOption<Duration> COORDINATOR_OFFLINE_LEADER_RETRY_DELAY =
+            key("coordinator.offline-leader.retry-delay")
                     .durationType()
                     .defaultValue(Duration.ofMinutes(1))
                     .withDescription(
-                            "The interval at which the coordinator retries offline leaders on "
-                                    + "live tablet servers. This lets a leader that was rejected "
-                                    + "because of temporary tablet-server conditions, such as disk "
-                                    + "write protection, become electable again after recovery.");
+                            "The delay before the coordinator retries offline leaders on live "
+                                    + "tablet servers after they are marked offline. This lets a "
+                                    + "leader that was rejected because of temporary tablet-server "
+                                    + "conditions, such as disk write protection, become electable "
+                                    + "again after recovery.");
 
     public static final ConfigOption<Boolean> LOG_TABLE_ALLOW_CREATION =
             key("allow.create.log.tables")

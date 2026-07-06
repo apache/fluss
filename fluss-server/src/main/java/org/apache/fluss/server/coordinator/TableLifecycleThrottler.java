@@ -107,6 +107,8 @@ public class TableLifecycleThrottler implements AutoCloseable {
         this(
                 eventManager,
                 clock,
+                // TODO: Reuse the CoordinatorServer shared scheduler for this lightweight
+                // coordinator timeout checker instead of creating a component-owned scheduler.
                 Executors.newScheduledThreadPool(
                         1, new ExecutorThreadFactory("lifecycle-throttler-timeout")),
                 conf.get(ConfigOptions.COORDINATOR_LIFECYCLE_THROTTLER_INFLIGHT_TIMEOUT).toMillis(),

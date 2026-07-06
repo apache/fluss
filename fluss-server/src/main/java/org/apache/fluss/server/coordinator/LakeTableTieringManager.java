@@ -158,6 +158,8 @@ public class LakeTableTieringManager implements AutoCloseable {
     public LakeTableTieringManager(LakeTieringMetricGroup lakeTieringMetricGroup) {
         this(
                 new DefaultTimer("delay lake tiering", 1_000, 20),
+                // TODO: Reuse the CoordinatorServer shared scheduler for this lightweight
+                // coordinator timeout checker instead of creating a component-owned scheduler.
                 Executors.newSingleThreadScheduledExecutor(
                         new ExecutorThreadFactory("fluss-lake-tiering-timeout-checker")),
                 SystemClock.getInstance(),
