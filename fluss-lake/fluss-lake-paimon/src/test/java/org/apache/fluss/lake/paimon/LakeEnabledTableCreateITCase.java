@@ -479,49 +479,7 @@ class LakeEnabledTableCreateITCase {
                 .cause()
                 .isInstanceOf(InvalidAlterTableException.class)
                 .hasMessageContaining(
-                        "'paimon.path' can only be altered when 'table.datalake.enabled' is false"
-                                + " and the Paimon table has not been created");
-
-        TablePath lakeCreatedThenDisabledTablePath =
-                TablePath.of(DATABASE, "alter_paimon_path_created_disabled");
-        admin.createTable(lakeCreatedThenDisabledTablePath, lakeEnabledTable, false).get();
-        admin.alterTable(
-                        lakeCreatedThenDisabledTablePath,
-                        Collections.singletonList(
-                                TableChange.set(
-                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "false")),
-                        false)
-                .get();
-        assertThat(
-                        admin.getTableInfo(lakeCreatedThenDisabledTablePath)
-                                .get()
-                                .getTableConfig()
-                                .isDataLakeEnabled())
-                .isFalse();
-        assertThat(
-                        paimonCatalog.getTable(
-                                Identifier.create(
-                                        DATABASE, lakeCreatedThenDisabledTablePath.getTableName())))
-                .isNotNull();
-
-        assertThatThrownBy(
-                        () ->
-                                admin.alterTable(
-                                                lakeCreatedThenDisabledTablePath,
-                                                Collections.singletonList(
-                                                        TableChange.set(
-                                                                "paimon.path",
-                                                                Files.createTempDirectory(
-                                                                                "alter-paimon-path-created-disabled")
-                                                                        .toUri()
-                                                                        .toString())),
-                                                false)
-                                        .get())
-                .cause()
-                .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessageContaining(
-                        "'paimon.path' can only be altered when 'table.datalake.enabled' is false"
-                                + " and the Paimon table has not been created");
+                        "'paimon.path' can only be altered when datalake is disabled");
     }
 
     @Test

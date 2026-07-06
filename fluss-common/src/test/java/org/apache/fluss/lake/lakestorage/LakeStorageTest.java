@@ -151,11 +151,6 @@ class LakeStorageTest {
                 throws TableAlreadyExistException {}
 
         @Override
-        public boolean tableExists(TablePath tablePath, Context context) {
-            throw new UnsupportedOperationException("tableExists is not supported.");
-        }
-
-        @Override
         public void alterTable(TablePath tablePath, List<TableChange> tableChanges, Context context)
                 throws TableNotExistException {}
     }

@@ -36,11 +36,6 @@ public class TestingValuesLakeCatalog implements LakeCatalog {
     }
 
     @Override
-    public boolean tableExists(TablePath tablePath, Context context) {
-        return TestingValuesLake.getTable(tablePath.toString()) != null;
-    }
-
-    @Override
     public void alterTable(TablePath tablePath, List<TableChange> tableChanges, Context context)
             throws TableNotExistException {
         throw new RuntimeException("Not impl.");

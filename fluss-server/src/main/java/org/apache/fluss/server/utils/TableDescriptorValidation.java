@@ -37,9 +37,6 @@ import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.security.acl.FlussPrincipal;
-import org.apache.fluss.server.coordinator.CoordinatorService.DefaultLakeCatalogContext;
-import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
@@ -71,8 +68,6 @@ import static org.apache.fluss.utils.PartitionUtils.PARTITION_KEY_SUPPORTED_TYPE
 
 /** Validator of {@link TableDescriptor}. */
 public class TableDescriptorValidation {
-
-    private static final String PAIMON_PATH_KEY = "paimon.path";
 
     private static final Set<String> SYSTEM_COLUMNS =
             Collections.unmodifiableSet(
@@ -174,21 +169,6 @@ public class TableDescriptorValidation {
 
     public static void validateAlterTableProperties(
             TableInfo currentTable, Set<String> tableKeysToChange) {
-        validateAlterTableProperties(currentTable, tableKeysToChange, Collections.emptySet());
-    }
-
-    public static void validateAlterTableProperties(
-            TableInfo currentTable, Set<String> tableKeysToChange, Set<String> customKeysToChange) {
-        validateAlterTableProperties(
-                currentTable, tableKeysToChange, customKeysToChange, null, null);
-    }
-
-    public static void validateAlterTableProperties(
-            TableInfo currentTable,
-            Set<String> tableKeysToChange,
-            Set<String> customKeysToChange,
-            @Nullable LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer,
-            @Nullable FlussPrincipal flussPrincipal) {
         TableConfig currentConfig = currentTable.getTableConfig();
 
         List<String> unsupportedKeys =
@@ -211,16 +191,6 @@ public class TableDescriptorValidation {
                     String.format(
                             "'%s' can only be altered on primary key tables.",
                             ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key()));
-        }
-
-        if (customKeysToChange.contains(PAIMON_PATH_KEY)
-                && (currentConfig.isDataLakeEnabled()
-                        || paimonTableExists(currentTable, lakeCatalogContainer, flussPrincipal))) {
-            throw new InvalidAlterTableException(
-                    String.format(
-                            "'%s' can only be altered when '%s' is false and the Paimon table"
-                                    + " has not been created.",
-                            PAIMON_PATH_KEY, ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
         }
 
         if (!currentConfig.getDataLakeFormat().isPresent()) {
@@ -254,25 +224,6 @@ public class TableDescriptorValidation {
                                         .collect(Collectors.joining(", "))));
             }
         }
-    }
-
-    private static boolean paimonTableExists(
-            TableInfo currentTable,
-            @Nullable LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer,
-            @Nullable FlussPrincipal flussPrincipal) {
-        if (lakeCatalogContainer == null
-                || lakeCatalogContainer.getDataLakeFormat() != DataLakeFormat.PAIMON
-                || lakeCatalogContainer.getLakeCatalog() == null) {
-            return false;
-        }
-
-        TableDescriptor tableDescriptor = currentTable.toTableDescriptor();
-        DefaultLakeCatalogContext context =
-                new DefaultLakeCatalogContext(
-                        false, flussPrincipal, tableDescriptor, tableDescriptor);
-        return lakeCatalogContainer
-                .getLakeCatalog()
-                .tableExists(currentTable.getTablePath(), context);
     }
 
     private static void checkSystemColumns(RowType schema) {

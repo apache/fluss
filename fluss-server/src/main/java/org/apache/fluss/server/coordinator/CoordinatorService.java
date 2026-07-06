@@ -1514,15 +1514,13 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         }
     }
 
-    /** Default context for lake catalog operations. */
-    public static class DefaultLakeCatalogContext implements LakeCatalog.Context {
+    static class DefaultLakeCatalogContext implements LakeCatalog.Context {
 
         private final boolean isCreatingFlussTable;
         private final FlussPrincipal flussPrincipal;
         @Nullable private final TableDescriptor currentTable;
         private final TableDescriptor expectedTable;
 
-        /** Creates a default context for a lake catalog operation. */
         public DefaultLakeCatalogContext(
                 boolean isCreatingFlussTable,
                 FlussPrincipal flussPrincipal,
