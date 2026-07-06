@@ -30,9 +30,11 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.IOUtils;
 
+import org.apache.iceberg.PartitionField;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.RowLevelOperationMode;
 import org.apache.iceberg.Schema;
+import org.apache.iceberg.SortField;
 import org.apache.iceberg.SortOrder;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.TableProperties;
@@ -96,15 +98,30 @@ public class IcebergLakeCatalog implements LakeCatalog {
         PartitionSpec partitionSpec =
                 IcebergPartitionSpecUtils.createPartitionSpec(tableDescriptor, icebergSchema);
         SortOrder sortOrder = createSortOrder(icebergSchema);
-        tableBuilder.withProperties(buildTableProperties(tableDescriptor, isPkTable));
+        Map<String, String> expectedProperties = buildTableProperties(tableDescriptor, isPkTable);
+        tableBuilder.withProperties(expectedProperties);
         tableBuilder.withPartitionSpec(partitionSpec);
         tableBuilder.withSortOrder(sortOrder);
         try {
-            createTable(tablePath, tableBuilder);
+            createTable(
+                    tablePath,
+                    tableBuilder,
+                    icebergSchema,
+                    partitionSpec,
+                    sortOrder,
+                    expectedProperties,
+                    context.isCreatingFlussTable());
         } catch (NoSuchNamespaceException e) {
             createDatabase(tablePath.getDatabaseName());
             try {
-                createTable(tablePath, tableBuilder);
+                createTable(
+                        tablePath,
+                        tableBuilder,
+                        icebergSchema,
+                        partitionSpec,
+                        sortOrder,
+                        expectedProperties,
+                        context.isCreatingFlussTable());
             } catch (NoSuchNamespaceException t) {
                 // shouldn't happen in normal cases
                 throw new RuntimeException(
@@ -255,12 +272,187 @@ public class IcebergLakeCatalog implements LakeCatalog {
         return TableIdentifier.of(tablePath.getDatabaseName(), tablePath.getTableName());
     }
 
-    private void createTable(TablePath tablePath, Catalog.TableBuilder tableBuilder) {
+    private void createTable(
+            TablePath tablePath,
+            Catalog.TableBuilder tableBuilder,
+            Schema newIcebergSchema,
+            PartitionSpec expectedSpec,
+            SortOrder expectedSortOrder,
+            Map<String, String> expectedProperties,
+            boolean isCreatingFlussTable) {
         try {
             tableBuilder.create();
         } catch (AlreadyExistsException e) {
-            throw new TableAlreadyExistException("Table " + tablePath + " already exists.");
+            // Table already exists in Iceberg. Check schema compatibility for idempotency,
+            TableIdentifier icebergId = toIcebergTableIdentifier(tablePath);
+            Table existingTable = icebergCatalog.loadTable(icebergId);
+            Schema existingSchema = existingTable.schema();
+            if (!isIcebergSchemaCompatibleWithSchema(existingSchema, newIcebergSchema)) {
+                throw new TableAlreadyExistException(
+                        String.format(
+                                "The table %s already exists in Iceberg catalog, but the table schema is not compatible. "
+                                        + "Existing schema: %s, new schema: %s. "
+                                        + "Please first drop the table in Iceberg catalog or use a new table name.",
+                                tablePath, existingSchema, newIcebergSchema),
+                        e);
+            }
+
+            if (!isIcebergPartitionSpecCompatible(
+                    existingTable.spec(), existingSchema, expectedSpec, newIcebergSchema)) {
+                throw new TableAlreadyExistException(
+                        String.format(
+                                "The table %s already exists in Iceberg catalog, but the partition spec is not compatible. "
+                                        + "Existing spec: %s, new spec: %s. "
+                                        + "Please first drop the table in Iceberg catalog or use a new table name.",
+                                tablePath, existingTable.spec(), expectedSpec),
+                        e);
+            }
+
+            if (!isIcebergSortOrderCompatible(
+                    existingTable.sortOrder(),
+                    existingSchema,
+                    expectedSortOrder,
+                    newIcebergSchema)) {
+                throw new TableAlreadyExistException(
+                        String.format(
+                                "The table %s already exists in Iceberg catalog, but the sort order is not compatible. "
+                                        + "Existing sort order: %s, new sort order: %s. "
+                                        + "Please first drop the table in Iceberg catalog, or pre-create the "
+                                        + "Iceberg table without a custom sort order, or with ASC(%s) set explicitly, "
+                                        + "or use a new table name.",
+                                tablePath,
+                                existingTable.sortOrder(),
+                                expectedSortOrder,
+                                OFFSET_COLUMN_NAME),
+                        e);
+            }
+
+            if (!isIcebergPropertiesCompatible(existingTable.properties(), expectedProperties)) {
+                throw new TableAlreadyExistException(
+                        String.format(
+                                "The table %s already exists in Iceberg catalog, but the table properties are not compatible. "
+                                        + "Existing properties: %s, new properties: %s. "
+                                        + "Please first drop the table in Iceberg catalog or use a new table name.",
+                                tablePath, existingTable.properties(), expectedProperties),
+                        e);
+            }
+
+            // if creating a new fluss table, we should ensure the lake table is empty
+            if (isCreatingFlussTable && existingTable.currentSnapshot() != null) {
+                throw new TableAlreadyExistException(
+                        String.format(
+                                "The table %s already exists in Iceberg catalog, and the table is not empty. "
+                                        + "Please first drop the table in Iceberg catalog or use a new table name.",
+                                tablePath),
+                        e);
+            }
         }
+    }
+
+    @VisibleForTesting
+    boolean isIcebergSchemaCompatibleWithSchema(Schema existingSchema, Schema newSchema) {
+        Schema normalizedExisting = TypeUtil.assignIncreasingFreshIds(existingSchema);
+        Schema normalizedNew = TypeUtil.assignIncreasingFreshIds(newSchema);
+
+        List<Types.NestedField> existingFields = normalizedExisting.columns();
+        List<Types.NestedField> newFields = normalizedNew.columns();
+
+        if (existingFields.size() != newFields.size()) {
+            return false;
+        }
+
+        for (int i = 0; i < existingFields.size(); i++) {
+            Types.NestedField existing = existingFields.get(i);
+            Types.NestedField expected = newFields.get(i);
+            if (!existing.name().equals(expected.name())
+                    || !existing.type().equals(expected.type())
+                    || existing.isOptional() != expected.isOptional()) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /** Checks whether the existing Iceberg partition spec is compatible with the expected one. */
+    @VisibleForTesting
+    boolean isIcebergPartitionSpecCompatible(
+            PartitionSpec existingSpec,
+            Schema existingSchema,
+            PartitionSpec expectedSpec,
+            Schema expectedSchema) {
+        if (existingSpec.fields().size() != expectedSpec.fields().size()) {
+            return false;
+        }
+
+        for (int i = 0; i < existingSpec.fields().size(); i++) {
+            PartitionField existing = existingSpec.fields().get(i);
+            PartitionField expected = expectedSpec.fields().get(i);
+
+            String existingSource = existingSchema.findColumnName(existing.sourceId());
+            String expectedSource = expectedSchema.findColumnName(expected.sourceId());
+            if (existingSource == null || !existingSource.equals(expectedSource)) {
+                return false;
+            }
+
+            if (!existing.name().equals(expected.name())) {
+                return false;
+            }
+
+            if (!existing.transform().equals(expected.transform())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    @VisibleForTesting
+    boolean isIcebergSortOrderCompatible(
+            SortOrder existingOrder,
+            Schema existingSchema,
+            SortOrder expectedOrder,
+            Schema expectedSchema) {
+        if (existingOrder.fields().size() != expectedOrder.fields().size()) {
+            return false;
+        }
+
+        for (int i = 0; i < existingOrder.fields().size(); i++) {
+            SortField existing = existingOrder.fields().get(i);
+            SortField expected = expectedOrder.fields().get(i);
+
+            String existingSource = existingSchema.findColumnName(existing.sourceId());
+            String expectedSource = expectedSchema.findColumnName(expected.sourceId());
+            if (existingSource == null || !existingSource.equals(expectedSource)) {
+                return false;
+            }
+
+            if (!existing.transform().equals(expected.transform())) {
+                return false;
+            }
+
+            if (existing.direction() != expected.direction()) {
+                return false;
+            }
+
+            if (existing.nullOrder() != expected.nullOrder()) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    @VisibleForTesting
+    boolean isIcebergPropertiesCompatible(
+            Map<String, String> existingProperties, Map<String, String> expectedProperties) {
+        for (Map.Entry<String, String> entry : expectedProperties.entrySet()) {
+            String actual = existingProperties.get(entry.getKey());
+            if (actual == null || !actual.equals(entry.getValue())) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private void setFlussPropertyToIceberg(
