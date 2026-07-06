@@ -1006,6 +1006,8 @@ public final class FlussClusterExtension
             clusterConf.set(
                     ConfigOptions.COORDINATOR_LIFECYCLE_THROTTLER_TIMEOUT_CHECK_INTERVAL,
                     Duration.ofSeconds(1));
+            // Set a high data disk write limit ratio to avoid disk write limit when testing
+            clusterConf.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 0.99);
         }
 
         /** Sets the number of tablet servers. */
