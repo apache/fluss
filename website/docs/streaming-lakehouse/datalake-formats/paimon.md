@@ -147,8 +147,8 @@ It supports both batch and streaming modes, using Paimon for historical data and
   This design enables Fluss to store only a small portion of the dataset in the Fluss cluster, reducing costs, while Paimon serves as the source of complete historical data when needed. 
 
 Key behavior for data retention:
-- **Expired Fluss log data** (controlled by `table.log.ttl`) remains accessible via Iceberg if previously tiered
-- **Cleaned-up partitions** in partitioned tables (controlled by `table.auto-partition.num-retention`) remain accessible via Iceberg if previously tiered
+- **Expired Fluss log data** (controlled by `table.log.ttl`) remains accessible via Paimon if previously tiered
+- **Cleaned-up partitions** in partitioned tables (controlled by `table.auto-partition.num-retention`) remain accessible via Paimon if previously tiered
 
 ### Reading with other Engines
 
