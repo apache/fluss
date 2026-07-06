@@ -632,7 +632,6 @@ public final class LogManager extends TabletManagerBase {
                         .collect(Collectors.toList()));
     }
 
-    @VisibleForTesting
     void checkpointRecoveryOffsets() {
         for (File dataDir : dataDirs) {
             checkpointRecoveryOffsets(dataDir);
