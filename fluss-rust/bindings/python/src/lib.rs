@@ -56,7 +56,7 @@ static TOKIO_RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
 ///   OffsetSpec.earliest()
 ///   OffsetSpec.latest()
 ///   OffsetSpec.timestamp(ts)
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct OffsetSpec {
     pub(crate) inner: fcore::rpc::message::OffsetSpec,

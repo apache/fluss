@@ -27,14 +27,14 @@ name = "fluss"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.26.0", features = ["extension-module", "generate-import-lib"] }
+pyo3 = { version = "0.28.0", features = ["extension-module", "generate-import-lib"] }
 fluss = { workspace = true, features = ["storage-all"] }
 tokio = { workspace = true }
 arrow = { workspace = true }
-arrow-pyarrow = "57.0.0"
-arrow-schema = "57.0.0"
-arrow-array = "57.0.0"
-pyo3-async-runtimes = { version = "0.26.0", features = ["tokio-runtime"] }
+arrow-pyarrow = "59.0.0"
+arrow-schema = "59.0.0"
+arrow-array = "59.0.0"
+pyo3-async-runtimes = { version = "0.28.0", features = ["tokio-runtime"] }
 jiff = { workspace = true }
 bigdecimal = "0.4"
 indexmap = "2"

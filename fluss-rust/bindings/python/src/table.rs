@@ -238,7 +238,7 @@ impl ScanRecords {
             ));
         }
         // Try slice
-        if let Ok(slice) = key.downcast::<PySlice>() {
+        if let Ok(slice) = key.cast::<PySlice>() {
             let indices = slice.indices(self.total_count as isize)?;
             let mut result: Vec<Py<ScanRecord>> = Vec::new();
             let mut i = indices.start;
@@ -1364,11 +1364,11 @@ fn python_value_to_datum(value: &Bound<PyAny>, data_type: &DataType) -> PyResult
             Ok(v.into())
         }
         DataType::Bytes(_) | DataType::Binary(_) => {
-            // Efficient extraction: downcast to specific type and use bulk copy.
+            // Efficient extraction: cast to specific type and use bulk copy.
             // PyBytes::as_bytes() and PyByteArray::to_vec() are O(n) bulk copies of the underlying data.
-            if let Ok(bytes) = value.downcast::<PyBytes>() {
+            if let Ok(bytes) = value.cast::<PyBytes>() {
                 Ok(bytes.as_bytes().to_vec().into())
-            } else if let Ok(bytearray) = value.downcast::<PyByteArray>() {
+            } else if let Ok(bytearray) = value.cast::<PyByteArray>() {
                 Ok(bytearray.to_vec().into())
             } else {
                 Err(FlussError::new_err(format!(
@@ -1392,7 +1392,7 @@ fn python_value_to_datum(value: &Bound<PyAny>, data_type: &DataType) -> PyResult
                     get_type_name(value)
                 )));
             }
-            let seq = value.downcast::<PySequence>().map_err(|_| {
+            let seq = value.cast::<PySequence>().map_err(|_| {
                 FlussError::new_err(format!(
                     "Expected sequence for Array column, got {}",
                     get_type_name(value)
@@ -1480,7 +1480,7 @@ fn python_value_to_datum(value: &Bound<PyAny>, data_type: &DataType) -> PyResult
 fn python_map_pairs<'py>(
     value: &Bound<'py, PyAny>,
 ) -> PyResult<Vec<(Bound<'py, PyAny>, Bound<'py, PyAny>)>> {
-    if let Ok(dict) = value.downcast::<PyDict>() {
+    if let Ok(dict) = value.cast::<PyDict>() {
         return Ok(dict.iter().collect());
     }
     if value.is_instance_of::<PyString>() {
@@ -1489,7 +1489,7 @@ fn python_map_pairs<'py>(
             get_type_name(value)
         )));
     }
-    let seq = value.downcast::<PySequence>().map_err(|_| {
+    let seq = value.cast::<PySequence>().map_err(|_| {
         FlussError::new_err(format!(
             "Expected dict or sequence of (key, value) pairs for Map column, got {}",
             get_type_name(value)
@@ -1499,7 +1499,7 @@ fn python_map_pairs<'py>(
     let mut pairs = Vec::with_capacity(len);
     for i in 0..len {
         let entry = seq.get_item(i)?;
-        let pair = entry.downcast::<PySequence>().map_err(|_| {
+        let pair = entry.cast::<PySequence>().map_err(|_| {
             FlussError::new_err("Map entries must be (key, value) pairs".to_string())
         })?;
         if pair.len()? != 2 {
@@ -1941,7 +1941,7 @@ static UTC_EPOCH: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 fn get_decimal_type(py: Python) -> PyResult<Bound<PyType>> {
     let ty = DECIMAL_TYPE.get_or_try_init(py, || -> PyResult<_> {
         let decimal_mod = py.import("decimal")?;
-        let decimal_ty = decimal_mod.getattr("Decimal")?.downcast_into::<PyType>()?;
+        let decimal_ty = decimal_mod.getattr("Decimal")?.cast_into::<PyType>()?;
         Ok(decimal_ty.unbind())
     })?;
     Ok(ty.bind(py).clone())
@@ -1955,8 +1955,8 @@ fn get_utc_timezone(py: Python) -> PyResult<Bound<PyTzInfo>> {
         let utc = timezone.getattr("utc")?;
         Ok(utc.unbind())
     })?;
-    // Downcast to PyTzInfo for use with PyDateTime::new()
-    Ok(tz.bind(py).clone().downcast_into::<PyTzInfo>()?)
+    // Cast to PyTzInfo for use with PyDateTime::new()
+    Ok(tz.bind(py).clone().cast_into::<PyTzInfo>()?)
 }
 
 /// Get the cached UTC epoch datetime, creating it once per interpreter.
@@ -2013,13 +2013,13 @@ fn python_decimal_to_datum(
 /// Convert Python datetime.date to Datum::Date.
 fn python_date_to_datum(value: &Bound<PyAny>) -> PyResult<fcore::row::Datum<'static>> {
     // Reject datetime.datetime (subclass of date) - use timestamp columns for those
-    if value.downcast::<PyDateTime>().is_ok() {
+    if value.cast::<PyDateTime>().is_ok() {
         return Err(FlussError::new_err(
             "Expected datetime.date, got datetime.datetime. Use a TIMESTAMP column for datetime values.",
         ));
     }
 
-    let date = value.downcast::<PyDate>().map_err(|_| {
+    let date = value.cast::<PyDate>().map_err(|_| {
         FlussError::new_err(format!(
             "Expected datetime.date, got {}",
             get_type_name(value)
@@ -2048,7 +2048,7 @@ fn python_date_to_datum(value: &Bound<PyAny>) -> PyResult<fcore::row::Datum<'sta
 /// Sub-millisecond precision (microseconds not divisible by 1000) will raise an error
 /// to prevent silent data loss and ensure fail-fast behavior.
 fn python_time_to_datum(value: &Bound<PyAny>) -> PyResult<fcore::row::Datum<'static>> {
-    let time = value.downcast::<PyTime>().map_err(|_| {
+    let time = value.cast::<PyTime>().map_err(|_| {
         FlussError::new_err(format!(
             "Expected datetime.time, got {}",
             get_type_name(value)
@@ -2107,7 +2107,7 @@ fn python_datetime_to_timestamp_ltz(value: &Bound<PyAny>) -> PyResult<fcore::row
 /// For clarity, tz-aware datetimes are rejected - use TimestampLtz for those.
 fn extract_datetime_components_ntz(value: &Bound<PyAny>) -> PyResult<(i64, i32)> {
     // Try PyDateTime first
-    if let Ok(dt) = value.downcast::<PyDateTime>() {
+    if let Ok(dt) = value.cast::<PyDateTime>() {
         // Reject tz-aware datetime for NTZ - it's ambiguous what the user wants
         let tzinfo = dt.getattr("tzinfo")?;
         if !tzinfo.is_none() {
@@ -2137,7 +2137,7 @@ fn extract_datetime_components_ntz(value: &Bound<PyAny>) -> PyResult<(i64, i32)>
 
     // Try to_pydatetime() for objects that support it
     if let Ok(py_dt) = value.call_method0("to_pydatetime") {
-        if let Ok(dt) = py_dt.downcast::<PyDateTime>() {
+        if let Ok(dt) = py_dt.cast::<PyDateTime>() {
             let tzinfo = dt.getattr("tzinfo")?;
             if !tzinfo.is_none() {
                 return Err(FlussError::new_err(
@@ -2159,7 +2159,7 @@ fn extract_datetime_components_ntz(value: &Bound<PyAny>) -> PyResult<(i64, i32)>
 /// For naive datetimes, assumes UTC. For aware datetimes, converts to UTC.
 fn extract_datetime_components_ltz(value: &Bound<PyAny>) -> PyResult<(i64, i32)> {
     // Try PyDateTime first
-    if let Ok(dt) = value.downcast::<PyDateTime>() {
+    if let Ok(dt) = value.cast::<PyDateTime>() {
         // Check if timezone-aware
         let tzinfo = dt.getattr("tzinfo")?;
         if tzinfo.is_none() {
@@ -2180,7 +2180,7 @@ fn extract_datetime_components_ltz(value: &Bound<PyAny>) -> PyResult<(i64, i32)>
 
     // Try to_pydatetime()
     if let Ok(py_dt) = value.call_method0("to_pydatetime") {
-        if let Ok(dt) = py_dt.downcast::<PyDateTime>() {
+        if let Ok(dt) = py_dt.cast::<PyDateTime>() {
             let tzinfo = dt.getattr("tzinfo")?;
             if tzinfo.is_none() {
                 return datetime_to_epoch_millis_as_utc(dt);
@@ -2234,7 +2234,7 @@ fn datetime_to_epoch_millis_utc_aware(dt: &Bound<'_, PyDateTime>) -> PyResult<(i
 
     // Compute delta = dt - epoch (this handles timezone conversion correctly)
     let delta = dt.call_method1("__sub__", (epoch,))?;
-    let delta = delta.downcast::<PyDelta>()?;
+    let delta = delta.cast::<PyDelta>()?;
 
     // Extract components using integer arithmetic
     let days = delta.get_days() as i64;

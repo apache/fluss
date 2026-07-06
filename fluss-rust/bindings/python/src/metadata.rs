@@ -20,7 +20,7 @@ use pyo3::types::PyDict;
 use std::collections::HashMap;
 
 /// Represents the type of change for a record in a log
-#[pyclass(eq, eq_int)]
+#[pyclass(eq, eq_int, from_py_object)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChangeType {
     /// Append-only operation
@@ -71,7 +71,7 @@ impl ChangeType {
 }
 
 /// Represents a table path with database and table name
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct TablePath {
     database_name: String,
@@ -260,7 +260,7 @@ impl TableDistribution {
 }
 
 /// Table descriptor containing schema and metadata
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct TableDescriptor {
     __tbl_desc: fcore::metadata::TableDescriptor,
@@ -363,7 +363,7 @@ impl TableDescriptor {
 }
 
 /// Information about a Fluss table
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct TableInfo {
     __table_info: fcore::metadata::TableInfo,
@@ -479,7 +479,7 @@ impl TableInfo {
 }
 
 /// Represents a lake snapshot with snapshot ID and table bucket offsets
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct LakeSnapshot {
     snapshot_id: i64,
@@ -487,7 +487,7 @@ pub struct LakeSnapshot {
 }
 
 /// Represents a table bucket with table ID, partition ID, and bucket ID
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Eq, Hash, PartialEq, Clone)]
 pub struct TableBucket {
     table_id: i64,
@@ -665,7 +665,7 @@ impl LakeSnapshot {
 }
 
 /// Descriptor for a Fluss database (comment and custom properties)
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct DatabaseDescriptor {
     __descriptor: fcore::metadata::DatabaseDescriptor,

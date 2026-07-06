@@ -26,7 +26,7 @@ use pyo3::prelude::*;
 const CLIENT_ERROR_CODE: i32 = -2;
 
 /// Fluss errors
-#[pyclass(extends=PyException)]
+#[pyclass(extends=PyException, from_py_object)]
 #[derive(Debug, Clone)]
 pub struct FlussError {
     #[pyo3(get)]
