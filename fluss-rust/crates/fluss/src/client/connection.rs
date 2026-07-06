@@ -23,6 +23,9 @@ use crate::client::table::FlussTable;
 use crate::config::Config;
 use crate::error::{Error, FlussError, Result};
 use crate::metadata::TablePath;
+
+#[cfg(feature = "integration_tests")]
+use crate::metadata::PhysicalTablePath;
 use crate::rpc::RpcClient;
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -142,6 +145,17 @@ impl FlussConnection {
         // 5. Store and return the newly created client.
         *writer_guard = Some(new_client.clone());
         Ok(new_client)
+    }
+
+    #[cfg(feature = "integration_tests")]
+    pub fn estimated_batch_size_for_table(
+        &self,
+        table_path: &Arc<PhysicalTablePath>,
+    ) -> Option<usize> {
+        self.writer_client
+            .read()
+            .as_ref()
+            .and_then(|c| c.estimated_batch_size_for_table(table_path))
     }
 
     /// Gets or creates a lookup client for batched lookup operations.
