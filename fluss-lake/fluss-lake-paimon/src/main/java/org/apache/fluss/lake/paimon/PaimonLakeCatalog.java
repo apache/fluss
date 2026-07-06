@@ -59,6 +59,7 @@ import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 public class PaimonLakeCatalog implements LakeCatalog {
 
     private static final Logger LOG = LoggerFactory.getLogger(PaimonLakeCatalog.class);
+    private static final String PAIMON_PATH_KEY = "paimon.path";
     public static final LinkedHashMap<String, DataType> SYSTEM_COLUMNS = new LinkedHashMap<>();
 
     static {
@@ -114,6 +115,22 @@ public class PaimonLakeCatalog implements LakeCatalog {
             throws TableNotExistException {
         try {
             Table table = paimonCatalog.getTable(toPaimon(tablePath));
+            if (tableChanges.stream()
+                    .anyMatch(
+                            tableChange ->
+                                    (tableChange instanceof TableChange.SetOption
+                                                    && PAIMON_PATH_KEY.equals(
+                                                            ((TableChange.SetOption) tableChange)
+                                                                    .getKey()))
+                                            || (tableChange instanceof TableChange.ResetOption
+                                                    && PAIMON_PATH_KEY.equals(
+                                                            ((TableChange.ResetOption) tableChange)
+                                                                    .getKey())))) {
+                throw new InvalidAlterTableException(
+                        String.format(
+                                "'%s' can only be altered before the Paimon table is created.",
+                                PAIMON_PATH_KEY));
+            }
             FileStoreTable fileStoreTable = (FileStoreTable) table;
             Schema currentPaimonSchema = fileStoreTable.schema().toSchema();
 
