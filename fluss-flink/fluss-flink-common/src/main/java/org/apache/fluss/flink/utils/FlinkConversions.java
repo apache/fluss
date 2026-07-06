@@ -22,6 +22,7 @@ import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.Password;
 import org.apache.fluss.flink.adapter.CatalogTableAdapter;
+import org.apache.fluss.flink.adapter.TableChangeAdapter;
 import org.apache.fluss.flink.catalog.FlinkCatalogFactory;
 import org.apache.fluss.metadata.AggFunction;
 import org.apache.fluss.metadata.DatabaseDescriptor;
@@ -466,6 +467,12 @@ public class FlinkConversions {
             // MaterializedTableChange may produce multiple fluss TableChange.
             return convertMaterializedTableChange(tableChange);
         } else {
+            // Some table changes (e.g. ModifyDefinitionQuery) only exist in newer Flink versions
+            // and are converted by a version-specific adapter.
+            Optional<List<TableChange>> adapted = TableChangeAdapter.convert(tableChange);
+            if (adapted.isPresent()) {
+                return adapted.get();
+            }
             throw new UnsupportedOperationException(
                     String.format("Unsupported flink table change: %s.", tableChange));
         }
