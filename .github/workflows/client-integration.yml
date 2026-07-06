@@ -84,6 +84,8 @@ jobs:
           fi
           echo "Changed files:"; echo "$changed"
           has() { echo "$changed" | grep -qE "$1"; }
+          # a change to this workflow itself should exercise every suite
+          has '^\.github/workflows/client-integration\.yml' && all=true || true
           protocol=false; core=false; py=false; cpp=false; ex=false
           has '^(fluss-rpc/src/main/proto/|fluss-server/|fluss-common/|fluss-dist/|docker/fluss/)' && protocol=true || true
           has '^(fluss-rust/crates/|fluss-rust/Cargo\.)' && core=true || true
@@ -372,15 +374,13 @@ jobs:
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: fluss-rust
-      - name: Cache Mix deps and build
+      - name: Cache Mix deps
         uses: actions/cache@v4
         with:
-          path: |
-            fluss-rust/bindings/elixir/deps
-            fluss-rust/bindings/elixir/_build
-          key: ${{ runner.os }}-mix-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-${{ hashFiles('fluss-rust/bindings/elixir/mix.lock') }}
+          path: fluss-rust/bindings/elixir/deps
+          key: ${{ runner.os }}-mixdeps-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-${{ hashFiles('fluss-rust/bindings/elixir/mix.lock') }}
           restore-keys: |
-            ${{ runner.os }}-mix-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-
+            ${{ runner.os }}-mixdeps-otp${{ env.OTP_VERSION }}-elixir${{ env.ELIXIR_VERSION }}-
       - name: Build fluss-test-cluster binary
         run: cargo build -p fluss-test-cluster
       - name: Fetch Elixir deps
