@@ -123,7 +123,8 @@ public final class ScanAndCleanFunction extends ProcessFunction<CleanTask, Clean
                 new BucketActiveRefs(
                         task.logSegmentRelativePaths(),
                         task.kvActiveSnapDirs(),
-                        task.logActiveManifestPaths());
+                        task.logActiveManifestPaths(),
+                        task.kvSharedSstFileNames());
         RuleDispatcher dispatcher = new RuleDispatcher(task.allowDeleteManifest());
         SafeDeleter safeDeleter = createSafeDeleter(anyDir.getFileSystem(), task.dryRun());
         BucketCleaner cleaner =

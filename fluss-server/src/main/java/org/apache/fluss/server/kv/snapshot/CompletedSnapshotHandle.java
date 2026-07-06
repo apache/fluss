@@ -20,7 +20,9 @@ package org.apache.fluss.server.kv.snapshot;
 import org.apache.fluss.fs.FSDataInputStream;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.utils.IOUtils;
+import org.apache.fluss.utils.json.CompletedSnapshotJsonSerde;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;

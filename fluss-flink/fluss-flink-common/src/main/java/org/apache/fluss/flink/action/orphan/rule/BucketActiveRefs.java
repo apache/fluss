@@ -29,21 +29,39 @@ public final class BucketActiveRefs {
 
     private static final BucketActiveRefs EMPTY =
             new BucketActiveRefs(
-                    Collections.emptySet(), Collections.emptySet(), Collections.emptySet());
+                    Collections.emptySet(),
+                    Collections.emptySet(),
+                    Collections.emptySet(),
+                    Collections.emptySet());
 
     private final Set<String> logSegmentRelativePaths;
     private final Set<String> kvActiveSnapDirs;
     private final Set<String> logActiveManifestPaths;
+    private final Set<String> kvSharedSstFileNames;
 
     public BucketActiveRefs(
             Set<String> logSegmentRelativePaths,
             Set<String> kvActiveSnapDirs,
             Set<String> logActiveManifestPaths) {
+        this(
+                logSegmentRelativePaths,
+                kvActiveSnapDirs,
+                logActiveManifestPaths,
+                Collections.emptySet());
+    }
+
+    public BucketActiveRefs(
+            Set<String> logSegmentRelativePaths,
+            Set<String> kvActiveSnapDirs,
+            Set<String> logActiveManifestPaths,
+            Set<String> kvSharedSstFileNames) {
         this.logSegmentRelativePaths =
                 Collections.unmodifiableSet(new HashSet<>(logSegmentRelativePaths));
         this.kvActiveSnapDirs = Collections.unmodifiableSet(new HashSet<>(kvActiveSnapDirs));
         this.logActiveManifestPaths =
                 Collections.unmodifiableSet(new HashSet<>(logActiveManifestPaths));
+        this.kvSharedSstFileNames =
+                Collections.unmodifiableSet(new HashSet<>(kvSharedSstFileNames));
     }
 
     public static BucketActiveRefs empty() {
@@ -80,5 +98,18 @@ public final class BucketActiveRefs {
      */
     public Set<String> logActiveManifestPaths() {
         return logActiveManifestPaths;
+    }
+
+    /**
+     * Returns the set of active shared SST file names (basenames only, e.g. {@code
+     * "abc-def-0.sst"}) for the bucket. Built from the union of {@code
+     * shared_file_handles[*].local_path} across all active snapshots' {@code _METADATA} files.
+     *
+     * <p>An empty set means no shared SST active set could be determined (either all active
+     * snapshots have zero shared files — which is unusual for PK tables — or the metadata read
+     * failed). Rules must treat an empty set conservatively (keep all files).
+     */
+    public Set<String> kvSharedSstFileNames() {
+        return kvSharedSstFileNames;
     }
 }

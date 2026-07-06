@@ -21,6 +21,7 @@ import org.apache.fluss.fs.FsPath;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
@@ -37,7 +38,25 @@ class KvSharedSstRuleTest {
     private final KvSharedSstRule rule = new KvSharedSstRule();
 
     @Test
-    void keepsExpiredUnreferencedSharedSst() {
+    void deletesExpiredUnreferencedSharedSst() {
+        FileMeta file = file("/kv/db/t-1/0/shared/abc-001.sst", NOW - 2 * DAY_MS);
+
+        assertThat(rule.evaluate(file, sharedSstActiveRefs("other-file.sst"), CUTOFF_MS))
+                .isEqualTo(Decision.DELETE);
+    }
+
+    @Test
+    void defersYoungUnreferencedSharedSst() {
+        FileMeta file = file("/kv/db/t-1/0/shared/abc-001.sst", NOW - DAY_MS / 2);
+
+        assertThat(rule.evaluate(file, sharedSstActiveRefs("other-file.sst"), CUTOFF_MS))
+                .isEqualTo(Decision.DEFER);
+    }
+
+    @Test
+    void keepsExpiredSharedSstWhenActiveSetIsEmpty() {
+        // Empty active set = metadata read failure or no shared SSTs in any snapshot.
+        // Must conservatively keep all files.
         FileMeta file = file("/kv/db/t-1/0/shared/abc-001.sst", NOW - 2 * DAY_MS);
 
         assertThat(rule.evaluate(file, BucketActiveRefs.empty(), CUTOFF_MS))
@@ -47,15 +66,9 @@ class KvSharedSstRuleTest {
     @Test
     void keepsReferencedSharedSst() {
         FileMeta file = file("/kv/db/t-1/0/shared/abc-001.sst", NOW - 2 * DAY_MS);
-        Set<String> sharedFiles = new HashSet<String>();
-        sharedFiles.add("abc-001.sst");
-        BucketActiveRefs activeRefs =
-                new BucketActiveRefs(
-                        Collections.<String>emptySet(),
-                        Collections.<String>emptySet(),
-                        sharedFiles);
 
-        assertThat(rule.evaluate(file, activeRefs, CUTOFF_MS)).isEqualTo(Decision.KEEP_ACTIVE);
+        assertThat(rule.evaluate(file, sharedSstActiveRefs("abc-001.sst"), CUTOFF_MS))
+                .isEqualTo(Decision.KEEP_ACTIVE);
     }
 
     @Test
@@ -72,6 +85,15 @@ class KvSharedSstRuleTest {
 
         assertThat(rule.evaluate(file, BucketActiveRefs.empty(), CUTOFF_MS))
                 .isEqualTo(Decision.SKIP_UNKNOWN);
+    }
+
+    private static BucketActiveRefs sharedSstActiveRefs(String... fileNames) {
+        Set<String> sharedFiles = new HashSet<>(Arrays.asList(fileNames));
+        return new BucketActiveRefs(
+                Collections.<String>emptySet(),
+                Collections.<String>emptySet(),
+                Collections.<String>emptySet(),
+                sharedFiles);
     }
 
     private static FileMeta file(String path, long modificationTime) {

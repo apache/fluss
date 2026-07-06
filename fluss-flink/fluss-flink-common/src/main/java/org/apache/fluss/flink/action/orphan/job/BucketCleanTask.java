@@ -39,6 +39,7 @@ public final class BucketCleanTask implements CleanTask {
     private final Set<String> logSegmentRelativePaths;
     private final Set<String> logActiveManifestPaths;
     private final Set<String> kvActiveSnapDirs;
+    private final Set<String> kvSharedSstFileNames;
     private final long cutoffMillis;
     private final boolean dryRun;
     private final boolean allowDeleteManifest;
@@ -49,6 +50,7 @@ public final class BucketCleanTask implements CleanTask {
             Set<String> logSegmentRelativePaths,
             Set<String> logActiveManifestPaths,
             Set<String> kvActiveSnapDirs,
+            Set<String> kvSharedSstFileNames,
             long cutoffMillis,
             boolean dryRun,
             boolean allowDeleteManifest) {
@@ -57,6 +59,7 @@ public final class BucketCleanTask implements CleanTask {
         this.logSegmentRelativePaths = new HashSet<>(logSegmentRelativePaths);
         this.logActiveManifestPaths = new HashSet<>(logActiveManifestPaths);
         this.kvActiveSnapDirs = new HashSet<>(kvActiveSnapDirs);
+        this.kvSharedSstFileNames = new HashSet<>(kvSharedSstFileNames);
         this.cutoffMillis = cutoffMillis;
         this.dryRun = dryRun;
         this.allowDeleteManifest = allowDeleteManifest;
@@ -87,6 +90,14 @@ public final class BucketCleanTask implements CleanTask {
      */
     public Set<String> kvActiveSnapDirs() {
         return kvActiveSnapDirs;
+    }
+
+    /**
+     * Active shared SST file names (basenames) resolved from active snapshots' {@code _METADATA}
+     * files. Empty when metadata could not be read (rules treat empty as "keep all").
+     */
+    public Set<String> kvSharedSstFileNames() {
+        return kvSharedSstFileNames;
     }
 
     public long cutoffMillis() {

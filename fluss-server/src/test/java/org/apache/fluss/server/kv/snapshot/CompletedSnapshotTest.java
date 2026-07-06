@@ -18,6 +18,10 @@
 package org.apache.fluss.server.kv.snapshot;
 
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.kv.snapshot.KvFileHandle;
+import org.apache.fluss.kv.snapshot.KvFileHandleAndLocalPath;
+import org.apache.fluss.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.utils.concurrent.Executors;
 
@@ -60,7 +64,7 @@ class CompletedSnapshotTest {
 
         SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry();
         // register the snapshot to a registry
-        snapshot.registerSharedKvFilesAfterRestored(sharedKvFileRegistry);
+        sharedKvFileRegistry.registerAllAfterRestored(snapshot);
         Executor ioExecutor = Executors.directExecutor();
         snapshot.discardAsync(ioExecutor).get();
 
@@ -78,7 +82,11 @@ class CompletedSnapshotTest {
                         FsPath.fromLocalFile(snapshotPath.toFile()),
                         kvSnapshotHandle);
         snapshot.discardAsync(ioExecutor).get();
-        // share files should be deleted since it has not been registered
+        // share files should be deleted since discardAll cleans both private and shared
+        checkCompletedSnapshotCleanUp(snapshotPath, kvSnapshotHandle, false);
+
+        // now explicitly discard all (simulates abort/failure path)
+        kvSnapshotHandle.discardAll();
         checkCompletedSnapshotCleanUp(snapshotPath, kvSnapshotHandle, true);
     }
 

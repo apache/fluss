@@ -31,6 +31,7 @@ import org.apache.fluss.flink.action.orphan.RpcErrorClassifier;
 import org.apache.fluss.flink.action.orphan.audit.AuditLogger;
 import org.apache.fluss.flink.action.orphan.build.ActiveRefsFetcher;
 import org.apache.fluss.flink.action.orphan.build.KvActiveRefsFetchResult;
+import org.apache.fluss.flink.action.orphan.build.KvSharedSstFetchResult;
 import org.apache.fluss.flink.action.orphan.build.LogActiveRefsFetchResult;
 import org.apache.fluss.flink.action.orphan.build.MaxKnownIdsTracker;
 import org.apache.fluss.flink.action.orphan.config.OrphanCleanConfig;
@@ -445,6 +446,7 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
 
             String kvTabletDir = null;
             Set<String> kvActiveSnaps = Collections.emptySet();
+            Set<String> kvSharedSstFileNames = Collections.emptySet();
             if (kvTargetOk && kvActiveByBucket.containsKey(bucketId)) {
                 kvTabletDir =
                         FlussPaths.remoteKvTabletDir(
@@ -453,6 +455,14 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
                                         tableBucket)
                                 .toString();
                 kvActiveSnaps = kvActiveByBucket.get(bucketId);
+                KvSharedSstFetchResult sstResult =
+                        fetcher.fetchKvSharedSstFileNames(new FsPath(kvTabletDir), kvActiveSnaps);
+                if (sstResult.allMetadataReadOk()) {
+                    kvSharedSstFileNames = sstResult.sharedSstFileNames();
+                } else {
+                    audit.logSkipKvSharedSst(
+                            liveTable.tableId, partitionId, bucketId, sstResult.failureReason());
+                }
             } else if (kvTargetOk) {
                 audit.logSkipKvBucket(liveTable.tableId, partitionId, bucketId, "empty_active_set");
             }
@@ -468,6 +478,7 @@ public final class ScopeEnumeratorFunction extends ProcessFunction<Integer, Clea
                             logSegmentRelativePaths,
                             logActiveManifestPaths,
                             kvActiveSnaps,
+                            kvSharedSstFileNames,
                             config.olderThanMillis(),
                             config.dryRun(),
                             config.allowDeleteManifest()));

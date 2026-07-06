@@ -32,6 +32,7 @@ import org.apache.fluss.shaded.guava32.com.google.common.util.concurrent.RateLim
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.RetryUtils;
+import org.apache.fluss.utils.json.CompletedSnapshotJsonSerde;
 
 import javax.annotation.Nullable;
 
@@ -252,6 +253,60 @@ public final class ActiveRefsFetcher {
             dirsByBucket.put(bucketId, dirNames);
         }
         return KvActiveRefsFetchResult.ok(dirsByBucket);
+    }
+
+    /**
+     * Fetches the set of active shared SST file names for a single bucket by second-reading the
+     * {@code _METADATA} files of its active snapshots.
+     *
+     * <p>For each active snapshot directory, the method constructs the metadata path ({@code
+     * {kvTabletDir}/{snapDir}/_METADATA}), reads the file, and extracts shared SST basenames via
+     * {@link CompletedSnapshotJsonSerde}. The union across all active snapshots forms the complete
+     * active set.
+     *
+     * <p>Failure handling:
+     *
+     * <ul>
+     *   <li>{@link java.io.FileNotFoundException} on a single metadata file (concurrent snapshot
+     *       removal) — reported as failure so the caller skips shared SST cleanup for this bucket.
+     *   <li>Other {@link IOException} — reported as {@link KvSharedSstFetchResult#failed(String)};
+     *       the caller must skip shared SST cleanup for this bucket.
+     * </ul>
+     */
+    public KvSharedSstFetchResult fetchKvSharedSstFileNames(
+            FsPath kvTabletDir, Set<String> activeSnapDirs) {
+        Set<String> sharedSstFileNames = new HashSet<>();
+        for (String snapDir : activeSnapDirs) {
+            FsPath metadataPath = new FsPath(new FsPath(kvTabletDir, snapDir), "_METADATA");
+            byte[] metadataBytes;
+            try {
+                remoteFsOpRateLimiter.acquire();
+                metadataBytes = metadataReader.read(metadataPath);
+            } catch (FileNotFoundException e) {
+                return KvSharedSstFetchResult.failed(
+                        String.format(
+                                "Snapshot metadata not found %s: %s",
+                                metadataPath,
+                                e.getMessage() != null ? e.getMessage() : e.getClass().getName()));
+            } catch (IOException e) {
+                return KvSharedSstFetchResult.failed(
+                        String.format(
+                                "IO error reading snapshot metadata %s: %s",
+                                metadataPath,
+                                e.getMessage() != null ? e.getMessage() : e.getClass().getName()));
+            }
+            try {
+                sharedSstFileNames.addAll(
+                        CompletedSnapshotJsonSerde.parseSharedSstLocalPaths(metadataBytes));
+            } catch (IOException e) {
+                return KvSharedSstFetchResult.failed(
+                        String.format(
+                                "Failed to parse snapshot metadata %s: %s",
+                                metadataPath,
+                                e.getMessage() != null ? e.getMessage() : e.getClass().getName()));
+            }
+        }
+        return KvSharedSstFetchResult.ok(sharedSstFileNames);
     }
 
     private static String formatRpcFailureReason(

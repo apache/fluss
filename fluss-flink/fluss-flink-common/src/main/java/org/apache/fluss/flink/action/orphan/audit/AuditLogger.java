@@ -145,6 +145,21 @@ public final class AuditLogger {
     }
 
     /**
+     * Skip shared SST cleanup for a single bucket because the active set could not be determined
+     * (metadata read failure). The bucket's snap-private and log cleanup proceed normally.
+     */
+    public void logSkipKvSharedSst(long tableId, Long partitionId, int bucketId, String reason) {
+        AUDIT.warn(
+                "action=skip_kv_shared_sst reason={} table_id={} partition_id={}"
+                        + " bucket_id={} ts={}",
+                reason,
+                tableId,
+                partitionId,
+                bucketId,
+                Instant.now());
+    }
+
+    /**
      * Skip log cleanup for one (tableId, partitionId) target — emitted when {@code
      * ListRemoteLogManifests} fails after retries. {@code partitionId} is null for non-partitioned
      * tables.

@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.kv.snapshot;
 
+import org.apache.fluss.kv.snapshot.KvFileHandle;
+
 /**
  * A placeholder handle for shared kv files that will be replaced by an original that was created in
  * a previous snapshot. This class is used in the referenced kv files of {@link KvSnapshotHandle}.

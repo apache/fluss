@@ -15,13 +15,13 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.kv.snapshot;
+package org.apache.fluss.kv.snapshot;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.kv.autoinc.AutoIncIDRange;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import javax.annotation.Nullable;
@@ -106,7 +106,7 @@ public class CompletedSnapshot {
     }
 
     @VisibleForTesting
-    CompletedSnapshot(
+    public CompletedSnapshot(
             TableBucket tableBucket,
             long snapshotID,
             FsPath snapshotLocation,
@@ -152,22 +152,11 @@ public class CompletedSnapshot {
         return kvSnapshotHandle.getSnapshotSize();
     }
 
-    /**
-     * Register all shared kv files in the given registry. This method is called before the snapshot
-     * is added into the store.
-     *
-     * @param sharedKvFileRegistry The registry where shared kv files are registered
-     */
-    public void registerSharedKvFilesAfterRestored(SharedKvFileRegistry sharedKvFileRegistry) {
-        sharedKvFileRegistry.registerAllAfterRestored(this);
-    }
-
     public CompletableFuture<Void> discardAsync(Executor ioExecutor) {
-        // it'll discard the snapshot files for kv, it'll always discard
-        // the private files; for shared files, only if they're not be registered in
-        // SharedKvRegistry, can the files be deleted.
+        // Discard private files only; shared files are managed by the SharedKvFileRegistry
+        // on the server side.
         CompletableFuture<Void> discardKvFuture =
-                FutureUtils.runAsync(kvSnapshotHandle::discard, ioExecutor);
+                FutureUtils.runAsync(kvSnapshotHandle::discardPrivateFiles, ioExecutor);
 
         CompletableFuture<Void> discardMetaFileFuture =
                 FutureUtils.runAsync(this::disposeMetadata, ioExecutor);

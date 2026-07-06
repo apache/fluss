@@ -19,6 +19,7 @@ package org.apache.fluss.server.replica;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
+import org.apache.fluss.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaGetter;
@@ -35,7 +36,6 @@ import org.apache.fluss.record.ProjectionPushdownCache;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.KvTablet;
-import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.TestingCompletedKvSnapshotCommitter;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.LogAppendInfo;
@@ -617,7 +617,7 @@ final class ReplicaTest extends ReplicaTestBase {
         // now simulate the latest snapshot (snapshot2) being broken by
         // deleting its metadata files and unshared SST files
         // This simulates file corruption while ZK metadata remains intact
-        snapshot2.getKvSnapshotHandle().discard();
+        snapshot2.getKvSnapshotHandle().discardAll();
 
         // ZK metadata should still show snapshot2 as latest (file corruption hasn't been detected
         // yet)

@@ -24,12 +24,13 @@ import org.apache.fluss.utils.FlussPaths;
 /**
  * Rule for shared SST files under the {@code shared/} KV directory.
  *
- * <p>Always returns {@link Decision#KEEP_ACTIVE}. The true active set for shared SSTs lives inside
- * the engine's {@code SharedKvFileRegistry}; orphan cleanup has no read path into that registry, so
- * any deletion here would be a guess. Per the action's hard constraint "prefer leak over
- * mis-delete," the rule never deletes, and as a consequence orphan PK-table / orphan-partition
- * directories permanently retain their {@code shared/} subtree as accepted residue (recovering that
- * residue would require a registry-backed GC channel that is out of scope for this action).
+ * <p>Determines whether a shared SST file is still referenced by any active snapshot. The active
+ * set is built from the union of {@code shared_file_handles[*].local_path} across all active
+ * snapshots' {@code _METADATA} files.
+ *
+ * <p>Safety: when the active set is empty (either because metadata reads failed or the bucket
+ * genuinely has no shared SSTs in any active snapshot), the rule conservatively returns {@link
+ * Decision#KEEP_ACTIVE} to prevent mis-deletion.
  */
 @Internal
 public final class KvSharedSstRule implements FileRule {
@@ -48,6 +49,18 @@ public final class KvSharedSstRule implements FileRule {
         if (!file.path().getName().endsWith(".sst")) {
             return Decision.SKIP_UNKNOWN;
         }
-        return Decision.KEEP_ACTIVE;
+
+        String fileName = file.path().getName();
+        if (activeRefs.kvSharedSstFileNames().contains(fileName)) {
+            return Decision.KEEP_ACTIVE;
+        }
+
+        // Empty active set means the metadata could not be read or genuinely no shared SSTs
+        // exist in any active snapshot — conservatively keep all files to prevent mis-deletion.
+        if (activeRefs.kvSharedSstFileNames().isEmpty()) {
+            return Decision.KEEP_ACTIVE;
+        }
+
+        return file.modificationTime() < cutoffMillis ? Decision.DELETE : Decision.DEFER;
     }
 }

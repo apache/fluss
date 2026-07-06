@@ -20,6 +20,7 @@ package org.apache.fluss.server.kv.autoinc;
 
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.SequenceOverflowException;
+import org.apache.fluss.kv.autoinc.AutoIncIDRange;
 import org.apache.fluss.metadata.TablePath;
 
 import org.junit.jupiter.api.BeforeEach;

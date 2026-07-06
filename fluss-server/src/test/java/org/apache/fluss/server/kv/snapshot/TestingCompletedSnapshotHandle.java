@@ -17,12 +17,11 @@
 
 package org.apache.fluss.server.kv.snapshot;
 
+import org.apache.fluss.kv.snapshot.CompletedSnapshot;
+
 import java.io.IOException;
 
-/**
- * Wrapping {@link org.apache.fluss.server.kv.snapshot.CompletedSnapshot} as {@link
- * org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle} for testing purpose.
- */
+/** Wrapping {@link CompletedSnapshot} as {@link CompletedSnapshotHandle} for testing purpose. */
 public class TestingCompletedSnapshotHandle extends CompletedSnapshotHandle {
 
     private final CompletedSnapshot snapshot;

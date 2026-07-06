@@ -18,7 +18,9 @@
 package org.apache.fluss.server.kv.snapshot;
 
 import org.apache.fluss.exception.FlussRuntimeException;
-import org.apache.fluss.server.utils.SnapshotUtil;
+import org.apache.fluss.kv.snapshot.KvFileHandle;
+import org.apache.fluss.kv.snapshot.KvFileHandleAndLocalPath;
+import org.apache.fluss.kv.snapshot.SnapshotUtil;
 import org.apache.fluss.utils.CloseableRegistry;
 import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.IOUtils;

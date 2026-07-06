@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.kv.snapshot;
+package org.apache.fluss.kv.snapshot;
 
 import java.util.Objects;
 
