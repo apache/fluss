@@ -828,9 +828,8 @@ public class MetadataManager {
                             partition.getPartitionQualifiedName(), tablePath));
         }
 
-        final int partitionNumber;
         try {
-            partitionNumber = zookeeperClient.getPartitionNumber(tablePath);
+            int partitionNumber = zookeeperClient.getPartitionNumber(tablePath);
             if (partitionNumber + 1 > maxPartitionNum) {
                 throw new TooManyPartitionsException(
                         String.format(
@@ -847,24 +846,12 @@ public class MetadataManager {
                     e);
         }
 
-        try {
-            int bucketCount = partitionAssignment.getBucketAssignments().size();
-            // currently, every partition has the same bucket count
-            int totalBuckets = bucketCount * (partitionNumber + 1);
-            if (totalBuckets > maxBucketNum) {
-                throw new TooManyBucketsException(
-                        String.format(
-                                "Adding partition '%s' would result in %d total buckets for table %s, exceeding the maximum of %d buckets.",
-                                partition.getPartitionName(),
-                                totalBuckets,
-                                tablePath,
-                                maxBucketNum));
-            }
-        } catch (TooManyBucketsException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new FlussRuntimeException(
-                    String.format("Failed to check total bucket count for table %s", tablePath), e);
+        int bucketCount = partitionAssignment.getBucketAssignments().size();
+        if (bucketCount > maxBucketNum) {
+            throw new TooManyBucketsException(
+                    String.format(
+                            "Partition '%s' has %d buckets for table %s, exceeding the maximum of %d buckets per partition.",
+                            partition.getPartitionName(), bucketCount, tablePath, maxBucketNum));
         }
 
         try {

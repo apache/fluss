@@ -1835,12 +1835,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .collect(Collectors.toList());
     }
 
-    /**
-     * Test that creating a partitioned table with bucket count exceeding the maximum throws
-     * TooManyBucketsException.
-     */
     @Test
-    public void testAddTooManyBuckets() throws Exception {
+    public void testBucketLimitForPartitionedTableAppliesPerPartition() throws Exception {
         // Already set low maximum bucket limit to 30 for this test in ClientToServerITCaseBase
         String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
         TableDescriptor partitionedTable =
@@ -1857,35 +1853,46 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         TablePath tablePath = TablePath.of(dbName, "test_add_too_many_buckets_table");
         admin.createTable(tablePath, partitionedTable, true).get();
 
-        // Add 3 partitions (3 * 10 = 30 buckets, which is the limit)
-        for (int i = 0; i < 3; i++) {
+        // Add 4 partitions. The total bucket count is 40, which is above the configured limit,
+        // but each partition only has 10 buckets.
+        for (int i = 0; i < 4; i++) {
             admin.createPartition(tablePath, newPartitionSpec("age", String.valueOf(i)), false)
                     .get();
         }
+        assertThat(admin.listPartitionInfos(tablePath).get()).hasSize(4);
 
-        // Try to add one more partition, exceeding the bucket limit (4 * 10 > 30)
+        TableDescriptor tooManyBucketsPartitionedTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("name", DataTypes.STRING())
+                                        .column("age", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(40, "id")
+                        .partitionedBy("age")
+                        .build();
+        TablePath tooManyBucketsTablePath =
+                TablePath.of(dbName, "test_too_many_buckets_partitioned");
+
         assertThatThrownBy(
                         () ->
-                                admin.createPartition(
-                                                tablePath, newPartitionSpec("age", "4"), false)
+                                admin.createTable(
+                                                tooManyBucketsTablePath,
+                                                tooManyBucketsPartitionedTable,
+                                                false)
                                         .get())
                 .cause()
                 .isInstanceOf(TooManyBucketsException.class)
-                .hasMessageContaining("exceeding the maximum of 30 buckets");
+                .hasMessageContaining(
+                        "Bucket count 40 exceeds the maximum limit 30 for a non-partitioned table or partition.");
     }
 
-    /**
-     * Test that creating a non-partitioned table with bucket count exceeding the maximum throws
-     * TooManyBucketsException.
-     */
     @Test
     public void testBucketLimitForNonPartitionedTable() throws Exception {
-        // Set a low maximum bucket limit for this test
-        // (Assuming the configuration is already set to 30 in ClientToServerITCaseBase)
         String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
 
-        // Create a non-partitioned table with 40 buckets (exceeding limit of 30)
-        TableDescriptor nonPartitionedTable =
+        TableDescriptor maxBucketsNonPartitionedTable =
                 TableDescriptor.builder()
                         .schema(
                                 Schema.newBuilder()
@@ -1893,21 +1900,42 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                         .column("name", DataTypes.STRING())
                                         .column("value", DataTypes.STRING())
                                         .build())
-                        .distributedBy(40, "id") // 40 buckets exceeds the limit of 30
-                        .build(); // No partitionedBy call makes this non-partitioned
+                        .distributedBy(30, "id")
+                        .build();
+        TablePath maxBucketsTablePath = TablePath.of(dbName, "test_max_buckets_non_partitioned");
 
-        TablePath tablePath = TablePath.of(dbName, "test_too_many_buckets_non_partitioned");
+        admin.createTable(maxBucketsTablePath, maxBucketsNonPartitionedTable, false).get();
 
-        // Creating this table should throw TooManyBucketsException
-        assertThatThrownBy(() -> admin.createTable(tablePath, nonPartitionedTable, false).get())
+        TableDescriptor tooManyBucketsNonPartitionedTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("id", DataTypes.STRING())
+                                        .column("name", DataTypes.STRING())
+                                        .column("value", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(31, "id")
+                        .build();
+        TablePath tooManyBucketsTablePath =
+                TablePath.of(dbName, "test_too_many_buckets_non_partitioned");
+
+        assertThatThrownBy(
+                        () ->
+                                admin.createTable(
+                                                tooManyBucketsTablePath,
+                                                tooManyBucketsNonPartitionedTable,
+                                                false)
+                                        .get())
                 .cause()
                 .isInstanceOf(TooManyBucketsException.class)
-                .hasMessageContaining("exceeds the maximum limit");
+                .hasMessageContaining(
+                        "Bucket count 31 exceeds the maximum limit 30 for a non-partitioned table or partition.");
     }
 
     @Test
-    public void testDefaultBucketLimitForNonPartitionedTable() throws Exception {
-        assertThat(ConfigOptions.MAX_BUCKET_NUM.defaultValue()).isEqualTo(20000);
+    public void testDefaultPartitionAndBucketLimitsForNonPartitionedTable() throws Exception {
+        assertThat(ConfigOptions.MAX_PARTITION_NUM.defaultValue()).isEqualTo(1000);
+        assertThat(ConfigOptions.MAX_BUCKET_NUM.defaultValue()).isEqualTo(4096);
 
         FlussClusterExtension defaultLimitCluster =
                 FlussClusterExtension.builder().setNumOfTabletServers(1).build();
@@ -1925,7 +1953,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                             .column("id", DataTypes.STRING())
                                             .column("name", DataTypes.STRING())
                                             .build())
-                            .distributedBy(30000, "id")
+                            .distributedBy(4097, "id")
                             .build();
 
             defaultLimitAdmin.createDatabase(dbName, DatabaseDescriptor.EMPTY, false).get();
@@ -1936,7 +1964,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                             .get())
                     .cause()
                     .isInstanceOf(TooManyBucketsException.class)
-                    .hasMessageContaining("Bucket count 30000 exceeds the maximum limit 20000.");
+                    .hasMessageContaining(
+                            "Bucket count 4097 exceeds the maximum limit 4096 for a non-partitioned table or partition.");
         } finally {
             defaultLimitCluster.close();
         }

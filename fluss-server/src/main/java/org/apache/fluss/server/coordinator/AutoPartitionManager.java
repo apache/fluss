@@ -441,7 +441,7 @@ public class AutoPartitionManager implements AutoCloseable {
             } catch (TooManyBucketsException t) {
                 LOG.warn(
                         "Auto partitioning skip to create partition {} for table [{}], "
-                                + "because exceed the maximum number of buckets.",
+                                + "because exceed the maximum number of buckets per partition.",
                         partition,
                         tablePath);
             } catch (Exception e) {

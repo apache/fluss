@@ -86,7 +86,7 @@ Below are the configuration items related to Fluss cluster and automatic partiti
 
 **Dynamic partitioning** is a feature that is enabled by default on client, allowing the client to automatically create partitions based on the data being written to the table. This feature is especially valuable when the set of partitions is not known in advance, eliminating the need for manual partition creation. It is also particularly useful when working with multi-field partitions, as auto-partitioning currently only supports single-field partitioning creation.
 
-Please note that the number of dynamically created partitions is also subject to the `max.partition.num` and `max.bucket.num` limit configured on the Fluss cluster.
+Please note that dynamically created partitions are subject to the `max.partition.num` limit, and each partition's bucket count is subject to the `max.bucket.num` limit configured on the Fluss cluster.
 
 ### Client Options
 | Option                                            | Type    | Required | Default              | Description                                                                                                                                                                   |

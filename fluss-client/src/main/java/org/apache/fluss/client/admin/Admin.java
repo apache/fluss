@@ -356,7 +356,7 @@ public interface Admin extends AutoCloseable {
      *   <li>{@link TooManyPartitionsException} if the number of partitions is larger than the
      *       maximum number of partitions of one table, see {@link ConfigOptions#MAX_PARTITION_NUM}.
      *   <li>{@link TooManyBucketsException} if the number of buckets is larger than the maximum
-     *       number of buckets of one table, see {@link ConfigOptions#MAX_BUCKET_NUM}.
+     *       number of buckets of one partition, see {@link ConfigOptions#MAX_BUCKET_NUM}.
      * </ul>
      *
      * @param tablePath The table path of the table.
