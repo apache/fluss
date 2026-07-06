@@ -741,8 +741,11 @@ impl RecordAccumulator {
         }
     }
 
-    #[cfg(test)]
-    fn estimated_batch_size(&self, table_path: &Arc<PhysicalTablePath>) -> Option<usize> {
+    #[cfg(any(test, feature = "integration_tests"))]
+    pub(crate) fn estimated_batch_size(
+        &self,
+        table_path: &Arc<PhysicalTablePath>,
+    ) -> Option<usize> {
         self.write_batches
             .get(table_path)?
             .dynamic_batch_size

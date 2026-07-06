@@ -221,6 +221,14 @@ impl WriterClient {
         Ok(())
     }
 
+    #[cfg(feature = "integration_tests")]
+    pub fn estimated_batch_size_for_table(
+        &self,
+        table_path: &Arc<PhysicalTablePath>,
+    ) -> Option<usize> {
+        self.accumulate.estimated_batch_size(table_path)
+    }
+
     pub fn create_bucket_assigner(
         table_info: &Arc<TableInfo>,
         table_path: Arc<PhysicalTablePath>,
