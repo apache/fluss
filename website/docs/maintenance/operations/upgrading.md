@@ -132,7 +132,7 @@ Since Fluss 0.8, the auto-compaction feature during datalake tiering is **disabl
 | Version                                | Behavior                                                                                                                       |
 |----------------------------------------|--------------------------------------------------------------------------------------------------------------------------------|
 | **Previous Version(v0.7 and earlier)** | Auto-compaction enabled during tiering                                                                                         |
-| **Fluss 0.8+**                         | **Auto-compaction disabled by default**. Tiering service focus solely on data movement; compaction must be explicitly enabled. |
+| **Fluss 0.8+**                         | **Auto-compaction disabled by default**. Tiering service focuses solely on data movement; compaction must be explicitly enabled. |
 
 ### How to Enable Compaction
 To maintain the previous behavior and enable automatic compaction, you must manually configure `table.datalake.auto-compaction = true` for each table in table option.

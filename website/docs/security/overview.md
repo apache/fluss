@@ -35,9 +35,9 @@ Server side listener configurations:
 | Option | Type | Default Value | Description |
 | --- | --- | --- | --- |
 | bind.listeners |  String  | FLUSS://localhost:9123 | The network address and port to which the server binds for accepting connections. This defines the interface and port where the server will listen for incoming requests. The format is `listener_name://host:port`, and multiple addresses can be specified, separated by commas. Use `0.0.0.0` for the `host` to bind to all available interfaces which is dangerous on production and not suggested for production usage. The `listener_name` serves as an identifier for the address in the configuration. For example, `internal.listener.name` specifies the address used for internal server communication. If multiple addresses are configured, ensure that the `listener_name` values are unique. |
-| advertised.listeners |  (none) | String | The externally advertised address and port for client connections. Required in distributed environments when the bind address is not publicly reachable. Format matches `bind.listeners` (listener_name://host:port). Defaults to the value of `bind.listeners` if not explicitly configured. |
-| internal.listener.name |   FLUSS | String |The listener name used for internal server communication. |
-| security.protocol.map | Map | (none) | A map defining the authentication protocol for each listener. The format is `listenerName1:protocol1,listenerName2:protocol2`, e.g.,`CLIENT:SASL, INTERNAL:PLAINTEXT`.A map defining the authentication protocol for each listener. The format is `listenerName1:protocol1,listenerName2:protocol2`, e.g., `INTERNAL:PLAINTEXT,CLIENT:GSSAPI`. Each listener can be associated with a specific authentication protocol. Listeners not included in the map will use PLAINTEXT by default, which does not require authentication. Currently, only PLAINTEXT and SASL/PLAIN are supported. |
+| advertised.listeners |  String | (none) | The externally advertised address and port for client connections. Required in distributed environments when the bind address is not publicly reachable. Format matches `bind.listeners` (listener_name://host:port). Defaults to the value of `bind.listeners` if not explicitly configured. |
+| internal.listener.name |   String | FLUSS |The listener name used for internal server communication. |
+| security.protocol.map | Map | (none) | A map defining the authentication protocol for each listener. The format is `listenerName1:protocol1,listenerName2:protocol2`, e.g., `INTERNAL:PLAINTEXT,CLIENT:GSSAPI`. Each listener can be associated with a specific authentication protocol. Listeners not included in the map will use PLAINTEXT by default, which does not require authentication. Currently, only PLAINTEXT and SASL/PLAIN are supported. |
 
 
 Here is an example server side configuration:
@@ -85,7 +85,7 @@ Example usage:
 * `new FlussPrincipal("admins", "Group")` – A group-based principal for authorization.
 
 ### Enable Authorization and Assign Super Users
-Fluss provides a pluggable authorization framework that uses Access Control Lists (ACLs) to determine whether a given Fluss Principal is allowed to perform an operation on a specific resource.To enable authorization, you need to configure the following properties:
+Fluss provides a pluggable authorization framework that uses Access Control Lists (ACLs) to determine whether a given Fluss Principal is allowed to perform an operation on a specific resource. To enable authorization, you need to configure the following properties:
 | Option             | Type    | Default Value | Description                                                                                                                                                                                                                                                                                                    |
 |--------------------|---------|---------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | authorizer.enabled | Boolean | false         | Specifies whether to enable the authorization feature.                                                                                                                                                                                                                                                         |
@@ -114,13 +114,13 @@ security.protocol.map: CLIENT:SASL, INTERNAL:PLAINTEXT
 
    The client presents its credentials using the selected authentication method. For SASL/PLAIN, this typically includes a username and password.
 
-   If the credentials are valid and the authentication is successful, and the client is allowed to proceed with further operations. Otherwise, the connection is rejected, and an authentication error is returned.
+   If the credentials are valid and the authentication is successful, the client is allowed to proceed with further operations. Otherwise, the connection is rejected, and an authentication error is returned.
 
 4. Fluss Principal is created
 
    Upon successful authentication, Fluss creates a FlussPrincipal, representing the identity of the authenticated user
 
-5. Authorization check occur
+5. Authorization check occurs
 
    Before allowing any operation (like producing or consuming data), Fluss checks whether the Fluss Principal has permission to perform that action based on configured ACL rules.
 

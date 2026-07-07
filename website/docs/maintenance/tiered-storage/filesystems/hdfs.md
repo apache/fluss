@@ -29,7 +29,7 @@ Verify downloaded JARs against the [KEYS file](https://downloads.apache.org/incu
 
 
 ## Configurations setup
-To enabled HDFS as remote storage, you need to define the hdfs path as remote storage in Fluss' `server.yaml`:
+To enable HDFS as remote storage, you need to define the hdfs path as remote storage in Fluss' `server.yaml`:
 ```yaml title="conf/server.yaml"
 # The dir that used to be as the remote storage of Fluss
 remote.data.dir: hdfs://namenode:50010/path/to/remote/storage

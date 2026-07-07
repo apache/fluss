@@ -100,7 +100,7 @@ See `fluss::ErrorCode` in `fluss.hpp` for the full list of named constants.
 
 ## Retry Logic
 
-Some errors are transient, where the server may be temporarily unavailable, mid-election, or under load. `IsRetriable()` can be used for deciding to to retry an operation rather than treating the error as permanent.
+Some errors are transient, where the server may be temporarily unavailable, mid-election, or under load. `IsRetriable()` can be used for deciding to retry an operation rather than treating the error as permanent.
 
 `ErrorCode::IsRetriable(int32_t code)` is a static helper available directly on the error code:
 

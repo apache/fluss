@@ -16,18 +16,18 @@ Fluss supports different metric types: **Counters**, **Gauges**, **Histograms**,
 - `Meter`: The gauge exports the meter's rate.
 
 Fluss client also has supported built-in metrics to measure operations of **write to**, **read from** fluss cluster, 
-which can be bridged to Flink use Flink connector standard metrics.
+which can be bridged to Flink using Flink connector standard metrics.
 
 ## Scope
 
 Every metric is assigned an identifier and a set of key-value pairs under which the metric will be reported.
 
 The identifier is delimited by `metrics.scope.delimiter`. Currently, the `metrics.scope.delimiter` is not configurable, 
-it determined by the metric reporter. Take prometheus as example, the scope will delimited by `_`, so the scope like `A_B_C`, 
+it is determined by the metric reporter. Take prometheus as example, the scope will be delimited by `_`, so the scope like `A_B_C`, 
 while Fluss metrics will always begin with `fluss`, as `fluss_A_B_C`.
 
 The key-value pairs are called **variables** and are used to filter metrics. There are no restrictions on the 
-number of order of variables. Variables are case-sensitive.
+number or order of variables. Variables are case-sensitive.
 
 ## Reporter
 

@@ -23,7 +23,7 @@ Primary-Key Tables use primary key (excluding partition key) as the bucket key b
 ## Sticky Bucketing
 
 **Sticky Bucketing** enables larger batches and reduces latency when writing records into Log Tables. After sending a batch, the sticky bucket changes. Over time, the records are spread out evenly among all the buckets.
-Sticky Bucketing is the default bucketing strategy for Log Tables. This is quite important because Log Tables uses Apache Arrow as the underling data format which is efficient for large batches.
+Sticky Bucketing is the default bucketing strategy for Log Tables. This is quite important because Log Tables use Apache Arrow as the underlying data format which is efficient for large batches.
 
 **Usage**: setting `'client.writer.bucket.no-key-assigner'='sticky'` property for the table to enable this strategy. PrimaryKey Tables do not support this strategy.
 

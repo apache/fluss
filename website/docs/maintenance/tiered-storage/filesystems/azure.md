@@ -45,7 +45,7 @@ Azure Blob Storage support is not included in the default Fluss distribution. To
 
 ## Configurations setup
 
-To enabled Azure Blob Storage as remote storage, there are some required configurations that must be added to Fluss' `server.yaml`:
+To enable Azure Blob Storage as remote storage, there are some required configurations that must be added to Fluss' `server.yaml`:
 
 ```yaml
 # The dir that used to be as the remote storage of Fluss, use the Azure Data Lake Storage URI

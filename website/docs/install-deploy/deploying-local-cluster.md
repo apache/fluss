@@ -49,7 +49,7 @@ After that, the Fluss local cluster is started.
 
 ## Interacting with Fluss
 
-After Fluss local cluster is started, you can use **Fluss Client** (Currently, only support Flink SQL Client) to interact with Fluss.
+After Fluss local cluster is started, you can use **Fluss Client** (Currently, only Flink SQL Client is supported) to interact with Fluss.
 The following subsections will show you how to use Flink SQL Client to interact with Fluss.
 
 ### Flink SQL Client
