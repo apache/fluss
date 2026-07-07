@@ -112,10 +112,7 @@ public class PartitionNegativeCache {
         cache.invalidate(partitionId);
     }
 
-    /**
-     * Returns the current number of entries in the cache. Includes potentially expired entries that
-     * haven't been cleaned up yet.
-     */
+    /** Returns the current number of entries in the cache after triggering cleanup. */
     @VisibleForTesting
     public long size() {
         cache.cleanUp();

@@ -704,10 +704,11 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         try {
             return !zkClient.getPartitionAssignment(partitionId).isPresent();
         } catch (Exception e) {
-            throw new FlussRuntimeException(
-                    String.format(
-                            "Failed to get partition assignment for partition %d.", partitionId),
+            LOG.warn(
+                    "Failed to check partition assignment for partition {}. Skip negative cache update.",
+                    partitionId,
                     e);
+            return false;
         }
     }
 }
