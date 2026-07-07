@@ -19,7 +19,11 @@ package org.apache.fluss.fs.s3.token;
 
 import org.apache.fluss.fs.token.CredentialsJsonSerde;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
+import org.apache.fluss.utils.StringUtils;
 
+import com.amazonaws.auth.AWSCredentials;
+import com.amazonaws.auth.AWSCredentialsProvider;
+import com.amazonaws.auth.AWSSessionCredentials;
 import com.amazonaws.auth.AWSStaticCredentialsProvider;
 import com.amazonaws.auth.BasicAWSCredentials;
 import com.amazonaws.client.builder.AwsClientBuilder;
@@ -30,11 +34,14 @@ import com.amazonaws.services.securitytoken.model.AssumeRoleResult;
 import com.amazonaws.services.securitytoken.model.Credentials;
 import com.amazonaws.services.securitytoken.model.GetSessionTokenResult;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.s3a.AWSCredentialProviderList;
+import org.apache.hadoop.fs.s3a.S3AUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
@@ -49,6 +56,9 @@ public class S3DelegationTokenProvider {
 
     private static final String ACCESS_KEY_ID = "fs.s3a.access.key";
     private static final String ACCESS_KEY_SECRET = "fs.s3a.secret.key";
+    private static final String AWS_CREDENTIALS_PROVIDER = "fs.s3a.aws.credentials.provider";
+    public static final String CREDENTIAL_PROVIDER_EXPLICITLY_CONFIGURED =
+            "fluss.fs.s3.aws.credentials.provider.explicitly.configured";
 
     private static final String REGION_KEY = "fs.s3a.region";
     private static final String ENDPOINT_KEY = "fs.s3a.endpoint";
@@ -63,9 +73,10 @@ public class S3DelegationTokenProvider {
     @Nullable private final String secretKey;
     @Nullable private final String roleArn;
     @Nullable private final String stsEndpoint;
+    @Nullable private final AWSCredentialProviderList credentialProviderList;
     private final Map<String, String> additionInfos;
 
-    public S3DelegationTokenProvider(String scheme, Configuration conf) {
+    public S3DelegationTokenProvider(String scheme, Configuration conf) throws IOException {
         this.scheme = scheme;
         this.region = conf.get(REGION_KEY);
         checkArgument(region != null, "Region is not set.");
@@ -73,11 +84,28 @@ public class S3DelegationTokenProvider {
         this.secretKey = conf.get(ACCESS_KEY_SECRET);
         this.roleArn = conf.get(ROLE_ARN_KEY);
         this.stsEndpoint = conf.get(STS_ENDPOINT_KEY);
+        boolean hasCredentialProvider =
+                conf.getBoolean(CREDENTIAL_PROVIDER_EXPLICITLY_CONFIGURED, false)
+                        && !StringUtils.isNullOrWhitespaceOnly(
+                                conf.getTrimmed(AWS_CREDENTIALS_PROVIDER));
 
         checkArgument(
                 (accessKey == null) == (secretKey == null),
                 "S3 access key and secret key must both be set or both be unset.");
-        if (accessKey == null) {
+        if (hasCredentialProvider && roleArn != null) {
+            throw new IllegalArgumentException(
+                    "AssumeRole and a custom AWS credentials provider cannot be configured together.");
+        }
+        if (hasCredentialProvider) {
+            checkArgument(
+                    !Arrays.asList(conf.getTrimmedStrings(AWS_CREDENTIALS_PROVIDER))
+                            .contains(DynamicTemporaryAWSCredentialsProvider.NAME),
+                    "%s cannot be configured as a server-side AWS credentials provider.",
+                    DynamicTemporaryAWSCredentialsProvider.NAME);
+        }
+        this.credentialProviderList =
+                hasCredentialProvider ? S3AUtils.createAWSCredentialProviderSet(null, conf) : null;
+        if (accessKey == null && credentialProviderList == null) {
             checkArgument(
                     roleArn != null,
                     "Role ARN must be set when static credentials are not provided.");
@@ -106,8 +134,10 @@ public class S3DelegationTokenProvider {
                 credentials = result.getCredentials();
             } else {
                 LOG.info(
-                        "Obtaining session credentials via GetSessionToken with access key: {}",
-                        S3TokenLogUtils.maskAccessKey(accessKey));
+                        "Obtaining session credentials via GetSessionToken{}.",
+                        credentialProviderList != null
+                                ? " with configured AWS credentials provider"
+                                : " with access key: " + S3TokenLogUtils.maskAccessKey(accessKey));
                 GetSessionTokenResult result = stsClient.getSessionToken();
                 credentials = result.getCredentials();
             }
@@ -131,10 +161,9 @@ public class S3DelegationTokenProvider {
         AWSSecurityTokenServiceClientBuilder builder =
                 AWSSecurityTokenServiceClientBuilder.standard();
 
-        if (accessKey != null && secretKey != null) {
-            builder.withCredentials(
-                    new AWSStaticCredentialsProvider(
-                            new BasicAWSCredentials(accessKey, secretKey)));
+        AWSCredentialsProvider stsCredentialsProvider = createStsCredentialsProvider();
+        if (stsCredentialsProvider != null) {
+            builder.withCredentials(stsCredentialsProvider);
         }
 
         if (stsEndpoint != null) {
@@ -145,6 +174,33 @@ public class S3DelegationTokenProvider {
         }
 
         return builder.build();
+    }
+
+    @Nullable
+    AWSCredentialsProvider createStsCredentialsProvider() {
+        if (credentialProviderList != null) {
+            AWSCredentials credentials = credentialProviderList.getCredentials();
+            checkArgument(
+                    !(credentials instanceof AWSSessionCredentials),
+                    "Session credentials from the configured AWS credentials provider are not supported "
+                            + "for Fluss S3 client-token generation.");
+            checkArgument(
+                    credentials.getAWSAccessKeyId() != null
+                            && credentials.getAWSSecretKey() != null,
+                    "The configured AWS credentials provider must return an access key and secret key.");
+            LOG.info(
+                    "Using configured AWS credentials provider for STS GetSessionToken with access key: {}",
+                    S3TokenLogUtils.maskAccessKey(credentials.getAWSAccessKeyId()));
+            return new AWSStaticCredentialsProvider(
+                    new BasicAWSCredentials(
+                            credentials.getAWSAccessKeyId(), credentials.getAWSSecretKey()));
+        }
+
+        if (accessKey != null && secretKey != null) {
+            return new AWSStaticCredentialsProvider(new BasicAWSCredentials(accessKey, secretKey));
+        }
+
+        return null;
     }
 
     private byte[] toJson(Credentials credentials) {
