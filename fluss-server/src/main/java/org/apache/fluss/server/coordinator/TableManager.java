@@ -255,8 +255,8 @@ public class TableManager {
     private void completeDeleteTable(long tableId) {
         Set<TableBucketReplica> replicas = coordinatorContext.getAllReplicasForTable(tableId);
         replicaStateMachine.handleStateChanges(replicas, ReplicaState.NonExistentReplica);
-        asyncDeleteRemoteDirectory(tableId);
         asyncDeleteTableMetadata(tableId);
+        asyncDeleteRemoteDirectory(tableId);
         coordinatorContext.removeTable(tableId);
         // Release the manager's in-flight tracking so the next batch can be submitted.
         lifecycleThrottler.onTableDropCompleted(tableId);
@@ -267,8 +267,8 @@ public class TableManager {
                 coordinatorContext.getAllReplicasForPartition(
                         tablePartition.getTableId(), tablePartition.getPartitionId());
         replicaStateMachine.handleStateChanges(replicas, ReplicaState.NonExistentReplica);
-        asyncDeleteRemoteDirectory(tablePartition);
         asyncDeletePartitionMetadata(tablePartition.getPartitionId());
+        asyncDeleteRemoteDirectory(tablePartition);
         coordinatorContext.removePartition(tablePartition);
         lifecycleThrottler.onPartitionDropCompleted(tablePartition);
     }
