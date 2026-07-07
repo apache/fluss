@@ -186,6 +186,17 @@ mod dynamic_batch_size_test {
         }
         writer.flush().await.expect("Failed to flush phase 1");
 
+        let physical_path = Arc::new(PhysicalTablePath::of(Arc::new(table_path.clone())));
+
+        let estimated_after_shrink = connection
+            .estimated_batch_size_for_table(&physical_path)
+            .expect("Estimator should exist after shrink phase");
+
+        assert!(
+            estimated_after_shrink < max_batch as usize,
+            "Expected batch size to shrink below max ({max_batch}), got {estimated_after_shrink}"
+        );
+
         // Phase 2: grow — large rows (>80% of current target) drive the
         // estimator back up toward max after it has been shrunk.
         let large_payload = "A".repeat(200 * 1024); // ~200 KB
@@ -195,6 +206,15 @@ mod dynamic_batch_size_test {
             writer.append(&row).expect("Failed to append large row");
         }
         writer.flush().await.expect("Failed to flush phase 2");
+
+        let estimated_after_grow = connection
+            .estimated_batch_size_for_table(&physical_path)
+            .expect("Estimator should exist after grow phase");
+
+        assert!(
+            estimated_after_grow > estimated_after_shrink,
+            "Expected batch size to grow after large writes (before={estimated_after_shrink}, after={estimated_after_grow})"
+        );
 
         // Read back all records from both phases to verify data integrity.
         let total = small_count + large_count;
