@@ -25,12 +25,13 @@ import org.apache.fluss.client.table.scanner.log.ArrowScanRecords;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.LogScannerImpl;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.client.tiering.TieringLogSplit;
+import org.apache.fluss.client.tiering.TieringSnapshotSplit;
+import org.apache.fluss.client.tiering.TieringSplit;
 import org.apache.fluss.flink.source.reader.BoundedSplitReader;
 import org.apache.fluss.flink.source.reader.RecordAndPos;
 import org.apache.fluss.flink.tiering.source.metrics.TieringMetrics;
-import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
-import org.apache.fluss.flink.tiering.source.split.TieringSnapshotSplit;
-import org.apache.fluss.flink.tiering.source.split.TieringSplit;
+import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.lake.batch.ArrowRecordBatch;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.lake.writer.LakeWriter;
@@ -72,7 +73,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** The {@link SplitReader} implementation which will read Fluss and write to lake. */
 public class TieringSplitReader<WriteResult>
-        implements SplitReader<TableBucketWriteResult<WriteResult>, TieringSplit> {
+        implements SplitReader<TableBucketWriteResult<WriteResult>, FlinkTieringSplit> {
 
     private static final Logger LOG = LoggerFactory.getLogger(TieringSplitReader.class);
 
@@ -210,14 +211,15 @@ public class TieringSplitReader<WriteResult>
     }
 
     @Override
-    public void handleSplitsChanges(SplitsChange<TieringSplit> splitsChange) {
+    public void handleSplitsChanges(SplitsChange<FlinkTieringSplit> splitsChange) {
         if (!(splitsChange instanceof SplitsAddition)) {
             throw new UnsupportedOperationException(
                     String.format(
                             "The SplitChange type of %s is not supported.",
                             splitsChange.getClass()));
         }
-        for (TieringSplit split : splitsChange.splits()) {
+        for (FlinkTieringSplit flinkSplit : splitsChange.splits()) {
+            TieringSplit split = flinkSplit.unwrap();
             LOG.info("add split {}", split.splitId());
             if (split.shouldSkipCurrentRound()) {
                 // if the split is forced to ignore,

@@ -17,6 +17,9 @@
 
 package org.apache.fluss.flink.tiering.source.split;
 
+import org.apache.fluss.client.tiering.TieringLogSplit;
+import org.apache.fluss.client.tiering.TieringSnapshotSplit;
+import org.apache.fluss.client.tiering.TieringSplit;
 import org.apache.fluss.flink.tiering.source.TieringSource;
 import org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator;
 import org.apache.fluss.metadata.TableBucket;
@@ -29,13 +32,13 @@ import org.apache.flink.core.memory.DataOutputSerializer;
 import java.io.IOException;
 
 /**
- * A serializer for the {@link TieringSplit}.
+ * A serializer for the {@link FlinkTieringSplit}.
  *
  * <p>This serializer is only used to serialize and deserialize splits sent from {@link
  * TieringSourceEnumerator} to {@link TieringSource} for network transmission. Therefore, it does
  * not need to consider compatibility.
  */
-public class TieringSplitSerializer implements SimpleVersionedSerializer<TieringSplit> {
+public class TieringSplitSerializer implements SimpleVersionedSerializer<FlinkTieringSplit> {
 
     public static final TieringSplitSerializer INSTANCE = new TieringSplitSerializer();
 
@@ -55,8 +58,9 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<Tiering
     }
 
     @Override
-    public byte[] serialize(TieringSplit split) throws IOException {
+    public byte[] serialize(FlinkTieringSplit flinkSplit) throws IOException {
         final DataOutputSerializer out = SERIALIZER_CACHE.get();
+        TieringSplit split = flinkSplit.unwrap();
 
         byte splitKind = split.splitKind();
         out.writeByte(splitKind);
@@ -111,7 +115,7 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<Tiering
     }
 
     @Override
-    public TieringSplit deserialize(int version, byte[] serialized) throws IOException {
+    public FlinkTieringSplit deserialize(int version, byte[] serialized) throws IOException {
         if (version != VERSION_0) {
             throw new IOException("Unknown version " + version);
         }
@@ -145,36 +149,40 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<Tiering
         int splitIndex = in.readInt();
         long tieringRoundTimestamp = in.readLong();
 
+        TieringSplit tieringSplit;
         if (splitKind == TIERING_SNAPSHOT_SPLIT_FLAG) {
             // deserialize snapshot id
             long snapshotId = in.readLong();
             // deserialize log offset of snapshot
             long logOffsetOfSnapshot = in.readLong();
-            return new TieringSnapshotSplit(
-                    tablePath,
-                    tableBucket,
-                    partitionName,
-                    snapshotId,
-                    logOffsetOfSnapshot,
-                    numberOfSplits,
-                    skipCurrentRound,
-                    splitIndex,
-                    tieringRoundTimestamp);
+            tieringSplit =
+                    new TieringSnapshotSplit(
+                            tablePath,
+                            tableBucket,
+                            partitionName,
+                            snapshotId,
+                            logOffsetOfSnapshot,
+                            numberOfSplits,
+                            skipCurrentRound,
+                            splitIndex,
+                            tieringRoundTimestamp);
         } else {
             // deserialize starting offset
             long startingOffset = in.readLong();
             // deserialize starting offset
             long stoppingOffset = in.readLong();
-            return new TieringLogSplit(
-                    tablePath,
-                    tableBucket,
-                    partitionName,
-                    startingOffset,
-                    stoppingOffset,
-                    numberOfSplits,
-                    skipCurrentRound,
-                    splitIndex,
-                    tieringRoundTimestamp);
+            tieringSplit =
+                    new TieringLogSplit(
+                            tablePath,
+                            tableBucket,
+                            partitionName,
+                            startingOffset,
+                            stoppingOffset,
+                            numberOfSplits,
+                            skipCurrentRound,
+                            splitIndex,
+                            tieringRoundTimestamp);
         }
+        return new FlinkTieringSplit(tieringSplit);
     }
 }

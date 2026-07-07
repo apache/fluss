@@ -21,7 +21,7 @@ import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator;
-import org.apache.fluss.flink.tiering.source.split.TieringSplit;
+import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplitSerializer;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorStateSerializer;
@@ -55,7 +55,9 @@ import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.getClientS
  */
 public class TieringSource<WriteResult>
         implements Source<
-                TableBucketWriteResult<WriteResult>, TieringSplit, TieringSourceEnumeratorState> {
+                TableBucketWriteResult<WriteResult>,
+                FlinkTieringSplit,
+                TieringSourceEnumeratorState> {
 
     public static final String TIERING_SOURCE_TRANSFORMATION_UID =
             "$$fluss_tiering_source_operator$$";
@@ -81,15 +83,15 @@ public class TieringSource<WriteResult>
     }
 
     @Override
-    public SplitEnumerator<TieringSplit, TieringSourceEnumeratorState> createEnumerator(
-            SplitEnumeratorContext<TieringSplit> splitEnumeratorContext) {
+    public SplitEnumerator<FlinkTieringSplit, TieringSourceEnumeratorState> createEnumerator(
+            SplitEnumeratorContext<FlinkTieringSplit> splitEnumeratorContext) {
         return new TieringSourceEnumerator(
                 flussConf, splitEnumeratorContext, pollTieringTableIntervalMs);
     }
 
     @Override
-    public SplitEnumerator<TieringSplit, TieringSourceEnumeratorState> restoreEnumerator(
-            SplitEnumeratorContext<TieringSplit> splitEnumeratorContext,
+    public SplitEnumerator<FlinkTieringSplit, TieringSourceEnumeratorState> restoreEnumerator(
+            SplitEnumeratorContext<FlinkTieringSplit> splitEnumeratorContext,
             TieringSourceEnumeratorState tieringSourceEnumeratorState) {
         // stateless operator
         return new TieringSourceEnumerator(
@@ -97,7 +99,7 @@ public class TieringSource<WriteResult>
     }
 
     @Override
-    public SimpleVersionedSerializer<TieringSplit> getSplitSerializer() {
+    public SimpleVersionedSerializer<FlinkTieringSplit> getSplitSerializer() {
         return TieringSplitSerializer.INSTANCE;
     }
 
@@ -108,7 +110,7 @@ public class TieringSource<WriteResult>
     }
 
     @Override
-    public SourceReader<TableBucketWriteResult<WriteResult>, TieringSplit> createReader(
+    public SourceReader<TableBucketWriteResult<WriteResult>, FlinkTieringSplit> createReader(
             SourceReaderContext sourceReaderContext) {
         FutureCompletingBlockingQueue<RecordsWithSplitIds<TableBucketWriteResult<WriteResult>>>
                 elementsQueue = new FutureCompletingBlockingQueue<>();
