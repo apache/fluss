@@ -25,6 +25,7 @@ import org.apache.fluss.remote.RemoteLogFetchInfo;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.entity.StopReplicaData;
@@ -364,6 +365,53 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         assertThat(resultForBucket.getHighWatermark()).isEqualTo(50L);
         assertThat(resultForBucket.records()).isNotNull();
         assertThat(resultForBucket.fetchFromRemote()).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testRemoteFirstFetchPrefersRemoteWhenLocalStillHasRecords(boolean partitionTable)
+            throws Exception {
+        TableBucket tb = makeTableBucket(partitionTable);
+        makeLogTableAsLeader(tb, partitionTable);
+        LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
+        addMultiSegmentsToLogTablet(logTablet, 5);
+        remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
+        logTablet.updateRemoteLogEndOffset(40L);
+
+        Map<TableBucket, FetchReqInfo> fetchData =
+                Collections.singletonMap(tb, new FetchReqInfo(tb.getTableId(), 35L, 1024 * 1024));
+
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> localFirstFuture =
+                new CompletableFuture<>();
+        replicaManager.fetchLogRecords(
+                new FetchParams(-1, Integer.MAX_VALUE),
+                fetchData,
+                null,
+                localFirstFuture::complete);
+        FetchLogResultForBucket localFirstResult = localFirstFuture.get().get(tb);
+        assertThat(localFirstResult.getError()).isEqualTo(ApiError.NONE);
+        assertThat(localFirstResult.fetchFromRemote()).isFalse();
+        assertThat(localFirstResult.records()).isNotNull();
+
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> remoteFirstFuture =
+                new CompletableFuture<>();
+        replicaManager.fetchLogRecords(
+                new FetchParams(
+                        -1,
+                        true,
+                        Integer.MAX_VALUE,
+                        -1,
+                        -1,
+                        null,
+                        FetchLogReadPreference.REMOTE_FIRST),
+                fetchData,
+                null,
+                remoteFirstFuture::complete);
+        FetchLogResultForBucket remoteFirstResult = remoteFirstFuture.get().get(tb);
+        assertThat(remoteFirstResult.getError()).isEqualTo(ApiError.NONE);
+        assertThat(remoteFirstResult.fetchFromRemote()).isTrue();
+        assertThat(remoteFirstResult.records()).isNull();
+        assertThat(remoteFirstResult.remoteLogFetchInfo()).isNotNull();
     }
 
     @ParameterizedTest

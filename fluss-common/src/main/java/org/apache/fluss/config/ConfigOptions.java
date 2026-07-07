@@ -26,6 +26,7 @@ import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
+import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 import org.apache.fluss.utils.ArrayUtils;
 
 import java.lang.reflect.Field;
@@ -1524,6 +1525,13 @@ public class ConfigOptions {
                     .withDescription(
                             "The number of remote log segments to keep in local temp file for LogScanner, "
                                     + "which download from remote storage. The default setting is 4.");
+
+    public static final ConfigOption<FetchLogReadPreference> CLIENT_SCANNER_LOG_READ_PREFERENCE =
+            key("client.scanner.log.read-preference")
+                    .enumType(FetchLogReadPreference.class)
+                    .defaultValue(FetchLogReadPreference.LOCAL_FIRST)
+                    .withDescription(
+                            "The read preference for LogScanner. Supported values are local-first and remote-first.");
 
     public static final ConfigOption<String> CLIENT_SCANNER_IO_TMP_DIR =
             key("client.scanner.io.tmpdir")

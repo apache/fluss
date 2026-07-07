@@ -229,6 +229,7 @@ message FetchLogRequest {
   repeated PbFetchLogReqForTable tables_req = 3;
   optional int32 max_wait_ms = 4;
   optional int32 min_bytes = 5;
+  optional int32 read_preference = 6;
 }
 
 message FetchLogResponse {

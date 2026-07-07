@@ -1474,6 +1474,22 @@ public class ReplicaManager implements ServerReconfigurable {
                         replica.getArrowCompressionInfo(),
                         fetchReqInfo.getProjectFields(),
                         projectionsCache);
+
+                // If the client prefers remote reads and the offset is covered, return remote fetch
+                // info.
+                if (fetchParams.isRemoteFirstClientFetch()) {
+                    FetchLogResultForBucket remoteFirstFetchResult =
+                            tryFetchRemoteFirst(replica, fetchOffset);
+                    if (remoteFirstFetchResult != null) {
+                        logReadResult.put(
+                                tb,
+                                new LogReadResult(
+                                        remoteFirstFetchResult,
+                                        LogOffsetMetadata.UNKNOWN_OFFSET_METADATA));
+                        continue;
+                    }
+                }
+
                 LogReadInfo readInfo = replica.fetchRecords(fetchParams);
 
                 // Once we read from a non-empty bucket, we stop ignoring request and bucket
@@ -1530,6 +1546,37 @@ public class ReplicaManager implements ServerReconfigurable {
             }
         }
         return logReadResult;
+    }
+
+    private @Nullable FetchLogResultForBucket tryFetchRemoteFirst(
+            Replica replica, long fetchOffset) {
+        TableBucket tb = replica.getTableBucket();
+        long normalizedFetchOffset =
+                fetchOffset == FetchParams.FETCH_FROM_EARLIEST_OFFSET
+                        ? replica.getLogStartOffset()
+                        : fetchOffset;
+        if (!canFetchFromRemoteLog(replica, normalizedFetchOffset)) {
+            return null;
+        }
+
+        try {
+            RemoteLogFetchInfo remoteLogFetchInfo =
+                    fetchLogFromRemote(replica, normalizedFetchOffset);
+            if (remoteLogFetchInfo != null) {
+                return new FetchLogResultForBucket(
+                        tb, remoteLogFetchInfo, replica.getLogHighWatermark());
+            }
+            return new FetchLogResultForBucket(
+                    tb,
+                    ApiError.fromThrowable(
+                            new LogOffsetOutOfRangeException(
+                                    String.format(
+                                            "The fetch offset %s is covered by remote log range for table bucket %s, "
+                                                    + "but no remote log segment is available.",
+                                            normalizedFetchOffset, tb))));
+        } catch (Exception e) {
+            return new FetchLogResultForBucket(tb, ApiError.fromThrowable(e));
+        }
     }
 
     private FetchLogResultForBucket handleFetchOutOfRangeException(

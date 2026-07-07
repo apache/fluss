@@ -52,6 +52,7 @@ import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForTable;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.rpc.protocol.FetchLogReadPreference;
 import org.apache.fluss.rpc.util.PredicateMessageUtils;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ChunkedAllocationManager;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
@@ -109,6 +110,7 @@ public class LogFetcher implements Closeable {
     private final LogFetchCollector logFetchCollector;
     private final ArrowLogFetchCollector arrowLogFetchCollector;
     private final RemoteLogDownloader remoteLogDownloader;
+    private final FetchLogReadPreference readPreference;
 
     @GuardedBy("this")
     private final Set<Integer> nodesWithPendingFetchRequests;
@@ -166,6 +168,7 @@ public class LogFetcher implements Closeable {
         this.arrowLogFetchCollector =
                 new ArrowLogFetchCollector(tablePath, logScannerStatus, conf, metadataUpdater);
         this.scannerMetricGroup = scannerMetricGroup;
+        this.readPreference = conf.get(ConfigOptions.CLIENT_SCANNER_LOG_READ_PREFERENCE);
         this.remoteLogDownloader =
                 new RemoteLogDownloader(tablePath, conf, remoteFileDownloader, scannerMetricGroup);
         remoteLogDownloader.start();
@@ -562,7 +565,8 @@ public class LogFetcher implements Closeable {
                                         .setFollowerServerId(-1)
                                         .setMaxBytes(maxFetchBytes)
                                         .setMinBytes(minFetchBytes)
-                                        .setMaxWaitMs(maxFetchWaitMs);
+                                        .setMaxWaitMs(maxFetchWaitMs)
+                                        .setReadPreference(readPreference.value());
                         PbFetchLogReqForTable reqForTable =
                                 new PbFetchLogReqForTable().setTableId(finalTableId);
                         if (readContext.isProjectionPushDowned()) {
