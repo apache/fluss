@@ -25,12 +25,12 @@ import org.apache.flink.table.annotation.ProcedureHint;
 import org.apache.flink.table.procedure.ProcedureContext;
 
 /**
- * Procedure to subtract (remove) values from list-type cluster configurations dynamically.
+ * Procedure to subtract (remove) values from collection-type cluster configurations dynamically.
  *
- * <p>This procedure removes specific values from existing list-type configurations. The SUBTRACT
- * operation only works on configurations defined as list types (e.g., {@code
- * security.sasl.plain.credentials}). If the list becomes empty after subtraction, the configuration
- * key is removed entirely. The changes are:
+ * <p>This procedure removes specific values from existing list-type or map-type configurations. The
+ * SUBTRACT operation only works on collection configurations (e.g., {@code
+ * security.sasl.plain.credentials}). If the collection becomes empty after subtraction, the
+ * configuration key is removed entirely. The changes are:
  *
  * <ul>
  *   <li>Validated by the CoordinatorServer before persistence
@@ -42,7 +42,7 @@ import org.apache.flink.table.procedure.ProcedureContext;
  * <p>Usage examples:
  *
  * <pre>
- * -- Remove a user from the SASL user list
+ * -- Remove a user from the SASL credentials map
  * CALL sys.subtract_cluster_configs('security.sasl.plain.credentials', 'bob:bob-secret');
  *
  * -- Remove multiple key-value pairs at one time
@@ -53,17 +53,17 @@ import org.apache.flink.table.procedure.ProcedureContext;
  *     'alice:alice-secret');
  * </pre>
  *
- * <p><b>Note:</b> SUBTRACT operations are only supported for list-type configuration keys. The
- * server will reject the change if the configuration key is not a list type. Subtracting a value
- * that does not exist in the list is a no-op.
+ * <p><b>Note:</b> SUBTRACT operations are only supported for list-type or map-type configuration
+ * keys. The server will reject the change if the configuration key is not a collection type.
+ * Subtracting a value that does not exist in the collection is a no-op.
  */
-public class SubtractClusterConfigsProcedure extends ListTypeClusterConfigsProcedureBase {
+public class SubtractClusterConfigsProcedure extends CollectionClusterConfigsProcedureBase {
 
     @ProcedureHint(
             argument = {@ArgumentHint(name = "config_pairs", type = @DataTypeHint("STRING"))},
             isVarArgs = true)
     public String[] call(ProcedureContext context, String... configPairs) throws Exception {
-        return alterListClusterConfigs(
+        return alterCollectionClusterConfigs(
                 configPairs, AlterConfigOpType.SUBTRACT, "subtracted", "from", "subtract");
     }
 }

@@ -529,13 +529,12 @@ public class ConfigOptions {
                                     + "Each listener can be associated with a specific authentication protocol. "
                                     + "Listeners not included in the map will use PLAINTEXT by default, which does not require authentication.");
 
-    public static final ConfigOption<List<String>> SERVER_SASL_CREDENTIALS =
+    public static final ConfigOption<Map<String, String>> SERVER_SASL_CREDENTIALS =
             key("security.sasl.plain.credentials")
-                    .stringType()
-                    .asList()
+                    .mapType()
                     .noDefaultValue()
                     .withDescription(
-                            "List of user credentials for SASL/PLAIN authentication in 'username:password' format. "
+                            "Map of user credentials for SASL/PLAIN authentication in 'username:password' format. "
                                     + "For example: 'admin:admin-secret,bob:bob-secret'. "
                                     + "This is syntactic sugar that auto-generates the JAAS config string.");
 

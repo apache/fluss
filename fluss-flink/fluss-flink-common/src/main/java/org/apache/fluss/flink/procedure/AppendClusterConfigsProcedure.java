@@ -25,10 +25,10 @@ import org.apache.flink.table.annotation.ProcedureHint;
 import org.apache.flink.table.procedure.ProcedureContext;
 
 /**
- * Procedure to append values to list-type cluster configurations dynamically.
+ * Procedure to append values to collection-type cluster configurations dynamically.
  *
- * <p>This procedure appends new values to existing list-type configurations. The APPEND operation
- * only works on configurations defined as list types (e.g., {@code
+ * <p>This procedure appends new values to existing list-type or map-type configurations. The APPEND
+ * operation only works on collection configurations (e.g., {@code
  * security.sasl.plain.credentials}). The changes are:
  *
  * <ul>
@@ -41,7 +41,7 @@ import org.apache.flink.table.procedure.ProcedureContext;
  * <p>Usage examples:
  *
  * <pre>
- * -- Append a user to the SASL user list
+ * -- Append a user to the SASL credentials map
  * CALL sys.append_cluster_configs('security.sasl.plain.credentials', 'bob:bob-secret');
  *
  * -- Append multiple key-value pairs at one time
@@ -52,16 +52,16 @@ import org.apache.flink.table.procedure.ProcedureContext;
  *     'alice:alice-secret');
  * </pre>
  *
- * <p><b>Note:</b> APPEND operations are only supported for list-type configuration keys. The server
- * will reject the change if the configuration key is not a list type.
+ * <p><b>Note:</b> APPEND operations are only supported for list-type or map-type configuration
+ * keys. The server will reject the change if the configuration key is not a collection type.
  */
-public class AppendClusterConfigsProcedure extends ListTypeClusterConfigsProcedureBase {
+public class AppendClusterConfigsProcedure extends CollectionClusterConfigsProcedureBase {
 
     @ProcedureHint(
             argument = {@ArgumentHint(name = "config_pairs", type = @DataTypeHint("STRING"))},
             isVarArgs = true)
     public String[] call(ProcedureContext context, String... configPairs) throws Exception {
-        return alterListClusterConfigs(
+        return alterCollectionClusterConfigs(
                 configPairs, AlterConfigOpType.APPEND, "appended", "to", "append");
     }
 }

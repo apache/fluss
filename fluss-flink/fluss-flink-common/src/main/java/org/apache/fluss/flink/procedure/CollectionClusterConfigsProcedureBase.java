@@ -23,10 +23,10 @@ import org.apache.fluss.config.cluster.AlterConfigOpType;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Base procedure for modifying list-type cluster configurations. */
-abstract class ListTypeClusterConfigsProcedureBase extends ProcedureBase {
+/** Base procedure for modifying collection-type cluster configurations. */
+abstract class CollectionClusterConfigsProcedureBase extends ProcedureBase {
 
-    protected String[] alterListClusterConfigs(
+    protected String[] alterCollectionClusterConfigs(
             String[] configPairs,
             AlterConfigOpType opType,
             String successVerb,

@@ -835,7 +835,7 @@ public abstract class FlinkProcedureITCase {
             assertThat(results).hasSize(1);
             assertThat(results.stream().map(Row::toString).collect(Collectors.toList()))
                     .containsExactly(
-                            "+I[security.sasl.plain.credentials, root:password,guest:passwords,bob:bob_pass, DYNAMIC_SERVER_CONFIG]");
+                            "+I[security.sasl.plain.credentials, root:******,guest:******,bob:******, DYNAMIC_SERVER_CONFIG]");
         }
 
         // Verify "bob" can authenticate by creating a catalog with bob's credentials.
@@ -859,7 +859,7 @@ public abstract class FlinkProcedureITCase {
             List<Row> results = CollectionUtil.iteratorToList(resultIterator);
             assertThat(results.stream().map(Row::toString).collect(Collectors.toList()))
                     .containsExactly(
-                            "+I[security.sasl.plain.credentials, root:password,guest:passwords,bob:bob_pass, DYNAMIC_SERVER_CONFIG]");
+                            "+I[security.sasl.plain.credentials, root:******,guest:******,bob:******, DYNAMIC_SERVER_CONFIG]");
         }
         tEnv.executeSql("drop catalog " + bobCatalog);
 
@@ -881,7 +881,7 @@ public abstract class FlinkProcedureITCase {
             // After subtracting the only dynamically-added entry, the config may be empty
             assertThat(results.stream().map(Row::toString).collect(Collectors.toList()))
                     .containsExactly(
-                            "+I[security.sasl.plain.credentials, root:password,guest:passwords, DYNAMIC_SERVER_CONFIG]");
+                            "+I[security.sasl.plain.credentials, root:******,guest:******, DYNAMIC_SERVER_CONFIG]");
         }
 
         // Verify "bob" can no longer authenticate.
@@ -920,7 +920,7 @@ public abstract class FlinkProcedureITCase {
                                                         ConfigOptions.SERVER_SASL_CREDENTIALS
                                                                 .key()))
                                         .await())
-                .hasMessageContaining("must be in 'username:password' format");
+                .hasMessageContaining("Invalid map entry");
 
         // Try to append a user with invalid username characters (@)
         assertThatThrownBy(
@@ -970,25 +970,7 @@ public abstract class FlinkProcedureITCase {
                                         .await())
                 .hasMessageContaining("contains invalid characters");
 
-        // Password with multiple colons is valid (first colon is the separator)
-        tEnv.executeSql(
-                        String.format(
-                                "Call %s.sys.append_cluster_configs('%s', 'colon_user:pass:word:extra')",
-                                CATALOG_NAME, ConfigOptions.SERVER_SASL_CREDENTIALS.key()))
-                .await();
-
-        // Verify colon_user was added successfully
-        try (CloseableIterator<Row> resultIterator =
-                tEnv.executeSql(
-                                String.format(
-                                        "Call %s.sys.get_cluster_configs('%s')",
-                                        CATALOG_NAME, ConfigOptions.SERVER_SASL_CREDENTIALS.key()))
-                        .collect()) {
-            List<Row> results = CollectionUtil.iteratorToList(resultIterator);
-            assertThat(results.get(0).toString()).contains("colon_user:pass:word:extra");
-        }
-
-        // Subtract a non-existent user — should be a no-op (no error)
+        // Subtract a non-existent user - should be a no-op (no error)
         tEnv.executeSql(
                         String.format(
                                 "Call %s.sys.subtract_cluster_configs('%s', 'nonexistent:whatever')",
@@ -997,7 +979,7 @@ public abstract class FlinkProcedureITCase {
 
         tEnv.executeSql(
                         String.format(
-                                "Call %s.sys.subtract_cluster_configs('%s', 'colon_user:pass:word:extra')",
+                                "Call %s.sys.subtract_cluster_configs('%s', 'special_user:P@ss!w0rd#$&*()')",
                                 CATALOG_NAME, ConfigOptions.SERVER_SASL_CREDENTIALS.key()))
                 .await();
     }

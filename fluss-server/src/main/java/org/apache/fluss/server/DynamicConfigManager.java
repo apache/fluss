@@ -38,6 +38,7 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /** Manager for dynamic configurations. */
 public class DynamicConfigManager {
@@ -106,7 +107,9 @@ public class DynamicConfigManager {
                     if (!dynamicDefaultConfigs.containsKey(key)) {
                         ConfigEntry configEntry =
                                 new ConfigEntry(
-                                        key, value, ConfigEntry.ConfigSource.INITIAL_SERVER_CONFIG);
+                                        key,
+                                        dynamicServerConfig.redactConfigValue(key, value),
+                                        ConfigEntry.ConfigSource.INITIAL_SERVER_CONFIG);
                         configEntries.add(configEntry);
                     }
                 });
@@ -114,7 +117,9 @@ public class DynamicConfigManager {
                 (key, value) -> {
                     ConfigEntry configEntry =
                             new ConfigEntry(
-                                    key, value, ConfigEntry.ConfigSource.DYNAMIC_SERVER_CONFIG);
+                                    key,
+                                    dynamicServerConfig.redactConfigValue(key, value),
+                                    ConfigEntry.ConfigSource.DYNAMIC_SERVER_CONFIG);
                     configEntries.add(configEntry);
                 });
 
@@ -148,12 +153,12 @@ public class DynamicConfigManager {
                             configsProps.remove(configKey);
                             break;
                         case APPEND:
-                            validateListType(configKey);
-                            appendListConfig(configsProps, configKey, configValue);
+                            validateListOrMapType(configKey);
+                            appendCollectionConfig(configsProps, configKey, configValue);
                             break;
                         case SUBTRACT:
-                            validateListType(configKey);
-                            subtractListConfig(configsProps, configKey, configValue);
+                            validateListOrMapType(configKey);
+                            subtractCollectionConfig(configsProps, configKey, configValue);
                             break;
                         default:
                             throw new ConfigException(
@@ -162,8 +167,13 @@ public class DynamicConfigManager {
                 });
     }
 
-    private void appendListConfig(
+    private void appendCollectionConfig(
             Map<String, String> dynamicConfigs, String configKey, String configValue) {
+        if (isMapType(configKey)) {
+            appendMapConfig(dynamicConfigs, configKey, configValue);
+            return;
+        }
+
         String existingValue = getExistingConfigValue(dynamicConfigs, configKey);
         if (existingValue == null || existingValue.isEmpty()) {
             dynamicConfigs.put(configKey, configValue);
@@ -172,8 +182,13 @@ public class DynamicConfigManager {
         }
     }
 
-    private void subtractListConfig(
+    private void subtractCollectionConfig(
             Map<String, String> dynamicConfigs, String configKey, String configValue) {
+        if (isMapType(configKey)) {
+            subtractMapConfig(dynamicConfigs, configKey, configValue);
+            return;
+        }
+
         String existingValue = getExistingConfigValue(dynamicConfigs, configKey);
         if (existingValue == null || existingValue.isEmpty()) {
             return;
@@ -194,6 +209,78 @@ public class DynamicConfigManager {
         }
     }
 
+    private void appendMapConfig(
+            Map<String, String> dynamicConfigs, String configKey, String configValue) {
+        validateMapEntry(configKey, configValue);
+        String username = getMapEntryKey(configValue);
+        String existingValue = getExistingConfigValue(dynamicConfigs, configKey);
+        if (existingValue == null || existingValue.isEmpty()) {
+            dynamicConfigs.put(configKey, configValue);
+            return;
+        }
+
+        String existingEntry = findMapEntry(existingValue, username);
+        if (existingEntry != null) {
+            throw new ConfigException(
+                    configKey + " must not contain duplicate usernames: '" + username + "'.");
+        }
+        dynamicConfigs.put(configKey, existingValue + "," + configValue);
+    }
+
+    private void subtractMapConfig(
+            Map<String, String> dynamicConfigs, String configKey, String configValue) {
+        validateMapEntry(configKey, configValue);
+        String username = getMapEntryKey(configValue);
+        String existingValue = getExistingConfigValue(dynamicConfigs, configKey);
+        if (existingValue == null || existingValue.isEmpty()) {
+            return;
+        }
+
+        List<String> entries = new ArrayList<>();
+        for (String entry : existingValue.split(",")) {
+            String trimmed = entry.trim();
+            if (!trimmed.isEmpty() && !Objects.equals(getMapEntryKey(trimmed), username)) {
+                entries.add(trimmed);
+            }
+        }
+        if (entries.isEmpty()) {
+            dynamicConfigs.put(configKey, null);
+        } else {
+            dynamicConfigs.put(configKey, String.join(",", entries));
+        }
+    }
+
+    private static String getMapEntryKey(String entry) {
+        int separatorIndex = entry.indexOf(':');
+        if (separatorIndex <= 0) {
+            throw new ConfigException(
+                    String.format("Map item is not a key-value pair: '%s'.", entry));
+        }
+        return entry.substring(0, separatorIndex);
+    }
+
+    private static String findMapEntry(String value, String targetKey) {
+        for (String entry : value.split(",")) {
+            String trimmed = entry.trim();
+            if (!trimmed.isEmpty() && Objects.equals(getMapEntryKey(trimmed), targetKey)) {
+                return trimmed;
+            }
+        }
+        return null;
+    }
+
+    private static void validateMapEntry(String configKey, String configValue) {
+        Configuration configuration = new Configuration();
+        configuration.setString(configKey, configValue);
+        try {
+            configuration.get(ConfigOptions.getConfigOption(configKey));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            throw new ConfigException(
+                    String.format("Invalid map entry for config '%s': %s", configKey, configValue),
+                    e);
+        }
+    }
+
     private String getExistingConfigValue(Map<String, String> dynamicConfigs, String configKey) {
         if (dynamicConfigs.containsKey(configKey)) {
             return dynamicConfigs.get(configKey);
@@ -209,15 +296,21 @@ public class DynamicConfigManager {
         zooKeeperClient.upsertServerEntityConfig(configsProps);
     }
 
-    private static void validateListType(String configKey) {
+    private static void validateListOrMapType(String configKey) {
         ConfigOption<?> configOption = ConfigOptions.getConfigOption(configKey);
-        if (configOption == null || !configOption.isList()) {
+        if (configOption == null
+                || (!configOption.isList() && configOption.getClazz() != Map.class)) {
             throw new ConfigException(
                     String.format(
-                            "APPEND/SUBTRACT operations are only supported for list-typed config keys, "
-                                    + "but '%s' is not a list type.",
+                            "APPEND/SUBTRACT operations are only supported for list-typed or map-typed config keys, "
+                                    + "but '%s' is not a list or map type.",
                             configKey));
         }
+    }
+
+    private static boolean isMapType(String configKey) {
+        ConfigOption<?> configOption = ConfigOptions.getConfigOption(configKey);
+        return configOption != null && configOption.getClazz() == Map.class;
     }
 
     private class ConfigChangedNotificationHandler

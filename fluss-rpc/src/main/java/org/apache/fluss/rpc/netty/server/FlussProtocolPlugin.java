@@ -39,8 +39,6 @@ import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static org.apache.fluss.utils.Preconditions.checkArgument;
-
 /** Build-in protocol plugin for Fluss. */
 public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfigurable {
 
@@ -59,12 +57,13 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
     private static final Pattern VALID_USERNAME_PATTERN = Pattern.compile("\\w+");
 
     /**
-     * Characters forbidden in passwords. These would break the comma-separated list format or the
-     * generated JAAS config string: comma (list separator), double-quote (JAAS value delimiter),
-     * semicolon (JAAS statement terminator), backslash (escape char), and control characters.
+     * Characters forbidden in passwords. These would break the map format or the generated JAAS
+     * config string: comma (entry separator), colon (key-value separator), double-quote (JAAS value
+     * delimiter), semicolon (JAAS statement terminator), backslash (escape char), and control
+     * characters.
      */
     private static final Pattern INVALID_PASSWORD_PATTERN =
-            Pattern.compile("[,\"\\\\;]|[\\x00-\\x1F\\x7F]");
+            Pattern.compile("[,:\"\\\\;]|[\\x00-\\x1F\\x7F]");
 
     private final ApiManager apiManager;
     private final List<String> listeners;
@@ -74,7 +73,7 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
     private Map<String, String> initialPlainCredentialsFromJaasConfig;
 
     /** Current config `security.sasl.plain.credentials`. */
-    private List<String> currentPlainCredentialEntries;
+    private Map<String, String> currentPlainCredentials;
 
     public FlussProtocolPlugin(
             ServerType serverType, List<String> listeners, RequestsMetrics requestsMetrics) {
@@ -126,45 +125,16 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
 
     @Override
     public void validate(Configuration newConfig) throws ConfigException {
-        List<String> credentialEntries = newConfig.get(ConfigOptions.SERVER_SASL_CREDENTIALS);
-        if (Objects.equals(credentialEntries, currentPlainCredentialEntries)) {
+        Map<String, String> newCredentials = readPlainCredentials(newConfig);
+        if (Objects.equals(newCredentials, currentPlainCredentials)) {
             return;
         }
-        Map<String, String> newCredentials = new LinkedHashMap<>();
-        if (credentialEntries != null && !credentialEntries.isEmpty()) {
-            for (int i = 0; i < credentialEntries.size(); i++) {
-                String entry = credentialEntries.get(i).trim();
-                int colonIdx = entry.indexOf(':');
-                if (colonIdx <= 0 || colonIdx == entry.length() - 1) {
-                    throw new ConfigException(
-                            String.format(
-                                    "%s must be in 'username:password' format, but got '%s'.",
-                                    PLAIN_CREDENTIALS_CONFIG, entry));
-                }
-                String username = entry.substring(0, colonIdx);
-                String password = entry.substring(colonIdx + 1);
-                if (!VALID_USERNAME_PATTERN.matcher(username).matches()) {
-                    throw new ConfigException(
-                            String.format(
-                                    "%s: username '%s' contains invalid characters. "
-                                            + "Only letters, digits, and underscores are allowed.",
-                                    PLAIN_CREDENTIALS_CONFIG, username));
-                }
-                if (INVALID_PASSWORD_PATTERN.matcher(password).find()) {
-                    throw new ConfigException(
-                            String.format(
-                                    "%s[%d]: password for user '%s' contains invalid characters. "
-                                            + "Commas, quotes, semicolons, backslashes, and control characters are not allowed.",
-                                    PLAIN_CREDENTIALS_CONFIG, i, username));
-                }
-                if (newCredentials.containsKey(username)) {
-                    throw new ConfigException(
-                            PLAIN_CREDENTIALS_CONFIG
-                                    + " must not contain duplicate usernames: '"
-                                    + username
-                                    + "'.");
-                }
-                newCredentials.put(username, password);
+        if (newCredentials != null && !newCredentials.isEmpty()) {
+            int index = 0;
+            for (Map.Entry<String, String> credential : newCredentials.entrySet()) {
+                validateUsername(credential.getKey());
+                validatePassword(index, credential.getKey(), credential.getValue());
+                index++;
             }
         }
 
@@ -182,29 +152,54 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
      *
      * <ol>
      *   <li>Existing credentials parsed from the current {@code security.sasl.plain.jaas.config}
-     *   <li>New credentials from the {@code security.sasl.plain.credentials} list in {@code
+     *   <li>New credentials from the {@code security.sasl.plain.credentials} map in {@code
      *       newConfig}
      * </ol>
      *
      * <p>New credentials take priority when a username exists in both sources. If the credentials
-     * list is not present in {@code newConfig}, the configuration is returned unchanged.
+     * map is not present in {@code newConfig}, the configuration is returned unchanged.
      */
-    private void enrichWithJaasConfig(Configuration newConfig) {
-        List<String> credentialEntries = newConfig.get(ConfigOptions.SERVER_SASL_CREDENTIALS);
-        if (Objects.equals(credentialEntries, currentPlainCredentialEntries)) {
+    private void enrichWithJaasConfig(Configuration newConfig) throws ConfigException {
+        Map<String, String> newCredentials = readPlainCredentials(newConfig);
+        if (Objects.equals(newCredentials, currentPlainCredentials)) {
             return;
-        }
-        Map<String, String> newCredentials = new LinkedHashMap<>();
-        if (credentialEntries != null && !credentialEntries.isEmpty()) {
-            for (String entry : credentialEntries) {
-                int colonIdx = entry.indexOf(':');
-                checkArgument(colonIdx > 0, "Invalid user entry format: '%s'", entry);
-                newCredentials.put(entry.substring(0, colonIdx), entry.substring(colonIdx + 1));
-            }
         }
 
         conf.setString(PLAIN_JAAS_CONFIG, generateMergedJaasConfig(newCredentials));
-        currentPlainCredentialEntries = credentialEntries;
+        currentPlainCredentials = newCredentials;
+    }
+
+    private static Map<String, String> readPlainCredentials(Configuration config)
+            throws ConfigException {
+        try {
+            return config.get(ConfigOptions.SERVER_SASL_CREDENTIALS);
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            throw new ConfigException(
+                    String.format(
+                            "Failed to parse %s: %s", PLAIN_CREDENTIALS_CONFIG, e.getMessage()),
+                    e);
+        }
+    }
+
+    private static void validateUsername(String username) throws ConfigException {
+        if (!VALID_USERNAME_PATTERN.matcher(username).matches()) {
+            throw new ConfigException(
+                    String.format(
+                            "%s: username '%s' contains invalid characters. "
+                                    + "Only letters, digits, and underscores are allowed.",
+                            PLAIN_CREDENTIALS_CONFIG, username));
+        }
+    }
+
+    private static void validatePassword(int index, String username, String password)
+            throws ConfigException {
+        if (password == null || INVALID_PASSWORD_PATTERN.matcher(password).find()) {
+            throw new ConfigException(
+                    String.format(
+                            "%s[%d]: password for user '%s' contains invalid characters. "
+                                    + "Commas, colons, quotes, semicolons, backslashes, and control characters are not allowed.",
+                            PLAIN_CREDENTIALS_CONFIG, index, username));
+        }
     }
 
     /**
@@ -212,13 +207,15 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
      * {@code security.sasl.plain.jaas.config} with the given new credentials map. New credentials
      * take priority on username conflict.
      *
-     * @param newCredentials ordered map of username → password from SERVER_SASL_CREDENTIALS
+     * @param newCredentials map of username to password from SERVER_SASL_CREDENTIALS
      * @return the generated JAAS config string
      */
     private String generateMergedJaasConfig(Map<String, String> newCredentials) {
         Map<String, String> mergedCredentials =
                 new LinkedHashMap<>(initialPlainCredentialsFromJaasConfig);
-        mergedCredentials.putAll(newCredentials);
+        if (newCredentials != null) {
+            mergedCredentials.putAll(newCredentials);
+        }
 
         StringBuilder sb =
                 new StringBuilder(

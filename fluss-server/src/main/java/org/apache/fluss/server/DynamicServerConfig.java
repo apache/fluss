@@ -28,6 +28,7 @@ import org.apache.fluss.exception.ConfigException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -86,6 +87,9 @@ class DynamicServerConfig {
     private final Map<String, List<ConfigValidator<?>>> configValidatorsByKey =
             new ConcurrentHashMap<>();
 
+    /** Registered config redactors for sensitive values exposed through describe config APIs. */
+    private final List<ConfigRedactor> configRedactors = new ArrayList<>();
+
     /** The initial configuration items when the server starts from server.yaml. */
     private final Map<String, String> initialConfigMap;
 
@@ -107,6 +111,7 @@ class DynamicServerConfig {
         this.currentConfig = flussConfig;
         this.initialConfigMap = flussConfig.toMap();
         this.currentConfigMap = flussConfig.toMap();
+        registerDefaultRedactors();
     }
 
     void register(ServerReconfigurable serverReconfigurable) {
@@ -130,6 +135,26 @@ class DynamicServerConfig {
         configValidatorsByKey
                 .computeIfAbsent(configKey, k -> new CopyOnWriteArrayList<>())
                 .add(validator);
+    }
+
+    String redactConfigValue(String configKey, String value) {
+        for (ConfigRedactor configRedactor : configRedactors) {
+            if (configRedactor.supports(configKey)) {
+                return configRedactor.redact(value);
+            }
+        }
+        return value;
+    }
+
+    private void registerDefaultRedactors() {
+        configRedactors.add(new MapConfigRedactor(SERVER_SASL_CREDENTIALS.key()));
+        configRedactors.add(new ValueConfigRedactor(DynamicServerConfig::isPlainJaasConfig));
+    }
+
+    private static boolean isPlainJaasConfig(String configKey) {
+        return "security.sasl.plain.jaas.config".equals(configKey)
+                || (configKey.startsWith("security.sasl.listener.name.")
+                        && configKey.endsWith(".plain.jaas.config"));
     }
 
     /**

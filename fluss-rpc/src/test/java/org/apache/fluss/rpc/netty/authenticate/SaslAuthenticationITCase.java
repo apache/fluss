@@ -432,13 +432,19 @@ public class SaslAuthenticationITCase {
             nettyServer.start();
             ServerReconfigurable reconfigurable = nettyServer.getServerReconfigurables().get(0);
 
-            // Password with comma (breaks list format)
+            // Password with comma (breaks map format)
             Configuration commaPassword = new Configuration();
             commaPassword.setString("security.sasl.plain.credentials", "bob:pass,word");
             assertThatThrownBy(() -> reconfigurable.validate(commaPassword))
                     .isInstanceOf(ConfigException.class)
-                    .hasMessageContaining(
-                            "security.sasl.plain.credentials must be in 'username:password' format");
+                    .hasMessageContaining("Failed to parse security.sasl.plain.credentials");
+
+            // Password with colon (breaks map key-value format)
+            Configuration colonPassword = new Configuration();
+            colonPassword.setString("security.sasl.plain.credentials", "bob:'pass:word'");
+            assertThatThrownBy(() -> reconfigurable.validate(colonPassword))
+                    .isInstanceOf(ConfigException.class)
+                    .hasMessageContaining("contains invalid characters");
 
             // Password with double-quote (breaks JAAS value)
             Configuration quotePassword = new Configuration();
