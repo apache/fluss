@@ -5,7 +5,7 @@
 
   - Make sure that the pull request corresponds to a [GitHub issue](https://github.com/apache/fluss/issues). Exceptions are made for typos in JavaDoc or documentation files, which need no issue.
 
-  - Name the pull request in the format "[component] Title of the pull request", where *[component]* should be replaced by the name of the component being changed. Typically, this corresponds to the component label assigned to the issue (e.g., [kv], [log], [client], [flink]). Skip *[component]* if you are unsure about which is the best component.
+  - Name the pull request in the format "[component] Title of the pull request", where *[component]* should be replaced by the name of the component being changed. Typically, this corresponds to the component label assigned to the issue (e.g., [kv], [log], [client], [flink], [rust], [python], [c++], [elixir]). Skip *[component]* if you are unsure about which is the best component.
 
   - Fill out the template below to describe the changes contributed by the pull request. That will give reviewers the context they need to do the review.
 

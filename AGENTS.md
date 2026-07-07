@@ -431,7 +431,7 @@ git remote add fork https://github.com/<your-username>/fluss.git
 Detailed explanation of changes and motivation.
 ```
 
-**Component tags:** `[client]`, `[server]`, `[rpc]`, `[flink]`, `[spark]`, `[docs]`, `[build]`, `[test]`
+**Component tags:** `[client]`, `[server]`, `[rpc]`, `[flink]`, `[spark]`, `[rust]`, `[python]`, `[c++]`, `[elixir]`, `[docs]`, `[build]`, `[test]`
 
 ### Pre-Push Self-Review
 
