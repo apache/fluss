@@ -1612,13 +1612,13 @@ public class CoordinatorEventProcessor implements EventProcessor {
                             planForBucket.getOriginReplicas(), planForBucket.getNewReplicas());
             try {
                 if (planForBucket.isLeaderChanged() && !reassignment.isBeingReassigned()) {
+                    if (!isSuccessfulLeaderOnlyRebalanceResponseFromNewLeader(
+                            notifyLeaderAndIsrResultForBucket, responseServerId, planForBucket)) {
+                        return;
+                    }
                     LeaderAndIsr leaderAndIsr = zooKeeperClient.getLeaderAndIsr(tableBucket).get();
                     int currentLeader = leaderAndIsr.leader();
-                    if (canCompleteLeaderOnlyRebalanceTask(
-                            notifyLeaderAndIsrResultForBucket,
-                            responseServerId,
-                            planForBucket,
-                            currentLeader)) {
+                    if (currentLeader == planForBucket.getNewLeader()) {
                         // leader action finish.
                         rebalanceManager.finishRebalanceTask(
                                 tableBucket, RebalanceStatus.COMPLETED);
@@ -1667,14 +1667,12 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     @VisibleForTesting
-    static boolean canCompleteLeaderOnlyRebalanceTask(
+    static boolean isSuccessfulLeaderOnlyRebalanceResponseFromNewLeader(
             NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket,
             int responseServerId,
-            RebalancePlanForBucket planForBucket,
-            int currentLeader) {
+            RebalancePlanForBucket planForBucket) {
         return notifyLeaderAndIsrResultForBucket.succeeded()
-                && responseServerId == planForBucket.getNewLeader()
-                && currentLeader == planForBucket.getNewLeader();
+                && responseServerId == planForBucket.getNewLeader();
     }
 
     /**

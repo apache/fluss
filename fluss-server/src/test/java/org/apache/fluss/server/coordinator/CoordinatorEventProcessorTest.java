@@ -1831,7 +1831,7 @@ class CoordinatorEventProcessorTest {
     }
 
     @Test
-    void testLeaderOnlyRebalanceCompletionRequiresSuccessfulResponseFromNewLeader() {
+    void testLeaderOnlyRebalanceCompletionCheckRequiresSuccessfulResponseFromNewLeader() {
         TableBucket tableBucket = new TableBucket(1L, 0);
         RebalancePlanForBucket planForBucket =
                 new RebalancePlanForBucket(
@@ -1843,20 +1843,19 @@ class CoordinatorEventProcessorTest {
                         tableBucket, new ApiError(Errors.UNKNOWN_SERVER_ERROR, "failed"));
 
         assertThat(
-                        CoordinatorEventProcessor.canCompleteLeaderOnlyRebalanceTask(
-                                successResult, 1, planForBucket, 1))
+                        CoordinatorEventProcessor
+                                .isSuccessfulLeaderOnlyRebalanceResponseFromNewLeader(
+                                        successResult, 1, planForBucket))
                 .isTrue();
         assertThat(
-                        CoordinatorEventProcessor.canCompleteLeaderOnlyRebalanceTask(
-                                successResult, 0, planForBucket, 1))
+                        CoordinatorEventProcessor
+                                .isSuccessfulLeaderOnlyRebalanceResponseFromNewLeader(
+                                        successResult, 0, planForBucket))
                 .isFalse();
         assertThat(
-                        CoordinatorEventProcessor.canCompleteLeaderOnlyRebalanceTask(
-                                failedResult, 1, planForBucket, 1))
-                .isFalse();
-        assertThat(
-                        CoordinatorEventProcessor.canCompleteLeaderOnlyRebalanceTask(
-                                successResult, 1, planForBucket, 0))
+                        CoordinatorEventProcessor
+                                .isSuccessfulLeaderOnlyRebalanceResponseFromNewLeader(
+                                        failedResult, 1, planForBucket))
                 .isFalse();
     }
 
