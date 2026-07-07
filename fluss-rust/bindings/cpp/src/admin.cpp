@@ -60,36 +60,6 @@ Result Admin::CreateTable(const TablePath& table_path, const TableDescriptor& de
     }
 
     auto ffi_path = utils::to_ffi_table_path(table_path);
-
-    // A MAP/ROW column can't go through the flat FFI encoding, so the schema is
-    // sent over Arrow instead (explicit via FromArrow, or lowered from native
-    // columns). Rust derives the columns from it, so the flat columns are dropped
-    // here; primary keys / metadata still come from the descriptor.
-    std::shared_ptr<arrow::Schema> arrow_schema = descriptor.schema.arrow_schema;
-    if (!arrow_schema) {
-        for (const auto& col : descriptor.schema.columns) {
-            if (detail::is_compound(col.data_type)) {
-                arrow_schema = detail::columns_to_arrow_schema(descriptor.schema.columns);
-                break;
-            }
-        }
-    }
-
-    if (arrow_schema) {
-        TableDescriptor arrow_desc = descriptor;
-        arrow_desc.schema.columns.clear();
-        auto ffi_desc = utils::to_ffi_table_descriptor(arrow_desc);
-        size_t schema_ptr = 0;
-        try {
-            schema_ptr = detail::export_arrow_schema(*arrow_schema);
-        } catch (const std::exception& e) {
-            return utils::make_client_error(e.what());
-        }
-        auto ffi_result =
-            admin_->create_table_arrow(ffi_path, ffi_desc, schema_ptr, ignore_if_exists);
-        return utils::from_ffi_result(ffi_result);
-    }
-
     auto ffi_desc = utils::to_ffi_table_descriptor(descriptor);
     auto ffi_result = admin_->create_table(ffi_path, ffi_desc, ignore_if_exists);
     return utils::from_ffi_result(ffi_result);

@@ -23,6 +23,8 @@
 
 #include "test_utils.h"
 
+using fluss::DataType;
+
 class KvTableTest : public ::testing::Test {
    protected:
     fluss::Admin& admin() { return fluss_test::FlussTestEnvironment::Instance()->GetAdmin(); }
@@ -39,9 +41,9 @@ TEST_F(KvTableTest, UpsertDeleteAndLookup) {
     fluss::TablePath table_path("fluss", "test_upsert_and_lookup_cpp");
 
     auto schema = fluss::Schema::NewBuilder()
-                      .AddColumn("id", fluss::DataType::Int())
-                      .AddColumn("name", fluss::DataType::String())
-                      .AddColumn("age", fluss::DataType::BigInt())
+                      .AddColumn("id", DataType::Int())
+                      .AddColumn("name", DataType::String())
+                      .AddColumn("age", DataType::BigInt())
                       .SetPrimaryKeys({"id"})
                       .Build();
 
@@ -164,8 +166,8 @@ TEST_F(KvTableTest, LimitScan) {
     fluss::TablePath table_path("fluss", "test_limit_scan_pk_cpp");
 
     auto schema = fluss::Schema::NewBuilder()
-                      .AddColumn("id", fluss::DataType::Int())
-                      .AddColumn("name", fluss::DataType::String())
+                      .AddColumn("id", DataType::Int())
+                      .AddColumn("name", DataType::String())
                       .SetPrimaryKeys({"id"})
                       .Build();
 
@@ -234,9 +236,9 @@ TEST_F(KvTableTest, LookupWithNestedArray) {
     fluss::TablePath table_path("fluss", "test_lookup_nested_array_cpp");
 
     auto schema = fluss::Schema::NewBuilder()
-                      .AddColumn("id", fluss::DataType::Int())
+                      .AddColumn("id", DataType::Int())
                       .AddColumn("matrix",
-                                 fluss::DataType::Array(fluss::DataType::Array(fluss::DataType::Int())))
+                                 DataType::Array(DataType::Array(DataType::Int())))
                       .SetPrimaryKeys({"id"})
                       .Build();
 
@@ -258,15 +260,15 @@ TEST_F(KvTableTest, LookupWithNestedArray) {
         auto row = table.NewRow();
         row.Set("id", 1);
 
-        fluss::ArrayWriter inner1(2, fluss::DataType::Int());
+        fluss::ArrayWriter inner1(2, DataType::Int());
         inner1.SetInt32(0, 11);
         inner1.SetInt32(1, 12);
 
-        fluss::ArrayWriter inner2(2, fluss::DataType::Int());
+        fluss::ArrayWriter inner2(2, DataType::Int());
         inner2.SetInt32(0, 21);
         inner2.SetInt32(1, 22);
 
-        fluss::ArrayWriter outer(2, fluss::DataType::Array(fluss::DataType::Int()));
+        fluss::ArrayWriter outer(2, DataType::Array(DataType::Int()));
         outer.SetArray(0, std::move(inner1));
         outer.SetArray(1, std::move(inner2));
         row.Set("matrix", std::move(outer));
@@ -308,45 +310,47 @@ TEST_F(KvTableTest, LookupComplexTypesMatrix) {
 
     fluss::TablePath table_path("fluss", "test_lookup_complex_matrix_cpp");
 
-    auto row_seq_label = arrow::struct_(
-        {arrow::field("seq", arrow::int32()), arrow::field("label", arrow::utf8())});
+    auto row_seq_label = DataType::Row({{"seq", DataType::Int()}, {"label", DataType::String()}});
 
-    auto arrow_schema = arrow::schema({
-        arrow::field("id", arrow::int32()),
-        arrow::field("m_str_int", arrow::map(arrow::utf8(), arrow::int32())),
-        arrow::field("m_str_row", arrow::map(arrow::utf8(), row_seq_label)),
-        arrow::field("m_str_map",
-                     arrow::map(arrow::utf8(), arrow::map(arrow::utf8(), arrow::int32()))),
-        arrow::field("m_str_arr", arrow::map(arrow::utf8(), arrow::list(arrow::int32()))),
-        arrow::field("arr_map", arrow::list(arrow::map(arrow::utf8(), arrow::int32()))),
-        arrow::field("arr_row", arrow::list(row_seq_label)),
-        arrow::field("r_deep", arrow::struct_({arrow::field(
-                                   "inner", arrow::struct_({arrow::field("n", arrow::int32())}))})),
-        arrow::field("r_with_arr",
-                     arrow::struct_({arrow::field("f_int", arrow::int32()),
-                                     arrow::field("f_arr", arrow::list(arrow::int32()))})),
-        // row_rich: every scalar type + an array field in one ROW.
-        arrow::field("r_rich",
-                     arrow::struct_({
-                         arrow::field("f_bool", arrow::boolean()),
-                         arrow::field("f_int", arrow::int32()),
-                         arrow::field("f_long", arrow::int64()),
-                         arrow::field("f_float", arrow::float32()),
-                         arrow::field("f_double", arrow::float64()),
-                         arrow::field("f_str", arrow::utf8()),
-                         arrow::field("f_bytes", arrow::binary()),
-                         arrow::field("f_decimal", arrow::decimal128(10, 2)),
-                         arrow::field("f_date", arrow::date32()),
-                         arrow::field("f_time", arrow::time32(arrow::TimeUnit::MILLI)),
-                         arrow::field("f_ts_ntz", arrow::timestamp(arrow::TimeUnit::MICRO)),
-                         arrow::field("f_ts_ltz", arrow::timestamp(arrow::TimeUnit::MICRO, "UTC")),
-                         arrow::field("f_binary", arrow::fixed_size_binary(4)),
-                         arrow::field("f_arr", arrow::list(arrow::int32())),
-                     })),
-        arrow::field("m_str_tiny", arrow::map(arrow::utf8(), arrow::int8())),
-        arrow::field("arr_small", arrow::list(arrow::int16())),
-    });
-    auto schema = fluss::Schema::FromArrow(arrow_schema, {"id"});
+    auto schema =
+        fluss::Schema::NewBuilder()
+            .AddColumn("id", DataType::Int())
+            .AddColumn("m_str_int", DataType::Map(DataType::String(), DataType::Int()))
+            .AddColumn("m_str_row", DataType::Map(DataType::String(), row_seq_label))
+            .AddColumn("m_str_map",
+                       DataType::Map(DataType::String(),
+                                     DataType::Map(DataType::String(), DataType::Int())))
+            .AddColumn("m_str_arr",
+                       DataType::Map(DataType::String(), DataType::Array(DataType::Int())))
+            .AddColumn("arr_map",
+                       DataType::Array(DataType::Map(DataType::String(), DataType::Int())))
+            .AddColumn("arr_row", DataType::Array(row_seq_label))
+            .AddColumn("r_deep",
+                       DataType::Row({{"inner", DataType::Row({{"n", DataType::Int()}})}}))
+            .AddColumn("r_with_arr",
+                       DataType::Row({{"f_int", DataType::Int()},
+                                      {"f_arr", DataType::Array(DataType::Int())}}))
+            // r_rich: every scalar type + an array field in one ROW.
+            .AddColumn("r_rich", DataType::Row({
+                                     {"f_bool", DataType::Boolean()},
+                                     {"f_int", DataType::Int()},
+                                     {"f_long", DataType::BigInt()},
+                                     {"f_float", DataType::Float()},
+                                     {"f_double", DataType::Double()},
+                                     {"f_str", DataType::String()},
+                                     {"f_bytes", DataType::Bytes()},
+                                     {"f_decimal", DataType::Decimal(10, 2)},
+                                     {"f_date", DataType::Date()},
+                                     {"f_time", DataType::Time()},
+                                     {"f_ts_ntz", DataType::Timestamp(6)},
+                                     {"f_ts_ltz", DataType::TimestampLtz(6)},
+                                     {"f_binary", DataType::Binary(4)},
+                                     {"f_arr", DataType::Array(DataType::Int())},
+                                 }))
+            .AddColumn("m_str_tiny", DataType::Map(DataType::String(), DataType::TinyInt()))
+            .AddColumn("arr_small", DataType::Array(DataType::SmallInt()))
+            .SetPrimaryKeys({"id"})
+            .Build();
 
     auto table_descriptor = fluss::TableDescriptor::NewBuilder()
                                 .SetSchema(schema)
@@ -366,7 +370,7 @@ TEST_F(KvTableTest, LookupComplexTypesMatrix) {
 
         // map<string,int> — second entry has a NULL value.
         {
-            fluss::MapWriter m(2, fluss::DataType::String(), fluss::DataType::Int());
+            fluss::MapWriter m(2, DataType::String(), DataType::Int());
             m.SetKeyString("a");
             m.SetValueInt32(1);
             m.Commit();
@@ -375,9 +379,9 @@ TEST_F(KvTableTest, LookupComplexTypesMatrix) {
             m.Commit();
             row.Set("m_str_int", std::move(m));
         }
-        // map<string, row<seq,label>> — value is a ROW, so the Arrow ctor.
+        // map<string, row<seq,label>>
         {
-            fluss::MapWriter m(1, arrow::utf8(), row_seq_label);
+            fluss::MapWriter m(1, DataType::String(), row_seq_label);
             m.SetKeyString("k");
             fluss::GenericRow v(2);
             v.SetInt32(0, 7);
@@ -390,7 +394,7 @@ TEST_F(KvTableTest, LookupComplexTypesMatrix) {
         {
             fluss::MapWriter m(1, arrow::utf8(), arrow::map(arrow::utf8(), arrow::int32()));
             m.SetKeyString("k");
-            fluss::MapWriter inner(1, fluss::DataType::String(), fluss::DataType::Int());
+            fluss::MapWriter inner(1, DataType::String(), DataType::Int());
             inner.SetKeyString("x");
             inner.SetValueInt32(9);
             inner.Commit();
@@ -400,10 +404,10 @@ TEST_F(KvTableTest, LookupComplexTypesMatrix) {
         }
         // map<string, array<int>> — value array fits the flat ctor.
         {
-            fluss::MapWriter m(1, fluss::DataType::String(),
-                               fluss::DataType::Array(fluss::DataType::Int()));
+            fluss::MapWriter m(1, DataType::String(),
+                               DataType::Array(DataType::Int()));
             m.SetKeyString("k");
-            fluss::ArrayWriter v(2, fluss::DataType::Int());
+            fluss::ArrayWriter v(2, DataType::Int());
             v.SetInt32(0, 10);
             v.SetInt32(1, 20);
             m.SetValueArray(std::move(v));
@@ -413,7 +417,7 @@ TEST_F(KvTableTest, LookupComplexTypesMatrix) {
         // array<map<string,int>> — element is a MAP, so the Arrow ctor.
         {
             fluss::ArrayWriter a(1, arrow::map(arrow::utf8(), arrow::int32()));
-            fluss::MapWriter e(1, fluss::DataType::String(), fluss::DataType::Int());
+            fluss::MapWriter e(1, DataType::String(), DataType::Int());
             e.SetKeyString("p");
             e.SetValueInt32(5);
             e.Commit();
@@ -445,7 +449,7 @@ TEST_F(KvTableTest, LookupComplexTypesMatrix) {
         {
             fluss::GenericRow r(2);
             r.SetInt32(0, 100);
-            fluss::ArrayWriter arr(3, fluss::DataType::Int());
+            fluss::ArrayWriter arr(3, DataType::Int());
             arr.SetInt32(0, 1);
             arr.SetInt32(1, 2);
             arr.SetInt32(2, 3);
@@ -468,7 +472,7 @@ TEST_F(KvTableTest, LookupComplexTypesMatrix) {
             rr.SetTimestampNtz(10, fluss::Timestamp{1769163227123LL, 456000});
             rr.SetTimestampLtz(11, fluss::Timestamp{1769163227456LL, 0});
             rr.SetBytes(12, {1, 2, 3, 4});
-            fluss::ArrayWriter farr(3, fluss::DataType::Int());
+            fluss::ArrayWriter farr(3, DataType::Int());
             farr.SetInt32(0, 7);
             farr.SetNull(1);
             farr.SetInt32(2, 11);
@@ -477,7 +481,7 @@ TEST_F(KvTableTest, LookupComplexTypesMatrix) {
         }
         // map<string,tinyint>
         {
-            fluss::MapWriter m(2, fluss::DataType::String(), fluss::DataType::TinyInt());
+            fluss::MapWriter m(2, DataType::String(), DataType::TinyInt());
             m.SetKeyString("lo");
             m.SetValueInt32(-128);
             m.Commit();
@@ -488,7 +492,7 @@ TEST_F(KvTableTest, LookupComplexTypesMatrix) {
         }
         // array<smallint>
         {
-            fluss::ArrayWriter a(2, fluss::DataType::SmallInt());
+            fluss::ArrayWriter a(2, DataType::SmallInt());
             a.SetInt32(0, 1000);
             a.SetInt32(1, -2000);
             row.Set("arr_small", std::move(a));
@@ -616,7 +620,7 @@ TEST_F(KvTableTest, LookupComplexTypesMatrix) {
 
     // Row 2 (id=2) — every compound column NULL.
     {
-        const int column_count = arrow_schema->num_fields();
+        const int column_count = static_cast<int>(schema.columns.size());
         auto row = table.NewRow();
         row.SetInt32(0, 2);
         for (int i = 1; i < column_count; ++i) {
@@ -647,13 +651,13 @@ TEST_F(KvTableTest, MapWithTimestampValuesNtzAndLtz) {
 
     fluss::TablePath table_path("fluss", "test_map_timestamp_values_cpp");
 
-    auto arrow_schema = arrow::schema({
-        arrow::field("id", arrow::int32()),
-        arrow::field("mn", arrow::map(arrow::utf8(), arrow::timestamp(arrow::TimeUnit::MICRO))),
-        arrow::field("ml",
-                     arrow::map(arrow::utf8(), arrow::timestamp(arrow::TimeUnit::MICRO, "UTC"))),
-    });
-    auto schema = fluss::Schema::FromArrow(arrow_schema, {"id"});
+    auto schema =
+        fluss::Schema::NewBuilder()
+            .AddColumn("id", DataType::Int())
+            .AddColumn("mn", DataType::Map(DataType::String(), DataType::Timestamp(6)))
+            .AddColumn("ml", DataType::Map(DataType::String(), DataType::TimestampLtz(6)))
+            .SetPrimaryKeys({"id"})
+            .Build();
 
     auto table_descriptor = fluss::TableDescriptor::NewBuilder()
                                 .SetSchema(schema)
@@ -716,16 +720,16 @@ TEST_F(KvTableTest, NativeNestedBuilderNoArrow) {
     fluss::TablePath table_path("fluss", "test_native_nested_builder_cpp");
 
     // array<row<seq: int, attrs: map<string, int>>>
-    auto event = fluss::DataType::Row({
-        {"seq", fluss::DataType::Int()},
-        {"attrs", fluss::DataType::Map(fluss::DataType::String(), fluss::DataType::Int())},
+    auto event = DataType::Row({
+        {"seq", DataType::Int()},
+        {"attrs", DataType::Map(DataType::String(), DataType::Int())},
     });
     auto schema = fluss::Schema::NewBuilder()
-                      .AddColumn("id", fluss::DataType::Int())
-                      .AddColumn("events", fluss::DataType::Array(event))
-                      .AddColumn("profile", fluss::DataType::Row({
-                                                {"name", fluss::DataType::String()},
-                                                {"score", fluss::DataType::Double()},
+                      .AddColumn("id", DataType::Int())
+                      .AddColumn("events", DataType::Array(event))
+                      .AddColumn("profile", DataType::Row({
+                                                {"name", DataType::String()},
+                                                {"score", DataType::Double()},
                                             }))
                       .SetPrimaryKeys({"id"})
                       .Build();
@@ -750,8 +754,8 @@ TEST_F(KvTableTest, NativeNestedBuilderNoArrow) {
         for (int i = 0; i < 2; i++) {
             fluss::GenericRow ev(2);
             ev.SetInt32(0, i);
-            fluss::MapWriter attrs(static_cast<size_t>(i + 1), fluss::DataType::String(),
-                                   fluss::DataType::Int());
+            fluss::MapWriter attrs(static_cast<size_t>(i + 1), DataType::String(),
+                                   DataType::Int());
             attrs.SetKeyString("a");
             attrs.SetValueInt32(i * 10);
             attrs.Commit();
@@ -805,16 +809,17 @@ TEST_F(KvTableTest, ComplexTypesPartialUpdate) {
 
     fluss::TablePath table_path("fluss", "test_complex_partial_update_cpp");
 
-    auto arrow_schema = arrow::schema({
-        arrow::field("id", arrow::int32()),
-        arrow::field("name", arrow::utf8()),
-        arrow::field("score", arrow::int64()),
-        arrow::field("nested", arrow::struct_({arrow::field("seq", arrow::int32()),
-                                               arrow::field("label", arrow::utf8())})),
-        arrow::field("attrs", arrow::map(arrow::utf8(), arrow::int32())),
-        arrow::field("tags", arrow::list(arrow::utf8())),
-    });
-    auto schema = fluss::Schema::FromArrow(arrow_schema, {"id"});
+    auto schema =
+        fluss::Schema::NewBuilder()
+            .AddColumn("id", DataType::Int())
+            .AddColumn("name", DataType::String())
+            .AddColumn("score", DataType::BigInt())
+            .AddColumn("nested", DataType::Row({{"seq", DataType::Int()},
+                                                {"label", DataType::String()}}))
+            .AddColumn("attrs", DataType::Map(DataType::String(), DataType::Int()))
+            .AddColumn("tags", DataType::Array(DataType::String()))
+            .SetPrimaryKeys({"id"})
+            .Build();
 
     auto table_descriptor = fluss::TableDescriptor::NewBuilder()
                                 .SetSchema(schema)
@@ -837,7 +842,7 @@ TEST_F(KvTableTest, ComplexTypesPartialUpdate) {
         nested.SetInt32(0, 10);
         nested.SetString(1, "alpha");
         row.SetRow(3, std::move(nested));
-        fluss::MapWriter attrs(2, fluss::DataType::String(), fluss::DataType::Int());
+        fluss::MapWriter attrs(2, DataType::String(), DataType::Int());
         attrs.SetKeyString("a");
         attrs.SetValueInt32(1);
         attrs.Commit();
@@ -845,7 +850,7 @@ TEST_F(KvTableTest, ComplexTypesPartialUpdate) {
         attrs.SetValueInt32(2);
         attrs.Commit();
         row.SetMap(4, std::move(attrs));
-        fluss::ArrayWriter tags(2, fluss::DataType::String());
+        fluss::ArrayWriter tags(2, DataType::String());
         tags.SetString(0, "x");
         tags.SetString(1, "y");
         row.SetArray(5, std::move(tags));
@@ -925,14 +930,15 @@ TEST_F(KvTableTest, PartitionedComplexTypes) {
 
     fluss::TablePath table_path("fluss", "test_partitioned_complex_cpp");
 
-    auto arrow_schema = arrow::schema({
-        arrow::field("region", arrow::utf8()),
-        arrow::field("user_id", arrow::int32()),
-        arrow::field("nested", arrow::struct_({arrow::field("seq", arrow::int32()),
-                                               arrow::field("label", arrow::utf8())})),
-        arrow::field("attrs", arrow::map(arrow::utf8(), arrow::int32())),
-    });
-    auto schema = fluss::Schema::FromArrow(arrow_schema, {"region", "user_id"});
+    auto schema =
+        fluss::Schema::NewBuilder()
+            .AddColumn("region", DataType::String())
+            .AddColumn("user_id", DataType::Int())
+            .AddColumn("nested", DataType::Row({{"seq", DataType::Int()},
+                                                {"label", DataType::String()}}))
+            .AddColumn("attrs", DataType::Map(DataType::String(), DataType::Int()))
+            .SetPrimaryKeys({"region", "user_id"})
+            .Build();
 
     auto table_descriptor = fluss::TableDescriptor::NewBuilder()
                                 .SetSchema(schema)
@@ -964,7 +970,7 @@ TEST_F(KvTableTest, PartitionedComplexTypes) {
         nested.SetInt32(0, d.seq);
         nested.SetString(1, d.label);
         row.SetRow(2, std::move(nested));
-        fluss::MapWriter attrs(1, fluss::DataType::String(), fluss::DataType::Int());
+        fluss::MapWriter attrs(1, DataType::String(), DataType::Int());
         attrs.SetKeyString(d.label);
         attrs.SetValueInt32(d.seq);
         attrs.Commit();
@@ -1002,8 +1008,8 @@ TEST_F(KvTableTest, LookupArrayValidationErrors) {
     fluss::TablePath table_path("fluss", "test_lookup_array_validation_errors_cpp");
 
     auto schema = fluss::Schema::NewBuilder()
-                      .AddColumn("id", fluss::DataType::Int())
-                      .AddColumn("vals", fluss::DataType::Array(fluss::DataType::Int()))
+                      .AddColumn("id", DataType::Int())
+                      .AddColumn("vals", DataType::Array(DataType::Int()))
                       .SetPrimaryKeys({"id"})
                       .Build();
     auto table_descriptor = fluss::TableDescriptor::NewBuilder()
@@ -1020,7 +1026,7 @@ TEST_F(KvTableTest, LookupArrayValidationErrors) {
 
     auto row = table.NewRow();
     row.Set("id", 1);
-    fluss::ArrayWriter vals(2, fluss::DataType::Int());
+    fluss::ArrayWriter vals(2, DataType::Int());
     vals.SetInt32(0, 99);
     vals.SetNull(1);
     row.Set("vals", std::move(vals));
@@ -1070,9 +1076,9 @@ TEST_F(KvTableTest, CompositePrimaryKeys) {
     fluss::TablePath table_path("fluss", "test_composite_pk_cpp");
 
     auto schema = fluss::Schema::NewBuilder()
-                      .AddColumn("region", fluss::DataType::String())
-                      .AddColumn("score", fluss::DataType::BigInt())
-                      .AddColumn("user_id", fluss::DataType::Int())
+                      .AddColumn("region", DataType::String())
+                      .AddColumn("score", DataType::BigInt())
+                      .AddColumn("user_id", DataType::Int())
                       .SetPrimaryKeys({"region", "user_id"})
                       .Build();
 
@@ -1167,10 +1173,10 @@ TEST_F(KvTableTest, PrefixLookupByBucketKey) {
 
     // Bucket key (a, b) is a strict prefix of the PK (a, b, c), enabling prefix lookup on (a, b).
     auto schema = fluss::Schema::NewBuilder()
-                      .AddColumn("a", fluss::DataType::Int())
-                      .AddColumn("b", fluss::DataType::String())
-                      .AddColumn("c", fluss::DataType::BigInt())
-                      .AddColumn("d", fluss::DataType::String())
+                      .AddColumn("a", DataType::Int())
+                      .AddColumn("b", DataType::String())
+                      .AddColumn("c", DataType::BigInt())
+                      .AddColumn("d", DataType::String())
                       .SetPrimaryKeys({"a", "b", "c"})
                       .Build();
 
@@ -1265,9 +1271,9 @@ TEST_F(KvTableTest, PrefixLookupValidationErrors) {
     fluss::TablePath table_path("fluss", "test_prefix_lookup_validation_cpp");
 
     auto schema = fluss::Schema::NewBuilder()
-                      .AddColumn("a", fluss::DataType::Int())
-                      .AddColumn("b", fluss::DataType::String())
-                      .AddColumn("c", fluss::DataType::BigInt())
+                      .AddColumn("a", DataType::Int())
+                      .AddColumn("b", DataType::String())
+                      .AddColumn("c", DataType::BigInt())
                       .SetPrimaryKeys({"a", "b", "c"})
                       .Build();
 
@@ -1311,11 +1317,11 @@ TEST_F(KvTableTest, PrefixLookupPartitioned) {
 
     // Partitioned by region; bucket key (a, b) is a prefix of the PK minus the partition column.
     auto schema = fluss::Schema::NewBuilder()
-                      .AddColumn("region", fluss::DataType::String())
-                      .AddColumn("a", fluss::DataType::Int())
-                      .AddColumn("b", fluss::DataType::String())
-                      .AddColumn("c", fluss::DataType::BigInt())
-                      .AddColumn("d", fluss::DataType::String())
+                      .AddColumn("region", DataType::String())
+                      .AddColumn("a", DataType::Int())
+                      .AddColumn("b", DataType::String())
+                      .AddColumn("c", DataType::BigInt())
+                      .AddColumn("d", DataType::String())
                       .SetPrimaryKeys({"region", "a", "b", "c"})
                       .Build();
 
@@ -1415,10 +1421,10 @@ TEST_F(KvTableTest, PartialUpdate) {
     fluss::TablePath table_path("fluss", "test_partial_update_cpp");
 
     auto schema = fluss::Schema::NewBuilder()
-                      .AddColumn("id", fluss::DataType::Int())
-                      .AddColumn("name", fluss::DataType::String())
-                      .AddColumn("age", fluss::DataType::BigInt())
-                      .AddColumn("score", fluss::DataType::BigInt())
+                      .AddColumn("id", DataType::Int())
+                      .AddColumn("name", DataType::String())
+                      .AddColumn("age", DataType::BigInt())
+                      .AddColumn("score", DataType::BigInt())
                       .SetPrimaryKeys({"id"})
                       .Build();
 
@@ -1505,10 +1511,10 @@ TEST_F(KvTableTest, PartialUpdateByIndex) {
     fluss::TablePath table_path("fluss", "test_partial_update_by_index_cpp");
 
     auto schema = fluss::Schema::NewBuilder()
-                      .AddColumn("id", fluss::DataType::Int())
-                      .AddColumn("name", fluss::DataType::String())
-                      .AddColumn("age", fluss::DataType::BigInt())
-                      .AddColumn("score", fluss::DataType::BigInt())
+                      .AddColumn("id", DataType::Int())
+                      .AddColumn("name", DataType::String())
+                      .AddColumn("age", DataType::BigInt())
+                      .AddColumn("score", DataType::BigInt())
                       .SetPrimaryKeys({"id"})
                       .Build();
 
@@ -1596,10 +1602,10 @@ TEST_F(KvTableTest, PartitionedTableUpsertAndLookup) {
 
     // Create a partitioned KV table with region as partition key
     auto schema = fluss::Schema::NewBuilder()
-                      .AddColumn("region", fluss::DataType::String())
-                      .AddColumn("user_id", fluss::DataType::Int())
-                      .AddColumn("name", fluss::DataType::String())
-                      .AddColumn("score", fluss::DataType::BigInt())
+                      .AddColumn("region", DataType::String())
+                      .AddColumn("user_id", DataType::Int())
+                      .AddColumn("name", DataType::String())
+                      .AddColumn("score", DataType::BigInt())
                       .SetPrimaryKeys({"region", "user_id"})
                       .Build();
 
@@ -1738,23 +1744,23 @@ TEST_F(KvTableTest, AllSupportedDatatypes) {
 
     // Create a table with all supported datatypes
     auto schema = fluss::Schema::NewBuilder()
-                      .AddColumn("pk_int", fluss::DataType::Int())
-                      .AddColumn("col_boolean", fluss::DataType::Boolean())
-                      .AddColumn("col_tinyint", fluss::DataType::TinyInt())
-                      .AddColumn("col_smallint", fluss::DataType::SmallInt())
-                      .AddColumn("col_int", fluss::DataType::Int())
-                      .AddColumn("col_bigint", fluss::DataType::BigInt())
-                      .AddColumn("col_float", fluss::DataType::Float())
-                      .AddColumn("col_double", fluss::DataType::Double())
-                      .AddColumn("col_char", fluss::DataType::Char(10))
-                      .AddColumn("col_string", fluss::DataType::String())
-                      .AddColumn("col_decimal", fluss::DataType::Decimal(10, 2))
-                      .AddColumn("col_date", fluss::DataType::Date())
-                      .AddColumn("col_time", fluss::DataType::Time())
-                      .AddColumn("col_timestamp", fluss::DataType::Timestamp())
-                      .AddColumn("col_timestamp_ltz", fluss::DataType::TimestampLtz())
-                      .AddColumn("col_bytes", fluss::DataType::Bytes())
-                      .AddColumn("col_binary", fluss::DataType::Binary(20))
+                      .AddColumn("pk_int", DataType::Int())
+                      .AddColumn("col_boolean", DataType::Boolean())
+                      .AddColumn("col_tinyint", DataType::TinyInt())
+                      .AddColumn("col_smallint", DataType::SmallInt())
+                      .AddColumn("col_int", DataType::Int())
+                      .AddColumn("col_bigint", DataType::BigInt())
+                      .AddColumn("col_float", DataType::Float())
+                      .AddColumn("col_double", DataType::Double())
+                      .AddColumn("col_char", DataType::Char(10))
+                      .AddColumn("col_string", DataType::String())
+                      .AddColumn("col_decimal", DataType::Decimal(10, 2))
+                      .AddColumn("col_date", DataType::Date())
+                      .AddColumn("col_time", DataType::Time())
+                      .AddColumn("col_timestamp", DataType::Timestamp())
+                      .AddColumn("col_timestamp_ltz", DataType::TimestampLtz())
+                      .AddColumn("col_bytes", DataType::Bytes())
+                      .AddColumn("col_binary", DataType::Binary(20))
                       .SetPrimaryKeys({"pk_int"})
                       .Build();
 

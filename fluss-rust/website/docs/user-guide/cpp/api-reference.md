@@ -461,7 +461,6 @@ Read-only result of a prefix lookup — zero or more matched rows. Each row is a
 | Method                            |  Description                |
 |-----------------------------------|-----------------------------|
 | `NewBuilder() -> Schema::Builder` | Create a new schema builder |
-| `FromArrow(std::shared_ptr<arrow::Schema> schema, std::vector<std::string> primary_keys = {}) -> Schema` | Build a schema from an existing Arrow schema (escape hatch; prefer `DataType::Map` / `DataType::Row`) |
 
 ## `Schema::Builder`
 
