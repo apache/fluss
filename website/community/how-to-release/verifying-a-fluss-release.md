@@ -73,6 +73,38 @@ Unzip the source release archive, and verify that:
 5. The LICENSE and NOTICE files in the root directory refer to dependencies in the source release, i.e., files in the git repository (such as fonts, css, JavaScript, images)
 
 
+## Verifying the clients (Rust / Python / C++)
+
+The Rust, Python, and C++ clients ship in the same source release under `fluss-rust/`. Build them from the extracted source archive — you need **Rust** (see `fluss-rust/rust-toolchain.toml` for the expected version), plus **protobuf** and, for the Python binding, **Python 3.9+**:
+
+```bash
+cd fluss-rust
+cargo build --workspace --release
+```
+
+Per-language verification:
+
+- **Rust:** build from the source release (above), or depend on the RC tag in a throwaway project (`fluss-rs = { git = "https://github.com/apache/fluss", tag = "v${RELEASE_VERSION}-rc${RC_NUM}" }`), then write a few test cases (connect, create table, read/write). Installation: https://fluss.apache.org/docs/apis/rust/installation/
+- **Python:** for an RC, install from **TestPyPI** (`pip install -i https://test.pypi.org/simple/ pyfluss==${RELEASE_VERSION}`) and write test cases. Installation: https://fluss.apache.org/docs/apis/python/installation/
+- **C++:** build and link the C++ client from `fluss-rust/bindings/cpp/`, then verify. Installation: https://fluss.apache.org/docs/apis/cpp/installation/
+
+The Rust workspace's dependency licenses are checked with [cargo-deny](https://embarkstudios.github.io/cargo-deny/); the release manager regenerates the dependency audit before the release.
+
+## Release artifacts and publish targets
+
+A release publishes to several registries; confirm each one carries the release version:
+
+| Component | Target | Identifier |
+|-----------|--------|------------|
+| Java / Scala | Maven Central (via Apache Nexus staging) | `org.apache.fluss:fluss-*` |
+| Rust | [crates.io](https://crates.io/crates/fluss-rs) | `fluss-rs` |
+| Python | [PyPI](https://pypi.org/project/pyfluss/) (RC → [TestPyPI](https://test.pypi.org/project/pyfluss/)) | `pyfluss` |
+| C++ | source archive only (no registry) | — |
+| Elixir | Hex.pm (post-1.0; not yet published) | `fluss` |
+| Docker | Docker Hub | `apache/fluss`, `apache/fluss-quickstart-flink` |
+
+Source archives, signatures, and checksums are on [dist.apache.org](https://dist.apache.org/repos/dist/dev/incubator/fluss/) (dev) and, after the vote, on [downloads.apache.org](https://downloads.apache.org/incubator/fluss/).
+
 ## Testing Against Staged Maven Artifacts
 
 Update the root `pom.xml` of the maven project (like the apache/fluss project) to include the staged repository in the `<repositories>` section. You can do this by adding a new repository entry like this:

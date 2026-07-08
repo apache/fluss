@@ -145,6 +145,8 @@ public class RebalanceManager implements ServerReconfigurable {
                 eventManager,
                 clock,
                 conf,
+                // TODO: Reuse the CoordinatorServer shared scheduler for this lightweight
+                // coordinator timeout checker instead of creating a component-owned scheduler.
                 Executors.newScheduledThreadPool(
                         1, new ExecutorThreadFactory("rebalance-timeout")));
     }
@@ -670,7 +672,8 @@ public class RebalanceManager implements ServerReconfigurable {
             TableBucket bucket = entry.getKey();
             long startMs = entry.getValue();
             long elapsed = clock.milliseconds() - startMs;
-            if (elapsed > REBALANCE_TASK_TIMEOUT_MS) {
+            if (elapsed > REBALANCE_TASK_TIMEOUT_MS
+                    && inflightRebalanceTaskStartMs.remove(bucket, startMs)) {
                 LOG.warn(
                         "In-flight rebalance task for {} timed out after {}ms. "
                                 + "Treating it as timed out and advancing to the next task.",

@@ -25,6 +25,7 @@ import org.apache.fluss.exception.RemoteStorageException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.remote.RemoteLogManifest;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.server.log.LogManager;

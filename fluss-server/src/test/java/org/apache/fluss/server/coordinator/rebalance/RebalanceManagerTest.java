@@ -48,6 +48,8 @@ import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
+import org.apache.fluss.utils.concurrent.FlussScheduler;
+import org.apache.fluss.utils.concurrent.Scheduler;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -88,6 +90,7 @@ public class RebalanceManagerTest {
     private LakeTableTieringManager lakeTableTieringManager;
     private RebalanceManager rebalanceManager;
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
+    private Scheduler scheduler;
 
     @BeforeAll
     static void baseBeforeAll() throws Exception {
@@ -115,6 +118,9 @@ public class RebalanceManagerTest {
                         TestingMetricGroups.COORDINATOR_METRICS);
         kvSnapshotLeaseManager.start();
 
+        scheduler = new FlussScheduler(1);
+        scheduler.startup();
+
         autoPartitionManager =
                 new AutoPartitionManager(
                         serverMetadataCache,
@@ -137,6 +143,9 @@ public class RebalanceManagerTest {
     @AfterEach
     void afterEach() throws Exception {
         rebalanceManager.close();
+        if (scheduler != null) {
+            scheduler.shutdown();
+        }
         zookeeperClient.deleteRebalanceTask();
         metadataManager =
                 new MetadataManager(
@@ -732,6 +741,7 @@ public class RebalanceManagerTest {
                 Executors.newFixedThreadPool(1, new ExecutorThreadFactory("test-coordinator-io")),
                 metadataManager,
                 kvSnapshotLeaseManager,
+                scheduler,
                 SystemClock.getInstance());
     }
 
@@ -746,7 +756,8 @@ public class RebalanceManagerTest {
                 lakeTableTieringManager,
                 conf,
                 metadataManager,
-                kvSnapshotLeaseManager);
+                kvSnapshotLeaseManager,
+                scheduler);
     }
 
     private static Map<TableBucket, RebalancePlanForBucket> createRebalancePlan(int bucketCount) {
@@ -795,7 +806,8 @@ public class RebalanceManagerTest {
                 LakeTableTieringManager lakeTableTieringManager,
                 Configuration conf,
                 MetadataManager metadataManager,
-                KvSnapshotLeaseManager kvSnapshotLeaseManager) {
+                KvSnapshotLeaseManager kvSnapshotLeaseManager,
+                Scheduler scheduler) {
             super(
                     zooKeeperClient,
                     serverMetadataCache,
@@ -809,6 +821,7 @@ public class RebalanceManagerTest {
                             1, new ExecutorThreadFactory("recording-coordinator-io")),
                     metadataManager,
                     kvSnapshotLeaseManager,
+                    scheduler,
                     SystemClock.getInstance());
         }
 

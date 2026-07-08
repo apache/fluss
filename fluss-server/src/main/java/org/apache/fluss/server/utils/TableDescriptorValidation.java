@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.utils;
 
+import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -129,6 +130,19 @@ public class TableDescriptorValidation {
         checkTableLakeFormatMatchesCluster(tableConf, clusterDataLakeFormat);
     }
 
+    /** Validates the schema after altering table columns. */
+    @Internal
+    public static void validateAlterTableSchema(TableInfo table, Schema newSchema) {
+        if (table.getTableConfig()
+                .getMergeEngineType()
+                .map(MergeEngineType.AGGREGATION::equals)
+                .orElse(false)) {
+            validateAggregationFunctionParameters(newSchema);
+        } else {
+            validateNoAggregationFunctions(newSchema);
+        }
+    }
+
     private static void checkTableLakeFormatMatchesCluster(
             Configuration tableConf, @Nullable DataLakeFormat clusterDataLakeFormat) {
         if (clusterDataLakeFormat == null) {
@@ -239,7 +253,7 @@ public class TableDescriptorValidation {
         if (bucketCount > maxBucketNum) {
             throw new TooManyBucketsException(
                     String.format(
-                            "Bucket count %s exceeds the maximum limit %s.",
+                            "Bucket count %s exceeds the maximum limit %s for a non-partitioned table or partition.",
                             bucketCount, maxBucketNum));
         }
         List<String> bucketKeys = tableDescriptor.getTableDistribution().get().getBucketKeys();
@@ -323,6 +337,9 @@ public class TableDescriptorValidation {
     private static void checkMergeEngine(
             Configuration tableConf, boolean hasPrimaryKey, Schema schema) {
         MergeEngineType mergeEngine = tableConf.get(ConfigOptions.TABLE_MERGE_ENGINE);
+        if (mergeEngine != MergeEngineType.AGGREGATION) {
+            validateNoAggregationFunctions(schema);
+        }
         if (mergeEngine != null) {
             if (!hasPrimaryKey) {
                 throw new InvalidConfigException(
@@ -373,6 +390,20 @@ public class TableDescriptorValidation {
                 }
                 // Validate aggregation function parameters for aggregation merge engine
                 validateAggregationFunctionParameters(schema);
+            }
+        }
+    }
+
+    /** Validates that the schema doesn't contain any aggregation functions. */
+    private static void validateNoAggregationFunctions(Schema schema) {
+        for (Schema.Column column : schema.getColumns()) {
+            Optional<AggFunction> aggFunction = column.getAggFunction();
+            if (aggFunction.isPresent()) {
+                throw new InvalidConfigException(
+                        String.format(
+                                "Aggregation function is only supported for aggregation merge engine table, "
+                                        + "but column '%s' has aggregation function '%s'.",
+                                column.getName(), aggFunction.get()));
             }
         }
     }

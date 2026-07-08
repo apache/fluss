@@ -17,7 +17,17 @@ name: Check License
 permissions:
   contents: read
 
-on: [push, pull_request]
+on:
+  push:
+    paths-ignore:
+      - 'fluss-rust/**'
+      - 'website/**'
+      - '**/*.md'
+  pull_request:
+    paths-ignore:
+      - 'fluss-rust/**'
+      - 'website/**'
+      - '**/*.md'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.number || github.run_id }}

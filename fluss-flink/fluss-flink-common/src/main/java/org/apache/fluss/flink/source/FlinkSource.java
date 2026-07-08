@@ -265,7 +265,9 @@ public class FlinkSource<OUT>
                 new LeaseContext(
                         sourceEnumeratorState.getLeaseId(),
                         leaseContext.getKvSnapshotLeaseDurationMs()),
-                true);
+                true,
+                sourceEnumeratorState.isInitialDiscoveryFinished(),
+                sourceEnumeratorState.getUnassignedSplits());
     }
 
     @Override

@@ -22,6 +22,7 @@ import org.apache.fluss.types.DataType;
 import javax.annotation.Nullable;
 
 import java.util.Objects;
+import java.util.Optional;
 
 /** {@link TableChange} represents the modification of the Fluss Table. */
 public interface TableChange {
@@ -42,7 +43,21 @@ public interface TableChange {
             DataType dataType,
             @Nullable String comment,
             ColumnPosition position) {
-        return new AddColumn(columnName, dataType, comment, position);
+        return new AddColumn(columnName, dataType, comment, position, null);
+    }
+
+    /**
+     * A table change to add the column with specified position and aggregation function.
+     *
+     * @return a TableChange represents the modification.
+     */
+    static AddColumn addColumn(
+            String columnName,
+            DataType dataType,
+            @Nullable String comment,
+            ColumnPosition position,
+            @Nullable AggFunction aggFunction) {
+        return new AddColumn(columnName, dataType, comment, position, aggFunction);
     }
 
     /**
@@ -230,15 +245,21 @@ public interface TableChange {
         private final String name;
         private final DataType dataType;
         private final @Nullable String comment;
+        private final @Nullable AggFunction aggFunction;
 
         private final ColumnPosition position;
 
         private AddColumn(
-                String name, DataType dataType, @Nullable String comment, ColumnPosition position) {
+                String name,
+                DataType dataType,
+                @Nullable String comment,
+                ColumnPosition position,
+                @Nullable AggFunction aggFunction) {
             this.name = name;
             this.dataType = dataType;
             this.comment = comment;
             this.position = position;
+            this.aggFunction = aggFunction;
         }
 
         public String getName() {
@@ -258,20 +279,26 @@ public interface TableChange {
             return position;
         }
 
+        public Optional<AggFunction> getAggFunction() {
+            return Optional.ofNullable(aggFunction);
+        }
+
         @Override
         public String toString() {
-            return "AddColumn{"
-                    + "name='"
-                    + name
-                    + '\''
-                    + ", dataType="
-                    + dataType
-                    + ", comment='"
-                    + comment
-                    + '\''
-                    + ", position="
-                    + position
-                    + '}';
+            String result =
+                    "AddColumn{"
+                            + "name='"
+                            + name
+                            + '\''
+                            + ", dataType="
+                            + dataType
+                            + ", comment='"
+                            + comment
+                            + '\'';
+            if (aggFunction != null) {
+                result += ", aggFunction=" + aggFunction;
+            }
+            return result + ", position=" + position + '}';
         }
     }
 

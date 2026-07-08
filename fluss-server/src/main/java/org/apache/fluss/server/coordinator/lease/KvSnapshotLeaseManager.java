@@ -92,6 +92,9 @@ public class KvSnapshotLeaseManager {
                 leaseExpirationCheckInterval,
                 zkClient,
                 remoteDataDir,
+                // TODO: Reuse the CoordinatorServer shared scheduler for this lightweight
+                // coordinator lease expiration task instead of creating a component-owned
+                // scheduler.
                 Executors.newScheduledThreadPool(
                         1, new ExecutorThreadFactory("kv-snapshot-lease-cleaner")),
                 clock,

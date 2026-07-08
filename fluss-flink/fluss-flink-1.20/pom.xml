@@ -234,6 +234,11 @@
                                     <include>org.apache.fluss:fluss-client</include>
                                 </includes>
                             </artifactSet>
+                            <transformers combine.children="append">
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>org.apache.fluss.flink.action.FlussActionEntrypoint</mainClass>
+                                </transformer>
+                            </transformers>
                         </configuration>
                     </execution>
                 </executions>

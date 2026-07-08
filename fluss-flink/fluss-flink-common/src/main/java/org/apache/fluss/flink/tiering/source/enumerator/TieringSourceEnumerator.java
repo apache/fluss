@@ -423,6 +423,7 @@ public class TieringSourceEnumerator
                                 TablePath.of(
                                         tieringTable.getTablePath().getDatabaseName(),
                                         tieringTable.getTablePath().getTableName()));
+                tieringTableEpochs.put(lakeTieringInfo.f0, lakeTieringInfo.f1);
                 LOG.info("Tiering table {} has been requested.", lakeTieringInfo);
             } else {
                 LOG.info("No available Tiering table found, will poll later.");
@@ -463,9 +464,9 @@ public class TieringSourceEnumerator
                 LOG.info(
                         "Generate Tiering splits for table {} is empty, no need to tier data.",
                         tieringTable.f2.getTableName());
+                tieringTableEpochs.remove(tieringTable.f0);
                 finishedTables.put(tieringTable.f0, TieringFinishInfo.from(tieringTable.f1));
             } else {
-                tieringTableEpochs.put(tieringTable.f0, tieringTable.f1);
                 pendingSplits.addAll(tieringSplits);
 
                 timerService.schedule(
@@ -484,6 +485,7 @@ public class TieringSourceEnumerator
         } catch (Exception e) {
             LOG.warn("Fail to generate Tiering splits for table {}.", tieringTable.f2, e);
             failedTableEpochs.put(tieringTable.f0, tieringTable.f1);
+            tieringTableEpochs.remove(tieringTable.f0);
         }
     }
 

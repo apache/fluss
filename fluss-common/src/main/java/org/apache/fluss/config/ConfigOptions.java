@@ -221,6 +221,17 @@ public class ConfigOptions {
                                             + "TableLifecycleThrottler scans in-flight drops for "
                                             + "timeouts.");
 
+    public static final ConfigOption<Duration> COORDINATOR_OFFLINE_LEADER_RETRY_DELAY =
+            key("coordinator.offline-leader.retry-delay")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(1))
+                    .withDescription(
+                            "The delay before the coordinator retries offline leaders on live "
+                                    + "tablet servers after they are marked offline. This lets a "
+                                    + "leader that was rejected because of temporary tablet-server "
+                                    + "conditions, such as disk write protection, become electable "
+                                    + "again after recovery.");
+
     public static final ConfigOption<Integer> COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS =
             key("coordinator.rebalance.max-inflight-tasks")
                     .intType()
@@ -316,10 +327,13 @@ public class ConfigOptions {
     public static final ConfigOption<Integer> MAX_BUCKET_NUM =
             key("max.bucket.num")
                     .intType()
-                    .defaultValue(128000)
+                    .defaultValue(4096)
                     .withDescription(
-                            "The maximum number of buckets that can be created for a table."
-                                    + "The default value is 128000");
+                            "The maximum number of buckets that can be created for a non-partitioned table "
+                                    + "or for each partition of a partitioned table. "
+                                    + "The default value is 4096. "
+                                    + "This default is capped to reduce the risk that an assignment znode exceeds "
+                                    + "ZooKeeper's packet size limit.");
 
     /**
      * The network address and port the server binds to for accepting connections.
@@ -854,6 +868,15 @@ public class ConfigOptions {
                                     + "fsync of data written to the log. For example if this was set to 1, "
                                     + "we would fsync after every message; if it were 5 we would fsync after every "
                                     + "five messages.");
+
+    public static final ConfigOption<Duration> LOG_FLUSH_OFFSET_CHECKPOINT_INTERVAL =
+            key("log.flush.offset.checkpoint-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(60))
+                    .withDescription(
+                            "The frequency with which we update the persistent record of the last "
+                                    + "flush which acts as the log recovery point. The default "
+                                    + "setting is 60 seconds.");
 
     public static final ConfigOption<Duration> LOG_REPLICA_HIGH_WATERMARK_CHECKPOINT_INTERVAL =
             key("log.replica.high-watermark.checkpoint-interval")
@@ -2196,6 +2219,24 @@ public class ConfigOptions {
                             .defaultValue(Duration.ofSeconds(10))
                             .withDescription(
                                     "The interval of pushing metrics to Prometheus PushGateway.");
+
+    public static final ConfigOption<String> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_USERNAME =
+            key("metrics.reporter.prometheus-push.username")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The username for Basic Auth of the Prometheus PushGateway. "
+                                    + "Leave it unset to disable authentication.");
+
+    public static final ConfigOption<Password> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_PASSWORD =
+            key("metrics.reporter.prometheus-push.password")
+                    .passwordType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The password for Basic Auth of the Prometheus PushGateway. "
+                                    + "Only takes effect when username is configured. "
+                                    + "The value is automatically redacted when the configuration "
+                                    + "is logged or displayed.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for jmx reporter

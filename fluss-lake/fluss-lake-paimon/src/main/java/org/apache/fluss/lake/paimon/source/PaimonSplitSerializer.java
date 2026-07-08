@@ -20,6 +20,7 @@ package org.apache.fluss.lake.paimon.source;
 
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 
+import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.io.DataOutputViewStreamWrapper;
 import org.apache.paimon.table.source.DataSplit;
 import org.apache.paimon.utils.InstantiationUtil;
@@ -28,15 +29,20 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 /** Serializer for paimon split. */
 public class PaimonSplitSerializer implements SimpleVersionedSerializer<PaimonSplit> {
 
     private static final int VERSION_1 = 1;
+    // VERSION_2 additionally persists the partition values.
+    private static final int VERSION_2 = 2;
 
     @Override
     public int getVersion() {
-        return VERSION_1;
+        return VERSION_2;
     }
 
     @Override
@@ -46,6 +52,11 @@ public class PaimonSplitSerializer implements SimpleVersionedSerializer<PaimonSp
         DataSplit dataSplit = paimonSplit.dataSplit();
         InstantiationUtil.serializeObject(view, dataSplit);
         view.writeBoolean(paimonSplit.isBucketUnAware());
+        List<String> partition = paimonSplit.partition();
+        view.writeInt(partition.size());
+        for (String value : partition) {
+            view.writeUTF(value);
+        }
         return out.toByteArray();
     }
 
@@ -55,16 +66,37 @@ public class PaimonSplitSerializer implements SimpleVersionedSerializer<PaimonSp
         DataSplit dataSplit;
         try {
             dataSplit = InstantiationUtil.deserializeObject(in, getClass().getClassLoader());
-
+            DataInputStream dis = new DataInputStream(in);
+            boolean isBucketUnAware = dis.readBoolean();
             if (version == VERSION_1) {
-                DataInputStream dis = new DataInputStream(in);
-                boolean isBucketUnAware = dis.readBoolean();
-                return new PaimonSplit(dataSplit, isBucketUnAware);
+                // VERSION_1 did not store partition values separately, but string partitions were
+                // exposed through DataSplit.partition(). Preserve that old behavior.
+                return new PaimonSplit(
+                        dataSplit, isBucketUnAware, readStringPartition(dataSplit.partition()));
+            } else if (version == VERSION_2) {
+                int size = dis.readInt();
+                List<String> partition = new ArrayList<>(size);
+                for (int i = 0; i < size; i++) {
+                    partition.add(dis.readUTF());
+                }
+                return new PaimonSplit(dataSplit, isBucketUnAware, partition);
             } else {
                 throw new IOException("Unsupported PaimonSplit serialization version: " + version);
             }
         } catch (ClassNotFoundException e) {
             throw new IOException("Failed to deserialize PaimonSplit", e);
         }
+    }
+
+    private List<String> readStringPartition(BinaryRow partition) {
+        if (partition == null || partition.getFieldCount() == 0) {
+            return Collections.emptyList();
+        }
+
+        List<String> partitions = new ArrayList<>(partition.getFieldCount());
+        for (int i = 0; i < partition.getFieldCount(); i++) {
+            partitions.add(partition.getString(i).toString());
+        }
+        return partitions;
     }
 }

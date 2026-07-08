@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.ConfigurationUtils;
 import org.apache.fluss.config.cluster.ConfigValidator;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
@@ -172,7 +173,9 @@ class DynamicServerConfig {
 
         // Early return if no effective changes
         if (effectiveChanges.isEmpty()) {
-            LOG.info("No effective config changes detected for: {}", newDynamicConfigs);
+            LOG.info(
+                    "No effective config changes detected for: {}",
+                    ConfigurationUtils.hideSensitiveValues(newDynamicConfigs));
             return;
         }
 
@@ -185,7 +188,9 @@ class DynamicServerConfig {
 
         // Update internal state
         updateInternalState(newConfig, newConfigMap, newDynamicConfigs);
-        LOG.info("Dynamic configs changed: {}", effectiveChanges);
+        LOG.info(
+                "Dynamic configs changed: {}",
+                ConfigurationUtils.hideSensitiveValues(effectiveChanges));
     }
 
     /**
@@ -291,8 +296,8 @@ class DynamicServerConfig {
             LOG.error(
                     "Config validation failed for '{}': {} -> {}. {}",
                     configKey,
-                    oldValue,
-                    newValue,
+                    ConfigurationUtils.hideSensitiveValue(configKey, oldValue),
+                    ConfigurationUtils.hideSensitiveValue(configKey, newValue),
                     e.getMessage());
             if (skipErrorConfig) {
                 skippedConfigs.add(configKey);
@@ -370,7 +375,7 @@ class DynamicServerConfig {
                 throw new ConfigException(
                         String.format(
                                 "Cannot parse '%s' as %s for config '%s': %s",
-                                newValueStr,
+                                ConfigurationUtils.hideSensitiveValue(configKey, newValueStr),
                                 configOption.isList()
                                         ? "List<" + configOption.getClazz().getSimpleName() + ">"
                                         : configOption.getClazz().getSimpleName(),
