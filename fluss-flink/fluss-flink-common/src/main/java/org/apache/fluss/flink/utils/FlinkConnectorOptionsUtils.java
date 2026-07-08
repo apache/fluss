@@ -214,8 +214,8 @@ public class FlinkConnectorOptionsUtils {
                 .orElseGet(
                         () -> {
                             String[] flinkTmpDirs = getFlinkIoTmpDirs(flinkConfig);
-                            int idx = taskIndex % flinkTmpDirs.length;
-                            return new File(flinkTmpDirs[idx], "/fluss").getAbsolutePath();
+                            int idx = Math.floorMod(taskIndex, flinkTmpDirs.length);
+                            return new File(flinkTmpDirs[idx], "fluss").getAbsolutePath();
                         });
     }
 
