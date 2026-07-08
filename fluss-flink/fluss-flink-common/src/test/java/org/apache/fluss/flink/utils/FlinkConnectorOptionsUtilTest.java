@@ -30,6 +30,7 @@ import java.util.TimeZone;
 
 import static org.apache.flink.configuration.CoreOptions.TMP_DIRS;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
+import static org.apache.fluss.config.ConfigOptions.LAKE_TIERING_IO_TMP_DIR;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP;
 import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.parseTimestamp;
@@ -136,6 +137,42 @@ class FlinkConnectorOptionsUtilTest {
                         FlinkConnectorOptionsUtils.getClientScannerIoTmpDir(
                                 new Configuration(), pathSeparatorFlinkConfig))
                 .isIn(
+                        new File("/flink_tmp_dir_0", "fluss").getAbsolutePath(),
+                        new File("/flink_tmp_dir_1", "fluss").getAbsolutePath());
+    }
+
+    @Test
+    void testGetFlinkIoTmpDir() {
+        org.apache.flink.configuration.Configuration flinkConfig =
+                new org.apache.flink.configuration.Configuration().set(TMP_DIRS, "/flink_tmp_dir");
+        String property = System.getProperty("java.io.tmpdir");
+
+        assertThat(FlinkConnectorOptionsUtils.getFlinkIoTmpDir(flinkConfig))
+                .isEqualTo("/flink_tmp_dir/fluss");
+        assertThat(
+                        FlinkConnectorOptionsUtils.getFlinkIoTmpDir(
+                                new org.apache.flink.configuration.Configuration()))
+                .isEqualTo(new File(property, "fluss").getAbsolutePath());
+    }
+
+    @Test
+    void testGetLakeTieringIoTmpDirs() {
+        org.apache.flink.configuration.Configuration flinkConfig =
+                new org.apache.flink.configuration.Configuration()
+                        .set(TMP_DIRS, "/flink_tmp_dir_0,/flink_tmp_dir_1");
+
+        assertThat(
+                        FlinkConnectorOptionsUtils.getLakeTieringIoTmpDirs(
+                                new Configuration()
+                                        .set(
+                                                LAKE_TIERING_IO_TMP_DIR,
+                                                "/tiering_tmp_0,/tiering_tmp_1"),
+                                flinkConfig))
+                .containsExactly("/tiering_tmp_0", "/tiering_tmp_1");
+        assertThat(
+                        FlinkConnectorOptionsUtils.getLakeTieringIoTmpDirs(
+                                new Configuration(), flinkConfig))
+                .containsExactly(
                         new File("/flink_tmp_dir_0", "fluss").getAbsolutePath(),
                         new File("/flink_tmp_dir_1", "fluss").getAbsolutePath());
     }

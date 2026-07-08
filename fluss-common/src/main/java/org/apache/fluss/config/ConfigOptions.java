@@ -2512,6 +2512,16 @@ public class ConfigOptions {
                                     + ConfigOptions.TABLE_DATALAKE_AUTO_EXPIRE_SNAPSHOT
                                     + " is false.");
 
+    public static final ConfigOption<String> LAKE_TIERING_IO_TMP_DIR =
+            key("lake.tiering.io.tmpdir")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Local directory or directories that are used by the lake tiering service for temporary IO files. "
+                                    + "Multiple directories can be separated by comma or the system path separator. "
+                                    + "If not configured and the tiering service runs in a Flink job, Fluss uses "
+                                    + "Flink's IO temporary directories with a 'fluss' child directory.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for fluss kafka
     // ------------------------------------------------------------------------
