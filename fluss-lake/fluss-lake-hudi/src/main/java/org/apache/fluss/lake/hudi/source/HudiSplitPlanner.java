@@ -119,6 +119,11 @@ public class HudiSplitPlanner implements Planner<HudiSplit> {
                             .getLatestMergedFileSlicesBeforeOrOn(partitionPath, snapshotTime)
                             .collect(Collectors.toList());
             for (FileSlice fileSlice : fileSlices) {
+                // Pending MOR compaction plans can expose empty file slices; they are not readable
+                // at the requested completed instant.
+                if (fileSlice.isEmpty()) {
+                    continue;
+                }
                 splits.add(toHudiSplit(hudiTableInfo, partitionPath, fileSlice));
             }
             return splits;

@@ -20,6 +20,7 @@ package org.apache.fluss.lake.hudi;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.hudi.source.HudiLakeSource;
 import org.apache.fluss.lake.hudi.source.HudiSplit;
+import org.apache.fluss.lake.hudi.tiering.HudiLakeTieringFactory;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
 import org.apache.fluss.lake.source.LakeSource;
@@ -37,9 +38,7 @@ public class HudiLakeStorage implements LakeStorage {
 
     @Override
     public LakeTieringFactory<?, ?> createLakeTieringFactory() {
-        throw new UnsupportedOperationException(
-                "Hudi lake tiering writer is not implemented yet, so HudiLakeStorage does not "
-                        + "support creating a LakeTieringFactory.");
+        return new HudiLakeTieringFactory(hudiConfig);
     }
 
     @Override

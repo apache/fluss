@@ -423,6 +423,7 @@ public class TieringSourceEnumerator
                                 TablePath.of(
                                         tieringTable.getTablePath().getDatabaseName(),
                                         tieringTable.getTablePath().getTableName()));
+                tieringTableEpochs.put(lakeTieringInfo.f0, lakeTieringInfo.f1);
                 LOG.info("Tiering table {} has been requested.", lakeTieringInfo);
             } else {
                 LOG.info("No available Tiering table found, will poll later.");
@@ -449,11 +450,11 @@ public class TieringSourceEnumerator
         try {
             TablePath tablePath = tieringTable.f2;
             final TableInfo tableInfo = flussAdmin.getTableInfo(tablePath).get();
-            List<TieringSplit> tieringSplits =
-                    populateNumberOfTieringSplits(splitGenerator.generateTableSplits(tableInfo));
+            List<TieringSplit> tieringSplits = splitGenerator.generateTableSplits(tableInfo);
             // shuffle tiering split to avoid splits tiering skew
             // after introduce tiering max duration
             Collections.shuffle(tieringSplits);
+            tieringSplits = populateTieringRoundMetadata(tieringSplits);
             LOG.info(
                     "Generate Tiering {} splits for table {} with cost {}ms.",
                     tieringSplits.size(),
@@ -463,9 +464,9 @@ public class TieringSourceEnumerator
                 LOG.info(
                         "Generate Tiering splits for table {} is empty, no need to tier data.",
                         tieringTable.f2.getTableName());
+                tieringTableEpochs.remove(tieringTable.f0);
                 finishedTables.put(tieringTable.f0, TieringFinishInfo.from(tieringTable.f1));
             } else {
-                tieringTableEpochs.put(tieringTable.f0, tieringTable.f1);
                 pendingSplits.addAll(tieringSplits);
 
                 timerService.schedule(
@@ -484,14 +485,24 @@ public class TieringSourceEnumerator
         } catch (Exception e) {
             LOG.warn("Fail to generate Tiering splits for table {}.", tieringTable.f2, e);
             failedTableEpochs.put(tieringTable.f0, tieringTable.f1);
+            tieringTableEpochs.remove(tieringTable.f0);
         }
     }
 
-    private List<TieringSplit> populateNumberOfTieringSplits(List<TieringSplit> tieringSplits) {
+    private List<TieringSplit> populateTieringRoundMetadata(List<TieringSplit> tieringSplits) {
         int numberOfSplits = tieringSplits.size();
-        return tieringSplits.stream()
-                .map(split -> split.copy(numberOfSplits))
-                .collect(Collectors.toList());
+        if (numberOfSplits == 0) {
+            return Collections.emptyList();
+        }
+        long tieringRoundTimestamp = System.currentTimeMillis();
+        List<TieringSplit> splitsWithMetadata = new ArrayList<>(numberOfSplits);
+        for (int splitIndex = 0; splitIndex < numberOfSplits; splitIndex++) {
+            splitsWithMetadata.add(
+                    tieringSplits
+                            .get(splitIndex)
+                            .copy(numberOfSplits, splitIndex, tieringRoundTimestamp));
+        }
+        return splitsWithMetadata;
     }
 
     @Override

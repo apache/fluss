@@ -20,6 +20,7 @@ package org.apache.fluss.server.zk;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.ConfigurationUtils;
 import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.exception.CoordinatorEpochFencedException;
 import org.apache.fluss.metadata.DatabaseSummary;
@@ -1587,7 +1588,7 @@ public class ZooKeeperClient implements AutoCloseable {
                     .forPath(path, ConfigEntityZNode.encode(configs));
         }
 
-        LOG.info("upsert entity configs {}", configs);
+        LOG.info("upsert entity configs {}", ConfigurationUtils.hideSensitiveValues(configs));
         insertConfigChangeNotification();
     }
 

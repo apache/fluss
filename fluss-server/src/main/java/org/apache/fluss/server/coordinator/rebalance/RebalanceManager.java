@@ -150,6 +150,8 @@ public class RebalanceManager {
                 zkClient,
                 eventManager,
                 clock,
+                // TODO: Reuse the CoordinatorServer shared scheduler for this lightweight
+                // coordinator timeout checker instead of creating a component-owned scheduler.
                 Executors.newScheduledThreadPool(1, new ExecutorThreadFactory("rebalance-timeout")),
                 conf);
     }

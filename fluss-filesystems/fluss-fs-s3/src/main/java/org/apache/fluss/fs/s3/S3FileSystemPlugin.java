@@ -23,7 +23,9 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FileSystemPlugin;
 import org.apache.fluss.fs.s3.token.S3ADelegationTokenReceiver;
+import org.apache.fluss.fs.s3.token.S3DelegationTokenProvider;
 import org.apache.fluss.fs.s3.token.S3DelegationTokenReceiver;
+import org.apache.fluss.utils.StringUtils;
 
 import org.apache.hadoop.fs.s3a.S3AFileSystem;
 import org.slf4j.Logger;
@@ -31,6 +33,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.URI;
+import java.util.Map;
 import java.util.Objects;
 
 import static org.apache.fluss.fs.s3.token.S3DelegationTokenReceiver.PROVIDER_CONFIG_NAME;
@@ -41,6 +44,10 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
     private static final Logger LOG = LoggerFactory.getLogger(S3FileSystemPlugin.class);
 
     private static final String[] FLUSS_CONFIG_PREFIXES = {"s3.", "s3a.", "fs.s3a."};
+
+    private static final String[] CREDENTIAL_PROVIDER_CONFIG_KEYS = {
+        "s3.aws.credentials.provider", "s3a.aws.credentials.provider", PROVIDER_CONFIG_NAME
+    };
 
     private static final String HADOOP_CONFIG_PREFIX = "fs.s3a.";
 
@@ -74,6 +81,12 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
     org.apache.hadoop.conf.Configuration buildHadoopConfiguration(Configuration flussConfig) {
         org.apache.hadoop.conf.Configuration hadoopConfig =
                 mirrorCertainHadoopConfig(getHadoopConfiguration(flussConfig));
+        boolean hasCredentialProvider = hasConfiguredCredentialProvider(flussConfig);
+        // Preserve whether the provider came from Fluss config. Token providers should not infer
+        // explicit server-side provider mode from Hadoop default resources.
+        hadoopConfig.setBoolean(
+                S3DelegationTokenProvider.CREDENTIAL_PROVIDER_EXPLICITLY_CONFIGURED,
+                hasCredentialProvider);
         setCredentialProvider(hadoopConfig);
         return hadoopConfig;
     }
@@ -130,27 +143,55 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
     }
 
     private void setCredentialProvider(org.apache.hadoop.conf.Configuration hadoopConfig) {
+        boolean hasCredentialProvider =
+                hadoopConfig.getBoolean(
+                        S3DelegationTokenProvider.CREDENTIAL_PROVIDER_EXPLICITLY_CONFIGURED, false);
         boolean hasStaticKeys =
                 hadoopConfig.get(ACCESS_KEY_ID) != null
                         && hadoopConfig.get(ACCESS_KEY_SECRET) != null;
         boolean hasRoleArn = hadoopConfig.get(ROLE_ARN_KEY) != null;
+
+        if (hasCredentialProvider) {
+            if (hasRoleArn) {
+                throw new IllegalArgumentException(
+                        "AssumeRole and a custom AWS credentials provider cannot be configured together.");
+            }
+            LOG.info(
+                    "Using configured AWS credential provider(s) for server-side S3 access: {}",
+                    hadoopConfig.get(PROVIDER_CONFIG_NAME));
+            return;
+        }
 
         if (hasStaticKeys || hasRoleArn) {
             LOG.info(
                     hasStaticKeys
                             ? "Using provided static credentials."
                             : "Using default AWS credential chain with AssumeRole.");
-        } else {
-            if (Objects.equals(getScheme(), "s3")) {
-                S3DelegationTokenReceiver.updateHadoopConfig(hadoopConfig);
-            } else if (Objects.equals(getScheme(), "s3a")) {
-                S3ADelegationTokenReceiver.updateHadoopConfig(hadoopConfig);
-            } else {
-                throw new IllegalArgumentException("Unsupported scheme: " + getScheme());
-            }
-            LOG.info(
-                    "Using credential provider {} for delegated tokens.",
-                    hadoopConfig.get(PROVIDER_CONFIG_NAME));
+            return;
         }
+
+        if (Objects.equals(getScheme(), "s3")) {
+            S3DelegationTokenReceiver.updateHadoopConfig(hadoopConfig);
+        } else if (Objects.equals(getScheme(), "s3a")) {
+            S3ADelegationTokenReceiver.updateHadoopConfig(hadoopConfig);
+        } else {
+            throw new IllegalArgumentException("Unsupported scheme: " + getScheme());
+        }
+        LOG.info(
+                "Using credential provider {} for delegated tokens.",
+                hadoopConfig.get(PROVIDER_CONFIG_NAME));
+    }
+
+    private boolean hasConfiguredCredentialProvider(Configuration flussConfig) {
+        if (flussConfig == null) {
+            return false;
+        }
+        Map<String, String> configMap = flussConfig.toMap();
+        for (String key : CREDENTIAL_PROVIDER_CONFIG_KEYS) {
+            if (!StringUtils.isNullOrWhitespaceOnly(configMap.get(key))) {
+                return true;
+            }
+        }
+        return false;
     }
 }

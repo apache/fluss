@@ -502,6 +502,13 @@
                                         <exclude>
                                             org.apache.fluss.flink.functions.bitmap.RbAndAggFunction.AccumulatorSerializer.AccumulatorSerializerSnapshot
                                         </exclude>
+                                        <!-- start exclude for flink action -->
+                                        <exclude>org.apache.fluss.flink.action.Action</exclude>
+                                        <exclude>org.apache.fluss.flink.action.ActionFactory</exclude>
+                                        <exclude>org.apache.fluss.flink.action.ActionLoader</exclude>
+                                        <exclude>org.apache.fluss.flink.action.FlussActionEntrypoint</exclude>
+                                        <exclude>org.apache.fluss.flink.action.orphan.*</exclude>
+                                        <!-- end exclude for flink action -->
                                         <!-- exclude flink compatibility class for catalogs -->
                                         <exclude>org.apache.flink.table.catalog.*</exclude>
                                     </excludes>

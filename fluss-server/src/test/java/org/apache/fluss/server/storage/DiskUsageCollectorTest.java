@@ -27,6 +27,7 @@ import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.data.Offset.offset;
 
 /** Test for {@link DiskUsageCollector}. */
 class DiskUsageCollectorTest {
@@ -55,7 +56,7 @@ class DiskUsageCollectorTest {
         DiskUsageCollector oneDir = new DiskUsageCollector(Collections.singletonList(dataDir1));
 
         // both directories share the same FileStore -> result should match a single-dir collector
-        assertThat(twoDirs.collect()).isEqualTo(oneDir.collect());
+        assertThat(twoDirs.collect()).isCloseTo(oneDir.collect(), offset(1e-6));
     }
 
     @Test

@@ -582,14 +582,14 @@ class AutoPartitionManagerTest {
     }
 
     /**
-     * Test if AutoPartionManager.createPartition adheres to maxBucketLimit while adding new
-     * parition automatically, skip if it breaches limit.
+     * Test if AutoPartitionManager.createPartition applies maxBucketLimit per partition while
+     * adding new partition automatically.
      */
     @Test
-    void testMaxBucketNum() throws Exception {
+    void testMaxBucketNumPerPartition() throws Exception {
 
         int bucketCountPerPartition = 10;
-        int maxBucketNum = 30; // Allow only 3 partitions with 10 buckets each
+        int maxBucketNum = 30;
 
         Configuration config = new Configuration();
         config.set(ConfigOptions.MAX_BUCKET_NUM, maxBucketNum);
@@ -626,16 +626,15 @@ class AutoPartitionManagerTest {
         periodicExecutor.triggerNonPeriodicScheduledTask();
 
         int partitionsNum = zookeeperClient.getPartitionNumber(tablePath);
-        // Only 3 partitions should be created (3 * 10 = 30 buckets) out of the 4 requested
-        assertThat(partitionsNum).isEqualTo(3);
+        // All 4 requested partitions should be created because each partition is below the limit.
+        assertThat(partitionsNum).isEqualTo(4);
 
         // Advance time to trigger another auto-partition cycle
         clock.advanceTime(Duration.ofDays(1).plusHours(23));
         periodicExecutor.triggerPeriodicScheduledTasks();
 
-        // Check partitions again - should still have only 3 due to bucket limit
         partitionsNum = zookeeperClient.getPartitionNumber(tablePath);
-        assertThat(partitionsNum).isEqualTo(3);
+        assertThat(partitionsNum).isEqualTo(5);
     }
 
     @Test

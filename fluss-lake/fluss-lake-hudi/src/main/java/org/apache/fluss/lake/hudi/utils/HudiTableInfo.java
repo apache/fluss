@@ -111,10 +111,12 @@ public class HudiTableInfo implements AutoCloseable {
             HoodieTableFileSystemView fileSystemView = null;
             HoodieTableMetaClient metaClient = createMetaClient(basePath, hudiConfig);
             HoodieTimeline completedTimeline =
-                    metaClient.getCommitsTimeline().filterCompletedInstants();
+                    metaClient.getCommitsAndCompactionTimeline().filterCompletedInstants();
             HoodieEngineContext engineContext =
                     new HoodieLocalEngineContext(metaClient.getStorageConf());
             try {
+                // The source planner gates readable snapshots with completedTimeline. The file
+                // system view still needs pending compaction instants as MOR file-slice boundaries.
                 HoodieTimeline fileSystemViewTimeline =
                         metaClient
                                 .getCommitsAndCompactionTimeline()

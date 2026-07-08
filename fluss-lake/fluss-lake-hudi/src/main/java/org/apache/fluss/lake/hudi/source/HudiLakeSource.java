@@ -18,6 +18,8 @@
 package org.apache.fluss.lake.hudi.source;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.hudi.utils.FlussToHudiExpressionPredicateConverter;
+import org.apache.fluss.lake.hudi.utils.HudiTableInfo;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.Planner;
@@ -25,10 +27,18 @@ import org.apache.fluss.lake.source.RecordReader;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.Predicate;
 
+import org.apache.hudi.common.model.HoodieTableType;
+import org.apache.hudi.org.apache.avro.Schema;
+import org.apache.hudi.source.ExpressionPredicates;
+import org.apache.hudi.util.StreamerUtil;
+
+import javax.annotation.Nullable;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 
 /** Hudi implementation of {@link LakeSource}. */
 public class HudiLakeSource implements LakeSource<HudiSplit> {
@@ -37,6 +47,8 @@ public class HudiLakeSource implements LakeSource<HudiSplit> {
 
     private final Configuration hudiConfig;
     private final TablePath tablePath;
+    private @Nullable int[][] project;
+    private List<ExpressionPredicates.Predicate> predicates = Collections.emptyList();
 
     public HudiLakeSource(Configuration hudiConfig, TablePath tablePath) {
         this.hudiConfig = hudiConfig;
@@ -45,7 +57,7 @@ public class HudiLakeSource implements LakeSource<HudiSplit> {
 
     @Override
     public void withProject(int[][] project) {
-        // Projection is applied by the Hudi record reader, which is not implemented yet.
+        this.project = project;
     }
 
     @Override
@@ -55,7 +67,32 @@ public class HudiLakeSource implements LakeSource<HudiSplit> {
 
     @Override
     public FilterPushDownResult withFilters(List<Predicate> predicates) {
-        return FilterPushDownResult.of(Collections.emptyList(), new ArrayList<>(predicates));
+        if (predicates.isEmpty()) {
+            this.predicates = Collections.emptyList();
+            return FilterPushDownResult.of(Collections.emptyList(), Collections.emptyList());
+        }
+
+        List<Predicate> remainingPredicates = new ArrayList<>();
+        List<Predicate> acceptedPredicates = new ArrayList<>();
+        List<ExpressionPredicates.Predicate> convertedPredicates = new ArrayList<>();
+
+        Schema hudiSchema = getHudiSchema();
+        for (Predicate predicate : predicates) {
+            Optional<ExpressionPredicates.Predicate> convertedPredicate =
+                    FlussToHudiExpressionPredicateConverter.convert(hudiSchema, predicate);
+            if (convertedPredicate.isPresent()) {
+                acceptedPredicates.add(predicate);
+                convertedPredicates.add(convertedPredicate.get());
+            } else {
+                remainingPredicates.add(predicate);
+            }
+        }
+
+        this.predicates =
+                convertedPredicates.isEmpty()
+                        ? Collections.emptyList()
+                        : Collections.unmodifiableList(new ArrayList<>(convertedPredicates));
+        return FilterPushDownResult.of(acceptedPredicates, remainingPredicates);
     }
 
     @Override
@@ -65,12 +102,42 @@ public class HudiLakeSource implements LakeSource<HudiSplit> {
 
     @Override
     public RecordReader createRecordReader(ReaderContext<HudiSplit> context) throws IOException {
-        throw new UnsupportedOperationException(
-                "Hudi lake source does not support record reading yet.");
+        try {
+            if (context.requireSortedRecords()) {
+                if (!shouldUseSortedRecordReader()) {
+                    throw new UnsupportedOperationException(
+                            "Hudi lake source can not provide sorted records for "
+                                    + tablePath
+                                    + ". Sorted records are only supported for MERGE_ON_READ tables"
+                                    + " whose projection contains all Hudi record key fields.");
+                }
+                return new HudiSortedRecordReader(
+                        hudiConfig, tablePath, context.lakeSplit(), project, predicates);
+            }
+            return new HudiRecordReader(
+                    hudiConfig, tablePath, context.lakeSplit(), project, predicates);
+        } catch (Exception e) {
+            throw new IOException("Fail to create Hudi record reader for " + tablePath + ".", e);
+        }
     }
 
     @Override
     public SimpleVersionedSerializer<HudiSplit> getSplitSerializer() {
         return new HudiSplitSerializer();
+    }
+
+    private Schema getHudiSchema() {
+        try (HudiTableInfo hudiTableInfo = HudiTableInfo.create(tablePath, hudiConfig)) {
+            return StreamerUtil.getTableAvroSchema(hudiTableInfo.getMetaClient(), true);
+        } catch (Exception e) {
+            throw new RuntimeException("Fail to get Hudi schema for " + tablePath + ".", e);
+        }
+    }
+
+    private boolean shouldUseSortedRecordReader() throws IOException {
+        try (HudiTableInfo hudiTableInfo = HudiTableInfo.create(tablePath, hudiConfig)) {
+            return hudiTableInfo.getTableType() == HoodieTableType.MERGE_ON_READ
+                    && HudiSortedRecordReader.canSortByRecordKey(hudiTableInfo, project);
+        }
     }
 }

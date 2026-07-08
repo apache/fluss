@@ -1,0 +1,10 @@
+# Elixir build artifacts
+_build/
+deps/
+
+# Generated NIF shared library
+priv/native/
+priv/plts/
+
+# Crash dumps
+erl_crash.dump

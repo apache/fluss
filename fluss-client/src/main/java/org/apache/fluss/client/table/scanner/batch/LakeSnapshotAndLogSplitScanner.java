@@ -188,10 +188,10 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
         List<RecordReader> recordReaders = new ArrayList<>();
         if (lakeSplits == null || lakeSplits.isEmpty()) {
             // pass null split to get rowComparator
-            recordReaders.add(lakeSource.createRecordReader(() -> null));
+            recordReaders.add(lakeSource.createRecordReader(sortedReaderContext(null)));
         } else {
             for (LakeSplit lakeSplit : lakeSplits) {
-                recordReaders.add(lakeSource.createRecordReader(() -> lakeSplit));
+                recordReaders.add(lakeSource.createRecordReader(sortedReaderContext(lakeSplit)));
             }
         }
         for (RecordReader reader : recordReaders) {
@@ -204,6 +204,21 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
             lakeRecordIterators.add(reader.read());
         }
         lakeRecordIteratorsInitialized = true;
+    }
+
+    private LakeSource.ReaderContext<LakeSplit> sortedReaderContext(@Nullable LakeSplit lakeSplit) {
+        return new LakeSource.ReaderContext<LakeSplit>() {
+            @Nullable
+            @Override
+            public LakeSplit lakeSplit() {
+                return lakeSplit;
+            }
+
+            @Override
+            public boolean requireSortedRecords() {
+                return true;
+            }
+        };
     }
 
     private void pollLogRecords(Duration timeout) {

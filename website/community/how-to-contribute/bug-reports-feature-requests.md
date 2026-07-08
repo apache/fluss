@@ -13,7 +13,7 @@ Considerations before opening an issue:
 
 - Make sure that the issue corresponds to a genuine bug or enhancement request. Exceptions are made for typos in documentation files, which can be reported directly.
 
-- Provide a clear and descriptive title. Use component labels (such as `component=server`, `component=client`, `component=connector`, `component=docs`) to help categorize your issue and make it easier to filter and search.
+- Provide a clear and descriptive title. Use component labels (such as `component=server`, `component=client`, `component=connector`, `component=rust`, `component=docs`) to help categorize your issue and make it easier to filter and search.
 
 - Fill out the issue template to describe the problem or enhancement clearly. Please describe it such that maintainers understand the context and impact from the description, not only from reproduction steps.
 

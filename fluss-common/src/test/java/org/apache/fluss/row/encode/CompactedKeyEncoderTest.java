@@ -17,12 +17,17 @@
 
 package org.apache.fluss.row.encode;
 
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.compacted.CompactedRowDeserializer;
 import org.apache.fluss.row.compacted.CompactedRowReader;
+import org.apache.fluss.row.encode.hudi.HudiKeyEncoder;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.row.indexed.IndexedRowTest;
 import org.apache.fluss.row.indexed.IndexedRowWriter;
@@ -81,6 +86,36 @@ class CompactedKeyEncoderTest {
                         encodedBytes);
         assertThat(encodedKey.getFieldCount()).isEqualTo(1);
         assertThat(encodedKey.getString(0).toString()).isEqualTo("a2");
+    }
+
+    @Test
+    void testBucketKeyEncoderReusesPrimaryKeyEncoderWhenCompatible() {
+        RowType rowType = RowType.of(new DataType[] {DataTypes.INT()}, new String[] {"id"});
+        List<String> primaryKeys = Collections.singletonList("id");
+        KeyEncoder primaryKeyEncoder = CompactedKeyEncoder.createKeyEncoder(rowType, primaryKeys);
+
+        assertThat(
+                        KeyEncoder.ofBucketKeyEncoder(
+                                rowType, primaryKeys, tableConfig(), true, primaryKeyEncoder))
+                .isSameAs(primaryKeyEncoder);
+    }
+
+    @Test
+    void testHudiBucketKeyEncoderDoesNotReusePrimaryKeyEncoder() {
+        RowType rowType = RowType.of(new DataType[] {DataTypes.INT()}, new String[] {"id"});
+        List<String> primaryKeys = Collections.singletonList("id");
+        KeyEncoder primaryKeyEncoder = CompactedKeyEncoder.createKeyEncoder(rowType, primaryKeys);
+
+        KeyEncoder bucketKeyEncoder =
+                KeyEncoder.ofBucketKeyEncoder(
+                        rowType,
+                        primaryKeys,
+                        tableConfig(DataLakeFormat.HUDI),
+                        true,
+                        primaryKeyEncoder);
+
+        assertThat(bucketKeyEncoder).isInstanceOf(HudiKeyEncoder.class);
+        assertThat(bucketKeyEncoder).isNotSameAs(primaryKeyEncoder);
     }
 
     @Test
@@ -178,5 +213,15 @@ class CompactedKeyEncoderTest {
         GenericRow genericRow = new GenericRow(dataTypes.length);
         compactedRowDeserializer.deserialize(compactedRowReader, genericRow);
         return genericRow;
+    }
+
+    private static TableConfig tableConfig() {
+        return new TableConfig(new Configuration());
+    }
+
+    private static TableConfig tableConfig(DataLakeFormat dataLakeFormat) {
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.TABLE_DATALAKE_FORMAT, dataLakeFormat);
+        return new TableConfig(configuration);
     }
 }

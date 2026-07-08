@@ -85,8 +85,8 @@ Download the Fluss Flink connector JAR from the [Dependencies](#dependencies) se
 cp fluss-flink-1.20-$FLUSS_VERSION$.jar <FLINK_HOME>/lib/
 ```
 :::note
-If you use [Amazon S3](http://aws.amazon.com/s3/), [Aliyun OSS](https://www.aliyun.com/product/oss) or [HDFS(Hadoop Distributed File System)](https://hadoop.apache.org/docs/stable/) as Fluss's [remote storage](maintenance/tiered-storage/remote-storage.md),
-you should download the corresponding Fluss filesystem JAR (see [Filesystems](../maintenance/filesystems/overview.md)) and also copy it to the lib directory of your Flink home.
+If you use [Amazon S3](http://aws.amazon.com/s3/), [Aliyun OSS](https://www.aliyun.com/product/oss) or [HDFS(Hadoop Distributed File System)](https://hadoop.apache.org/docs/stable/) as Fluss's [remote storage](../maintenance/tiered-storage/remote-storage.md),
+you should download the corresponding [Fluss filesystem jar](/downloads#filesystem-jars) and also copy it to the lib directory of your Flink home.
 :::
 
 - **Start a local cluster**

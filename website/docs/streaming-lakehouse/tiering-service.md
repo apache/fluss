@@ -1,0 +1,102 @@
+---
+title: "Tiering Service"
+sidebar_position: 2
+---
+
+# Tiering Service
+
+The Tiering Service continuously compacts real-time data from Fluss into the configured lake format (Paimon, Iceberg, or Lance) for cost-efficient long-term storage and analytics.
+
+## Overview
+
+The Tiering Service is implemented as an Apache Flink job that:
+- Reads records from Fluss tables with lakehouse storage enabled
+- Writes data to the configured data lake format (Paimon, Iceberg, or Lance)
+- Maintains exactly-once semantics between Fluss and the data lake
+- Operates incrementally, syncing only missing data segments
+
+For deployment instructions, see [Deploying Streaming Lakehouse](../install-deploy/deploying-streaming-lakehouse.md).
+
+## Architecture
+
+The Tiering Service consists of three Flink operators:
+
+| Operator | Description |
+|----------|-------------|
+| **TieringSource** | Reads records from Fluss and writes to the data lake via LakeWriter |
+| **TieringCommitter** | Commits batches and advances offsets in both Fluss and lake |
+| **No-Op Sink** | Dummy sink required by Flink's topology |
+
+### How It Works
+
+1. **Enumerator** sends heartbeat to Fluss CoordinatorService, receives table metadata
+2. **SplitGenerator** calculates data delta between Fluss offsets and lake snapshot offsets
+3. **Splits** are created for missing data ranges and assigned to readers
+4. **Readers** fetch records from Fluss tablet servers, write via LakeWriter
+5. **Committer** performs two-phase commit: first to lake, then updates Fluss coordinator
+6. Cycle repeats based on `table.datalake.freshness` interval
+
+### Split Types
+
+| Table Type | Split Type | Description |
+|------------|------------|-------------|
+| Log Table (append-only) | TieringLogSplit | Defines starting and stopping offsets for a contiguous range |
+| Primary Key Table | TieringSnapshotSplit | References snapshot ID and log offset for CDC replay |
+
+## Configuration Options
+
+### Tiering Service Options
+
+The tiering job is a standalone Flink job, and its arguments fall into three groups:
+
+- `--fluss.*` — Fluss client configuration, e.g. `--fluss.bootstrap.servers localhost:9123`
+- `--datalake.<format>.*` — lake catalog/storage configuration; Fluss strips the `datalake.<format>.` prefix before passing the remaining keys to the lake connector
+- `--lake.tiering.*` — tiering job-level configuration, e.g. `--lake.tiering.auto-expire-snapshot true`
+
+For example:
+
+```shell
+${FLINK_HOME}/bin/flink run \
+    -Dparallelism.default=3 \
+    /path/to/fluss-flink-tiering-$FLUSS_VERSION$.jar \
+    --fluss.bootstrap.servers localhost:9123 \
+    --datalake.format paimon \
+    --datalake.paimon.metastore filesystem \
+    --datalake.paimon.warehouse /tmp/paimon \
+    --lake.tiering.auto-expire-snapshot true
+```
+
+The following `--lake.tiering.*` options are set when starting the tiering job:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `lake.tiering.auto-expire-snapshot` | Boolean | false | Auto-trigger snapshot expiration on commit |
+
+### Table-Level Options
+
+The following `table.datalake.*` options are configured per table when creating or altering tables, not on the tiering job:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `table.datalake.enabled` | Boolean | false | Enable lakehouse storage for this table |
+| `table.datalake.freshness` | Duration | 3min | Maximum lag between Fluss and lake data |
+| `table.datalake.auto-compaction` | Boolean | false | Auto-trigger compaction in the data lake |
+| `table.datalake.auto-expire-snapshot` | Boolean | false | Auto-expire snapshots in the data lake |
+
+## Scaling
+
+The Tiering Service is stateless and can be scaled by adjusting Flink parallelism:
+
+```shell
+${FLINK_HOME}/bin/flink run \
+    -Dparallelism.default=6 \
+    /path/to/fluss-flink-tiering-$FLUSS_VERSION$.jar \
+    --fluss.bootstrap.servers localhost:9123 \
+    ...
+```
+
+Multiple tiering service jobs can run simultaneously. They are coordinated by the Fluss cluster to ensure exactly-once semantics and automatic load balancing.
+
+## Monitoring
+
+Key metrics for monitoring the Tiering Service are available through Flink's metrics system. See [Monitoring Metrics](../maintenance/observability/monitor-metrics.md#tiering-service-metrics) for details on lakehouse tiering metrics.

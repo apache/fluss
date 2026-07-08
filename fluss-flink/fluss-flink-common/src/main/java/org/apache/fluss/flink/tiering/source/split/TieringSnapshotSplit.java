@@ -62,8 +62,58 @@ public class TieringSnapshotSplit extends TieringSplit {
             long snapshotId,
             long logOffsetOfSnapshot,
             int numberOfSplits,
+            int splitIndex,
+            long tieringRoundTimestamp) {
+        this(
+                tablePath,
+                tableBucket,
+                partitionName,
+                snapshotId,
+                logOffsetOfSnapshot,
+                numberOfSplits,
+                false,
+                splitIndex,
+                tieringRoundTimestamp);
+    }
+
+    public TieringSnapshotSplit(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            @Nullable String partitionName,
+            long snapshotId,
+            long logOffsetOfSnapshot,
+            int numberOfSplits,
             boolean skipCurrentRound) {
-        super(tablePath, tableBucket, partitionName, numberOfSplits, skipCurrentRound);
+        this(
+                tablePath,
+                tableBucket,
+                partitionName,
+                snapshotId,
+                logOffsetOfSnapshot,
+                numberOfSplits,
+                skipCurrentRound,
+                UNKNOWN_SPLIT_INDEX,
+                UNKNOWN_TIERING_ROUND_TIMESTAMP);
+    }
+
+    public TieringSnapshotSplit(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            @Nullable String partitionName,
+            long snapshotId,
+            long logOffsetOfSnapshot,
+            int numberOfSplits,
+            boolean skipCurrentRound,
+            int splitIndex,
+            long tieringRoundTimestamp) {
+        super(
+                tablePath,
+                tableBucket,
+                partitionName,
+                numberOfSplits,
+                skipCurrentRound,
+                splitIndex,
+                tieringRoundTimestamp);
         this.snapshotId = snapshotId;
         this.logOffsetOfSnapshot = logOffsetOfSnapshot;
     }
@@ -99,11 +149,16 @@ public class TieringSnapshotSplit extends TieringSplit {
                 + snapshotId
                 + ", logOffsetOfSnapshot="
                 + logOffsetOfSnapshot
+                + ", splitIndex="
+                + splitIndex
+                + ", tieringRoundTimestamp="
+                + tieringRoundTimestamp
                 + '}';
     }
 
     @Override
-    public TieringSnapshotSplit copy(int numberOfSplits) {
+    public TieringSnapshotSplit copy(
+            int numberOfSplits, int splitIndex, long tieringRoundTimestamp) {
         return new TieringSnapshotSplit(
                 tablePath,
                 tableBucket,
@@ -111,7 +166,9 @@ public class TieringSnapshotSplit extends TieringSplit {
                 snapshotId,
                 logOffsetOfSnapshot,
                 numberOfSplits,
-                skipCurrentRound);
+                skipCurrentRound,
+                splitIndex,
+                tieringRoundTimestamp);
     }
 
     @Override

@@ -447,12 +447,15 @@ public class TieringSplitReader<WriteResult>
             long lastWrittenTimestamp =
                     handler.handleRecords(
                             records,
-                            () ->
-                                    getOrCreateLakeWriter(
-                                            bucket,
-                                            currentTableSplitsByBucket
-                                                    .get(bucket)
-                                                    .getPartitionName()),
+                            () -> {
+                                TieringSplit split =
+                                        checkNotNull(currentTableSplitsByBucket.get(bucket));
+                                return getOrCreateLakeWriter(
+                                        bucket,
+                                        split.getPartitionName(),
+                                        split.getSplitIndex(),
+                                        split.getTieringRoundTimestamp());
+                            },
                             stoppingOffset);
 
             // The split owns offsets before stoppingOffset only. If the scanner consumed past
@@ -589,7 +592,11 @@ public class TieringSplitReader<WriteResult>
     }
 
     private LakeWriter<WriteResult> getOrCreateLakeWriter(
-            TableBucket bucket, @Nullable String partitionName) throws IOException {
+            TableBucket bucket,
+            @Nullable String partitionName,
+            int splitIndex,
+            long tieringRoundTimestamp)
+            throws IOException {
         LakeWriter<WriteResult> lakeWriter = lakeWriters.get(bucket);
         if (lakeWriter == null) {
             lakeWriter =
@@ -598,7 +605,9 @@ public class TieringSplitReader<WriteResult>
                                     currentTablePath,
                                     bucket,
                                     partitionName,
-                                    currentTable.getTableInfo()));
+                                    currentTable.getTableInfo(),
+                                    splitIndex,
+                                    tieringRoundTimestamp));
             lakeWriters.put(bucket, lakeWriter);
         }
         return lakeWriter;
@@ -683,7 +692,10 @@ public class TieringSplitReader<WriteResult>
             if (lakeWriter == null) {
                 lakeWriter =
                         getOrCreateLakeWriter(
-                                bucket, checkNotNull(currentSnapshotSplit).getPartitionName());
+                                bucket,
+                                checkNotNull(currentSnapshotSplit).getPartitionName(),
+                                currentSnapshotSplit.getSplitIndex(),
+                                currentSnapshotSplit.getTieringRoundTimestamp());
             }
             lakeWriter.write(scanRecord);
             if (scanRecord.getSizeInBytes() > 0) {
