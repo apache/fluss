@@ -17,13 +17,9 @@
 
 package org.apache.fluss.lake.paimon.tiering;
 
-import org.apache.fluss.lake.paimon.source.FlussRowAsPaimonRow;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecord;
-import org.apache.fluss.row.GenericRow;
-import org.apache.fluss.types.DataTypeRoot;
-import org.apache.fluss.utils.PartitionUtils;
 
 import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.table.sink.CommitMessage;
@@ -34,6 +30,7 @@ import javax.annotation.Nullable;
 
 import java.util.List;
 
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonPartition;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** A base interface to write {@link LogRecord} to Paimon. */
@@ -94,26 +91,6 @@ public abstract class RecordWriter<T> implements AutoCloseable {
             org.apache.fluss.types.RowType flussRowType) {
         ResolvedPartitionSpec spec =
                 ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName);
-        List<String> partitionValues = spec.getPartitionValues();
-
-        // Build a GenericRow with partition column values at their correct positions.
-        // The row field count must match the Paimon RowType (business columns + system columns)
-        // so that FlussRowAsPaimonRow aligns with the Paimon schema.
-        GenericRow partitionRow = new GenericRow(tableRowType.getFieldCount());
-
-        for (int i = 0; i < partitionKeys.size(); i++) {
-            String partitionKey = partitionKeys.get(i);
-            int fieldIndex = flussRowType.getFieldIndex(partitionKey);
-            checkState(
-                    fieldIndex >= 0,
-                    "Partition key '%s' not found in Fluss row type.",
-                    partitionKey);
-            DataTypeRoot typeRoot = flussRowType.getTypeAt(fieldIndex).getTypeRoot();
-            Object typedValue = PartitionUtils.parseValueOfType(partitionValues.get(i), typeRoot);
-            partitionRow.setField(fieldIndex, typedValue);
-        }
-
-        FlussRowAsPaimonRow paimonRow = new FlussRowAsPaimonRow(partitionRow, tableRowType);
-        return tableWrite.getPartition(paimonRow);
+        return toPaimonPartition(spec, flussRowType, tableRowType, tableWrite::getPartition);
     }
 }

@@ -157,6 +157,13 @@ public class ConfigOptions {
                     .withDescription(
                             "The default size of the write buffer for writing the local files to remote file systems.");
 
+    public static final ConfigOption<String> IO_TMP_DIR =
+            key("io.tmpdir")
+                    .stringType()
+                    .defaultValue(System.getProperty("java.io.tmpdir") + "/fluss")
+                    .withDescription(
+                            "Local directory used by Fluss components to store temporary files.");
+
     public static final ConfigOption<List<String>> PLUGIN_ALWAYS_PARENT_FIRST_LOADER_PATTERNS =
             key("plugin.classloader.parent-first-patterns.default")
                     .stringType()

@@ -22,6 +22,8 @@ import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.TablePath;
 
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+
 /**
  * The LakeStorage interface defines how to implement lakehouse storage system such as Paimon and
  * Iceberg. It provides a method to create a lake tiering factory.
@@ -50,4 +52,36 @@ public interface LakeStorage {
      * @return a configured lake source instance for the specified table
      */
     LakeSource<?> createLakeSource(TablePath tablePath);
+
+    /**
+     * Creates a table-level point lookuper for the specified lake table.
+     *
+     * @param tablePath the logical path identifying the table in the lakehouse storage
+     * @param context runtime context for creating the lookuper
+     * @return a table-level point lookuper
+     */
+    default LakeTableLookuper createLakeTableLookuper(
+            TablePath tablePath, LookuperContext context) {
+        throw new UnsupportedOperationException(
+                "Point lookup is not supported for this lake storage.");
+    }
+
+    /** Runtime context for creating a lake table lookuper. */
+    final class LookuperContext {
+        private final String ioTmpDir;
+
+        /**
+         * Creates a lookuper context.
+         *
+         * @param ioTmpDir local directory for temporary files used by the lookuper
+         */
+        public LookuperContext(String ioTmpDir) {
+            this.ioTmpDir = checkNotNull(ioTmpDir, "ioTmpDir must not be null.");
+        }
+
+        /** Returns the local directory for temporary files used by the lookuper. */
+        public String ioTmpDir() {
+            return ioTmpDir;
+        }
+    }
 }
