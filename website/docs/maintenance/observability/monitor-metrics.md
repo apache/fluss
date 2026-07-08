@@ -892,7 +892,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     </tr>
     <tr>
       <td>pendingRecordsLag</td>
-      <td>The backlog-aware lag for committed records pending lake tiering for this table bucket, in milliseconds. It is 0 when there are no committed records pending lake tiering.</td>
+      <td>The elapsed time, in milliseconds, since the oldest committed record in this table bucket became pending for lake tiering. Returns 0 when no committed records are pending lake tiering.</td>
       <td>Gauge</td>
     </tr>
     <tr>
