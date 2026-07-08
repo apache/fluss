@@ -90,6 +90,20 @@ public class SimpleWatermarkExtractor implements WatermarkExtractor {
         String rowtimeColumn = null;
         String watermarkIndex = null;
 
+        long definitionCount =
+                props.keySet().stream()
+                        .filter(
+                                k ->
+                                        k.startsWith(WATERMARK_PROPERTY_PREFIX)
+                                                && k.endsWith(WATERMARK_ROWTIME_SUFFIX))
+                        .count();
+        if (definitionCount > 1) {
+            LOG.warn(
+                    "There are more than 1 watermark definition for {}, which is not supported for watermark extraction.",
+                    tableInfo.getTablePath());
+            return null;
+        }
+
         for (Map.Entry<String, String> entry : props.entrySet()) {
             String key = entry.getKey();
             if (key.startsWith(WATERMARK_PROPERTY_PREFIX)
@@ -100,12 +114,6 @@ public class SimpleWatermarkExtractor implements WatermarkExtractor {
                         key.substring(
                                 WATERMARK_PROPERTY_PREFIX.length(),
                                 key.length() - WATERMARK_ROWTIME_SUFFIX.length());
-                if (!String.valueOf(0).equals(watermarkIndex)) {
-                    LOG.warn(
-                            "There are more than 1 watermark definition for {}, which is not supported for watermark extraction.",
-                            tableInfo.getTablePath());
-                    return null;
-                }
                 break;
             }
         }

@@ -242,6 +242,8 @@ public class TieringCommitOperator<WriteResult extends LakeWriteResult, Committa
                 if (writeResultWatermark == null) {
                     continue;
                 }
+                // Simply takes the minimum watermark, relying on lake committer to ensure the
+                // watermark does not regress
                 watermark =
                         watermark == null
                                 ? writeResultWatermark
