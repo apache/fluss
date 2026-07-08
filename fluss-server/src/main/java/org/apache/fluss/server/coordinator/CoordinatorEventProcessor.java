@@ -403,7 +403,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                             server,
                             registration.getRack(),
                             registration.getEndpoints(),
-                            ServerType.TABLET_SERVER);
+                            ServerType.TABLET_SERVER,
+                            registration.getResource());
             // Get internal listener endpoint to send request to tablet server.
             Endpoint internalEndpoint = serverInfo.endpoint(internalListenerName);
             if (internalEndpoint == null) {

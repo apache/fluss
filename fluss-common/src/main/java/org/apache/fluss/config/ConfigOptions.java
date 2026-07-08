@@ -319,6 +319,14 @@ public class ConfigOptions {
                                     + "This default is capped to reduce the risk that an assignment znode exceeds "
                                     + "ZooKeeper's packet size limit.");
 
+    public static final ConfigOption<MemorySize> KV_LEADER_REPLICA_MEMORY_RESERVED =
+            key("kv.leader-replica.memory-reserved")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("8mb"))
+                    .withDescription(
+                            "The reserved memory for one KV leader replica. Coordinator uses this "
+                                    + "value to calculate the cluster-level KV leader replica capacity.");
+
     /**
      * The network address and port the server binds to for accepting connections.
      *
@@ -589,6 +597,22 @@ public class ConfigOptions {
                     .withDescription(
                             "The rack for the tabletServer. This will be used in rack aware bucket assignment "
                                     + "for fault tolerance. Examples: `RACK1`, `cn-hangzhou-server10`");
+
+    public static final ConfigOption<Double> TABLET_SERVER_RESOURCE_CPU_CORES =
+            key("tablet-server.resource.cpu-cores")
+                    .doubleType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The CPU cores of this tablet server. If not configured, the tablet server "
+                                    + "will try to detect it from cgroup or JVM runtime.");
+
+    public static final ConfigOption<MemorySize> TABLET_SERVER_RESOURCE_MEMORY_SIZE =
+            key("tablet-server.resource.memory-size")
+                    .memoryType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The memory size of this tablet server. If not configured, the tablet server "
+                                    + "will try to detect it from cgroup or operating system information.");
 
     public static final ConfigOption<String> DATA_DIR =
             key("data.dir")

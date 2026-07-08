@@ -22,6 +22,7 @@ import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
 import org.apache.fluss.exception.PartitionAlreadyExistsException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.TooManyBucketsException;
@@ -30,6 +31,7 @@ import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.remote.RemoteDirDynamicLoader;
+import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
@@ -91,6 +93,7 @@ public class AutoPartitionManager implements AutoCloseable {
     private final ServerMetadataCache metadataCache;
     private final MetadataManager metadataManager;
     private final RemoteDirDynamicLoader remoteDirDynamicLoader;
+    private final KvLeaderReplicaCapacityManager kvLeaderReplicaCapacityManager;
     private final Clock clock;
 
     private final long periodicInterval;
@@ -121,6 +124,21 @@ public class AutoPartitionManager implements AutoCloseable {
                 metadataManager,
                 remoteDirDynamicLoader,
                 conf,
+                new KvLeaderReplicaCapacityManager(conf, new CoordinatorMetadataCache()));
+    }
+
+    public AutoPartitionManager(
+            ServerMetadataCache metadataCache,
+            MetadataManager metadataManager,
+            RemoteDirDynamicLoader remoteDirDynamicLoader,
+            Configuration conf,
+            KvLeaderReplicaCapacityManager kvLeaderReplicaCapacityManager) {
+        this(
+                metadataCache,
+                metadataManager,
+                remoteDirDynamicLoader,
+                conf,
+                kvLeaderReplicaCapacityManager,
                 SystemClock.getInstance(),
                 // TODO: Reuse the CoordinatorServer shared scheduler for this lightweight
                 // coordinator periodic task instead of creating a component-owned scheduler.
@@ -136,9 +154,29 @@ public class AutoPartitionManager implements AutoCloseable {
             Configuration conf,
             Clock clock,
             ScheduledExecutorService periodicExecutor) {
+        this(
+                metadataCache,
+                metadataManager,
+                remoteDirDynamicLoader,
+                conf,
+                new KvLeaderReplicaCapacityManager(conf, new CoordinatorMetadataCache()),
+                clock,
+                periodicExecutor);
+    }
+
+    @VisibleForTesting
+    AutoPartitionManager(
+            ServerMetadataCache metadataCache,
+            MetadataManager metadataManager,
+            RemoteDirDynamicLoader remoteDirDynamicLoader,
+            Configuration conf,
+            KvLeaderReplicaCapacityManager kvLeaderReplicaCapacityManager,
+            Clock clock,
+            ScheduledExecutorService periodicExecutor) {
         this.metadataCache = metadataCache;
         this.metadataManager = metadataManager;
         this.remoteDirDynamicLoader = remoteDirDynamicLoader;
+        this.kvLeaderReplicaCapacityManager = kvLeaderReplicaCapacityManager;
         this.clock = clock;
         this.periodicExecutor = periodicExecutor;
         this.periodicInterval = conf.get(ConfigOptions.AUTO_PARTITION_CHECK_INTERVAL).toMillis();
@@ -382,8 +420,7 @@ public class AutoPartitionManager implements AutoCloseable {
             }
 
             dropPartitions(
-                    tablePath,
-                    tableInfo.getPartitionKeys(),
+                    tableInfo,
                     now,
                     tableInfo.getTableConfig().getAutoPartitionStrategy(),
                     currentPartitions);
@@ -412,7 +449,13 @@ public class AutoPartitionManager implements AutoCloseable {
             long tableId = tableInfo.getTableId();
             int replicaFactor = tableInfo.getTableConfig().getReplicationFactor();
             TabletServerInfo[] servers = metadataCache.getLiveServers();
+            long newKvLeaderReplicaCount =
+                    tableInfo.hasPrimaryKey() ? tableInfo.getNumBuckets() : 0;
+            boolean capacityIncreased = false;
             try {
+                kvLeaderReplicaCapacityManager.checkAndIncrease(newKvLeaderReplicaCount);
+                capacityIncreased = newKvLeaderReplicaCount > 0;
+
                 Map<Integer, BucketAssignment> bucketAssignments =
                         generateAssignment(tableInfo.getNumBuckets(), replicaFactor, servers)
                                 .getBucketAssignments();
@@ -434,25 +477,43 @@ public class AutoPartitionManager implements AutoCloseable {
                         "Auto partitioning skip to create partition {} for table [{}] as the partition is exist.",
                         partition,
                         tablePath);
+                rollbackKvLeaderReplicaCapacity(capacityIncreased, newKvLeaderReplicaCount);
             } catch (TooManyPartitionsException t) {
                 LOG.warn(
                         "Auto partitioning skip to create partition {} for table [{}], "
                                 + "because exceed the maximum number of partitions.",
                         partition,
                         tablePath);
+                rollbackKvLeaderReplicaCapacity(capacityIncreased, newKvLeaderReplicaCount);
             } catch (TooManyBucketsException t) {
                 LOG.warn(
                         "Auto partitioning skip to create partition {} for table [{}], "
                                 + "because exceed the maximum number of buckets per partition.",
                         partition,
                         tablePath);
+                rollbackKvLeaderReplicaCapacity(capacityIncreased, newKvLeaderReplicaCount);
+            } catch (InsufficientKvLeaderReplicaCapacityException t) {
+                LOG.warn(
+                        "Auto partitioning skip to create partition {} for table [{}], "
+                                + "because {}",
+                        partition,
+                        tablePath,
+                        t.getMessage());
             } catch (Exception e) {
                 LOG.error(
                         "Auto partitioning failed to create partition {} for table [{}].",
                         partition,
                         tablePath,
                         e);
+                rollbackKvLeaderReplicaCapacity(capacityIncreased, newKvLeaderReplicaCount);
             }
+        }
+    }
+
+    private void rollbackKvLeaderReplicaCapacity(
+            boolean capacityIncreased, long kvLeaderReplicaCount) {
+        if (capacityIncreased) {
+            kvLeaderReplicaCapacityManager.decrease(kvLeaderReplicaCount);
         }
     }
 
@@ -481,11 +542,12 @@ public class AutoPartitionManager implements AutoCloseable {
     }
 
     private void dropPartitions(
-            TablePath tablePath,
-            List<String> partitionKeys,
+            TableInfo tableInfo,
             Instant currentInstant,
             AutoPartitionStrategy autoPartitionStrategy,
             NavigableMap<String, Set<String>> currentPartitions) {
+        TablePath tablePath = tableInfo.getTablePath();
+        List<String> partitionKeys = tableInfo.getPartitionKeys();
         int numToRetain = autoPartitionStrategy.numToRetain();
         // negative value means not to drop partitions
         if (numToRetain < 0) {
@@ -528,16 +590,21 @@ public class AutoPartitionManager implements AutoCloseable {
             while (dropIterator.hasNext()) {
                 String partitionName = dropIterator.next();
                 // drop the partition
+                boolean partitionDropped = true;
                 try {
                     metadataManager.dropPartition(
                             tablePath,
                             ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName),
                             false);
                 } catch (PartitionNotExistException e) {
+                    partitionDropped = false;
                     LOG.info(
                             "Auto partitioning skip to delete partition {} for table [{}] as the partition is not exist.",
                             partitionName,
                             tablePath);
+                }
+                if (partitionDropped && tableInfo.hasPrimaryKey()) {
+                    kvLeaderReplicaCapacityManager.decrease(tableInfo.getNumBuckets());
                 }
 
                 // only remove when zk success, this reflects to the partitionsByTable

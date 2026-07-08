@@ -18,6 +18,7 @@
 package org.apache.fluss.server.zk.data;
 
 import org.apache.fluss.cluster.Endpoint;
+import org.apache.fluss.server.metadata.TabletServerResource;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.fluss.utils.json.JsonSerdeTestBase;
@@ -49,16 +50,24 @@ public class TabletServerRegistrationJsonSerdeTest
                         Endpoint.fromListenersString(
                                 "CLIENT://localhost:2345,FLUSS://127.0.0.1:2346"),
                         10000);
+        TabletServerRegistration tabletServerRegistration3 =
+                new TabletServerRegistration(
+                        "cn-hangzhou-server10",
+                        Endpoint.fromListenersString(
+                                "CLIENT://localhost:2345,FLUSS://127.0.0.1:2346"),
+                        10000,
+                        new TabletServerResource(8.0, 1024L));
         return new TabletServerRegistration[] {
-            tabletServerRegistration1, tabletServerRegistration2
+            tabletServerRegistration1, tabletServerRegistration2, tabletServerRegistration3
         };
     }
 
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            "{\"version\":3,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000}",
-            "{\"version\":3,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000,\"rack\":\"cn-hangzhou-server10\"}"
+            "{\"version\":4,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000}",
+            "{\"version\":4,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000,\"rack\":\"cn-hangzhou-server10\"}",
+            "{\"version\":4,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\",\"register_timestamp\":10000,\"rack\":\"cn-hangzhou-server10\",\"cpu_cores\":8.0,\"memory_bytes\":1024}"
         };
     }
 
@@ -90,6 +99,23 @@ public class TabletServerRegistrationJsonSerdeTest
         expectedTabletServerRegistration =
                 new TabletServerRegistration(
                         null,
+                        Endpoint.fromListenersString(
+                                "CLIENT://localhost:2345,FLUSS://127.0.0.1:2346"),
+                        10000);
+        assertEquals(tabletServerRegistration, expectedTabletServerRegistration);
+
+        // compatibility with version 3
+        JsonNode jsonInVersion3 =
+                new ObjectMapper()
+                        .readTree(
+                                ("{\"version\":3,\"listeners\":\"CLIENT://localhost:2345,FLUSS://127.0.0.1:2346\","
+                                                + "\"register_timestamp\":10000,\"rack\":\"cn-hangzhou-server10\"}")
+                                        .getBytes(StandardCharsets.UTF_8));
+        tabletServerRegistration =
+                TabletServerRegistrationJsonSerde.INSTANCE.deserialize(jsonInVersion3);
+        expectedTabletServerRegistration =
+                new TabletServerRegistration(
+                        "cn-hangzhou-server10",
                         Endpoint.fromListenersString(
                                 "CLIENT://localhost:2345,FLUSS://127.0.0.1:2346"),
                         10000);

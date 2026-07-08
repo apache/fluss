@@ -23,15 +23,18 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
+import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -95,11 +98,13 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.config.ConfigOptions.CURRENT_KV_FORMAT_VERSION;
 import static org.apache.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createPartition;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newAlterTableRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newCreateDatabaseRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newCreateTableRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDatabaseExistsRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDropDatabaseRequest;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDropPartitionRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDropTableRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newGetTableInfoRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newListTablesRequest;
@@ -842,6 +847,10 @@ class TableManagerITCase {
                 .build();
     }
 
+    private static PartitionSpec partitionSpec(String dt) {
+        return new PartitionSpec(Collections.singletonMap("dt", dt));
+    }
+
     private static List<PbAddColumn> alterTableAddColumns() {
         List<PbAddColumn> addColumns = new ArrayList<>();
         PbAddColumn newNestedColumn = new PbAddColumn();
@@ -914,6 +923,98 @@ class TableManagerITCase {
     }
 
     // Test methods for table creation restrictions
+
+    @Test
+    void testKvLeaderReplicaCapacityRestriction() throws Exception {
+        Configuration conf = initConf();
+        conf.set(ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED, new MemorySize(1));
+        conf.set(ConfigOptions.TABLET_SERVER_RESOURCE_MEMORY_SIZE, new MemorySize(3));
+        FlussClusterExtension limitedCluster =
+                FlussClusterExtension.builder()
+                        .setNumOfTabletServers(1)
+                        .setClusterConf(conf)
+                        .build();
+
+        try {
+            limitedCluster.start();
+
+            AdminGateway gateway = limitedCluster.newCoordinatorClient();
+            TablePath firstTablePath = TablePath.of("fluss", "kv_capacity_first");
+            TablePath secondTablePath = TablePath.of("fluss", "kv_capacity_second");
+            gateway.createTable(newCreateTableRequest(firstTablePath, newPkTable(), false)).get();
+
+            assertThatThrownBy(
+                            () ->
+                                    gateway.createTable(
+                                                    newCreateTableRequest(
+                                                            secondTablePath,
+                                                            newPkTable().withBucketCount(1),
+                                                            false))
+                                            .get())
+                    .cause()
+                    .isInstanceOf(InsufficientKvLeaderReplicaCapacityException.class)
+                    .hasMessageContaining("currentKvLeaderReplicaCount=3")
+                    .hasMessageContaining("newKvLeaderReplicaCount=1")
+                    .hasMessageContaining("kvLeaderReplicaCapacity=3");
+
+            gateway.dropTable(newDropTableRequest("fluss", "kv_capacity_first", false)).get();
+            gateway.createTable(
+                            newCreateTableRequest(
+                                    secondTablePath, newPkTable().withBucketCount(1), false))
+                    .get();
+
+            assertThat(gateway.tableExists(newTableExistsRequest(secondTablePath)).get().isExists())
+                    .isTrue();
+        } finally {
+            limitedCluster.close();
+        }
+    }
+
+    @Test
+    void testKvLeaderReplicaCapacityRestrictionForPartitionedTable() throws Exception {
+        Configuration conf = initConf();
+        conf.set(ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED, new MemorySize(1));
+        conf.set(ConfigOptions.TABLET_SERVER_RESOURCE_MEMORY_SIZE, new MemorySize(3));
+        FlussClusterExtension limitedCluster =
+                FlussClusterExtension.builder()
+                        .setNumOfTabletServers(1)
+                        .setClusterConf(conf)
+                        .build();
+
+        try {
+            limitedCluster.start();
+
+            AdminGateway gateway = limitedCluster.newCoordinatorClient();
+            TablePath tablePath = TablePath.of("fluss", "partitioned_kv_capacity");
+            TableDescriptor tableDescriptor =
+                    newPartitionedTableBuilder(null)
+                            .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(), "false")
+                            .build();
+            gateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
+
+            PartitionSpec firstPartition = partitionSpec("20260707");
+            PartitionSpec secondPartition = partitionSpec("20260708");
+            createPartition(limitedCluster, tablePath, firstPartition, false);
+
+            assertThatThrownBy(
+                            () ->
+                                    createPartition(
+                                            limitedCluster, tablePath, secondPartition, false))
+                    .cause()
+                    .isInstanceOf(InsufficientKvLeaderReplicaCapacityException.class)
+                    .hasMessageContaining("currentKvLeaderReplicaCount=3")
+                    .hasMessageContaining("newKvLeaderReplicaCount=3")
+                    .hasMessageContaining("kvLeaderReplicaCapacity=3");
+
+            gateway.dropPartition(newDropPartitionRequest(tablePath, firstPartition, false)).get();
+            createPartition(limitedCluster, tablePath, secondPartition, false);
+
+            assertThat(limitedCluster.getZooKeeperClient().getPartition(tablePath, "20260708"))
+                    .isPresent();
+        } finally {
+            limitedCluster.close();
+        }
+    }
 
     @Test
     void testLogTableCreationRestriction() throws Exception {

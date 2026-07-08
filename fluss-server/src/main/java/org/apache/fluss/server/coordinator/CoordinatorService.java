@@ -34,6 +34,7 @@ import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
+import org.apache.fluss.exception.PartitionAlreadyExistsException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.TableAlreadyExistException;
@@ -178,7 +179,6 @@ import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
-import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.server.zk.data.producer.ProducerOffsets;
@@ -257,6 +257,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final KvSnapshotLeaseManager kvSnapshotLeaseManager;
     private final CoordinatorLeaderElection coordinatorLeaderElection;
     private final RemoteDirDynamicLoader remoteDirDynamicLoader;
+    private final KvLeaderReplicaCapacityManager kvLeaderReplicaCapacityManager;
 
     public CoordinatorService(
             Configuration conf,
@@ -272,7 +273,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             DynamicConfigManager dynamicConfigManager,
             ExecutorService ioExecutor,
             KvSnapshotLeaseManager kvSnapshotLeaseManager,
-            CoordinatorLeaderElection coordinatorLeaderElection) {
+            CoordinatorLeaderElection coordinatorLeaderElection,
+            KvLeaderReplicaCapacityManager kvLeaderReplicaCapacityManager) {
         super(
                 remoteFileSystem,
                 ServerType.COORDINATOR,
@@ -305,6 +307,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         this.kvSnapshotLeaseManager = kvSnapshotLeaseManager;
         this.coordinatorLeaderElection = coordinatorLeaderElection;
+        this.kvLeaderReplicaCapacityManager = kvLeaderReplicaCapacityManager;
     }
 
     @Override
@@ -447,6 +450,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         DropDatabaseResponse response = new DropDatabaseResponse();
         metadataManager.dropDatabase(
                 request.getDatabaseName(), request.isIgnoreIfNotExists(), request.isCascade());
+        if (request.isCascade()) {
+            kvLeaderReplicaCapacityManager.rebuildCurrentCount(metadataManager);
+        }
         return CompletableFuture.completedFuture(response);
     }
 
@@ -485,6 +491,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         // the distribution and bucket count must be set now
         //noinspection OptionalGetWithoutIsPresent
         int bucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
+        long newKvLeaderReplicaCount = getNewKvLeaderReplicaCount(tableDescriptor);
 
         // first, generate the assignment
         TableAssignment tableAssignment = null;
@@ -496,6 +503,88 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             tableAssignment = generateAssignment(bucketCount, replicaFactor, servers);
         }
 
+        if (request.isIgnoreIfExists() && metadataManager.tableExists(tablePath)) {
+            return CompletableFuture.completedFuture(new CreateTableResponse());
+        }
+
+        boolean capacityIncreased = false;
+        try {
+            kvLeaderReplicaCapacityManager.checkAndIncrease(newKvLeaderReplicaCount);
+            capacityIncreased = newKvLeaderReplicaCount > 0;
+
+            createLakeTableIfNeeded(tablePath, tableDescriptor, lakeCatalogContainer);
+
+            // select remote data dir for table.
+            // remote data dir will be used to store table data for non-partitioned table and
+            // metadata (such as lake snapshot offset file) for partitioned table
+            String remoteDataDir = remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
+
+            // then create table;
+            long tableId =
+                    metadataManager.createTable(
+                            tablePath,
+                            remoteDataDir,
+                            tableDescriptor,
+                            tableAssignment,
+                            request.isIgnoreIfExists());
+            if (tableId < 0 && capacityIncreased) {
+                kvLeaderReplicaCapacityManager.decrease(newKvLeaderReplicaCount);
+            }
+        } catch (RuntimeException | Error e) {
+            if (capacityIncreased) {
+                kvLeaderReplicaCapacityManager.decrease(newKvLeaderReplicaCount);
+            }
+            throw e;
+        }
+
+        return CompletableFuture.completedFuture(new CreateTableResponse());
+    }
+
+    private long getNewKvLeaderReplicaCount(TableDescriptor tableDescriptor) {
+        if (!tableDescriptor.hasPrimaryKey() || tableDescriptor.isPartitioned()) {
+            return 0;
+        }
+        // the distribution and bucket count must be set now
+        //noinspection OptionalGetWithoutIsPresent
+        return tableDescriptor.getTableDistribution().get().getBucketCount().get();
+    }
+
+    private long getExistingKvLeaderReplicaCount(TableInfo tableInfo) {
+        if (!tableInfo.hasPrimaryKey()) {
+            return 0;
+        }
+        if (!tableInfo.isPartitioned()) {
+            return tableInfo.getNumBuckets();
+        }
+        return (long) metadataManager.getPartitions(tableInfo.getTablePath()).size()
+                * tableInfo.getNumBuckets();
+    }
+
+    private static void throwPartitionAlreadyExists(
+            TablePath tablePath, ResolvedPartitionSpec partition) {
+        throw new PartitionAlreadyExistsException(
+                String.format(
+                        "Partition '%s' already exists for table %s",
+                        partition.getPartitionQualifiedName(), tablePath));
+    }
+
+    private static void throwPartitionNotExist(
+            TablePath tablePath, ResolvedPartitionSpec partition) {
+        throw new PartitionNotExistException(
+                String.format(
+                        "Partition '%s' does not exist for table %s",
+                        partition.getPartitionQualifiedName(), tablePath));
+    }
+
+    private static boolean partitionExists(
+            Set<String> partitions, ResolvedPartitionSpec partitionSpec) {
+        return partitions.contains(partitionSpec.getPartitionName());
+    }
+
+    private void createLakeTableIfNeeded(
+            TablePath tablePath,
+            TableDescriptor tableDescriptor,
+            LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer) {
         // before create table in fluss, we may create in lake
         if (isDataLakeEnabled(tableDescriptor)) {
             try {
@@ -512,21 +601,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 throw new LakeTableAlreadyExistException(e.getMessage(), e);
             }
         }
-
-        // select remote data dir for table.
-        // remote data dir will be used to store table data for non-partitioned table and metadata
-        // (such as lake snapshot offset file) for partitioned table
-        String remoteDataDir = remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
-
-        // then create table;
-        metadataManager.createTable(
-                tablePath,
-                remoteDataDir,
-                tableDescriptor,
-                tableAssignment,
-                request.isIgnoreIfExists());
-
-        return CompletableFuture.completedFuture(new CreateTableResponse());
     }
 
     @Override
@@ -704,7 +778,22 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         authorizeTable(OperationType.DROP, tablePath);
 
         DropTableResponse response = new DropTableResponse();
-        metadataManager.dropTable(tablePath, request.isIgnoreIfNotExists());
+        if (!metadataManager.tableExists(tablePath)) {
+            metadataManager.dropTable(tablePath, request.isIgnoreIfNotExists());
+            return CompletableFuture.completedFuture(response);
+        }
+
+        long removedKvLeaderReplicaCount =
+                getExistingKvLeaderReplicaCount(metadataManager.getTable(tablePath));
+        try {
+            metadataManager.dropTable(tablePath, false);
+        } catch (TableNotExistException e) {
+            if (request.isIgnoreIfNotExists()) {
+                return CompletableFuture.completedFuture(response);
+            }
+            throw e;
+        }
+        kvLeaderReplicaCapacityManager.decrease(removedKvLeaderReplicaCount);
         return CompletableFuture.completedFuture(response);
     }
 
@@ -715,44 +804,72 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         authorizeTable(OperationType.WRITE, tablePath);
 
         CreatePartitionResponse response = new CreatePartitionResponse();
-        TableRegistration table = metadataManager.getTableRegistration(tablePath);
-        if (!table.isPartitioned()) {
+        TableInfo tableInfo = metadataManager.getTable(tablePath);
+        if (!tableInfo.isPartitioned()) {
             throw new TableNotPartitionedException(
                     "Only partitioned table support create partition.");
         }
 
         // first, validate the partition spec, and get resolved partition spec.
         PartitionSpec partitionSpec = getPartitionSpec(request.getPartitionSpec());
-        validatePartitionSpec(tablePath, table.partitionKeys, partitionSpec, true);
+        validatePartitionSpec(tablePath, tableInfo.getPartitionKeys(), partitionSpec, true);
 
         // second, check whether the partition is out-of-date.
         validateAutoPartitionTime(
                 partitionSpec,
-                table.partitionKeys,
-                table.getTableConfig().getAutoPartitionStrategy());
+                tableInfo.getPartitionKeys(),
+                tableInfo.getTableConfig().getAutoPartitionStrategy());
 
         ResolvedPartitionSpec partitionToCreate =
-                ResolvedPartitionSpec.fromPartitionSpec(table.partitionKeys, partitionSpec);
+                ResolvedPartitionSpec.fromPartitionSpec(
+                        tableInfo.getPartitionKeys(), partitionSpec);
+        Set<String> existingPartitions = metadataManager.getPartitions(tablePath);
+        if (partitionExists(existingPartitions, partitionToCreate)) {
+            if (request.isIgnoreIfNotExists()) {
+                return CompletableFuture.completedFuture(response);
+            }
+            throwPartitionAlreadyExists(tablePath, partitionToCreate);
+        }
 
-        // third, generate the PartitionAssignment.
-        int replicaFactor = table.getTableConfig().getReplicationFactor();
-        TabletServerInfo[] servers = metadataCache.getLiveServers();
-        Map<Integer, BucketAssignment> bucketAssignments =
-                generateAssignment(table.bucketCount, replicaFactor, servers)
-                        .getBucketAssignments();
-        PartitionAssignment partitionAssignment =
-                new PartitionAssignment(table.tableId, bucketAssignments);
+        long newKvLeaderReplicaCount = tableInfo.hasPrimaryKey() ? tableInfo.getNumBuckets() : 0;
+        boolean capacityIncreased = false;
+        try {
+            kvLeaderReplicaCapacityManager.checkAndIncrease(newKvLeaderReplicaCount);
+            capacityIncreased = newKvLeaderReplicaCount > 0;
 
-        // select remote data dir for partition
-        String remoteDataDir = remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
+            // third, generate the PartitionAssignment.
+            int replicaFactor = tableInfo.getTableConfig().getReplicationFactor();
+            TabletServerInfo[] servers = metadataCache.getLiveServers();
+            Map<Integer, BucketAssignment> bucketAssignments =
+                    generateAssignment(tableInfo.getNumBuckets(), replicaFactor, servers)
+                            .getBucketAssignments();
+            PartitionAssignment partitionAssignment =
+                    new PartitionAssignment(tableInfo.getTableId(), bucketAssignments);
 
-        metadataManager.createPartition(
-                tablePath,
-                table.tableId,
-                remoteDataDir,
-                partitionAssignment,
-                partitionToCreate,
-                request.isIgnoreIfNotExists());
+            // select remote data dir for partition
+            String remoteDataDir = remoteDirDynamicLoader.getRemoteDirSelector().nextDataDir();
+
+            metadataManager.createPartition(
+                    tablePath,
+                    tableInfo.getTableId(),
+                    remoteDataDir,
+                    partitionAssignment,
+                    partitionToCreate,
+                    false);
+        } catch (PartitionAlreadyExistsException e) {
+            if (capacityIncreased) {
+                kvLeaderReplicaCapacityManager.decrease(newKvLeaderReplicaCount);
+            }
+            if (request.isIgnoreIfNotExists()) {
+                return CompletableFuture.completedFuture(response);
+            }
+            throw e;
+        } catch (RuntimeException | Error e) {
+            if (capacityIncreased) {
+                kvLeaderReplicaCapacityManager.decrease(newKvLeaderReplicaCount);
+            }
+            throw e;
+        }
         return CompletableFuture.completedFuture(response);
     }
 
@@ -762,19 +879,37 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         authorizeTable(OperationType.WRITE, tablePath);
 
         DropPartitionResponse response = new DropPartitionResponse();
-        TableRegistration table = metadataManager.getTableRegistration(tablePath);
-        if (!table.isPartitioned()) {
+        TableInfo tableInfo = metadataManager.getTable(tablePath);
+        if (!tableInfo.isPartitioned()) {
             throw new TableNotPartitionedException(
                     "Only partitioned table support drop partition.");
         }
 
         // first, validate the partition spec.
         PartitionSpec partitionSpec = getPartitionSpec(request.getPartitionSpec());
-        validatePartitionSpec(tablePath, table.partitionKeys, partitionSpec, false);
+        validatePartitionSpec(tablePath, tableInfo.getPartitionKeys(), partitionSpec, false);
         ResolvedPartitionSpec partitionToDrop =
-                ResolvedPartitionSpec.fromPartitionSpec(table.partitionKeys, partitionSpec);
+                ResolvedPartitionSpec.fromPartitionSpec(
+                        tableInfo.getPartitionKeys(), partitionSpec);
+        Set<String> existingPartitions = metadataManager.getPartitions(tablePath);
+        if (!partitionExists(existingPartitions, partitionToDrop)) {
+            if (request.isIgnoreIfNotExists()) {
+                return CompletableFuture.completedFuture(response);
+            }
+            throwPartitionNotExist(tablePath, partitionToDrop);
+        }
 
-        metadataManager.dropPartition(tablePath, partitionToDrop, request.isIgnoreIfNotExists());
+        try {
+            metadataManager.dropPartition(tablePath, partitionToDrop, false);
+        } catch (PartitionNotExistException e) {
+            if (request.isIgnoreIfNotExists()) {
+                return CompletableFuture.completedFuture(response);
+            }
+            throw e;
+        }
+        if (tableInfo.hasPrimaryKey()) {
+            kvLeaderReplicaCapacityManager.decrease(tableInfo.getNumBuckets());
+        }
         return CompletableFuture.completedFuture(response);
     }
 

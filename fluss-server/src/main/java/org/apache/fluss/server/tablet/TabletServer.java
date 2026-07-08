@@ -45,6 +45,7 @@ import org.apache.fluss.server.kv.snapshot.DefaultCompletedKvSnapshotCommitter;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
+import org.apache.fluss.server.metadata.TabletServerResource;
 import org.apache.fluss.server.metrics.ServerMetricUtils;
 import org.apache.fluss.server.metrics.UserMetrics;
 import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
@@ -380,9 +381,13 @@ public class TabletServer extends ServerBase {
     private void registerTabletServer() throws Exception {
         long startTime = System.currentTimeMillis();
         List<Endpoint> bindEndpoints = rpcServer.getBindEndpoints();
+        TabletServerResource tabletServerResource = new TabletServerResourceProbe(conf).probe();
         TabletServerRegistration tabletServerRegistration =
                 new TabletServerRegistration(
-                        rack, Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf), startTime);
+                        rack,
+                        Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf),
+                        startTime,
+                        tabletServerResource);
 
         while (true) {
             try {
