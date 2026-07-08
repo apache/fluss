@@ -40,7 +40,7 @@ import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metrics.ServerMetricUtils;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.metrics.group.LakeTieringMetricGroup;
-import org.apache.fluss.server.storage.DiskWriteLimitRatioValidator;
+import org.apache.fluss.server.storage.DiskWriteLimitConfigValidator;
 import org.apache.fluss.server.zk.ZkEpoch;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperUtils;
@@ -299,7 +299,7 @@ public class CoordinatorServer extends ServerBase {
             dynamicConfigManager.register(lakeCatalogDynamicLoader);
             dynamicConfigManager.register(remoteDirDynamicLoader);
             // Register stateless validators for coordinator-side upfront validation
-            dynamicConfigManager.registerValidator(new DiskWriteLimitRatioValidator());
+            dynamicConfigManager.register(new DiskWriteLimitConfigValidator());
             rpcServer.getServerReconfigurables().forEach(dynamicConfigManager::register);
             dynamicConfigManager.startup();
 

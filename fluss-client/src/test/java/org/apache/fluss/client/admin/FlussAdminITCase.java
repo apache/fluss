@@ -1680,9 +1680,8 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                         .get())
                 .cause()
                 .isInstanceOf(ConfigException.class)
-                .hasMessageContaining("must be within (0.1, 1.0]");
-
-        // Invalid value: 0.1 (boundary, must be > 0.1)
+                .hasMessageContaining("Invalid disk write-limit configuration");
+        // Invalid value: 0.05 (boundary, must be > 0.05)
         assertThatThrownBy(
                         () ->
                                 admin.alterClusterConfigs(
@@ -1691,12 +1690,12 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                                                 ConfigOptions
                                                                         .SERVER_DATA_DISK_WRITE_LIMIT_RATIO
                                                                         .key(),
-                                                                "0.1",
+                                                                "0.05",
                                                                 AlterConfigOpType.SET)))
                                         .get())
                 .cause()
                 .isInstanceOf(ConfigException.class)
-                .hasMessageContaining("must be within (0.1, 1.0]");
+                .hasMessageContaining("Invalid disk write-limit configuration");
 
         // Invalid value: 1.5 (must be <= 1.0)
         assertThatThrownBy(
@@ -1712,7 +1711,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                         .get())
                 .cause()
                 .isInstanceOf(ConfigException.class)
-                .hasMessageContaining("must be within (0.1, 1.0]");
+                .hasMessageContaining("Invalid disk write-limit configuration");
 
         // Reset should succeed (restores default)
         admin.alterClusterConfigs(

@@ -34,6 +34,7 @@ import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.within;
 
 /** Test for {@link LocalDiskManager}. */
 class LocalDiskManagerTest {
@@ -356,6 +357,40 @@ class LocalDiskManagerTest {
         assertThatThrownBy(() -> LocalDiskManager.create(conf))
                 .isInstanceOf(LogStorageException.class)
                 .hasMessageContaining("None of the specified data dirs");
+    }
+
+    @Test
+    void testDiskWriteLimitConfigValidation() throws Exception {
+        File dataDir = new File(tempDir, "data-1");
+
+        try (LocalDiskManager localDiskManager = LocalDiskManager.create(createConf(dataDir))) {
+            assertThat(localDiskManager.getDiskWriteLimitRatio()).isEqualTo(0.85);
+            assertThat(localDiskManager.getDiskWriteLimitRecoverGap()).isEqualTo(0.05);
+            assertThat(localDiskManager.getDiskUsageMonitor().getRecoverThreshold())
+                    .isCloseTo(0.80, within(1e-9));
+        }
+
+        Configuration disabledRatioConf = createConf(new File(tempDir, "disabled-ratio"));
+        disabledRatioConf.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 1.0);
+        try (LocalDiskManager localDiskManager = LocalDiskManager.create(disabledRatioConf)) {
+            localDiskManager.getDiskUsageMonitor().update(1.0);
+            assertThat(localDiskManager.isDiskWriteLocked()).isFalse();
+        }
+
+        Configuration invalidRatioConf = createConf(new File(tempDir, "invalid-ratio"));
+        invalidRatioConf.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 1.1);
+        assertThatThrownBy(() -> LocalDiskManager.create(invalidRatioConf))
+                .isInstanceOf(IllegalConfigurationException.class);
+
+        Configuration zeroRecoverGapConf = createConf(new File(tempDir, "zero-gap"));
+        zeroRecoverGapConf.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP, 0.0);
+        assertThatThrownBy(() -> LocalDiskManager.create(zeroRecoverGapConf))
+                .isInstanceOf(IllegalConfigurationException.class);
+
+        Configuration equalRecoverGapConf = createConf(new File(tempDir, "equal-gap"));
+        equalRecoverGapConf.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP, 0.85);
+        assertThatThrownBy(() -> LocalDiskManager.create(equalRecoverGapConf))
+                .isInstanceOf(IllegalConfigurationException.class);
     }
 
     private Configuration createConf(File... dataDirs) {

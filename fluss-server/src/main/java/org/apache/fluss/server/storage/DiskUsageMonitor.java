@@ -30,21 +30,19 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * Periodically samples the local data disk usage ratio and toggles the tablet server write-lock
- * state with a fixed 10% hysteresis: writes are locked when the usage reaches the configured
- * write-limit ratio and resume only after the usage drops below {@code (limit - 0.10)}. The monitor
- * is single-state and intended to be driven by a scheduler thread; it never blocks.
+ * state with a configurable hysteresis: writes are locked when the usage reaches the configured
+ * write-limit ratio and resume only after the usage drops below {@code (limit - recoverGap)}. The
+ * monitor is single-state and intended to be driven by a scheduler thread; it never blocks.
  */
 @Internal
 public final class DiskUsageMonitor {
-
-    /** Fixed hysteresis between the lock and unlock thresholds. */
-    public static final double RECOVER_GAP = 0.10;
 
     private static final Logger LOG = LoggerFactory.getLogger(DiskUsageMonitor.class);
 
     private final int serverId;
     private final DiskUsageCollector collector;
     private volatile double writeLimitRatio;
+    private volatile double recoverGap;
     private volatile double recoverThreshold;
     private final Listener listener;
 
@@ -52,16 +50,17 @@ public final class DiskUsageMonitor {
     private volatile double lastUsageRatio;
 
     public DiskUsageMonitor(
-            int serverId, DiskUsageCollector collector, double writeLimitRatio, Listener listener) {
-        checkArgument(
-                writeLimitRatio > 0.0 && writeLimitRatio <= 1.0,
-                "%s must be within (0.0, 1.0], but was %s",
-                "server.data-disk.write-limit-ratio",
-                writeLimitRatio);
+            int serverId,
+            DiskUsageCollector collector,
+            double writeLimitRatio,
+            double recoverGap,
+            Listener listener) {
+        checkValidWriteLimitConfig(writeLimitRatio, recoverGap);
         this.serverId = serverId;
         this.collector = checkNotNull(collector, "collector");
         this.writeLimitRatio = writeLimitRatio;
-        this.recoverThreshold = Math.max(0.0, writeLimitRatio - RECOVER_GAP);
+        this.recoverGap = recoverGap;
+        this.recoverThreshold = writeLimitRatio - recoverGap;
         this.listener = checkNotNull(listener, "listener");
     }
 
@@ -137,23 +136,43 @@ public final class DiskUsageMonitor {
         return writeLimitRatio;
     }
 
+    public double getRecoverGap() {
+        return recoverGap;
+    }
+
     public double getRecoverThreshold() {
         return recoverThreshold;
     }
 
     /**
-     * Dynamically updates the write-limit ratio and the derived recover threshold. The new ratio
-     * takes effect on the next {@link #runOnce()} invocation or {@link #update(double)} call.
+     * Dynamically updates the write-limit ratio, recover gap and the derived recover threshold. The
+     * new values take effect on the next {@link #runOnce()} invocation or {@link #update(double)}
+     * call.
      *
-     * @param newRatio the new write-limit ratio, must be within (0.0, 1.0]
+     * @param newRatio the new write-limit ratio, must be within (recoverGap, 1.0]
+     * @param newRecoverGap the new recover gap, must be within (0.0, writeLimitRatio)
+     */
+    public void updateWriteLimitConfig(double newRatio, double newRecoverGap) {
+        checkValidWriteLimitConfig(newRatio, newRecoverGap);
+        this.writeLimitRatio = newRatio;
+        this.recoverGap = newRecoverGap;
+        this.recoverThreshold = newRatio - newRecoverGap;
+    }
+
+    /**
+     * Dynamically updates the write-limit ratio while keeping the current recover gap.
+     *
+     * @param newRatio the new write-limit ratio, must be greater than the current recover gap and
+     *     no greater than 1.0
      */
     public void updateWriteLimitRatio(double newRatio) {
-        checkArgument(
-                newRatio > 0.0 && newRatio <= 1.0,
-                "server.data-disk.write-limit-ratio must be within (0.0, 1.0], but was %s",
-                newRatio);
-        this.writeLimitRatio = newRatio;
-        this.recoverThreshold = Math.max(0.0, newRatio - RECOVER_GAP);
+        updateWriteLimitConfig(newRatio, recoverGap);
+    }
+
+    private static void checkValidWriteLimitConfig(double writeLimitRatio, double recoverGap) {
+        String validationError =
+                DiskWriteLimitConfigValidator.getValidationError(writeLimitRatio, recoverGap);
+        checkArgument(validationError == null, validationError);
     }
 
     /** Receives every sample for downstream state synchronization (e.g. metrics gauges). */

@@ -385,10 +385,24 @@ public class ConfigOptions {
                     .doubleType()
                     .defaultValue(0.85)
                     .withDescription(
-                            "Reject writes when the tablet server data disk usage exceeds this ratio. "
-                                    + "Writes resume after the usage drops below (ratio - 0.10). "
+                            "Reject writes when the tablet server data disk usage reaches this ratio. "
+                                    + "Writes resume after the usage drops below "
+                                    + "(server.data-disk.write-limit-ratio - "
+                                    + "server.data-disk.write-limit-recover-gap). "
                                     + "Set to 1.0 to disable the disk-usage protection entirely. "
-                                    + "The valid range is (0.1, 1.0].");
+                                    + "The valid range is "
+                                    + "(server.data-disk.write-limit-recover-gap, 1.0].");
+
+    public static final ConfigOption<Double> SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP =
+            key("server.data-disk.write-limit-recover-gap")
+                    .doubleType()
+                    .defaultValue(0.05)
+                    .withDescription(
+                            "The hysteresis gap between the data disk write-limit ratio and the "
+                                    + "recover threshold. Writes resume after the disk usage drops "
+                                    + "below (server.data-disk.write-limit-ratio - "
+                                    + "server.data-disk.write-limit-recover-gap). The valid range "
+                                    + "is (0, server.data-disk.write-limit-ratio).");
 
     public static final ConfigOption<Duration> SERVER_DATA_DISK_CHECK_INTERVAL =
             key("server.data-disk.check-interval")

@@ -55,6 +55,7 @@ import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS;
 import static org.apache.fluss.config.ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO;
 import static org.apache.fluss.config.ConfigOptions.SERVER_SASL_CREDENTIALS;
 import static org.apache.fluss.config.ConfigOptions.SERVER_SASL_PLAIN_JAAS_CONFIG;
+import static org.apache.fluss.config.ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP;
 import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
 import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 
@@ -75,6 +76,7 @@ class DynamicServerConfig {
                             LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER.key(),
                             KV_SHARED_RATE_LIMITER_BYTES_PER_SEC.key(),
                             KV_SNAPSHOT_INTERVAL.key(),
+                            SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP.key(),
                             SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
                             // Config options for remote.data.dirs
                             REMOTE_DATA_DIRS.key(),

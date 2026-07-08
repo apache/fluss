@@ -102,11 +102,16 @@ public final class LocalDiskManager implements Closeable, ServerReconfigurable {
     /**
      * Configured high-water-mark ratio: writes are rejected once any single backing {@link
      * java.nio.file.FileStore}'s usage ratio reaches this value. Writes resume after the usage
-     * drops below {@code diskWriteLimitRatio - 0.10} (the recover gap is owned by {@link
-     * DiskUsageMonitor}). This field is volatile because it can be changed at runtime via dynamic
-     * reconfiguration.
+     * drops below {@code diskWriteLimitRatio - diskWriteLimitRecoverGap}. This field is volatile
+     * because it can be changed at runtime via dynamic reconfiguration.
      */
     private volatile double diskWriteLimitRatio;
+
+    /**
+     * Configured gap between the write-limit ratio and the recover threshold. This field is
+     * volatile because it can be changed at runtime via dynamic reconfiguration.
+     */
+    private volatile double diskWriteLimitRecoverGap;
 
     /**
      * Whether the local tablet server is currently rejecting writes because the data disk usage has
@@ -124,23 +129,14 @@ public final class LocalDiskManager implements Closeable, ServerReconfigurable {
 
     private LocalDiskManager(Configuration conf) throws IOException {
         this.serverId = conf.getInt(ConfigOptions.TABLET_SERVER_ID);
-        List<File> configuredDataDirs = resolveConfiguredDataDirs(conf);
-        List<File> initializedDataDirs;
-        try {
-            initializedDataDirs = initializeDataDirs(configuredDataDirs);
-        } catch (Throwable throwable) {
-            close();
-            throw throwable;
-        }
-        this.dataDirs = Collections.unmodifiableList(initializedDataDirs);
-
         this.diskWriteLimitRatio = conf.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO);
-        if (diskWriteLimitRatio <= 0.0 || diskWriteLimitRatio > 1.0) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "%s must be within (0.0, 1.0], but was %s",
-                            ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
-                            diskWriteLimitRatio));
+        this.diskWriteLimitRecoverGap =
+                conf.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP);
+        String diskWriteLimitValidationError =
+                DiskWriteLimitConfigValidator.getValidationError(
+                        diskWriteLimitRatio, diskWriteLimitRecoverGap);
+        if (diskWriteLimitValidationError != null) {
+            throw new IllegalConfigurationException(diskWriteLimitValidationError);
         }
         this.diskCheckIntervalMs =
                 conf.get(ConfigOptions.SERVER_DATA_DISK_CHECK_INTERVAL).toMillis();
@@ -151,11 +147,22 @@ public final class LocalDiskManager implements Closeable, ServerReconfigurable {
                             ConfigOptions.SERVER_DATA_DISK_CHECK_INTERVAL.key(),
                             diskCheckIntervalMs));
         }
+
+        List<File> configuredDataDirs = resolveConfiguredDataDirs(conf);
+        List<File> initializedDataDirs;
+        try {
+            initializedDataDirs = initializeDataDirs(configuredDataDirs);
+        } catch (Throwable throwable) {
+            close();
+            throw throwable;
+        }
+        this.dataDirs = Collections.unmodifiableList(initializedDataDirs);
         this.diskUsageMonitor =
                 new DiskUsageMonitor(
                         serverId,
                         new DiskUsageCollector(this.dataDirs),
                         diskWriteLimitRatio,
+                        diskWriteLimitRecoverGap,
                         (usage, locked) -> {
                             this.lastDiskUsageRatio = usage;
                             this.diskWriteLocked = locked;
@@ -498,6 +505,13 @@ public final class LocalDiskManager implements Closeable, ServerReconfigurable {
     }
 
     /**
+     * @return the configured gap between the write-limit ratio and the recover threshold.
+     */
+    public double getDiskWriteLimitRecoverGap() {
+        return diskWriteLimitRecoverGap;
+    }
+
+    /**
      * Throws {@link DiskWriteLockedException} when the local data disk usage has crossed the
      * configured write-limit ratio. Only client-driven writes ({@code appendLog} / {@code putKv})
      * should call this; follower replication paths must bypass this check to preserve replica
@@ -515,41 +529,52 @@ public final class LocalDiskManager implements Closeable, ServerReconfigurable {
     }
 
     // ------------------------------------------------------------------------
-    // ServerReconfigurable: dynamic write-limit-ratio update
+    // ServerReconfigurable: dynamic disk write-limit update
     // ------------------------------------------------------------------------
 
     @Override
     public void validate(Configuration newConfig) throws ConfigException {
         double newRatio = newConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO);
-        if (newRatio <= 0.1 || newRatio > 1.0) {
-            throw new ConfigException(
-                    String.format(
-                            "Invalid %s: must be within (0.1, 1.0], but was %s",
-                            ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(), newRatio));
+        double newRecoverGap =
+                newConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP);
+        String validationError =
+                DiskWriteLimitConfigValidator.getValidationError(newRatio, newRecoverGap);
+        if (validationError != null) {
+            throw new ConfigException(validationError);
         }
     }
 
     @Override
     public void reconfigure(Configuration newConfig) {
         double newRatio = newConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO);
-        if (Double.compare(newRatio, diskWriteLimitRatio) == 0) {
+        double newRecoverGap =
+                newConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP);
+        if (Double.compare(newRatio, diskWriteLimitRatio) == 0
+                && Double.compare(newRecoverGap, diskWriteLimitRecoverGap) == 0) {
             LOG.debug(
-                    "{} unchanged: {}",
+                    "{}/{} unchanged: {}/{}",
                     ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
-                    newRatio);
+                    ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP.key(),
+                    newRatio,
+                    newRecoverGap);
             return;
         }
         double oldRatio = diskWriteLimitRatio;
+        double oldRecoverGap = diskWriteLimitRecoverGap;
         diskWriteLimitRatio = newRatio;
-        diskUsageMonitor.updateWriteLimitRatio(newRatio);
+        diskWriteLimitRecoverGap = newRecoverGap;
+        diskUsageMonitor.updateWriteLimitConfig(newRatio, newRecoverGap);
         // Trigger an immediate check so the new threshold takes effect without waiting
         // for the next scheduled tick.
         diskUsageMonitor.runOnce();
         LOG.info(
-                "{} reconfigured: {} -> {} (immediate check triggered)",
+                "{}/{} reconfigured: {}/{} -> {}/{} (immediate check triggered)",
                 ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO.key(),
+                ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP.key(),
                 oldRatio,
-                newRatio);
+                oldRecoverGap,
+                newRatio,
+                newRecoverGap);
     }
 
     /**
