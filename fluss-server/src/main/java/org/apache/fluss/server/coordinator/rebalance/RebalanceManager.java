@@ -54,6 +54,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -98,10 +99,13 @@ public class RebalanceManager implements ServerReconfigurable {
     private final Clock clock;
     private final ScheduledExecutorService timeoutChecker;
 
-    /** A queue of pending table buckets to rebalance. */
+    /** A queue of pending table buckets in the current rebalance round. */
     private final Queue<TableBucket> pendingRebalanceTasksQueue = new ArrayDeque<>();
 
-    /** A mapping from table bucket to rebalance status of pending and running tasks. */
+    /** A queue of table buckets waiting for future rebalance rounds. */
+    private final Queue<TableBucket> remainingRebalanceTasksQueue = new ArrayDeque<>();
+
+    /** A mapping from table bucket to rebalance status of unfinished tasks. */
     private final Map<TableBucket, RebalanceResultForBucket> inProgressRebalanceTasks =
             new ConcurrentHashMap<>();
 
@@ -113,6 +117,7 @@ public class RebalanceManager implements ServerReconfigurable {
             new ConcurrentHashMap<>();
 
     private final GoalOptimizer goalOptimizer;
+    private final int maxBucketsPerRound;
     private volatile int maxInflightRebalanceTasks;
     private volatile int queuedMaxInflightRebalanceTasks;
     private volatile long registerTime;
@@ -172,6 +177,8 @@ public class RebalanceManager implements ServerReconfigurable {
         this.maxInflightRebalanceTasks =
                 conf.get(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS);
         this.queuedMaxInflightRebalanceTasks = maxInflightRebalanceTasks;
+        this.maxBucketsPerRound =
+                conf.get(ConfigOptions.COORDINATOR_REBALANCE_MAX_BUCKETS_PER_ROUND);
     }
 
     public void startup() {
@@ -206,6 +213,16 @@ public class RebalanceManager implements ServerReconfigurable {
                             "Invalid %s: must be non-negative, but was %s",
                             ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS.key(),
                             newMaxInflightRebalanceTasks));
+        }
+
+        int newMaxBucketsPerRound =
+                newConfig.get(ConfigOptions.COORDINATOR_REBALANCE_MAX_BUCKETS_PER_ROUND);
+        if (newMaxBucketsPerRound < 0) {
+            throw new ConfigException(
+                    String.format(
+                            "Invalid %s: must be non-negative, but was %s",
+                            ConfigOptions.COORDINATOR_REBALANCE_MAX_BUCKETS_PER_ROUND.key(),
+                            newMaxBucketsPerRound));
         }
     }
 
@@ -258,6 +275,7 @@ public class RebalanceManager implements ServerReconfigurable {
         // first clear all exists tasks.
         inProgressRebalanceTasks.clear();
         pendingRebalanceTasksQueue.clear();
+        remainingRebalanceTasksQueue.clear();
         inflightRebalanceTaskStartMs.clear();
         finishedRebalanceTasks.clear();
 
@@ -267,20 +285,22 @@ public class RebalanceManager implements ServerReconfigurable {
             return;
         }
 
-        rebalancePlan.forEach(
-                ((tableBucket, planForBucket) -> {
-                    if (FINAL_STATUSES.contains(newStatus)) {
-                        finishedRebalanceTasks.put(
-                                tableBucket, RebalanceResultForBucket.of(planForBucket, newStatus));
-                    } else {
-                        pendingRebalanceTasksQueue.add(tableBucket);
-                        inProgressRebalanceTasks.put(
-                                tableBucket,
-                                RebalanceResultForBucket.of(planForBucket, NOT_STARTED));
-                    }
-                }));
+        List<TableBucket> tableBuckets = new ArrayList<>(rebalancePlan.keySet());
+        tableBuckets.sort(RebalanceManager::compareTableBucket);
+        for (TableBucket tableBucket : tableBuckets) {
+            RebalancePlanForBucket planForBucket = rebalancePlan.get(tableBucket);
+            if (FINAL_STATUSES.contains(newStatus)) {
+                finishedRebalanceTasks.put(
+                        tableBucket, RebalanceResultForBucket.of(planForBucket, newStatus));
+            } else {
+                remainingRebalanceTasksQueue.add(tableBucket);
+                inProgressRebalanceTasks.put(
+                        tableBucket, RebalanceResultForBucket.of(planForBucket, NOT_STARTED));
+            }
+        }
 
-        if (!pendingRebalanceTasksQueue.isEmpty()) {
+        openNextRebalanceRoundIfNeeded();
+        if (!inProgressRebalanceTasks.isEmpty()) {
             // Trigger rebalance tasks to execute.
             rebalanceStatus = REBALANCING;
             processNewRebalanceTasks();
@@ -299,13 +319,16 @@ public class RebalanceManager implements ServerReconfigurable {
 
         inProgressRebalanceTasks.remove(tableBucket);
         pendingRebalanceTasksQueue.remove(tableBucket);
+        remainingRebalanceTasksQueue.remove(tableBucket);
         inflightRebalanceTaskStartMs.remove(tableBucket);
         finishedRebalanceTasks.put(
                 tableBucket, RebalanceResultForBucket.of(resultForBucket.plan(), statusForBucket));
         LOG.info(
-                "Rebalance task {} in progress: {} tasks pending, {} tasks in-flight, {} completed.",
+                "Rebalance task {} in progress: {} tasks pending in current round, "
+                        + "{} tasks waiting for next rounds, {} tasks in-flight, {} completed.",
                 currentRebalanceId,
                 pendingRebalanceTasksQueue.size(),
+                remainingRebalanceTasksQueue.size(),
                 inflightRebalanceTaskStartMs.size(),
                 finishedRebalanceTasks.size());
 
@@ -382,6 +405,7 @@ public class RebalanceManager implements ServerReconfigurable {
 
         rebalanceStatus = CANCELED;
         pendingRebalanceTasksQueue.clear();
+        remainingRebalanceTasksQueue.clear();
         inProgressRebalanceTasks.clear();
         inflightRebalanceTaskStartMs.clear();
         // Here, it will not clear finishedRebalanceTasks, because it will be used by
@@ -392,7 +416,9 @@ public class RebalanceManager implements ServerReconfigurable {
 
     public synchronized boolean hasInProgressRebalance() {
         checkNotClosed();
-        return !inProgressRebalanceTasks.isEmpty() || !pendingRebalanceTasksQueue.isEmpty();
+        return !inProgressRebalanceTasks.isEmpty()
+                || !pendingRebalanceTasksQueue.isEmpty()
+                || !remainingRebalanceTasksQueue.isEmpty();
     }
 
     public RebalanceTask generateRebalanceTask(List<Goal> goalsByPriority) {
@@ -435,6 +461,7 @@ public class RebalanceManager implements ServerReconfigurable {
     }
 
     private void processNewRebalanceTasks() {
+        openNextRebalanceRoundIfNeeded();
         while (inflightRebalanceTaskStartMs.size() < maxInflightRebalanceTasks) {
             TableBucket tableBucket = pendingRebalanceTasksQueue.poll();
             if (tableBucket == null) {
@@ -451,6 +478,39 @@ public class RebalanceManager implements ServerReconfigurable {
             inProgressRebalanceTasks.put(tableBucket, rebalanceResultForBucket);
             inflightRebalanceTaskStartMs.put(tableBucket, clock.milliseconds());
             eventProcessor.tryToExecuteRebalanceTask(rebalanceResultForBucket.plan());
+        }
+    }
+
+    private void openNextRebalanceRoundIfNeeded() {
+        if (!pendingRebalanceTasksQueue.isEmpty() || !inflightRebalanceTaskStartMs.isEmpty()) {
+            return;
+        }
+
+        int maxBucketsForNextRound =
+                maxBucketsPerRound == 0 ? remainingRebalanceTasksQueue.size() : maxBucketsPerRound;
+        int admittedTasks = 0;
+        while (admittedTasks < maxBucketsForNextRound) {
+            TableBucket tableBucket = remainingRebalanceTasksQueue.poll();
+            if (tableBucket == null) {
+                break;
+            }
+
+            RebalanceResultForBucket resultForBucket = inProgressRebalanceTasks.get(tableBucket);
+            if (resultForBucket == null || FINAL_STATUSES.contains(resultForBucket.status())) {
+                continue;
+            }
+
+            pendingRebalanceTasksQueue.add(tableBucket);
+            admittedTasks++;
+        }
+
+        if (admittedTasks > 0) {
+            LOG.info(
+                    "Open rebalance round for task {} with {} bucket tasks admitted "
+                            + "and {} bucket tasks waiting for later rounds.",
+                    currentRebalanceId,
+                    admittedTasks,
+                    remainingRebalanceTasksQueue.size());
         }
     }
 
@@ -502,6 +562,7 @@ public class RebalanceManager implements ServerReconfigurable {
         rebalanceStatus = COMPLETED;
         inProgressRebalanceTasks.clear();
         pendingRebalanceTasksQueue.clear();
+        remainingRebalanceTasksQueue.clear();
         inflightRebalanceTaskStartMs.clear();
 
         // Here, it will not clear finishedRebalanceTasks, because it will be used by
@@ -563,6 +624,28 @@ public class RebalanceManager implements ServerReconfigurable {
         return new RebalanceTask(rebalanceId, NOT_STARTED, bucketPlan);
     }
 
+    private static int compareTableBucket(TableBucket first, TableBucket second) {
+        int result = Long.compare(first.getTableId(), second.getTableId());
+        if (result != 0) {
+            return result;
+        }
+
+        Long firstPartitionId = first.getPartitionId();
+        Long secondPartitionId = second.getPartitionId();
+        if (firstPartitionId == null && secondPartitionId != null) {
+            return -1;
+        } else if (firstPartitionId != null && secondPartitionId == null) {
+            return 1;
+        } else if (firstPartitionId != null) {
+            result = Long.compare(firstPartitionId, secondPartitionId);
+            if (result != 0) {
+                return result;
+            }
+        }
+
+        return Integer.compare(first.getBucket(), second.getBucket());
+    }
+
     private boolean isOfflineTagged(ServerTag serverTag) {
         return serverTag == ServerTag.PERMANENT_OFFLINE || serverTag == ServerTag.TEMPORARY_OFFLINE;
     }
@@ -621,5 +704,10 @@ public class RebalanceManager implements ServerReconfigurable {
     @VisibleForTesting
     int getMaxInflightRebalanceTasks() {
         return maxInflightRebalanceTasks;
+    }
+
+    @VisibleForTesting
+    int getMaxBucketsPerRound() {
+        return maxBucketsPerRound;
     }
 }

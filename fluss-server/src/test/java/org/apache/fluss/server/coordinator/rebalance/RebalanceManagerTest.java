@@ -69,6 +69,7 @@ import static org.apache.fluss.cluster.rebalance.RebalanceStatus.COMPLETED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.NOT_STARTED;
 import static org.apache.fluss.cluster.rebalance.RebalanceStatus.TIMEOUT;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link RebalanceManager}. */
 public class RebalanceManagerTest {
@@ -371,6 +372,186 @@ public class RebalanceManagerTest {
         assertThat(countStatus(manager, RebalanceStatus.NOT_STARTED)).isEqualTo(2);
 
         manager.close();
+    }
+
+    @Test
+    void testRebalanceRoundLimitsActivatedBuckets() throws Exception {
+        ManualClock clock = new ManualClock(0L);
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 2);
+        conf.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_BUCKETS_PER_ROUND, 2);
+        RecordingCoordinatorEventProcessor eventProcessor =
+                buildRecordingCoordinatorEventProcessor(conf);
+        RebalanceManager manager =
+                new RebalanceManager(
+                        eventProcessor, zookeeperClient, eventManager, clock, conf, executor);
+
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(5);
+        List<TableBucket> buckets = new ArrayList<>(plan.keySet());
+        zookeeperClient.registerRebalanceTask(new RebalanceTask("round-test", NOT_STARTED, plan));
+
+        manager.registerRebalance("round-test", plan, NOT_STARTED);
+
+        assertThat(manager.getMaxBucketsPerRound()).isEqualTo(2);
+        assertThat(eventProcessor.executedPlans).hasSize(2);
+        assertThat(countStatus(manager, RebalanceStatus.REBALANCING)).isEqualTo(2);
+        assertThat(countStatus(manager, RebalanceStatus.NOT_STARTED)).isEqualTo(3);
+
+        manager.finishRebalanceTask(buckets.get(0), COMPLETED);
+
+        assertThat(eventProcessor.executedPlans).hasSize(2);
+        assertThat(countStatus(manager, RebalanceStatus.REBALANCING)).isEqualTo(1);
+        assertThat(countStatus(manager, RebalanceStatus.NOT_STARTED)).isEqualTo(3);
+
+        manager.finishRebalanceTask(buckets.get(1), COMPLETED);
+
+        assertThat(eventProcessor.executedPlans).hasSize(4);
+        assertThat(eventProcessor.executedPlans.get(2).getTableBucket()).isEqualTo(buckets.get(2));
+        assertThat(eventProcessor.executedPlans.get(3).getTableBucket()).isEqualTo(buckets.get(3));
+        assertThat(countStatus(manager, RebalanceStatus.REBALANCING)).isEqualTo(2);
+        assertThat(countStatus(manager, RebalanceStatus.NOT_STARTED)).isEqualTo(1);
+
+        manager.close();
+    }
+
+    @Test
+    void testRebalanceRoundWorksWithLowerMaxInflightTasks() throws Exception {
+        ManualClock clock = new ManualClock(0L);
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 1);
+        conf.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_BUCKETS_PER_ROUND, 2);
+        RecordingCoordinatorEventProcessor eventProcessor =
+                buildRecordingCoordinatorEventProcessor(conf);
+        RebalanceManager manager =
+                new RebalanceManager(
+                        eventProcessor, zookeeperClient, eventManager, clock, conf, executor);
+
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(3);
+        List<TableBucket> buckets = new ArrayList<>(plan.keySet());
+        zookeeperClient.registerRebalanceTask(
+                new RebalanceTask("round-lower-inflight-test", NOT_STARTED, plan));
+
+        manager.registerRebalance("round-lower-inflight-test", plan, NOT_STARTED);
+
+        assertThat(eventProcessor.executedPlans).hasSize(1);
+        assertThat(eventProcessor.executedPlans.get(0).getTableBucket()).isEqualTo(buckets.get(0));
+        assertThat(countStatus(manager, RebalanceStatus.REBALANCING)).isEqualTo(1);
+        assertThat(countStatus(manager, RebalanceStatus.NOT_STARTED)).isEqualTo(2);
+
+        manager.finishRebalanceTask(buckets.get(0), COMPLETED);
+
+        assertThat(eventProcessor.executedPlans).hasSize(2);
+        assertThat(eventProcessor.executedPlans.get(1).getTableBucket()).isEqualTo(buckets.get(1));
+        assertThat(countStatus(manager, RebalanceStatus.REBALANCING)).isEqualTo(1);
+        assertThat(countStatus(manager, RebalanceStatus.NOT_STARTED)).isEqualTo(1);
+
+        manager.finishRebalanceTask(buckets.get(1), COMPLETED);
+
+        assertThat(eventProcessor.executedPlans).hasSize(3);
+        assertThat(eventProcessor.executedPlans.get(2).getTableBucket()).isEqualTo(buckets.get(2));
+        assertThat(countStatus(manager, RebalanceStatus.REBALANCING)).isEqualTo(1);
+        assertThat(countStatus(manager, RebalanceStatus.NOT_STARTED)).isZero();
+
+        manager.close();
+    }
+
+    @Test
+    void testZeroMaxBucketsPerRoundKeepsMaxInflightBehavior() throws Exception {
+        ManualClock clock = new ManualClock(0L);
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 2);
+        conf.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_BUCKETS_PER_ROUND, 0);
+        RecordingCoordinatorEventProcessor eventProcessor =
+                buildRecordingCoordinatorEventProcessor(conf);
+        RebalanceManager manager =
+                new RebalanceManager(
+                        eventProcessor, zookeeperClient, eventManager, clock, conf, executor);
+
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(5);
+        List<TableBucket> buckets = new ArrayList<>(plan.keySet());
+        zookeeperClient.registerRebalanceTask(
+                new RebalanceTask("unlimited-round-test", NOT_STARTED, plan));
+
+        manager.registerRebalance("unlimited-round-test", plan, NOT_STARTED);
+
+        assertThat(manager.getMaxBucketsPerRound()).isZero();
+        assertThat(eventProcessor.executedPlans).hasSize(2);
+        assertThat(countStatus(manager, RebalanceStatus.REBALANCING)).isEqualTo(2);
+        assertThat(countStatus(manager, RebalanceStatus.NOT_STARTED)).isEqualTo(3);
+
+        manager.finishRebalanceTask(buckets.get(0), COMPLETED);
+
+        assertThat(eventProcessor.executedPlans).hasSize(3);
+        assertThat(eventProcessor.executedPlans.get(2).getTableBucket()).isEqualTo(buckets.get(2));
+        assertThat(countStatus(manager, RebalanceStatus.REBALANCING)).isEqualTo(2);
+        assertThat(countStatus(manager, RebalanceStatus.NOT_STARTED)).isEqualTo(2);
+
+        manager.close();
+    }
+
+    @Test
+    void testMaxBucketsPerRoundSmallerThanMaxInflightCapsScheduling() throws Exception {
+        ManualClock clock = new ManualClock(0L);
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_INFLIGHT_TASKS, 3);
+        conf.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_BUCKETS_PER_ROUND, 1);
+        RecordingCoordinatorEventProcessor eventProcessor =
+                buildRecordingCoordinatorEventProcessor(conf);
+        RebalanceManager manager =
+                new RebalanceManager(
+                        eventProcessor, zookeeperClient, eventManager, clock, conf, executor);
+
+        Map<TableBucket, RebalancePlanForBucket> plan = createRebalancePlan(3);
+        List<TableBucket> buckets = new ArrayList<>(plan.keySet());
+        zookeeperClient.registerRebalanceTask(
+                new RebalanceTask("round-smaller-than-inflight-test", NOT_STARTED, plan));
+
+        manager.registerRebalance("round-smaller-than-inflight-test", plan, NOT_STARTED);
+
+        assertThat(eventProcessor.executedPlans).hasSize(1);
+        assertThat(eventProcessor.executedPlans.get(0).getTableBucket()).isEqualTo(buckets.get(0));
+        assertThat(countStatus(manager, RebalanceStatus.REBALANCING)).isEqualTo(1);
+        assertThat(countStatus(manager, RebalanceStatus.NOT_STARTED)).isEqualTo(2);
+
+        manager.finishRebalanceTask(buckets.get(0), COMPLETED);
+
+        assertThat(eventProcessor.executedPlans).hasSize(2);
+        assertThat(eventProcessor.executedPlans.get(1).getTableBucket()).isEqualTo(buckets.get(1));
+        assertThat(countStatus(manager, RebalanceStatus.REBALANCING)).isEqualTo(1);
+        assertThat(countStatus(manager, RebalanceStatus.NOT_STARTED)).isEqualTo(1);
+
+        manager.close();
+    }
+
+    @Test
+    void testNegativeMaxBucketsPerRoundIsRejected() {
+        ManualClock clock = new ManualClock(0L);
+        RecordingEventManager eventManager = new RecordingEventManager();
+        NoOpScheduledExecutor executor = new NoOpScheduledExecutor();
+        Configuration conf = new Configuration();
+        conf.set(ConfigOptions.COORDINATOR_REBALANCE_MAX_BUCKETS_PER_ROUND, -1);
+        RecordingCoordinatorEventProcessor eventProcessor =
+                buildRecordingCoordinatorEventProcessor(new Configuration());
+
+        assertThatThrownBy(
+                        () ->
+                                new RebalanceManager(
+                                        eventProcessor,
+                                        zookeeperClient,
+                                        eventManager,
+                                        clock,
+                                        conf,
+                                        executor))
+                .hasMessageContaining(
+                        ConfigOptions.COORDINATOR_REBALANCE_MAX_BUCKETS_PER_ROUND.key());
     }
 
     @Test
