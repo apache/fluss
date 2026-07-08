@@ -216,6 +216,8 @@ public class TieringCommitOperator<WriteResult extends LakeWriteResult, Committa
             if (writeResult.writeResult() != null) {
                 Long writeResultWatermark = writeResult.writeResult().getWatermark();
                 if (writeResultWatermark != null) {
+                    // Simply takes the minimum watermark, relying on lake committer to ensure the
+                    // watermark does not regress
                     watermark =
                             watermark == null
                                     ? writeResultWatermark

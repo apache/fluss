@@ -55,79 +55,23 @@ class SimpleWatermarkExtractorTest {
         assertThat(SimpleWatermarkExtractor.create(tableInfo)).isNull();
     }
 
-    @Test
-    void testCreateWithSimpleColumn() {
-        TableInfo tableInfo = createTableInfoWithWatermark("`ts`", "TIMESTAMP(3)");
+    @ParameterizedTest
+    @CsvSource({
+        "`ts`,                           1000,      1000",
+        "ts,                             2000,      2000",
+        "`ts` - INTERVAL '5' SECOND,     10000,     5000",
+        "`ts` - INTERVAL '0.001' SECOND, 1000,      999",
+        "`ts` - INTERVAL '2' MINUTE,     200000,    80000",
+        "`ts` - INTERVAL '1' HOUR,       7200000,   3600000",
+        "`ts` - INTERVAL '1' DAY,        172800000, 86400000",
+    })
+    void testNtzWatermarkExtraction(String expr, long inputMillis, long expectedMillis) {
+        TableInfo tableInfo = createTableInfoWithWatermark(expr, "TIMESTAMP(3)");
         SimpleWatermarkExtractor extractor = SimpleWatermarkExtractor.create(tableInfo);
         assertThat(extractor).isNotNull();
 
-        GenericRow row = GenericRow.of(1, TimestampNtz.fromMillis(1000L));
-        assertThat(extractor.currentWatermark(row)).isEqualTo(1000L);
-    }
-
-    @Test
-    void testCreateWithSimpleColumnWithoutBackticks() {
-        TableInfo tableInfo = createTableInfoWithWatermark("ts", "TIMESTAMP(3)");
-        SimpleWatermarkExtractor extractor = SimpleWatermarkExtractor.create(tableInfo);
-        assertThat(extractor).isNotNull();
-
-        GenericRow row = GenericRow.of(1, TimestampNtz.fromMillis(2000L));
-        assertThat(extractor.currentWatermark(row)).isEqualTo(2000L);
-    }
-
-    @Test
-    void testCreateWithColumnMinusInterval() {
-        TableInfo tableInfo =
-                createTableInfoWithWatermark("`ts` - INTERVAL '5' SECOND", "TIMESTAMP(3)");
-        SimpleWatermarkExtractor extractor = SimpleWatermarkExtractor.create(tableInfo);
-        assertThat(extractor).isNotNull();
-
-        GenericRow row = GenericRow.of(1, TimestampNtz.fromMillis(10000L));
-        assertThat(extractor.currentWatermark(row)).isEqualTo(5000L);
-    }
-
-    @Test
-    void testCreateWithDecimalInterval() {
-        TableInfo tableInfo =
-                createTableInfoWithWatermark("`ts` - INTERVAL '0.001' SECOND", "TIMESTAMP(3)");
-        SimpleWatermarkExtractor extractor = SimpleWatermarkExtractor.create(tableInfo);
-        assertThat(extractor).isNotNull();
-
-        GenericRow row = GenericRow.of(1, TimestampNtz.fromMillis(1000L));
-        assertThat(extractor.currentWatermark(row)).isEqualTo(999L);
-    }
-
-    @Test
-    void testCreateWithMinuteInterval() {
-        TableInfo tableInfo =
-                createTableInfoWithWatermark("`ts` - INTERVAL '2' MINUTE", "TIMESTAMP(3)");
-        SimpleWatermarkExtractor extractor = SimpleWatermarkExtractor.create(tableInfo);
-        assertThat(extractor).isNotNull();
-
-        GenericRow row = GenericRow.of(1, TimestampNtz.fromMillis(200000L));
-        assertThat(extractor.currentWatermark(row)).isEqualTo(80000L);
-    }
-
-    @Test
-    void testCreateWithHourInterval() {
-        TableInfo tableInfo =
-                createTableInfoWithWatermark("`ts` - INTERVAL '1' HOUR", "TIMESTAMP(3)");
-        SimpleWatermarkExtractor extractor = SimpleWatermarkExtractor.create(tableInfo);
-        assertThat(extractor).isNotNull();
-
-        GenericRow row = GenericRow.of(1, TimestampNtz.fromMillis(7200000L));
-        assertThat(extractor.currentWatermark(row)).isEqualTo(3600000L);
-    }
-
-    @Test
-    void testCreateWithDayInterval() {
-        TableInfo tableInfo =
-                createTableInfoWithWatermark("`ts` - INTERVAL '1' DAY", "TIMESTAMP(3)");
-        SimpleWatermarkExtractor extractor = SimpleWatermarkExtractor.create(tableInfo);
-        assertThat(extractor).isNotNull();
-
-        GenericRow row = GenericRow.of(1, TimestampNtz.fromMillis(172800000L));
-        assertThat(extractor.currentWatermark(row)).isEqualTo(86400000L);
+        GenericRow row = GenericRow.of(1, TimestampNtz.fromMillis(inputMillis));
+        assertThat(extractor.currentWatermark(row)).isEqualTo(expectedMillis);
     }
 
     @Test

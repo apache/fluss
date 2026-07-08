@@ -81,7 +81,7 @@ public class PaimonWriteResultSerializer implements SimpleVersionedSerializer<Pa
 
                     int len = view.readInt();
                     byte[] messageBytes = new byte[len];
-                    view.read(messageBytes);
+                    view.readFully(messageBytes);
                     CommitMessage commitMessage =
                             messageSer.deserialize(messageSer.getVersion(), messageBytes);
 
