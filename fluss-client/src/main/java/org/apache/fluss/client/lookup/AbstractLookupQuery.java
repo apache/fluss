@@ -21,6 +21,8 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 
+import javax.annotation.Nullable;
+
 import java.util.concurrent.CompletableFuture;
 
 /** Abstract Class to represent a lookup operation. */
@@ -30,12 +32,28 @@ public abstract class AbstractLookupQuery<T> {
     private final TablePath tablePath;
     private final TableBucket tableBucket;
     private final byte[] key;
+
+    /**
+     * Null for normal and prefix lookups. Historical lookups use this to carry the original
+     * partition name.
+     */
+    private final @Nullable String partitionName;
+
     private int retries;
 
     public AbstractLookupQuery(TablePath tablePath, TableBucket tableBucket, byte[] key) {
+        this(tablePath, tableBucket, key, null);
+    }
+
+    public AbstractLookupQuery(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            byte[] key,
+            @Nullable String partitionName) {
         this.tablePath = tablePath;
         this.tableBucket = tableBucket;
         this.key = key;
+        this.partitionName = partitionName;
         this.retries = 0;
     }
 
@@ -49,6 +67,10 @@ public abstract class AbstractLookupQuery<T> {
 
     public TableBucket tableBucket() {
         return tableBucket;
+    }
+
+    public @Nullable String partitionName() {
+        return partitionName;
     }
 
     public int retries() {

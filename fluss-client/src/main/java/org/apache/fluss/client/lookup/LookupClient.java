@@ -28,6 +28,7 @@ import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.time.Duration;
@@ -100,7 +101,17 @@ public class LookupClient {
             TableBucket tableBucket,
             byte[] keyBytes,
             boolean insertIfNotExists) {
-        LookupQuery lookup = new LookupQuery(tablePath, tableBucket, keyBytes, insertIfNotExists);
+        return lookup(tablePath, tableBucket, keyBytes, insertIfNotExists, null);
+    }
+
+    public CompletableFuture<byte[]> lookup(
+            TablePath tablePath,
+            TableBucket tableBucket,
+            byte[] keyBytes,
+            boolean insertIfNotExists,
+            @Nullable String partitionName) {
+        LookupQuery lookup =
+                new LookupQuery(tablePath, tableBucket, keyBytes, insertIfNotExists, partitionName);
         lookupQueue.appendLookup(lookup);
         return lookup.future();
     }

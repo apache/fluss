@@ -32,6 +32,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.LookupResponse;
+import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PbPrefixLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
@@ -43,7 +44,10 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -115,6 +119,121 @@ public class LookupSenderTest {
         if (senderThread != null) {
             senderThread.join(5000);
         }
+    }
+
+    @Test
+    void testHistoricalLookupsSplitSameBucketAndBatchDifferentBuckets() throws Exception {
+        List<LookupRequest> receivedRequests = Collections.synchronizedList(new ArrayList<>());
+        gateway.setLookupHandler(
+                request -> {
+                    receivedRequests.add(request);
+                    return createPartitionNameEchoResponse(request);
+                });
+
+        // These two queries target the same historical bucket but carry different original
+        // partition names, so they must be sent in different RPCs.
+        LookupQuery sameBucketQuery1 =
+                new LookupQuery(
+                        DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key1"), false, "dt=20200101");
+        LookupQuery sameBucketQuery2 =
+                new LookupQuery(
+                        DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key2"), false, "dt=20200102");
+
+        // This query has a different target bucket, so it can still share an RPC with another
+        // historical lookup.
+        LookupQuery differentBucketQuery =
+                new LookupQuery(
+                        DATA1_TABLE_PATH_PK,
+                        new TableBucket(DATA1_TABLE_ID_PK, 1),
+                        bytes("key3"),
+                        false,
+                        "dt=20200103");
+
+        lookupSender.sendLookups(
+                1,
+                LookupType.LOOKUP,
+                Arrays.asList(sameBucketQuery1, sameBucketQuery2, differentBucketQuery));
+
+        assertThat(sameBucketQuery1.future().get(5, TimeUnit.SECONDS))
+                .isEqualTo(responseValue("dt=20200101", "key1"));
+        assertThat(sameBucketQuery2.future().get(5, TimeUnit.SECONDS))
+                .isEqualTo(responseValue("dt=20200102", "key2"));
+        assertThat(differentBucketQuery.future().get(5, TimeUnit.SECONDS))
+                .isEqualTo(responseValue("dt=20200103", "key3"));
+
+        assertThat(receivedRequests).hasSize(2);
+        LookupRequest firstRequest = receivedRequests.get(0);
+        assertThat(firstRequest.getBucketsReqsCount()).isEqualTo(1);
+        assertThat(firstRequest.getBucketsReqAt(0).getBucketId()).isEqualTo(0);
+        assertThat(firstRequest.getBucketsReqAt(0).getPartitionName()).isEqualTo("dt=20200101");
+
+        LookupRequest secondRequest = receivedRequests.get(1);
+        assertThat(secondRequest.getBucketsReqsList())
+                .extracting(PbLookupReqForBucket::getBucketId)
+                .containsExactly(0, 1);
+        assertThat(secondRequest.getBucketsReqsList())
+                .extracting(PbLookupReqForBucket::getPartitionName)
+                .containsExactly("dt=20200102", "dt=20200103");
+    }
+
+    @Test
+    void testNormalAndHistoricalLookupsCanBatchTogetherForDifferentBuckets() throws Exception {
+        List<LookupRequest> receivedRequests = Collections.synchronizedList(new ArrayList<>());
+        gateway.setLookupHandler(
+                request -> {
+                    receivedRequests.add(request);
+                    return createPartitionNameEchoResponse(request);
+                });
+
+        // Normal lookup has no original partition name.
+        LookupQuery normalQuery =
+                new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("normal-key"));
+        // Historical lookup carries the original partition name. Because it targets another
+        // bucket, the response can still be dispatched unambiguously in the same RPC.
+        LookupQuery historicalQuery =
+                new LookupQuery(
+                        DATA1_TABLE_PATH_PK,
+                        new TableBucket(DATA1_TABLE_ID_PK, 1),
+                        bytes("historical-key"),
+                        false,
+                        "dt=20200101");
+
+        lookupSender.sendLookups(1, LookupType.LOOKUP, Arrays.asList(normalQuery, historicalQuery));
+
+        assertThat(normalQuery.future().get(5, TimeUnit.SECONDS))
+                .isEqualTo(responseValue("", "normal-key"));
+        assertThat(historicalQuery.future().get(5, TimeUnit.SECONDS))
+                .isEqualTo(responseValue("dt=20200101", "historical-key"));
+        assertThat(receivedRequests).hasSize(1);
+        LookupRequest request = receivedRequests.get(0);
+        assertThat(request.getBucketsReqsList())
+                .extracting(PbLookupReqForBucket::getBucketId)
+                .containsExactly(0, 1);
+        assertThat(request.getBucketsReqAt(0).hasPartitionName()).isFalse();
+        assertThat(request.getBucketsReqAt(1).getPartitionName()).isEqualTo("dt=20200101");
+    }
+
+    @Test
+    void testNormalLookupsKeepExistingBatching() throws Exception {
+        List<LookupRequest> receivedRequests = Collections.synchronizedList(new ArrayList<>());
+        gateway.setLookupHandler(
+                request -> {
+                    receivedRequests.add(request);
+                    return createPartitionNameEchoResponse(request);
+                });
+
+        LookupQuery query1 = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key1"));
+        LookupQuery query2 = new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key2"));
+
+        lookupSender.sendLookups(1, LookupType.LOOKUP, Arrays.asList(query1, query2));
+
+        assertThat(query1.future().get(5, TimeUnit.SECONDS)).isEqualTo(responseValue("", "key1"));
+        assertThat(query2.future().get(5, TimeUnit.SECONDS)).isEqualTo(responseValue("", "key2"));
+        assertThat(receivedRequests).hasSize(1);
+        LookupRequest request = receivedRequests.get(0);
+        assertThat(request.getBucketsReqsCount()).isEqualTo(1);
+        assertThat(request.getBucketsReqAt(0).getKeysCount()).isEqualTo(2);
+        assertThat(request.getBucketsReqAt(0).hasPartitionName()).isFalse();
     }
 
     @Test
@@ -381,6 +500,39 @@ public class LookupSenderTest {
     }
 
     // Helper methods
+
+    private CompletableFuture<LookupResponse> createPartitionNameEchoResponse(
+            LookupRequest request) {
+        LookupResponse response = new LookupResponse();
+        for (PbLookupReqForBucket bucketRequest : request.getBucketsReqsList()) {
+            PbLookupRespForBucket bucketResponse = response.addBucketsResp();
+            bucketResponse.setBucketId(bucketRequest.getBucketId());
+            if (bucketRequest.hasPartitionId()) {
+                bucketResponse.setPartitionId(bucketRequest.getPartitionId());
+            }
+            String partitionName =
+                    bucketRequest.hasPartitionName() ? bucketRequest.getPartitionName() : "";
+            for (int i = 0; i < bucketRequest.getKeysCount(); i++) {
+                bucketResponse
+                        .addValue()
+                        .setValues(
+                                responseValue(
+                                        partitionName,
+                                        new String(
+                                                bucketRequest.getKeyAt(i),
+                                                StandardCharsets.UTF_8)));
+            }
+        }
+        return CompletableFuture.completedFuture(response);
+    }
+
+    private static byte[] bytes(String value) {
+        return value.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static byte[] responseValue(String partitionName, String key) {
+        return bytes(partitionName + ":" + key);
+    }
 
     private void testException(Exception exception, boolean shouldRetry, int expectedRetries)
             throws Exception {

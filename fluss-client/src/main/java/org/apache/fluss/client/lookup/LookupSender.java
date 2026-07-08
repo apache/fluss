@@ -45,8 +45,10 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -198,34 +200,38 @@ class LookupSender implements Runnable {
 
     private void sendLookupRequest(
             int destination, List<AbstractLookupQuery<?>> lookups, boolean insertIfNotExists) {
-        // table id -> (bucket -> lookups)
-        Map<Long, Map<TableBucket, LookupBatch>> lookupByTableId = new HashMap<>();
+        // table id -> (bucket and original partition name -> lookups)
+        Map<Long, Map<LookupBatchKey, LookupBatch>> lookupByTableId = new LinkedHashMap<>();
         for (AbstractLookupQuery<?> abstractLookupQuery : lookups) {
             LookupQuery lookup = (LookupQuery) abstractLookupQuery;
             TableBucket tb = lookup.tableBucket();
             long tableId = tb.getTableId();
+            LookupBatchKey batchKey = new LookupBatchKey(tb, lookup.partitionName());
             lookupByTableId
-                    .computeIfAbsent(tableId, k -> new HashMap<>())
-                    .computeIfAbsent(tb, k -> new LookupBatch(tb))
+                    .computeIfAbsent(tableId, k -> new LinkedHashMap<>())
+                    .computeIfAbsent(batchKey, k -> new LookupBatch(batchKey))
                     .addLookup(lookup);
         }
 
         TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
         if (gateway == null) {
             lookupByTableId.forEach(
-                    (tableId, lookupsByBucket) ->
+                    (tableId, lookupsByBatchKey) ->
                             handleLookupRequestException(
                                     new LeaderNotAvailableException(
                                             "Server "
                                                     + destination
                                                     + " is not found in metadata cache."),
                                     destination,
-                                    lookupsByBucket));
+                                    lookupsByBatchKey.values()));
             return;
         }
 
         lookupByTableId.forEach(
-                (tableId, lookupsByBucket) ->
+                (tableId, lookupsByBatchKey) -> {
+                    List<Map<TableBucket, LookupBatch>> lookupRequestGroups =
+                            packLookupRequestGroups(lookupsByBatchKey.values());
+                    for (Map<TableBucket, LookupBatch> lookupsByBucket : lookupRequestGroups) {
                         sendLookupRequestAndHandleResponse(
                                 destination,
                                 gateway,
@@ -236,7 +242,41 @@ class LookupSender implements Runnable {
                                         acks,
                                         maxRequestTimeoutMs),
                                 tableId,
-                                lookupsByBucket));
+                                lookupsByBucket);
+                    }
+                });
+    }
+
+    /**
+     * Packs lookup batches into RPC request groups so response dispatch can still use {@link
+     * TableBucket} as the lookup key.
+     *
+     * <p>Historical lookups can have multiple batches with the same target {@link TableBucket} but
+     * different original partition names. The request carries that original partition name, but the
+     * response does not. If those batches were sent in one RPC, two response buckets would have the
+     * same {@link TableBucket} and the client could not map each response back to the right batch.
+     *
+     * <p>To avoid that ambiguity, each request group contains a {@link TableBucket} at most once.
+     */
+    private List<Map<TableBucket, LookupBatch>> packLookupRequestGroups(
+            Collection<LookupBatch> lookupBatches) {
+        List<Map<TableBucket, LookupBatch>> lookupRequestGroups = new ArrayList<>();
+        Map<TableBucket, LookupBatch> currentRequestGroup = new LinkedHashMap<>();
+        for (LookupBatch lookupBatch : lookupBatches) {
+            TableBucket tableBucket = lookupBatch.tableBucket();
+            boolean tableBucketAlreadyInCurrentGroup = currentRequestGroup.containsKey(tableBucket);
+            if (tableBucketAlreadyInCurrentGroup) {
+                // This happens when different historical original partitions map to the same
+                // historical TableBucket. Start a new RPC so response dispatch remains unambiguous.
+                lookupRequestGroups.add(currentRequestGroup);
+                currentRequestGroup = new LinkedHashMap<>();
+            }
+            currentRequestGroup.put(tableBucket, lookupBatch);
+        }
+        if (!currentRequestGroup.isEmpty()) {
+            lookupRequestGroups.add(currentRequestGroup);
+        }
+        return lookupRequestGroups;
     }
 
     private void sendPrefixLookupRequest(
@@ -302,7 +342,8 @@ class LookupSender implements Runnable {
                 .exceptionally(
                         e -> {
                             try {
-                                handleLookupRequestException(e, destination, lookupsByBucket);
+                                handleLookupRequestException(
+                                        e, destination, lookupsByBucket.values());
                                 return null;
                             } finally {
                                 maxInFlightReuqestsSemaphore.release();
@@ -420,9 +461,9 @@ class LookupSender implements Runnable {
     }
 
     private void handleLookupRequestException(
-            Throwable t, int destination, Map<TableBucket, LookupBatch> lookupsByBucket) {
+            Throwable t, int destination, Collection<LookupBatch> lookupBatches) {
         ApiError error = ApiError.fromThrowable(t);
-        for (LookupBatch lookupBatch : lookupsByBucket.values()) {
+        for (LookupBatch lookupBatch : lookupBatches) {
             handleLookupError(
                     lookupBatch.tableBucket(), destination, error, lookupBatch.lookups(), "lookup");
         }
