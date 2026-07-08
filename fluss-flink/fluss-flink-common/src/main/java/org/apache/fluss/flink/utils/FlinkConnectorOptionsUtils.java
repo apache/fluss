@@ -29,6 +29,7 @@ import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.api.config.TableConfigOptions;
 import org.apache.flink.table.types.logical.RowType;
 
+import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import java.io.File;
@@ -201,13 +202,38 @@ public class FlinkConnectorOptionsUtils {
 
     public static String getClientScannerIoTmpDir(
             Configuration flussConf, org.apache.flink.configuration.Configuration flinkConfig) {
-        if (!flussConf.contains(CLIENT_SCANNER_IO_TMP_DIR)) {
-            if (flinkConfig.contains(TMP_DIRS)) {
-                // pass flink io tmp dir to fluss client.
-                return new File(flinkConfig.get(CoreOptions.TMP_DIRS), "/fluss").getAbsolutePath();
+        return getClientScannerIoTmpDir(flussConf, flinkConfig, 0);
+    }
+
+    public static String getClientScannerIoTmpDir(
+            Configuration flussConf,
+            org.apache.flink.configuration.Configuration flinkConfig,
+            int taskIndex) {
+        return flussConf
+                .getOptional(CLIENT_SCANNER_IO_TMP_DIR)
+                .orElseGet(
+                        () -> {
+                            String[] flinkTmpDirs = getFlinkIoTmpDirs(flinkConfig);
+                            int idx = taskIndex % flinkTmpDirs.length;
+                            return new File(flinkTmpDirs[idx], "/fluss").getAbsolutePath();
+                        });
+    }
+
+    private static String[] getFlinkIoTmpDirs(
+            org.apache.flink.configuration.Configuration flinkConfig) {
+        if (flinkConfig.contains(TMP_DIRS)) {
+            String[] paths = splitPaths(flinkConfig.get(CoreOptions.TMP_DIRS));
+            if (paths.length > 0) {
+                return paths;
             }
         }
-        return flussConf.getString(CLIENT_SCANNER_IO_TMP_DIR);
+        return new String[] {System.getProperty("java.io.tmpdir")};
+    }
+
+    private static String[] splitPaths(@Nonnull String separatedPaths) {
+        return separatedPaths.length() > 0
+                ? separatedPaths.split(",|" + File.pathSeparator)
+                : new String[0];
     }
 
     /** Fluss startup options. * */

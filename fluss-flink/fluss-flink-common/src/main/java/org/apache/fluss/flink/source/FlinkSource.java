@@ -290,7 +290,8 @@ public class FlinkSource<OUT>
 
         flussConf.set(
                 CLIENT_SCANNER_IO_TMP_DIR,
-                getClientScannerIoTmpDir(flussConf, context.getConfiguration()));
+                getClientScannerIoTmpDir(
+                        flussConf, context.getConfiguration(), context.getIndexOfSubtask()));
         deserializationSchema.open(
                 new DeserializerInitContextImpl(
                         context.metricGroup().addGroup("deserializer"),

@@ -114,7 +114,10 @@ public class TieringSource<WriteResult>
                 elementsQueue = new FutureCompletingBlockingQueue<>();
         flussConf.set(
                 CLIENT_SCANNER_IO_TMP_DIR,
-                getClientScannerIoTmpDir(flussConf, sourceReaderContext.getConfiguration()));
+                getClientScannerIoTmpDir(
+                        flussConf,
+                        sourceReaderContext.getConfiguration(),
+                        sourceReaderContext.getIndexOfSubtask()));
         Connection connection = ConnectionFactory.createConnection(flussConf);
         return new TieringSourceReader<>(
                 elementsQueue, sourceReaderContext, connection, lakeTieringFactory);
