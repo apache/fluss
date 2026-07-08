@@ -762,7 +762,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="30"><strong>tabletserver</strong></th>
+      <th rowspan="31"><strong>tabletserver</strong></th>
       <td rowspan="20">table</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this table.</td>
@@ -864,7 +864,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Meter</td>
     </tr>
      <tr>
-      <td rowspan="2">table_bucket_log</td>
+      <td rowspan="3">table_bucket_log</td>
       <td>numSegments</td>
       <td>The number of segments in local storage for this table bucket.</td>
       <td>Gauge</td>
@@ -896,7 +896,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
     <tr>
-      <td rowspan="3">table_bucket_remoteLog</td>
+      <td rowspan="4">table_bucket_remoteLog</td>
       <td>numSegments</td>
       <td>The number of segments in remote storage for this table bucket.</td>
       <td>Gauge</td>
