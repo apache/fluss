@@ -18,11 +18,12 @@
 package org.apache.fluss.server.metadata;
 
 import org.apache.fluss.annotation.VisibleForTesting;
-import org.apache.fluss.shaded.guava32.com.google.common.base.Ticker;
-import org.apache.fluss.shaded.guava32.com.google.common.cache.Cache;
-import org.apache.fluss.shaded.guava32.com.google.common.cache.CacheBuilder;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
+
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.Ticker;
 
 import javax.annotation.concurrent.ThreadSafe;
 
@@ -67,7 +68,7 @@ public class PartitionNegativeCache {
             throw new IllegalArgumentException("Maximum size must be positive.");
         }
         this.cache =
-                CacheBuilder.newBuilder()
+                Caffeine.newBuilder()
                         .maximumSize(maximumSize)
                         .expireAfterAccess(ttl)
                         .ticker(
@@ -83,7 +84,7 @@ public class PartitionNegativeCache {
     /**
      * Checks if the given partition ID is known to not exist.
      *
-     * <p>If the entry exists and is not expired, Guava refreshes its access time and this method
+     * <p>If the entry exists and is not expired, Caffeine refreshes its access time and this method
      * returns {@code true}. If the entry is expired or doesn't exist, returns {@code false}.
      *
      * @param partitionId the partition ID to check
@@ -116,7 +117,7 @@ public class PartitionNegativeCache {
     @VisibleForTesting
     public long size() {
         cache.cleanUp();
-        return cache.size();
+        return cache.estimatedSize();
     }
 
     /** Removes all entries from the cache. */
