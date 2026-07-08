@@ -23,7 +23,6 @@ import org.apache.fluss.flink.FlinkConnectorOptions.ScanStartupMode;
 import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.metadata.MergeEngineType;
 
-import org.apache.flink.configuration.CoreOptions;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.api.config.TableConfigOptions;
@@ -42,7 +41,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
-import static org.apache.flink.configuration.CoreOptions.TMP_DIRS;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_SPLIT_ASSIGNMENT_BATCH_SIZE;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_MODE;
@@ -213,21 +211,12 @@ public class FlinkConnectorOptionsUtils {
                 .getOptional(CLIENT_SCANNER_IO_TMP_DIR)
                 .orElseGet(
                         () -> {
-                            String[] flinkTmpDirs = getFlinkIoTmpDirs(flinkConfig);
+                            String[] flinkTmpDirs =
+                                    org.apache.flink.configuration.ConfigurationUtils
+                                            .parseTempDirectories(flinkConfig);
                             int idx = Math.floorMod(taskIndex, flinkTmpDirs.length);
                             return new File(flinkTmpDirs[idx], "fluss").getAbsolutePath();
                         });
-    }
-
-    private static String[] getFlinkIoTmpDirs(
-            org.apache.flink.configuration.Configuration flinkConfig) {
-        if (flinkConfig.contains(TMP_DIRS)) {
-            String[] paths = splitPaths(flinkConfig.get(CoreOptions.TMP_DIRS));
-            if (paths.length > 0) {
-                return paths;
-            }
-        }
-        return new String[] {System.getProperty("java.io.tmpdir")};
     }
 
     private static String[] splitPaths(@Nonnull String separatedPaths) {
