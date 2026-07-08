@@ -28,7 +28,6 @@ import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.api.config.TableConfigOptions;
 import org.apache.flink.table.types.logical.RowType;
 
-import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import java.io.File;
@@ -217,12 +216,6 @@ public class FlinkConnectorOptionsUtils {
                             int idx = Math.floorMod(taskIndex, flinkTmpDirs.length);
                             return new File(flinkTmpDirs[idx], "fluss").getAbsolutePath();
                         });
-    }
-
-    private static String[] splitPaths(@Nonnull String separatedPaths) {
-        return separatedPaths.length() > 0
-                ? separatedPaths.split(",|" + File.pathSeparator)
-                : new String[0];
     }
 
     /** Fluss startup options. * */
