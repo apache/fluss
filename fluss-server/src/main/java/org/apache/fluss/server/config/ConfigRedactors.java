@@ -15,28 +15,25 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server;
+package org.apache.fluss.server.config;
 
-import javax.annotation.Nullable;
+import org.apache.fluss.annotation.Internal;
 
 import java.util.function.Predicate;
 
-/** Redacts sensitive config values as a whole. */
-class ValueConfigRedactor implements ConfigRedactor {
+/** Factory methods for server config redactors. */
+@Internal
+public final class ConfigRedactors {
 
-    private final Predicate<String> configKeyMatcher;
+    private ConfigRedactors() {}
 
-    ValueConfigRedactor(Predicate<String> configKeyMatcher) {
-        this.configKeyMatcher = configKeyMatcher;
+    /** Creates a redactor that masks map values while preserving map keys. */
+    public static ConfigRedactor map(String configKey) {
+        return new MapConfigRedactor(configKey);
     }
 
-    @Override
-    public boolean supports(String configKey) {
-        return configKeyMatcher.test(configKey);
-    }
-
-    @Override
-    public @Nullable String redact(@Nullable String value) {
-        return value == null ? null : MapConfigRedactor.REDACTED_VALUE;
+    /** Creates a redactor that masks the whole config value when the matcher accepts its key. */
+    public static ConfigRedactor value(Predicate<String> configKeyMatcher) {
+        return new ValueConfigRedactor(configKeyMatcher);
     }
 }

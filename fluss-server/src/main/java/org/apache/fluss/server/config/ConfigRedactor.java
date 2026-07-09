@@ -15,12 +15,15 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server;
+package org.apache.fluss.server.config;
+
+import org.apache.fluss.annotation.Internal;
 
 import javax.annotation.Nullable;
 
 /** Redacts sensitive values before exposing server configurations. */
-interface ConfigRedactor {
+@Internal
+public interface ConfigRedactor {
 
     /** Returns whether this redactor handles the given config key. */
     boolean supports(String configKey);

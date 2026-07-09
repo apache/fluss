@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server;
+package org.apache.fluss.server.config;
 
 import javax.annotation.Nullable;
 

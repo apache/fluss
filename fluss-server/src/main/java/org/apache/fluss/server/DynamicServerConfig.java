@@ -24,6 +24,8 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.ConfigValidator;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
+import org.apache.fluss.server.config.ConfigRedactor;
+import org.apache.fluss.server.config.ConfigRedactors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -148,8 +150,8 @@ class DynamicServerConfig {
     }
 
     private void registerDefaultRedactors() {
-        configRedactors.add(new MapConfigRedactor(SERVER_SASL_CREDENTIALS.key()));
-        configRedactors.add(new ValueConfigRedactor(DynamicServerConfig::isPlainJaasConfig));
+        configRedactors.add(ConfigRedactors.map(SERVER_SASL_CREDENTIALS.key()));
+        configRedactors.add(ConfigRedactors.value(DynamicServerConfig::isPlainJaasConfig));
     }
 
     private static boolean isPlainJaasConfig(String configKey) {
