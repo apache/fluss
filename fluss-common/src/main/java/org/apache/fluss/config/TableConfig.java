@@ -25,6 +25,7 @@ import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
+import org.apache.fluss.metadata.RowTtlChangelogMode;
 import org.apache.fluss.utils.AutoPartitionStrategy;
 
 import java.time.Duration;
@@ -40,6 +41,9 @@ import java.util.stream.Collectors;
  */
 @PublicEvolving
 public class TableConfig {
+
+    /** Internal table property that binds row TTL time-column to a stable schema column id. */
+    public static final String ROW_TTL_TIME_COLUMN_ID_KEY = "table.row.ttl.time-column-id";
 
     // the table properties configuration
     private final Configuration config;
@@ -88,6 +92,27 @@ public class TableConfig {
     /** Gets the log TTL of the table. */
     public long getLogTTLMs() {
         return config.get(ConfigOptions.TABLE_LOG_TTL).toMillis();
+    }
+
+    /** Gets the row-level TTL of the table. */
+    public Optional<Duration> getRowTTL() {
+        return config.getOptional(ConfigOptions.TABLE_ROW_TTL);
+    }
+
+    /** Gets the row-level TTL changelog mode of the table. */
+    public RowTtlChangelogMode getRowTTLChangelogMode() {
+        return config.get(ConfigOptions.TABLE_ROW_TTL_CHANGELOG_MODE);
+    }
+
+    /** Gets the optional row-level TTL time column of the table. */
+    public Optional<String> getRowTTLTimeColumn() {
+        return config.getOptional(ConfigOptions.TABLE_ROW_TTL_TIME_COLUMN);
+    }
+
+    /** Gets the internal row-level TTL time-column id, if event-time TTL is enabled. */
+    public Optional<Integer> getRowTTLTimeColumnId() {
+        String value = config.toMap().get(ROW_TTL_TIME_COLUMN_ID_KEY);
+        return value == null ? Optional.empty() : Optional.of(Integer.parseInt(value));
     }
 
     /** Gets the local segments to retain for tiered log of the table. */

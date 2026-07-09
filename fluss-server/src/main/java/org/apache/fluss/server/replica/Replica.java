@@ -821,7 +821,8 @@ public final class Replica {
 
                 checkNotNull(kvTablet, "kv tablet should not be null.");
                 restoreStartOffset = completedSnapshot.getLogOffset();
-                rowCount = completedSnapshot.getRowCount();
+                rowCount =
+                        supportsExactRowCount(tableConfig) ? completedSnapshot.getRowCount() : null;
                 // currently, we only support one auto-increment column.
                 autoIncIDRange = completedSnapshot.getFirstAutoIncIDRange();
             } else {
@@ -843,8 +844,7 @@ public final class Replica {
                                 arrowCompressionInfo,
                                 this::onKvFlushComplete);
 
-                // we don't support rowCount
-                rowCount = tableConfig.getChangelogImage() == ChangelogImage.WAL ? null : 0L;
+                rowCount = supportsExactRowCount(tableConfig) ? 0L : null;
                 // TODO: it is possible that this is a recovered kv tablet without kv snapshot but
                 //  with changelogs, in this case, the kv tablet should also have the
                 //  autoIncIDRange, we may need to get it from the changelog in the future.
@@ -976,6 +976,7 @@ public final class Replica {
                                 recoverContext,
                                 tableConfig.getKvFormat(),
                                 tableConfig.getLogFormat(),
+                                tableConfig,
                                 schemaGetter,
                                 remoteLogFetcher);
                 kvRecoverHelper.recover();
@@ -1655,6 +1656,11 @@ public final class Replica {
                         return logTablet.getRowCount();
                     }
                 });
+    }
+
+    private static boolean supportsExactRowCount(TableConfig tableConfig) {
+        return tableConfig.getChangelogImage() != ChangelogImage.WAL
+                && !tableConfig.getRowTTL().isPresent();
     }
 
     public long getOffset(RemoteLogManager remoteLogManager, ListOffsetsParam listOffsetsParam)

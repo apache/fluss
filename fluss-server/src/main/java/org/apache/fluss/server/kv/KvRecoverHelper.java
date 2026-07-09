@@ -17,12 +17,15 @@
 
 package org.apache.fluss.server.kv;
 
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.BinaryValue;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
@@ -74,6 +77,9 @@ public class KvRecoverHelper {
 
     private KeyEncoder keyEncoder;
     private RowEncoder rowEncoder;
+    private final ValueEncoder valueEncoder;
+    private final ValueEncoder recoveryValueEncoder;
+    @Nullable private final ValueTimestampProvider recoveryTimestampProvider;
     private final SchemaGetter schemaGetter;
 
     private InternalRow.FieldGetter[] currentFieldGetters;
@@ -87,6 +93,7 @@ public class KvRecoverHelper {
             KvRecoverContext recoverContext,
             KvFormat kvFormat,
             LogFormat logFormat,
+            TableConfig tableConfig,
             SchemaGetter schemaGetter,
             RemoteLogFetcher remoteLogFetcher) {
         this.kvTablet = kvTablet;
@@ -98,6 +105,15 @@ public class KvRecoverHelper {
         this.kvFormat = kvFormat;
         this.logFormat = logFormat;
         this.schemaGetter = schemaGetter;
+        this.valueEncoder = kvTablet.getValueEncoder();
+        this.recoveryTimestampProvider =
+                valueEncoder.hasValueTimestamp()
+                        ? ValueTimestampProvider.forRecovery(tableConfig, schemaGetter)
+                        : null;
+        this.recoveryValueEncoder =
+                recoveryTimestampProvider == null
+                        ? valueEncoder
+                        : valueEncoder.withTimestampProvider(recoveryTimestampProvider);
         this.remoteLogFetcher = remoteLogFetcher;
     }
 
@@ -268,7 +284,14 @@ public class KvRecoverHelper {
                         // the log row format may not compatible with kv row format,
                         // e.g, arrow vs. compacted, thus needs a conversion here.
                         BinaryRow row = toKvRow(logRow);
-                        value = ValueEncoder.encodeValue(currentSchemaId.shortValue(), row);
+                        value =
+                                createRecoveredValue(
+                                                recoveryValueEncoder,
+                                                recoveryTimestampProvider,
+                                                currentSchemaId.shortValue(),
+                                                row,
+                                                logRecord.timestamp())
+                                        .encodeValue();
                     }
                     resumeRecordConsumer.accept(
                             new KeyValueAndLogOffset(
@@ -311,6 +334,19 @@ public class KvRecoverHelper {
             rowEncoder.encodeField(i, currentFieldGetters[i].getFieldOrNull(originalRow));
         }
         return rowEncoder.finishRow();
+    }
+
+    @VisibleForTesting
+    static BinaryValue createRecoveredValue(
+            ValueEncoder valueEncoder,
+            @Nullable ValueTimestampProvider timestampProvider,
+            short schemaId,
+            BinaryRow row,
+            long logRecordTimestamp) {
+        if (timestampProvider != null) {
+            timestampProvider.setLogRecordTimestampMs(logRecordTimestamp);
+        }
+        return valueEncoder.createValue(schemaId, row);
     }
 
     private void initSchema(int schemaId) throws Exception {

@@ -27,10 +27,38 @@ public class BinaryValue {
 
     public final short schemaId;
     public final BinaryRow row;
+    private final long valueTimestampMs;
+    private final boolean hasValueTimestamp;
 
     public BinaryValue(short schemaId, BinaryRow row) {
         this.schemaId = schemaId;
         this.row = row;
+        this.valueTimestampMs = 0L;
+        this.hasValueTimestamp = false;
+    }
+
+    public BinaryValue(short schemaId, long valueTimestampMs, BinaryRow row) {
+        this.schemaId = schemaId;
+        this.row = row;
+        this.valueTimestampMs = valueTimestampMs;
+        this.hasValueTimestamp = true;
+    }
+
+    /** Returns whether this value carries an internal value timestamp prefix. */
+    public boolean hasValueTimestamp() {
+        return hasValueTimestamp;
+    }
+
+    /** Returns the internal value timestamp in milliseconds. */
+    public long getValueTimestampMs() {
+        return valueTimestampMs;
+    }
+
+    /** Returns a value with a different row while preserving the value-layout metadata. */
+    public BinaryValue withRow(short schemaId, BinaryRow row) {
+        return hasValueTimestamp
+                ? new BinaryValue(schemaId, valueTimestampMs, row)
+                : new BinaryValue(schemaId, row);
     }
 
     /**
@@ -38,7 +66,9 @@ public class BinaryValue {
      * be expected persisted to kv store.
      */
     public byte[] encodeValue() {
-        return ValueEncoder.encodeValue(schemaId, row);
+        return hasValueTimestamp
+                ? ValueEncoder.encodeValue(schemaId, valueTimestampMs, row)
+                : ValueEncoder.encodeValue(schemaId, row);
     }
 
     @Override
@@ -47,16 +77,28 @@ public class BinaryValue {
             return false;
         }
         BinaryValue that = (BinaryValue) o;
-        return schemaId == that.schemaId && Objects.equals(row, that.row);
+        return schemaId == that.schemaId
+                && valueTimestampMs == that.valueTimestampMs
+                && hasValueTimestamp == that.hasValueTimestamp
+                && Objects.equals(row, that.row);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(schemaId, row);
+        return Objects.hash(schemaId, row, valueTimestampMs, hasValueTimestamp);
     }
 
     @Override
     public String toString() {
-        return "BinaryValue{" + "schemaId=" + schemaId + ", row=" + row + '}';
+        return "BinaryValue{"
+                + "schemaId="
+                + schemaId
+                + ", row="
+                + row
+                + ", valueTimestampMs="
+                + valueTimestampMs
+                + ", hasValueTimestamp="
+                + hasValueTimestamp
+                + '}';
     }
 }

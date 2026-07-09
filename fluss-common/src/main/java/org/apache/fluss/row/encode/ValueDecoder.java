@@ -29,7 +29,7 @@ import org.apache.fluss.types.DataType;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-import static org.apache.fluss.row.encode.ValueEncoder.SCHEMA_ID_LENGTH;
+import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 
 /**
  * A decoder to decode a schema id and {@link BinaryRow} from a byte array value which is encoded by
@@ -40,17 +40,27 @@ public class ValueDecoder {
     private final Map<Short, RowDecoder> rowDecoders;
     private final SchemaGetter schemaGetter;
     private final KvFormat kvFormat;
+    private final ValueLayout valueLayout;
 
     public ValueDecoder(SchemaGetter schemaGetter, KvFormat kvFormat) {
+        this(schemaGetter, kvFormat, KV_FORMAT_VERSION_2);
+    }
+
+    public ValueDecoder(SchemaGetter schemaGetter, KvFormat kvFormat, int kvFormatVersion) {
+        this(schemaGetter, kvFormat, ValueLayout.forVersion(kvFormatVersion));
+    }
+
+    public ValueDecoder(SchemaGetter schemaGetter, KvFormat kvFormat, ValueLayout valueLayout) {
         this.rowDecoders = new ConcurrentHashMap<>();
         this.schemaGetter = schemaGetter;
         this.kvFormat = kvFormat;
+        this.valueLayout = valueLayout;
     }
 
     /** Decode the value bytes and return the schema id and the row encoded in the value bytes. */
     public BinaryValue decodeValue(byte[] valueBytes) {
         MemorySegment memorySegment = MemorySegment.wrap(valueBytes);
-        short schemaId = memorySegment.getShort(0);
+        short schemaId = valueLayout.readSchemaId(memorySegment);
 
         RowDecoder rowDecoder =
                 rowDecoders.computeIfAbsent(
@@ -64,7 +74,12 @@ public class ValueDecoder {
 
         BinaryRow row =
                 rowDecoder.decode(
-                        memorySegment, SCHEMA_ID_LENGTH, valueBytes.length - SCHEMA_ID_LENGTH);
+                        memorySegment,
+                        valueLayout.rowOffset(),
+                        valueLayout.rowLength(valueBytes.length));
+        if (valueLayout.hasValueTimestamp()) {
+            return new BinaryValue(schemaId, valueLayout.readValueTimestamp(memorySegment), row);
+        }
         return new BinaryValue(schemaId, row);
     }
 }

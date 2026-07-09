@@ -83,6 +83,7 @@ public class KvSnapshotBatchScanner implements BatchScanner {
 
     private final Path snapshotLocalDirectory;
     private final RemoteFileDownloader remoteFileDownloader;
+    private final int kvFormatVersion;
     private final KvFormat kvFormat;
 
     private final ReentrantLock lock = new ReentrantLock();
@@ -104,6 +105,7 @@ public class KvSnapshotBatchScanner implements BatchScanner {
             List<FsPathAndFileName> fsPathAndFileNames,
             @Nullable int[] projectedFields,
             String scannerTmpDir,
+            int kvFormatVersion,
             KvFormat kvFormat,
             RemoteFileDownloader remoteFileDownloader) {
         this.targetSchema = targetSchema;
@@ -112,6 +114,7 @@ public class KvSnapshotBatchScanner implements BatchScanner {
         this.tableBucket = tableBucket;
         this.fsPathAndFileNames = fsPathAndFileNames;
         this.projectedFields = projectedFields;
+        this.kvFormatVersion = kvFormatVersion;
         this.kvFormat = kvFormat;
         // create a directory to store the snapshot files
         this.snapshotLocalDirectory =
@@ -220,7 +223,8 @@ public class KvSnapshotBatchScanner implements BatchScanner {
                                                         projectedFields,
                                                         targetSchemaId,
                                                         targetSchema,
-                                                        schemaGetter);
+                                                        schemaGetter,
+                                                        kvFormatVersion);
                                         readerIsReady.signalAll();
                                     } catch (Throwable e) {
                                         IOUtils.closeQuietly(closeableRegistry);

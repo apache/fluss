@@ -237,7 +237,8 @@ public class ReplicaTestBase {
                         logManager,
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         localDiskManager,
-                        createTestKvFlushScheduler(conf));
+                        createTestKvFlushScheduler(conf),
+                        manualClock);
         kvManager.startup();
 
         serverMetadataCache =
