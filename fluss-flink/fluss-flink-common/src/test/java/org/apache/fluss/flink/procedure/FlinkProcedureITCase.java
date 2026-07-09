@@ -63,6 +63,7 @@ import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DA
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** ITCase for Flink Procedure. */
@@ -840,7 +841,11 @@ public abstract class FlinkProcedureITCase {
 
         // Verify "bob" can authenticate by creating a catalog with bob's credentials.
         // Use retry to wait for ZK config notification to propagate to all TabletServers.
-        retry(Duration.ofSeconds(30), () -> tEnv.executeSql(createCatalogDDL).await());
+        retry(
+                Duration.ofSeconds(30),
+                () ->
+                        assertThatNoException()
+                                .isThrownBy(() -> tEnv.executeSql(createCatalogDDL).await()));
 
         // Grant bob DESCRIBE permission on cluster so bob can query configs
         tEnv.executeSql(
