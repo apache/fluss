@@ -538,6 +538,17 @@ public class ConfigOptions {
                                     + "For example: 'admin:admin-secret,bob:bob-secret'. "
                                     + "This is syntactic sugar that auto-generates the JAAS config string.");
 
+    public static final ConfigOption<String> SERVER_SASL_PLAIN_JAAS_CONFIG =
+            key("security.sasl.plain.jaas.config")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "JAAS configuration string for server-side SASL/PLAIN authentication. "
+                                    + "The value should use PlainLoginModule and define users with "
+                                    + "'user_<username>=\"<password>\"' options. This option is generated "
+                                    + "from 'security.sasl.plain.credentials' when that credential map is set, "
+                                    + "and can also be configured directly for compatibility.");
+
     public static final ConfigOption<Integer> TABLET_SERVER_ID =
             key("tablet-server.id")
                     .intType()

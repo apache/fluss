@@ -18,8 +18,6 @@
 package org.apache.fluss.rpc.netty.server;
 
 import org.apache.fluss.cluster.ServerType;
-import org.apache.fluss.config.ConfigBuilder;
-import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
@@ -42,8 +40,6 @@ import java.util.regex.Pattern;
 /** Build-in protocol plugin for Fluss. */
 public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfigurable {
 
-    private static final ConfigOption<String> PLAIN_JAAS_CONFIG =
-            ConfigBuilder.key("security.sasl.plain.jaas.config").stringType().noDefaultValue();
     private static final String PLAIN_CREDENTIALS_CONFIG =
             ConfigOptions.SERVER_SASL_CREDENTIALS.key();
 
@@ -165,7 +161,9 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
             return;
         }
 
-        conf.setString(PLAIN_JAAS_CONFIG, generateMergedJaasConfig(newCredentials));
+        conf.setString(
+                ConfigOptions.SERVER_SASL_PLAIN_JAAS_CONFIG,
+                generateMergedJaasConfig(newCredentials));
         currentPlainCredentials = newCredentials;
     }
 
@@ -229,7 +227,7 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfi
 
     private static Map<String, String> parseCredentialsFromJaasConfig(Configuration configuration) {
         Map<String, String> credentials = new LinkedHashMap<>();
-        String existingJaas = configuration.getString(PLAIN_JAAS_CONFIG);
+        String existingJaas = configuration.getString(ConfigOptions.SERVER_SASL_PLAIN_JAAS_CONFIG);
         if (existingJaas != null) {
             Matcher matcher = JAAS_USER_PATTERN.matcher(existingJaas);
             while (matcher.find()) {

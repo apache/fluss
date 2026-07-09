@@ -51,6 +51,7 @@ import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS_STRATEGY;
 import static org.apache.fluss.config.ConfigOptions.REMOTE_DATA_DIRS_WEIGHTS;
 import static org.apache.fluss.config.ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO;
 import static org.apache.fluss.config.ConfigOptions.SERVER_SASL_CREDENTIALS;
+import static org.apache.fluss.config.ConfigOptions.SERVER_SASL_PLAIN_JAAS_CONFIG;
 import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
 import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 
@@ -152,7 +153,7 @@ class DynamicServerConfig {
     }
 
     private static boolean isPlainJaasConfig(String configKey) {
-        return "security.sasl.plain.jaas.config".equals(configKey)
+        return SERVER_SASL_PLAIN_JAAS_CONFIG.key().equals(configKey)
                 || (configKey.startsWith("security.sasl.listener.name.")
                         && configKey.endsWith(".plain.jaas.config"));
     }

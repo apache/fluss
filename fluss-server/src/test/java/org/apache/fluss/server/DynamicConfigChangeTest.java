@@ -813,7 +813,7 @@ public class DynamicConfigChangeTest {
         Configuration configuration = new Configuration();
         configuration.setString(ConfigOptions.SERVER_SASL_CREDENTIALS.key(), "admin:admin-secret");
         configuration.setString(
-                "security.sasl.plain.jaas.config",
+                ConfigOptions.SERVER_SASL_PLAIN_JAAS_CONFIG.key(),
                 "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required "
                         + "user_admin=\"admin-secret\";");
 
@@ -828,7 +828,7 @@ public class DynamicConfigChangeTest {
                                 "admin:******",
                                 ConfigEntry.ConfigSource.INITIAL_SERVER_CONFIG),
                         new ConfigEntry(
-                                "security.sasl.plain.jaas.config",
+                                ConfigOptions.SERVER_SASL_PLAIN_JAAS_CONFIG.key(),
                                 "******",
                                 ConfigEntry.ConfigSource.INITIAL_SERVER_CONFIG));
     }
