@@ -24,11 +24,15 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.exception.ConfigException;
+import org.apache.fluss.exception.DatabaseNotExistException;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerInfo;
@@ -50,7 +54,9 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.apache.fluss.record.TestData.DEFAULT_REMOTE_DATA_DIR;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -213,6 +219,294 @@ class KvLeaderReplicaCapacityManagerTest {
         assertThat(manager.getKvLeaderReplicaCount()).isEqualTo(11);
     }
 
+    @Test
+    void testRebuildCurrentCountSkipsDatabaseDeletedDuringScan() {
+        MetadataManager metadataManager =
+                new TestingMetadataManager()
+                        .withDatabases("dropped_db")
+                        .withListTablesFailure(
+                                "dropped_db",
+                                new DatabaseNotExistException(
+                                        "Database dropped_db does not exist."),
+                                false);
+        KvLeaderReplicaCapacityManager manager =
+                new KvLeaderReplicaCapacityManager(
+                        configWithMemoryReserved(1), new CoordinatorMetadataCache());
+        manager.checkAndIncrease(5);
+
+        manager.rebuildCurrentCount(metadataManager);
+
+        assertThat(manager.getKvLeaderReplicaCount()).isEqualTo(0);
+    }
+
+    @Test
+    void testRebuildCurrentCountSkipsDatabaseDeletedDuringRuntimeListFailure() {
+        MetadataManager metadataManager =
+                new TestingMetadataManager()
+                        .withDatabases("dropped_db")
+                        .withListTablesFailure(
+                                "dropped_db",
+                                new FlussRuntimeException(
+                                        "Fail to list tables for database:dropped_db"),
+                                false);
+        KvLeaderReplicaCapacityManager manager =
+                new KvLeaderReplicaCapacityManager(
+                        configWithMemoryReserved(1), new CoordinatorMetadataCache());
+        manager.checkAndIncrease(5);
+
+        manager.rebuildCurrentCount(metadataManager);
+
+        assertThat(manager.getKvLeaderReplicaCount()).isEqualTo(0);
+    }
+
+    @Test
+    void testRebuildCurrentCountDoesNotSwallowListTablesFailureForExistingDatabase() {
+        MetadataManager metadataManager =
+                new TestingMetadataManager()
+                        .withDatabases("db")
+                        .withListTablesFailure(
+                                "db",
+                                new FlussRuntimeException("Fail to list tables for database:db"),
+                                true);
+        KvLeaderReplicaCapacityManager manager =
+                new KvLeaderReplicaCapacityManager(
+                        configWithMemoryReserved(1), new CoordinatorMetadataCache());
+
+        assertThatThrownBy(() -> manager.rebuildCurrentCount(metadataManager))
+                .isInstanceOf(FlussRuntimeException.class)
+                .hasMessageContaining("Fail to list tables for database:db");
+    }
+
+    @Test
+    void testRebuildCurrentCountSkipsTableDeletedDuringScan() {
+        TablePath droppedTablePath = TablePath.of("db", "dropped_table");
+        MetadataManager metadataManager =
+                new TestingMetadataManager()
+                        .withDatabases("db")
+                        .withTables("db", "dropped_table")
+                        .withGetTableFailure(
+                                droppedTablePath,
+                                new TableNotExistException(
+                                        "Table 'db.dropped_table' does not exist."),
+                                false);
+        KvLeaderReplicaCapacityManager manager =
+                new KvLeaderReplicaCapacityManager(
+                        configWithMemoryReserved(1), new CoordinatorMetadataCache());
+        manager.checkAndIncrease(5);
+
+        manager.rebuildCurrentCount(metadataManager);
+
+        assertThat(manager.getKvLeaderReplicaCount()).isEqualTo(0);
+    }
+
+    @Test
+    void testRebuildCurrentCountSkipsTableDeletedDuringRuntimeGetFailure() {
+        TablePath droppedTablePath = TablePath.of("db", "dropped_table");
+        MetadataManager metadataManager =
+                new TestingMetadataManager()
+                        .withDatabases("db")
+                        .withTables("db", "dropped_table")
+                        .withGetTableFailure(
+                                droppedTablePath,
+                                new FlussRuntimeException(
+                                        "Failed to get table 'db.dropped_table'."),
+                                false);
+        KvLeaderReplicaCapacityManager manager =
+                new KvLeaderReplicaCapacityManager(
+                        configWithMemoryReserved(1), new CoordinatorMetadataCache());
+        manager.checkAndIncrease(5);
+
+        manager.rebuildCurrentCount(metadataManager);
+
+        assertThat(manager.getKvLeaderReplicaCount()).isEqualTo(0);
+    }
+
+    @Test
+    void testRebuildCurrentCountDoesNotSwallowGetTableFailureForExistingTable() {
+        TablePath tablePath = TablePath.of("db", "table");
+        MetadataManager metadataManager =
+                new TestingMetadataManager()
+                        .withDatabases("db")
+                        .withTables("db", "table")
+                        .withGetTableFailure(
+                                tablePath,
+                                new FlussRuntimeException("Failed to get table 'db.table'."),
+                                true);
+        KvLeaderReplicaCapacityManager manager =
+                new KvLeaderReplicaCapacityManager(
+                        configWithMemoryReserved(1), new CoordinatorMetadataCache());
+
+        assertThatThrownBy(() -> manager.rebuildCurrentCount(metadataManager))
+                .isInstanceOf(FlussRuntimeException.class)
+                .hasMessageContaining("Failed to get table 'db.table'.");
+    }
+
+    @Test
+    void testRebuildCurrentCountSkipsPartitionedTableDeletedDuringPartitionScan() {
+        TablePath droppedTablePath = TablePath.of("db", "dropped_partitioned_table");
+        MetadataManager metadataManager =
+                new TestingMetadataManager()
+                        .withDatabases("db")
+                        .withTables("db", "dropped_partitioned_table")
+                        .withTableInfo(
+                                tableInfo(
+                                        droppedTablePath,
+                                        1,
+                                        partitionedKvTable(3),
+                                        DEFAULT_REMOTE_DATA_DIR),
+                                false)
+                        .withGetPartitionsFailure(
+                                droppedTablePath,
+                                new FlussRuntimeException("Failed to get partitions."));
+        KvLeaderReplicaCapacityManager manager =
+                new KvLeaderReplicaCapacityManager(
+                        configWithMemoryReserved(1), new CoordinatorMetadataCache());
+        manager.checkAndIncrease(5);
+
+        manager.rebuildCurrentCount(metadataManager);
+
+        assertThat(manager.getKvLeaderReplicaCount()).isEqualTo(0);
+    }
+
+    @Test
+    void testRebuildCurrentCountDoesNotSwallowPartitionScanFailureForExistingTable() {
+        TablePath tablePath = TablePath.of("db", "partitioned_table");
+        MetadataManager metadataManager =
+                new TestingMetadataManager()
+                        .withDatabases("db")
+                        .withTables("db", "partitioned_table")
+                        .withTableInfo(
+                                tableInfo(
+                                        tablePath,
+                                        1,
+                                        partitionedKvTable(3),
+                                        DEFAULT_REMOTE_DATA_DIR),
+                                true)
+                        .withGetPartitionsFailure(
+                                tablePath, new FlussRuntimeException("Failed to get partitions."));
+        KvLeaderReplicaCapacityManager manager =
+                new KvLeaderReplicaCapacityManager(
+                        configWithMemoryReserved(1), new CoordinatorMetadataCache());
+
+        assertThatThrownBy(() -> manager.rebuildCurrentCount(metadataManager))
+                .isInstanceOf(FlussRuntimeException.class)
+                .hasMessageContaining("Failed to get partitions.");
+    }
+
+    private static final class TestingMetadataManager extends MetadataManager {
+
+        private List<String> databases = Collections.emptyList();
+        private final Set<String> existingDatabases = new HashSet<>();
+        private final Map<String, List<String>> tablesByDatabase = new HashMap<>();
+        private final Map<String, RuntimeException> listTablesFailures = new HashMap<>();
+        private final Set<TablePath> existingTables = new HashSet<>();
+        private final Map<TablePath, TableInfo> tableInfos = new HashMap<>();
+        private final Map<TablePath, RuntimeException> getTableFailures = new HashMap<>();
+        private final Map<TablePath, Set<String>> partitionsByTable = new HashMap<>();
+        private final Map<TablePath, RuntimeException> getPartitionsFailures = new HashMap<>();
+
+        private TestingMetadataManager() {
+            super(null, new Configuration(), null);
+        }
+
+        private TestingMetadataManager withDatabases(String... databases) {
+            this.databases = Arrays.asList(databases);
+            return this;
+        }
+
+        private TestingMetadataManager withTables(String database, String... tables) {
+            existingDatabases.add(database);
+            tablesByDatabase.put(database, Arrays.asList(tables));
+            return this;
+        }
+
+        private TestingMetadataManager withListTablesFailure(
+                String database, RuntimeException failure, boolean databaseExists) {
+            if (databaseExists) {
+                existingDatabases.add(database);
+            } else {
+                existingDatabases.remove(database);
+            }
+            listTablesFailures.put(database, failure);
+            return this;
+        }
+
+        private TestingMetadataManager withTableInfo(TableInfo tableInfo, boolean tableExists) {
+            tableInfos.put(tableInfo.getTablePath(), tableInfo);
+            if (tableExists) {
+                existingTables.add(tableInfo.getTablePath());
+            } else {
+                existingTables.remove(tableInfo.getTablePath());
+            }
+            return this;
+        }
+
+        private TestingMetadataManager withGetTableFailure(
+                TablePath tablePath, RuntimeException failure, boolean tableExists) {
+            if (tableExists) {
+                existingTables.add(tablePath);
+            } else {
+                existingTables.remove(tablePath);
+            }
+            getTableFailures.put(tablePath, failure);
+            return this;
+        }
+
+        private TestingMetadataManager withGetPartitionsFailure(
+                TablePath tablePath, RuntimeException failure) {
+            getPartitionsFailures.put(tablePath, failure);
+            return this;
+        }
+
+        @Override
+        public List<String> listDatabases() {
+            return databases;
+        }
+
+        @Override
+        public boolean databaseExists(String databaseName) {
+            return existingDatabases.contains(databaseName);
+        }
+
+        @Override
+        public List<String> listTables(String databaseName) throws DatabaseNotExistException {
+            RuntimeException failure = listTablesFailures.get(databaseName);
+            if (failure != null) {
+                throw failure;
+            }
+            List<String> tables = tablesByDatabase.get(databaseName);
+            return tables == null ? Collections.emptyList() : tables;
+        }
+
+        @Override
+        public TableInfo getTable(TablePath tablePath) throws TableNotExistException {
+            RuntimeException failure = getTableFailures.get(tablePath);
+            if (failure != null) {
+                throw failure;
+            }
+            TableInfo tableInfo = tableInfos.get(tablePath);
+            if (tableInfo == null) {
+                throw new TableNotExistException("Table '" + tablePath + "' does not exist.");
+            }
+            return tableInfo;
+        }
+
+        @Override
+        public boolean tableExists(TablePath tablePath) {
+            return existingTables.contains(tablePath);
+        }
+
+        @Override
+        public Set<String> getPartitions(TablePath tablePath) {
+            RuntimeException failure = getPartitionsFailures.get(tablePath);
+            if (failure != null) {
+                throw failure;
+            }
+            Set<String> partitions = partitionsByTable.get(tablePath);
+            return partitions == null ? Collections.emptySet() : partitions;
+        }
+    }
+
     private static Configuration configWithMemoryReserved(long bytes) {
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED, new MemorySize(bytes));
@@ -267,6 +561,22 @@ class KvLeaderReplicaCapacityManagerTest {
                 .distributedBy(bucketCount)
                 .partitionedBy("dt")
                 .build();
+    }
+
+    private static TableInfo tableInfo(
+            TablePath tablePath,
+            long tableId,
+            TableDescriptor tableDescriptor,
+            String remoteDataDir) {
+        long currentMillis = System.currentTimeMillis();
+        return TableInfo.of(
+                tablePath,
+                tableId,
+                1,
+                tableDescriptor,
+                remoteDataDir,
+                currentMillis,
+                currentMillis);
     }
 
     private static PartitionAssignment partitionAssignment(long tableId, int bucketCount) {

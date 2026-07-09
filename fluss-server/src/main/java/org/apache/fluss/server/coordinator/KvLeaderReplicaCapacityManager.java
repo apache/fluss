@@ -22,7 +22,10 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
+import org.apache.fluss.exception.DatabaseNotExistException;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
@@ -111,10 +114,30 @@ public class KvLeaderReplicaCapacityManager implements ServerReconfigurable {
         long rebuiltCount = 0;
         List<String> databases = metadataManager.listDatabases();
         for (String database : databases) {
-            List<String> tables = metadataManager.listTables(database);
+            List<String> tables;
+            try {
+                tables = metadataManager.listTables(database);
+            } catch (DatabaseNotExistException e) {
+                continue;
+            } catch (FlussRuntimeException e) {
+                if (!metadataManager.databaseExists(database)) {
+                    continue;
+                }
+                throw e;
+            }
             for (String table : tables) {
                 TablePath tablePath = TablePath.of(database, table);
-                TableInfo tableInfo = metadataManager.getTable(tablePath);
+                TableInfo tableInfo;
+                try {
+                    tableInfo = metadataManager.getTable(tablePath);
+                } catch (TableNotExistException e) {
+                    continue;
+                } catch (FlussRuntimeException e) {
+                    if (!metadataManager.tableExists(tablePath)) {
+                        continue;
+                    }
+                    throw e;
+                }
                 rebuiltCount += getKvLeaderReplicaCount(tableInfo, metadataManager);
             }
         }
@@ -185,7 +208,14 @@ public class KvLeaderReplicaCapacityManager implements ServerReconfigurable {
         if (!tableInfo.isPartitioned()) {
             return tableInfo.getNumBuckets();
         }
-        return (long) metadataManager.getPartitions(tableInfo.getTablePath()).size()
-                * tableInfo.getNumBuckets();
+        try {
+            return (long) metadataManager.getPartitions(tableInfo.getTablePath()).size()
+                    * tableInfo.getNumBuckets();
+        } catch (FlussRuntimeException e) {
+            if (!metadataManager.tableExists(tableInfo.getTablePath())) {
+                return 0;
+            }
+            throw e;
+        }
     }
 }
