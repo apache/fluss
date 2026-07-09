@@ -248,13 +248,14 @@ class LookupSender implements Runnable {
     }
 
     /**
-     * Packs lookup batches into RPC request groups so response dispatch can still use {@link
-     * TableBucket} as the lookup key.
+     * Packs lookup batches into RPC request groups so each request has one lookup kind and response
+     * dispatch can still use {@link TableBucket} as the lookup key.
      *
-     * <p>Historical lookups can have multiple batches with the same target {@link TableBucket} but
-     * different original partition names. The request carries that original partition name, but the
-     * response does not. If those batches were sent in one RPC, two response buckets would have the
-     * same {@link TableBucket} and the client could not map each response back to the right batch.
+     * <p>Normal and historical lookups are sent in separate RPCs. Historical lookups can have
+     * multiple batches with the same target {@link TableBucket} but different original partition
+     * names. The request carries that original partition name, but the response does not. If those
+     * batches were sent in one RPC, two response buckets would have the same {@link TableBucket}
+     * and the client could not map each response back to the right batch.
      *
      * <p>To avoid that ambiguity, each request group contains a {@link TableBucket} at most once.
      */
@@ -262,16 +263,21 @@ class LookupSender implements Runnable {
             Collection<LookupBatch> lookupBatches) {
         List<Map<TableBucket, LookupBatch>> lookupRequestGroups = new ArrayList<>();
         Map<TableBucket, LookupBatch> currentRequestGroup = new LinkedHashMap<>();
+        boolean currentGroupHistorical = false;
         for (LookupBatch lookupBatch : lookupBatches) {
             TableBucket tableBucket = lookupBatch.tableBucket();
+            boolean historicalLookup = lookupBatch.partitionName() != null;
             boolean tableBucketAlreadyInCurrentGroup = currentRequestGroup.containsKey(tableBucket);
-            if (tableBucketAlreadyInCurrentGroup) {
-                // This happens when different historical original partitions map to the same
-                // historical TableBucket. Start a new RPC so response dispatch remains unambiguous.
+            boolean differentLookupKind =
+                    !currentRequestGroup.isEmpty() && currentGroupHistorical != historicalLookup;
+            if (tableBucketAlreadyInCurrentGroup || differentLookupKind) {
+                // Start a new RPC when the request kind changes, or when different historical
+                // original partitions map to the same historical TableBucket.
                 lookupRequestGroups.add(currentRequestGroup);
                 currentRequestGroup = new LinkedHashMap<>();
             }
             currentRequestGroup.put(tableBucket, lookupBatch);
+            currentGroupHistorical = historicalLookup;
         }
         if (!currentRequestGroup.isEmpty()) {
             lookupRequestGroups.add(currentRequestGroup);

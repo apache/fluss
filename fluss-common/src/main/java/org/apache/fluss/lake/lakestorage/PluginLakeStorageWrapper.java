@@ -28,6 +28,8 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.TemporaryClassLoaderContext;
 import org.apache.fluss.utils.WrappingProxy;
 
+import javax.annotation.Nullable;
+
 import java.util.List;
 
 /**
@@ -134,6 +136,46 @@ public class PluginLakeStorageWrapper implements LakeStoragePlugin {
         @Override
         public LakeSource<?> createLakeSource(TablePath tablePath) {
             return inner.createLakeSource(tablePath);
+        }
+
+        @Override
+        public LakeTableLookuper createLakeTableLookuper(
+                TablePath tablePath, LookuperContext context) {
+            try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
+                return new ClassLoaderFixingLakeTableLookuper(
+                        inner.createLakeTableLookuper(tablePath, context), loader);
+            }
+        }
+    }
+
+    static class ClassLoaderFixingLakeTableLookuper
+            implements LakeTableLookuper, WrappingProxy<LakeTableLookuper> {
+
+        private final LakeTableLookuper inner;
+        private final ClassLoader loader;
+
+        private ClassLoaderFixingLakeTableLookuper(LakeTableLookuper inner, ClassLoader loader) {
+            this.inner = inner;
+            this.loader = loader;
+        }
+
+        @Override
+        public @Nullable byte[] lookup(byte[] key, LookupContext context) throws Exception {
+            try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
+                return inner.lookup(key, context);
+            }
+        }
+
+        @Override
+        public void close() throws Exception {
+            try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
+                inner.close();
+            }
+        }
+
+        @Override
+        public LakeTableLookuper getWrappedDelegate() {
+            return inner;
         }
     }
 }

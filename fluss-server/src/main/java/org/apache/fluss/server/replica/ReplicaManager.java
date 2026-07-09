@@ -43,6 +43,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.plugin.PluginManager;
 import org.apache.fluss.record.KeyRecordBatch;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
@@ -70,6 +71,7 @@ import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.entity.LakeBucketOffset;
+import org.apache.fluss.server.entity.LookupDataForBucket;
 import org.apache.fluss.server.entity.NotifyKvSnapshotOffsetData;
 import org.apache.fluss.server.entity.NotifyLakeTableOffsetData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
@@ -138,9 +140,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
@@ -218,6 +222,8 @@ public class ReplicaManager implements ServerReconfigurable {
 
     private final ScannerManager scannerManager;
 
+    private final HistoricalLakeLookupManager historicalLakeLookupManager;
+
     public ReplicaManager(
             Configuration conf,
             Scheduler scheduler,
@@ -251,6 +257,47 @@ public class ReplicaManager implements ServerReconfigurable {
                 fatalErrorHandler,
                 serverMetricGroup,
                 userMetrics,
+                scannerManager,
+                clock,
+                ioExecutor,
+                localDiskManager,
+                null);
+    }
+
+    public ReplicaManager(
+            Configuration conf,
+            Scheduler scheduler,
+            LogManager logManager,
+            KvManager kvManager,
+            ZooKeeperClient zkClient,
+            int serverId,
+            TabletServerMetadataCache metadataCache,
+            RpcClient rpcClient,
+            CoordinatorGateway coordinatorGateway,
+            CompletedKvSnapshotCommitter completedKvSnapshotCommitter,
+            FatalErrorHandler fatalErrorHandler,
+            TabletServerMetricGroup serverMetricGroup,
+            UserMetrics userMetrics,
+            ScannerManager scannerManager,
+            Clock clock,
+            ExecutorService ioExecutor,
+            LocalDiskManager localDiskManager,
+            @Nullable PluginManager pluginManager)
+            throws IOException {
+        this(
+                conf,
+                scheduler,
+                logManager,
+                kvManager,
+                zkClient,
+                serverId,
+                metadataCache,
+                rpcClient,
+                coordinatorGateway,
+                completedKvSnapshotCommitter,
+                fatalErrorHandler,
+                serverMetricGroup,
+                userMetrics,
                 new RemoteLogManager(
                         conf,
                         zkClient,
@@ -262,7 +309,8 @@ public class ReplicaManager implements ServerReconfigurable {
                 scannerManager,
                 clock,
                 ioExecutor,
-                localDiskManager);
+                localDiskManager,
+                pluginManager);
     }
 
     @VisibleForTesting
@@ -285,6 +333,50 @@ public class ReplicaManager implements ServerReconfigurable {
             Clock clock,
             ExecutorService ioExecutor,
             LocalDiskManager localDiskManager)
+            throws IOException {
+        this(
+                conf,
+                scheduler,
+                logManager,
+                kvManager,
+                zkClient,
+                serverId,
+                metadataCache,
+                rpcClient,
+                coordinatorGateway,
+                completedKvSnapshotCommitter,
+                fatalErrorHandler,
+                serverMetricGroup,
+                userMetrics,
+                remoteLogManager,
+                scannerManager,
+                clock,
+                ioExecutor,
+                localDiskManager,
+                null);
+    }
+
+    @VisibleForTesting
+    ReplicaManager(
+            Configuration conf,
+            Scheduler scheduler,
+            LogManager logManager,
+            KvManager kvManager,
+            ZooKeeperClient zkClient,
+            int serverId,
+            TabletServerMetadataCache metadataCache,
+            RpcClient rpcClient,
+            CoordinatorGateway coordinatorGateway,
+            CompletedKvSnapshotCommitter completedKvSnapshotCommitter,
+            FatalErrorHandler fatalErrorHandler,
+            TabletServerMetricGroup serverMetricGroup,
+            UserMetrics userMetrics,
+            RemoteLogManager remoteLogManager,
+            ScannerManager scannerManager,
+            Clock clock,
+            ExecutorService ioExecutor,
+            LocalDiskManager localDiskManager,
+            @Nullable PluginManager pluginManager)
             throws IOException {
         this.conf = conf;
         this.zkClient = zkClient;
@@ -336,6 +428,8 @@ public class ReplicaManager implements ServerReconfigurable {
         this.ioExecutor = ioExecutor;
         this.minInSyncReplicas = conf.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER);
         this.scannerManager = checkNotNull(scannerManager, "scannerManager");
+        this.historicalLakeLookupManager =
+                new HistoricalLakeLookupManager(conf, pluginManager, ioExecutor);
 
         registerMetrics();
     }
@@ -773,6 +867,45 @@ public class ReplicaManager implements ServerReconfigurable {
             short apiVersion,
             Consumer<Map<TableBucket, LookupResultForBucket>> responseCallback) {
         lookups(false, null, null, entriesPerBucket, apiVersion, responseCallback);
+    }
+
+    /** Lookup historical lake data for requests that carry original partition names. */
+    public void historicalLookups(
+            List<LookupDataForBucket> lookupData,
+            Consumer<Map<TableBucket, LookupResultForBucket>> responseCallback) {
+        if (lookupData.isEmpty()) {
+            responseCallback.accept(Collections.emptyMap());
+            return;
+        }
+
+        Map<TableBucket, LookupResultForBucket> result = new ConcurrentHashMap<>();
+        AtomicInteger remainingLookups = new AtomicInteger(lookupData.size());
+        for (LookupDataForBucket data : lookupData) {
+            CompletableFuture<LookupResultForBucket> lookupFuture;
+            try {
+                Replica replica = getReplicaOrException(data.tableBucket());
+                lookupFuture = historicalLakeLookupManager.lookup(data, replica.getTableInfo());
+            } catch (Exception e) {
+                lookupFuture =
+                        CompletableFuture.completedFuture(
+                                new LookupResultForBucket(
+                                        data.tableBucket(), ApiError.fromThrowable(e)));
+            }
+            lookupFuture.whenComplete(
+                    (bucketResult, error) -> {
+                        if (error == null) {
+                            result.put(bucketResult.getTableBucket(), bucketResult);
+                        } else {
+                            result.put(
+                                    data.tableBucket(),
+                                    new LookupResultForBucket(
+                                            data.tableBucket(), ApiError.fromThrowable(error)));
+                        }
+                        if (remainingLookups.decrementAndGet() == 0) {
+                            responseCallback.accept(result);
+                        }
+                    });
+        }
     }
 
     /**
@@ -2200,6 +2333,7 @@ public class ReplicaManager implements ServerReconfigurable {
     public void shutdown() throws InterruptedException {
         // Close the resources for snapshot kv
         kvSnapshotResource.close();
+        historicalLakeLookupManager.close();
         replicaFetcherManager.shutdown();
         delayedWriteManager.shutdown();
         delayedFetchLogManager.shutdown();

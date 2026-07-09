@@ -51,6 +51,7 @@ import static org.apache.fluss.utils.PartitionUtils.generateAutoPartition;
 import static org.apache.fluss.utils.PartitionUtils.isHistoricalLookupCandidatePartition;
 import static org.apache.fluss.utils.PartitionUtils.isHistoricalPartitionName;
 import static org.apache.fluss.utils.PartitionUtils.parseValueOfType;
+import static org.apache.fluss.utils.PartitionUtils.toHistoricalPartitionSpec;
 import static org.apache.fluss.utils.PartitionUtils.validateAutoPartitionTime;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionValues;
@@ -432,6 +433,25 @@ class PartitionUtilsTest {
                                 multiplePartitionKeyTable,
                                 "region1$" + HISTORICAL_PARTITION_VALUE + "$extra"))
                 .isFalse();
+    }
+
+    @Test
+    void testToHistoricalPartitionSpec() {
+        TableInfo singlePartitionKeyTable =
+                createAutoPartitionedTableInfo(
+                        true, DataLakeFormat.PAIMON, AutoPartitionTimeUnit.DAY, 2, "b", "b");
+        assertThat(
+                        toHistoricalPartitionSpec(singlePartitionKeyTable, "20240101")
+                                .getPartitionName())
+                .isEqualTo(HISTORICAL_PARTITION_VALUE);
+
+        TableInfo multiplePartitionKeyTable =
+                createAutoPartitionedTableInfo(
+                        true, DataLakeFormat.PAIMON, AutoPartitionTimeUnit.DAY, 2, "b", "a", "b");
+        assertThat(
+                        toHistoricalPartitionSpec(multiplePartitionKeyTable, "region1$20240101")
+                                .getPartitionName())
+                .isEqualTo("region1$" + HISTORICAL_PARTITION_VALUE);
     }
 
     @Test

@@ -177,7 +177,7 @@ public class LookupSenderTest {
     }
 
     @Test
-    void testNormalAndHistoricalLookupsCanBatchTogetherForDifferentBuckets() throws Exception {
+    void testNormalAndHistoricalLookupsSplitRequests() throws Exception {
         List<LookupRequest> receivedRequests = Collections.synchronizedList(new ArrayList<>());
         gateway.setLookupHandler(
                 request -> {
@@ -188,8 +188,8 @@ public class LookupSenderTest {
         // Normal lookup has no original partition name.
         LookupQuery normalQuery =
                 new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("normal-key"));
-        // Historical lookup carries the original partition name. Because it targets another
-        // bucket, the response can still be dispatched unambiguously in the same RPC.
+        // Historical lookup carries the original partition name, so it is sent in another RPC even
+        // when it targets a different bucket.
         LookupQuery historicalQuery =
                 new LookupQuery(
                         DATA1_TABLE_PATH_PK,
@@ -204,13 +204,18 @@ public class LookupSenderTest {
                 .isEqualTo(responseValue("", "normal-key"));
         assertThat(historicalQuery.future().get(5, TimeUnit.SECONDS))
                 .isEqualTo(responseValue("dt=20200101", "historical-key"));
-        assertThat(receivedRequests).hasSize(1);
-        LookupRequest request = receivedRequests.get(0);
-        assertThat(request.getBucketsReqsList())
-                .extracting(PbLookupReqForBucket::getBucketId)
-                .containsExactly(0, 1);
-        assertThat(request.getBucketsReqAt(0).hasPartitionName()).isFalse();
-        assertThat(request.getBucketsReqAt(1).getPartitionName()).isEqualTo("dt=20200101");
+        assertThat(receivedRequests).hasSize(2);
+
+        LookupRequest normalRequest = receivedRequests.get(0);
+        assertThat(normalRequest.getBucketsReqsCount()).isEqualTo(1);
+        assertThat(normalRequest.getBucketsReqAt(0).getBucketId()).isEqualTo(0);
+        assertThat(normalRequest.getBucketsReqAt(0).hasPartitionName()).isFalse();
+
+        LookupRequest historicalRequest = receivedRequests.get(1);
+        assertThat(historicalRequest.getBucketsReqsCount()).isEqualTo(1);
+        assertThat(historicalRequest.getBucketsReqAt(0).getBucketId()).isEqualTo(1);
+        assertThat(historicalRequest.getBucketsReqAt(0).getPartitionName())
+                .isEqualTo("dt=20200101");
     }
 
     @Test

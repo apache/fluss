@@ -242,6 +242,31 @@ public class PartitionUtils {
     }
 
     /**
+     * Converts an original partition name to the corresponding historical system partition spec.
+     */
+    public static ResolvedPartitionSpec toHistoricalPartitionSpec(
+            TableInfo tableInfo, String originalPartitionName) {
+        AutoPartitionStrategy autoPartitionStrategy =
+                tableInfo.getTableConfig().getAutoPartitionStrategy();
+        Optional<Integer> autoPartitionKeyIndex =
+                getAutoPartitionKeyIndex(tableInfo.getPartitionKeys(), autoPartitionStrategy);
+        if (!autoPartitionKeyIndex.isPresent()) {
+            throw new InvalidPartitionException(
+                    String.format(
+                            "Cannot resolve historical partition for table %s because auto partition key is not available.",
+                            tableInfo.getTablePath()));
+        }
+
+        ResolvedPartitionSpec originalPartitionSpec =
+                ResolvedPartitionSpec.fromPartitionName(
+                        tableInfo.getPartitionKeys(), originalPartitionName);
+        List<String> historicalPartitionValues =
+                new ArrayList<>(originalPartitionSpec.getPartitionValues());
+        historicalPartitionValues.set(autoPartitionKeyIndex.get(), HISTORICAL_PARTITION_VALUE);
+        return new ResolvedPartitionSpec(tableInfo.getPartitionKeys(), historicalPartitionValues);
+    }
+
+    /**
      * Returns true if the partition can be served by historical lookup.
      *
      * <p>This is stricter than checking whether the auto partition time is expired. Historical
