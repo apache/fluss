@@ -746,18 +746,20 @@ public class DynamicConfigChangeTest {
                 .containsEntry("admin", "admin-secret")
                 .containsEntry("bob", "bob-secret");
 
-        // SUBTRACT first user
+        // SUBTRACT with an existing key but a different value should remove by map key.
         dynamicConfigManager.alterConfigs(
                 Collections.singletonList(
                         new AlterConfig(
                                 ConfigOptions.SERVER_SASL_CREDENTIALS.key(),
-                                "admin:admin-secret",
+                                "admin:wrong-secret",
                                 AlterConfigOpType.SUBTRACT)));
 
         zkConfig = zookeeperClient.fetchEntityConfig();
         assertThat(zkConfig.get(ConfigOptions.SERVER_SASL_CREDENTIALS.key()))
                 .isEqualTo("bob:bob-secret");
-        assertThat(reconfiguredUsers.get()).containsEntry("bob", "bob-secret");
+        assertThat(reconfiguredUsers.get())
+                .containsEntry("bob", "bob-secret")
+                .doesNotContainKey("admin");
 
         // SUBTRACT last user - should write null to override static config
         dynamicConfigManager.alterConfigs(

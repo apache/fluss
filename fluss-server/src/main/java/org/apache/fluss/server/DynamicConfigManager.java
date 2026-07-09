@@ -230,18 +230,27 @@ public class DynamicConfigManager {
     private void subtractMapConfig(
             Map<String, String> dynamicConfigs, String configKey, String configValue) {
         validateMapEntry(configKey, configValue);
-        String username = getMapEntryKey(configValue);
+        String targetKey = getMapEntryKey(configValue);
         String existingValue = getExistingConfigValue(dynamicConfigs, configKey);
         if (existingValue == null || existingValue.isEmpty()) {
             return;
         }
 
         List<String> entries = new ArrayList<>();
+        boolean removed = false;
         for (String entry : existingValue.split(",")) {
             String trimmed = entry.trim();
-            if (!trimmed.isEmpty() && !Objects.equals(getMapEntryKey(trimmed), username)) {
-                entries.add(trimmed);
+            if (trimmed.isEmpty()) {
+                continue;
             }
+            if (Objects.equals(getMapEntryKey(trimmed), targetKey)) {
+                removed = true;
+                continue;
+            }
+            entries.add(trimmed);
+        }
+        if (!removed) {
+            return;
         }
         if (entries.isEmpty()) {
             dynamicConfigs.put(configKey, null);

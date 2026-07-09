@@ -225,7 +225,7 @@ public class DefaultAuthorizerTest {
 
     @Test
     void testIgnoreCase() throws Exception {
-        Session normalUserSession = createSession("user1", "192.168.1.1");
+        Session normalUserSession = createSession("USER", "user1", "192.168.1.1");
         Session superUserSession = createSession("user", "ROOT", "192.168.1.1");
         assertThat(authorizer.isAuthorized(normalUserSession, READ, Resource.database("database1")))
                 .isFalse();

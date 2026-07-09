@@ -27,10 +27,12 @@ import org.apache.flink.table.procedure.ProcedureContext;
 /**
  * Procedure to subtract (remove) values from collection-type cluster configurations dynamically.
  *
- * <p>This procedure removes specific values from existing list-type or map-type configurations. The
- * SUBTRACT operation only works on collection configurations (e.g., {@code
- * security.sasl.plain.credentials}). If the collection becomes empty after subtraction, the
- * configuration key is removed entirely. The changes are:
+ * <p>This procedure removes values from existing collection configurations. For list-type
+ * configurations, SUBTRACT removes the exact list value. For map-type configurations, SUBTRACT
+ * removes the entry by map key: the supplied value must still be a valid {@code key:value} pair,
+ * but only the key is used to find the entry to remove. The SUBTRACT operation only works on
+ * collection configurations (e.g., {@code security.sasl.plain.credentials}). If the collection
+ * becomes empty after subtraction, the configuration key is removed entirely. The changes are:
  *
  * <ul>
  *   <li>Validated by the CoordinatorServer before persistence
@@ -42,8 +44,8 @@ import org.apache.flink.table.procedure.ProcedureContext;
  * <p>Usage examples:
  *
  * <pre>
- * -- Remove a user from the SASL credentials map
- * CALL sys.subtract_cluster_configs('security.sasl.plain.credentials', 'bob:bob-secret');
+ * -- Remove user "bob" from the SASL credentials map. For map configs, only "bob" is matched.
+ * CALL sys.subtract_cluster_configs('security.sasl.plain.credentials', 'bob:any-secret');
  *
  * -- Remove multiple key-value pairs at one time
  * CALL sys.subtract_cluster_configs(
@@ -55,7 +57,7 @@ import org.apache.flink.table.procedure.ProcedureContext;
  *
  * <p><b>Note:</b> SUBTRACT operations are only supported for list-type or map-type configuration
  * keys. The server will reject the change if the configuration key is not a collection type.
- * Subtracting a value that does not exist in the collection is a no-op.
+ * Subtracting a list value or map key that does not exist in the collection is a no-op.
  */
 public class SubtractClusterConfigsProcedure extends CollectionClusterConfigsProcedureBase {
 
