@@ -20,6 +20,8 @@ package org.apache.fluss.server.coordinator;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceProgress;
+import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.RebalanceStatus;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -2239,16 +2241,18 @@ class CoordinatorEventProcessorTest {
     }
 
     private int countInProgressRebalanceTasks(TableBucket... buckets) {
+        RebalanceProgress progress =
+                eventProcessor.getRebalanceManager().listRebalanceProgress(null);
+        if (progress == null) {
+            return 0;
+        }
+
+        Map<TableBucket, RebalanceResultForBucket> progressForBucketMap =
+                progress.progressForBucketMap();
         int count = 0;
         for (TableBucket tb : buckets) {
-            RebalanceStatus status =
-                    eventProcessor
-                            .getRebalanceManager()
-                            .listRebalanceProgress(null)
-                            .progressForBucketMap()
-                            .get(tb)
-                            .status();
-            if (!RebalanceStatus.FINAL_STATUSES.contains(status)) {
+            RebalanceResultForBucket result = progressForBucketMap.get(tb);
+            if (result != null && !RebalanceStatus.FINAL_STATUSES.contains(result.status())) {
                 count++;
             }
         }

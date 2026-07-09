@@ -111,9 +111,13 @@ class DynamicServerConfig {
     }
 
     void register(ServerReconfigurable serverReconfigurable) {
-        serverReconfigures.put(serverReconfigurable.getClass(), serverReconfigurable);
-        serverReconfigurable.validate(currentConfig);
-        serverReconfigurable.reconfigure(currentConfig);
+        inWriteLock(
+                lock,
+                () -> {
+                    serverReconfigurable.validate(currentConfig);
+                    serverReconfigurable.reconfigure(currentConfig);
+                    serverReconfigures.put(serverReconfigurable.getClass(), serverReconfigurable);
+                });
     }
 
     /**

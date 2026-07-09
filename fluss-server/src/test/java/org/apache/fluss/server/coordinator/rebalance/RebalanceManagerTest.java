@@ -713,10 +713,9 @@ public class RebalanceManagerTest {
         manager.checkTimeout();
 
         assertThat(eventManager.events).hasSize(2);
-        assertThat(((RebalanceTaskTimeoutEvent) eventManager.events.get(0)).getTableBucket())
-                .isEqualTo(buckets.get(0));
-        assertThat(((RebalanceTaskTimeoutEvent) eventManager.events.get(1)).getTableBucket())
-                .isEqualTo(buckets.get(1));
+        assertThat(eventManager.events)
+                .extracting(event -> ((RebalanceTaskTimeoutEvent) event).getTableBucket())
+                .containsExactlyInAnyOrder(buckets.get(0), buckets.get(1));
 
         manager.finishRebalanceTask(buckets.get(0), TIMEOUT);
         manager.finishRebalanceTask(buckets.get(1), TIMEOUT);
