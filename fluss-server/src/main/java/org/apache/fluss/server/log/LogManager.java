@@ -264,6 +264,8 @@ public final class LogManager extends TabletManagerBase {
      * @param logFormat the log format
      * @param tieredLogLocalSegments the number of segments to retain in local for tiered log
      * @param logTtlMs the log TTL in milliseconds from table configuration
+     * @param logSegmentRollMs the active segment rolling interval in milliseconds from table
+     *     configuration
      * @param isChangelog whether the log is a changelog of primary key table
      */
     public LogTablet getOrCreateLog(
@@ -273,6 +275,7 @@ public final class LogManager extends TabletManagerBase {
             LogFormat logFormat,
             int tieredLogLocalSegments,
             long logTtlMs,
+            long logSegmentRollMs,
             boolean isChangelog)
             throws Exception {
         return inLock(
@@ -296,6 +299,7 @@ public final class LogManager extends TabletManagerBase {
                                     logFormat,
                                     tieredLogLocalSegments,
                                     logTtlMs,
+                                    logSegmentRollMs,
                                     isChangelog,
                                     clock,
                                     true);
@@ -319,14 +323,15 @@ public final class LogManager extends TabletManagerBase {
             int tieredLogLocalSegments,
             boolean isChangelog)
             throws Exception {
-        long logTtlMs = new TableConfig(new Configuration()).getLogTTLMs();
+        TableConfig tableConfig = new TableConfig(new Configuration());
         return getOrCreateLog(
                 dataDir,
                 tablePath,
                 tableBucket,
                 logFormat,
                 tieredLogLocalSegments,
-                logTtlMs,
+                tableConfig.getLogTTLMs(),
+                tableConfig.getLogSegmentRollMs(),
                 isChangelog);
     }
 
@@ -422,6 +427,7 @@ public final class LogManager extends TabletManagerBase {
                         tableInfo.getTableConfig().getLogFormat(),
                         tableInfo.getTableConfig().getTieredLogLocalSegments(),
                         tableInfo.getTableConfig().getLogTTLMs(),
+                        tableInfo.getTableConfig().getLogSegmentRollMs(),
                         tableInfo.hasPrimaryKey(),
                         clock,
                         isCleanShutdown);

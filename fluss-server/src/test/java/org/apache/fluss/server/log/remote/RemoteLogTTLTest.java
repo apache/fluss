@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.log.remote;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.apache.fluss.rpc.protocol.Errors;
@@ -35,7 +36,9 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.record.TestData.DATA1;
+import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithWriterId;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -50,6 +53,7 @@ final class RemoteLogTTLTest extends RemoteLogTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testRemoteLogTTL(boolean partitionTable) throws Exception {
+        enableActiveSegmentRolling();
         TableBucket tb;
         if (partitionTable) {
             tb = new TableBucket(DATA1_TABLE_ID, 0L, 0);
@@ -137,6 +141,7 @@ final class RemoteLogTTLTest extends RemoteLogTestBase {
 
     @Test
     void testExpiredActiveSegmentRolledUploadedAndLocallyDeleted() throws Exception {
+        enableActiveSegmentRolling();
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
         makeLogTableAsLeader(tb, false);
         LogTablet logTablet = replicaManager.getReplicaOrException(tb).getLogTablet();
@@ -170,5 +175,14 @@ final class RemoteLogTTLTest extends RemoteLogTestBase {
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
         assertThat(remoteLog.allRemoteLogSegments()).isEmpty();
         assertThat(remoteLog.getRemoteLogStartOffset()).isEqualTo(Long.MAX_VALUE);
+    }
+
+    private void enableActiveSegmentRolling() throws Exception {
+        registerTableInZkClient(
+                DATA1_TABLE_PATH,
+                DATA1_SCHEMA,
+                DATA1_TABLE_ID,
+                Collections.emptyList(),
+                Collections.singletonMap(ConfigOptions.TABLE_LOG_SEGMENT_ROLL_MS.key(), "1h"));
     }
 }

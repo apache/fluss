@@ -82,6 +82,11 @@ public class TableConfig {
         return config.get(ConfigOptions.TABLE_LOG_TTL).toMillis();
     }
 
+    /** Gets the active log segment rolling interval of the table. */
+    public long getLogSegmentRollMs() {
+        return config.get(ConfigOptions.TABLE_LOG_SEGMENT_ROLL_MS).toMillis();
+    }
+
     /** Gets the local segments to retain for tiered log of the table. */
     public int getTieredLogLocalSegments() {
         return config.get(ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS);

@@ -1549,6 +1549,16 @@ public class ConfigOptions {
                                     + "we will retain a log before we will delete old segments to free up "
                                     + "space. If set to -1, the log will not be deleted.");
 
+    public static final ConfigOption<Duration> TABLE_LOG_SEGMENT_ROLL_MS =
+            key("table.log.segment.roll-ms")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(-1))
+                    .withDescription(
+                            "The maximum time before the active log segment is rolled. This helps make "
+                                    + "the active segment eligible for tiering even when it has not reached "
+                                    + "the configured segment size. If set to -1, time-based active segment "
+                                    + "rolling is disabled.");
+
     public static final ConfigOption<Integer> TABLE_TIERED_LOG_LOCAL_SEGMENTS =
             key("table.log.tiered.local-segments")
                     .intType()
