@@ -259,7 +259,7 @@ ALTER TABLE MyTable ADD (
 ### SET properties
 The SET statement allows users to configure one or more connector options including the [Storage Options](engine-flink/options.md#storage-options) for a specified table. If a particular option is already configured on the table, it will be overridden with the new value.
 
-When using SET to modify [Storage Options](engine-flink/options.md#storage-options), the Fluss cluster will dynamically apply the changes to the table. This can be useful for modifying table behavior without needing to recreate the table.
+When using SET to modify [Storage Options](engine-flink/options.md#storage-options), the Fluss cluster will apply the changes according to each option's runtime contract. This can be useful for modifying table behavior without needing to recreate the table.
 
 **Supported Options to modify**
 - All [Read Options](engine-flink/options.md#read-options), [Write Options](engine-flink/options.md#write-options), [Lookup Options](engine-flink/options.md#lookup-options) and [Other Options](engine-flink/options.md#other-options) except `bootstrap.servers`.
@@ -283,6 +283,7 @@ ALTER TABLE my_table SET ('table.log.tiered.local-segments' = '5');
 
 **Limits**
 - If lakehouse storage (`table.datalake.enabled`) is already enabled for a table, options with lakehouse format prefixes (e.g., `paimon.*`) cannot be modified again.
+- `table.row.ttl` cannot be modified with `ALTER TABLE ... SET` in this version. Configure row-level TTL when creating the primary-key table.
 
 
 ### RESET properties
@@ -293,6 +294,8 @@ The following example illustrates reset the `table.datalake.enabled` option to i
 ```sql title="Flink SQL"
 ALTER TABLE my_table RESET ('table.datalake.enabled');
 ```
+
+`table.row.ttl` cannot be reset to disable row-level TTL. To change or disable row-level TTL, create a new table with the desired TTL configuration and migrate the data.
 
 ## Add Partition
 

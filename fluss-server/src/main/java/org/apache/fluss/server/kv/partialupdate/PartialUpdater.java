@@ -123,7 +123,7 @@ public class PartialUpdater {
                 }
             }
         }
-        return new BinaryValue(targetSchemaId, rowEncoder.finishRow());
+        return partialValue.withRow(targetSchemaId, rowEncoder.finishRow());
     }
 
     /**
@@ -156,7 +156,7 @@ public class PartialUpdater {
                     }
                 }
             }
-            return new BinaryValue(targetSchemaId, rowEncoder.finishRow());
+            return value.withRow(targetSchemaId, rowEncoder.finishRow());
         }
     }
 

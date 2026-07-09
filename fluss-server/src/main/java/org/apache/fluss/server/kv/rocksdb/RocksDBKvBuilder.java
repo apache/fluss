@@ -24,6 +24,8 @@ import org.apache.fluss.server.utils.ResourceGuard;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
 
+import org.rocksdb.AbstractCompactionFilter;
+import org.rocksdb.AbstractCompactionFilterFactory;
 import org.rocksdb.ColumnFamilyHandle;
 import org.rocksdb.ColumnFamilyOptions;
 import org.rocksdb.NativeLibraryLoader;
@@ -74,6 +76,13 @@ public class RocksDBKvBuilder {
         this.optionsContainer = rocksDBResourceContainer;
         this.instanceBasePath = instanceBasePath;
         this.instanceRocksDBPath = getInstanceRocksDBPath(instanceBasePath);
+    }
+
+    @SuppressWarnings("rawtypes")
+    public RocksDBKvBuilder setCompactionFilterFactory(
+            AbstractCompactionFilterFactory<? extends AbstractCompactionFilter<?>> factory) {
+        columnFamilyOptions.setCompactionFilterFactory((AbstractCompactionFilterFactory) factory);
+        return this;
     }
 
     public RocksDBKv build() throws KvBuildingException {
