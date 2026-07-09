@@ -897,7 +897,7 @@ public abstract class FlinkProcedureITCase {
                                 "Call %s.sys.drop_acl('CLUSTER', 'ALLOW', 'User:bob', 'DESCRIBE', '*')",
                                 CATALOG_NAME))
                 .await();
-        // Try to append a user with the same username as the existing "root" user
+        // Try to append a map entry with the same key as the existing "root" entry
         assertThatThrownBy(
                         () ->
                                 tEnv.executeSql(
@@ -907,7 +907,7 @@ public abstract class FlinkProcedureITCase {
                                                         ConfigOptions.SERVER_SASL_CREDENTIALS
                                                                 .key()))
                                         .await())
-                .hasMessageContaining("duplicate usernames")
+                .hasMessageContaining("duplicate map entry keys")
                 .hasMessageContaining("root");
 
         // Try to append a user with no colon (invalid format)

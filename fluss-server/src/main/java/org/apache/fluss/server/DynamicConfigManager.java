@@ -174,6 +174,11 @@ public class DynamicConfigManager {
             return;
         }
 
+        appendListConfig(dynamicConfigs, configKey, configValue);
+    }
+
+    private void appendListConfig(
+            Map<String, String> dynamicConfigs, String configKey, String configValue) {
         String existingValue = getExistingConfigValue(dynamicConfigs, configKey);
         if (existingValue == null || existingValue.isEmpty()) {
             dynamicConfigs.put(configKey, configValue);
@@ -189,6 +194,11 @@ public class DynamicConfigManager {
             return;
         }
 
+        subtractListConfig(dynamicConfigs, configKey, configValue);
+    }
+
+    private void subtractListConfig(
+            Map<String, String> dynamicConfigs, String configKey, String configValue) {
         String existingValue = getExistingConfigValue(dynamicConfigs, configKey);
         if (existingValue == null || existingValue.isEmpty()) {
             return;
@@ -212,17 +222,20 @@ public class DynamicConfigManager {
     private void appendMapConfig(
             Map<String, String> dynamicConfigs, String configKey, String configValue) {
         validateMapEntry(configKey, configValue);
-        String username = getMapEntryKey(configValue);
+        String mapEntryKey = getMapEntryKey(configValue);
         String existingValue = getExistingConfigValue(dynamicConfigs, configKey);
         if (existingValue == null || existingValue.isEmpty()) {
             dynamicConfigs.put(configKey, configValue);
             return;
         }
 
-        String existingEntry = findMapEntry(existingValue, username);
+        String existingEntry = findMapEntry(existingValue, mapEntryKey);
         if (existingEntry != null) {
             throw new ConfigException(
-                    configKey + " must not contain duplicate usernames: '" + username + "'.");
+                    configKey
+                            + " must not contain duplicate map entry keys: '"
+                            + mapEntryKey
+                            + "'.");
         }
         dynamicConfigs.put(configKey, existingValue + "," + configValue);
     }
@@ -230,7 +243,7 @@ public class DynamicConfigManager {
     private void subtractMapConfig(
             Map<String, String> dynamicConfigs, String configKey, String configValue) {
         validateMapEntry(configKey, configValue);
-        String targetKey = getMapEntryKey(configValue);
+        String targetMapEntryKey = getMapEntryKey(configValue);
         String existingValue = getExistingConfigValue(dynamicConfigs, configKey);
         if (existingValue == null || existingValue.isEmpty()) {
             return;
@@ -243,7 +256,7 @@ public class DynamicConfigManager {
             if (trimmed.isEmpty()) {
                 continue;
             }
-            if (Objects.equals(getMapEntryKey(trimmed), targetKey)) {
+            if (Objects.equals(getMapEntryKey(trimmed), targetMapEntryKey)) {
                 removed = true;
                 continue;
             }
