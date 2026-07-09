@@ -24,7 +24,9 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -338,6 +340,54 @@ class TableSchemaTest {
 
         assertThat(schema1).isEqualTo(schema2);
         assertThat(schema1).isNotEqualTo(schema3);
+    }
+
+    @Test
+    void testPrimaryKeySchemaSurvivesJsonRoundTripAsHashKey() {
+        // A primary-key schema is serialized to JSON when it is persisted (e.g. to
+        // ZooKeeper via SchemaZNode) and deserialized when it is read back. The reloaded
+        // schema is equal() to the in-memory one, so per the Object.hashCode() contract
+        // ("If two objects are equal according to the equals(Object) method, then calling
+        // the hashCode method on each of the two objects must produce the same integer
+        // result.") it must also hash equally and remain usable as a key in hash-based
+        // collections. Before this fix, Schema.PrimaryKey.hashCode() folded in
+        // super.hashCode() (the Object identity hash) while equals() compares only the
+        // column names, so a reloaded schema could not be found in a HashSet/HashMap.
+        Schema schema =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("value", DataTypes.BIGINT())
+                        .primaryKey("id")
+                        .build();
+
+        Schema reloaded = Schema.fromJsonBytes(schema.toJsonBytes());
+
+        // Root cause: the two equal primary keys must hash equally.
+        Schema.PrimaryKey primaryKey = schema.getPrimaryKey().get();
+        Schema.PrimaryKey reloadedPrimaryKey = reloaded.getPrimaryKey().get();
+        assertThat(reloadedPrimaryKey).isEqualTo(primaryKey);
+        assertThat(reloadedPrimaryKey.hashCode()).isEqualTo(primaryKey.hashCode());
+
+        // The violation propagates to the enclosing Schema, which includes the primary key.
+        assertThat(reloaded).isEqualTo(schema);
+        assertThat(reloaded.hashCode()).isEqualTo(schema.hashCode());
+
+        // A reloaded schema must be found in a hash-based collection of schemas.
+        Set<Schema> schemas = new HashSet<>();
+        schemas.add(schema);
+        assertThat(schemas.contains(reloaded)).isTrue();
+
+        // equals() intentionally ignores constraintName, so two primary keys with the same
+        // columns but different constraint names are equal and therefore must hash equally.
+        // This pins the fix to hashing columnNames only: a hashCode over constraintName would
+        // pass the round-trip assertions above (the serde regenerates an identical name) but
+        // would break this contract.
+        Schema.PrimaryKey generatedName =
+                new Schema.PrimaryKey("PK_id", Collections.singletonList("id"));
+        Schema.PrimaryKey customName =
+                new Schema.PrimaryKey("custom_pk", Collections.singletonList("id"));
+        assertThat(customName).isEqualTo(generatedName);
+        assertThat(customName.hashCode()).isEqualTo(generatedName.hashCode());
     }
 
     @Test

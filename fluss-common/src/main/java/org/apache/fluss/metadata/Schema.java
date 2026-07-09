@@ -732,7 +732,7 @@ public final class Schema implements Serializable {
 
         @Override
         public int hashCode() {
-            return Objects.hash(super.hashCode(), columnNames);
+            return Objects.hash(columnNames);
         }
     }
 

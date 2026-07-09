@@ -102,10 +102,12 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
@@ -350,6 +352,45 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 admin.getTableInfo(tablePath).get().getProperties().toMap();
         assertThat(properties.containsKey("table.datalake.paimon.jdbc.user")).isTrue();
         assertThat(properties.containsKey("table.datalake.paimon.jdbc.password")).isFalse();
+    }
+
+    @Test
+    void testPrimaryKeySchemaReadBackIsUsableAsHashKey() throws Exception {
+        // End-to-end: create a primary-key table through the Admin API (the coordinator
+        // persists its schema to ZooKeeper), then read the schema back from the cluster.
+        // The schema returned by the server is deserialized from its persisted form, so it is
+        // a different instance than the one submitted. Per the Object.hashCode() contract,
+        // equal schemas must have equal hash codes and must be interchangeable as keys in
+        // hash-based collections. Before the Schema.PrimaryKey.hashCode() fix, the read-back
+        // schema was equal() to the submitted one but hashed differently (its PrimaryKey
+        // folded in the Object identity hash), so it could not be found in a HashSet/HashMap.
+        TablePath tablePath = TablePath.of("test_db", "pk_schema_hashkey");
+        Schema submittedSchema =
+                Schema.newBuilder()
+                        .primaryKey("id")
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .build();
+        admin.createTable(
+                        tablePath,
+                        TableDescriptor.builder()
+                                .schema(submittedSchema)
+                                .distributedBy(3, "id")
+                                .build(),
+                        false)
+                .get();
+
+        Schema readBackSchema = admin.getTableSchema(tablePath).get().getSchema();
+
+        // The schema read back from the cluster is equal to the submitted one ...
+        assertThat(readBackSchema).isEqualTo(submittedSchema);
+        // ... so per the equals/hashCode contract it must hash the same ...
+        assertThat(readBackSchema.hashCode()).isEqualTo(submittedSchema.hashCode());
+        // ... and be found via a hash-based lookup when the submitted schema is used as a key
+        // (HashSet.contains relies on hashCode, unlike AssertJ's equals-only contains).
+        Set<Schema> knownSchemas = new HashSet<>();
+        knownSchemas.add(submittedSchema);
+        assertThat(knownSchemas.contains(readBackSchema)).isTrue();
     }
 
     @Test
