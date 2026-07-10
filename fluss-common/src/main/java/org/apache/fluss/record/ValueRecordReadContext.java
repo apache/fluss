@@ -21,7 +21,7 @@ import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.row.decode.RowDecoder;
-import org.apache.fluss.row.encode.ValueLayout;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.types.DataType;
 
 import java.util.HashMap;
@@ -34,27 +34,27 @@ public class ValueRecordReadContext implements ValueRecordBatch.ReadContext {
     private final Map<Integer, RowDecoder> rowDecoderCache;
     private final SchemaGetter schemaGetter;
     private final KvFormat kvFormat;
-    private final ValueLayout valueLayout;
+    private final KvValueLayout kvValueLayout;
 
     private ValueRecordReadContext(
-            SchemaGetter schemaGetter, KvFormat kvFormat, ValueLayout valueLayout) {
+            SchemaGetter schemaGetter, KvFormat kvFormat, KvValueLayout kvValueLayout) {
         this.rowDecoderCache = new HashMap<>();
         this.schemaGetter = schemaGetter;
         this.kvFormat = kvFormat;
-        this.valueLayout = valueLayout;
+        this.kvValueLayout = kvValueLayout;
     }
 
     /** Creates a read context for version 2 raw values. */
     public static ValueRecordReadContext createReadContext(
             SchemaGetter schemaGetter, KvFormat kvFormat) {
         return createReadContext(
-                schemaGetter, kvFormat, ValueLayout.forVersion(KV_FORMAT_VERSION_2));
+                schemaGetter, kvFormat, KvValueLayout.forKvFormatVersion(KV_FORMAT_VERSION_2));
     }
 
-    /** Creates a read context for the given raw value layout. */
+    /** Creates a read context for the given KV value layout. */
     public static ValueRecordReadContext createReadContext(
-            SchemaGetter schemaGetter, KvFormat kvFormat, ValueLayout valueLayout) {
-        return new ValueRecordReadContext(schemaGetter, kvFormat, valueLayout);
+            SchemaGetter schemaGetter, KvFormat kvFormat, KvValueLayout kvValueLayout) {
+        return new ValueRecordReadContext(schemaGetter, kvFormat, kvValueLayout);
     }
 
     @Override
@@ -69,7 +69,7 @@ public class ValueRecordReadContext implements ValueRecordBatch.ReadContext {
     }
 
     @Override
-    public ValueLayout getValueLayout() {
-        return valueLayout;
+    public KvValueLayout getKvValueLayout() {
+        return kvValueLayout;
     }
 }

@@ -79,7 +79,7 @@ public class KvRecoverHelper {
     private RowEncoder rowEncoder;
     private final ValueEncoder valueEncoder;
     private final ValueEncoder recoveryValueEncoder;
-    @Nullable private final ValueTimestampProvider recoveryTimestampProvider;
+    @Nullable private final RowTtlTimestampProvider recoveryTimestampProvider;
     private final SchemaGetter schemaGetter;
 
     private InternalRow.FieldGetter[] currentFieldGetters;
@@ -107,13 +107,13 @@ public class KvRecoverHelper {
         this.schemaGetter = schemaGetter;
         this.valueEncoder = kvTablet.getValueEncoder();
         this.recoveryTimestampProvider =
-                valueEncoder.hasValueTimestamp()
-                        ? ValueTimestampProvider.forRecovery(tableConfig, schemaGetter)
+                valueEncoder.hasValueTag()
+                        ? RowTtlTimestampProvider.forRecovery(tableConfig, schemaGetter)
                         : null;
         this.recoveryValueEncoder =
                 recoveryTimestampProvider == null
                         ? valueEncoder
-                        : valueEncoder.withTimestampProvider(recoveryTimestampProvider);
+                        : valueEncoder.withValueTagProvider(recoveryTimestampProvider);
         this.remoteLogFetcher = remoteLogFetcher;
     }
 
@@ -339,7 +339,7 @@ public class KvRecoverHelper {
     @VisibleForTesting
     static BinaryValue createRecoveredValue(
             ValueEncoder valueEncoder,
-            @Nullable ValueTimestampProvider timestampProvider,
+            @Nullable RowTtlTimestampProvider timestampProvider,
             short schemaId,
             BinaryRow row,
             long logRecordTimestamp) {

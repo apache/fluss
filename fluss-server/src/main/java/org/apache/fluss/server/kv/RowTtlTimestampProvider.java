@@ -33,40 +33,40 @@ import static org.apache.fluss.types.DataTypeChecks.getPrecision;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
-/** Provides the timestamp stored in the v3 KV value prefix. */
-final class ValueTimestampProvider implements ToLongFunction<BinaryRow> {
+/** Provides the timestamp used as the V3 KV value tag for row TTL. */
+final class RowTtlTimestampProvider implements ToLongFunction<BinaryRow> {
 
     static final long NEVER_EXPIRE_TIMESTAMP_MS = Long.MAX_VALUE / 2;
 
     private final TimestampExtractor timestampExtractor;
     private long timestampMs;
 
-    private ValueTimestampProvider(TimestampExtractor timestampExtractor) {
+    private RowTtlTimestampProvider(TimestampExtractor timestampExtractor) {
         this.timestampExtractor = timestampExtractor;
     }
 
-    static ValueTimestampProvider forWrite(
+    static RowTtlTimestampProvider forWrite(
             TableConfig tableConfig, SchemaGetter schemaGetter, Clock clock) {
         checkNotNull(clock, "clock must not be null.");
         if (tableConfig.getRowTTLTimeColumn().isPresent()) {
             return forEventTime(tableConfig, schemaGetter);
         }
-        return new ValueTimestampProvider(new BatchClockTimestampExtractor(clock));
+        return new RowTtlTimestampProvider(new BatchClockTimestampExtractor(clock));
     }
 
-    static ValueTimestampProvider forRecovery(TableConfig tableConfig, SchemaGetter schemaGetter) {
+    static RowTtlTimestampProvider forRecovery(TableConfig tableConfig, SchemaGetter schemaGetter) {
         if (tableConfig.getRowTTLTimeColumn().isPresent()) {
             return forEventTime(tableConfig, schemaGetter);
         }
-        return new ValueTimestampProvider(new LogRecordTimestampExtractor());
+        return new RowTtlTimestampProvider(new LogRecordTimestampExtractor());
     }
 
-    private static ValueTimestampProvider forEventTime(
+    private static RowTtlTimestampProvider forEventTime(
             TableConfig tableConfig, SchemaGetter schemaGetter) {
         Optional<Integer> timeColumnId = tableConfig.getRowTTLTimeColumnId();
         checkState(
                 timeColumnId.isPresent(), "Event-time row TTL requires internal time column id.");
-        return new ValueTimestampProvider(
+        return new RowTtlTimestampProvider(
                 EventTimeTimestampExtractor.create(schemaGetter, timeColumnId.get()));
     }
 
@@ -86,9 +86,9 @@ final class ValueTimestampProvider implements ToLongFunction<BinaryRow> {
     private interface TimestampExtractor {
         long extract(BinaryRow row, long timestampMs);
 
-        default void prepareForWriteBatch(ValueTimestampProvider provider) {}
+        default void prepareForWriteBatch(RowTtlTimestampProvider provider) {}
 
-        default void setLogRecordTimestampMs(ValueTimestampProvider provider, long timestampMs) {}
+        default void setLogRecordTimestampMs(RowTtlTimestampProvider provider, long timestampMs) {}
     }
 
     private static final class BatchClockTimestampExtractor implements TimestampExtractor {
@@ -104,7 +104,7 @@ final class ValueTimestampProvider implements ToLongFunction<BinaryRow> {
         }
 
         @Override
-        public void prepareForWriteBatch(ValueTimestampProvider provider) {
+        public void prepareForWriteBatch(RowTtlTimestampProvider provider) {
             provider.timestampMs = clock.milliseconds();
         }
     }
@@ -116,7 +116,7 @@ final class ValueTimestampProvider implements ToLongFunction<BinaryRow> {
         }
 
         @Override
-        public void setLogRecordTimestampMs(ValueTimestampProvider provider, long timestampMs) {
+        public void setLogRecordTimestampMs(RowTtlTimestampProvider provider, long timestampMs) {
             provider.timestampMs = timestampMs;
         }
     }

@@ -34,7 +34,7 @@ import org.apache.fluss.record.ValueRecordReadContext;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
-import org.apache.fluss.row.encode.ValueLayout;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.LimitScanRequest;
 import org.apache.fluss.rpc.messages.LimitScanResponse;
@@ -70,7 +70,7 @@ public class LimitBatchScanner implements BatchScanner {
     private final CompletableFuture<LimitScanResponse> scanFuture;
     private final SchemaGetter schemaGetter;
     private final KvFormat kvFormat;
-    private final ValueLayout valueLayout;
+    private final KvValueLayout kvValueLayout;
     private final int targetSchemaId;
     /** The chunked allocation manager factory to reuse memory for arrow log write batch. */
     private final ChunkedAllocationManager.ChunkedFactory chunkedFactory;
@@ -123,8 +123,8 @@ public class LimitBatchScanner implements BatchScanner {
         this.scanFuture = gateway.limitScan(limitScanRequest);
 
         this.kvFormat = tableInfo.getTableConfig().getKvFormat();
-        this.valueLayout =
-                ValueLayout.forVersion(
+        this.kvValueLayout =
+                KvValueLayout.forKvFormatVersion(
                         tableInfo
                                 .getTableConfig()
                                 .getKvFormatVersion()
@@ -173,7 +173,7 @@ public class LimitBatchScanner implements BatchScanner {
             DefaultValueRecordBatch valueRecords =
                     DefaultValueRecordBatch.pointToByteBuffer(recordsBuffer);
             ValueRecordReadContext readContext =
-                    ValueRecordReadContext.createReadContext(schemaGetter, kvFormat, valueLayout);
+                    ValueRecordReadContext.createReadContext(schemaGetter, kvFormat, kvValueLayout);
             for (ValueRecord record : valueRecords.records(readContext)) {
                 InternalRow row = record.getRow();
                 if (targetSchemaId != record.schemaId()) {

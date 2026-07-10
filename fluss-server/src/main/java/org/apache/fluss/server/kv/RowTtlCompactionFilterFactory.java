@@ -18,7 +18,7 @@
 package org.apache.fluss.server.kv;
 
 import org.apache.fluss.annotation.VisibleForTesting;
-import org.apache.fluss.row.encode.ValueLayout;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.server.utils.RowTtlUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
@@ -71,7 +71,7 @@ public final class RowTtlCompactionFilterFactory {
         factory.configure(
                 FlinkCompactionFilter.Config.createNotList(
                         FlinkCompactionFilter.StateType.Value,
-                        ValueLayout.forVersion(KV_FORMAT_VERSION_3).valueTimestampOffset(),
+                        KvValueLayout.forKvFormatVersion(KV_FORMAT_VERSION_3).valueTagOffset(),
                         ttlMillis,
                         queryTimeAfterNumEntries));
         return factory;

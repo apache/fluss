@@ -35,16 +35,16 @@ import java.time.Duration;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Tests for {@link ValueTimestampProvider}. */
-class ValueTimestampProviderTest {
+/** Tests for {@link RowTtlTimestampProvider}. */
+class RowTtlTimestampProviderTest {
 
     private static final short SCHEMA_ID = 0;
 
     @Test
     void testProcessTimeWriteProviderUsesBatchClock() {
         ManualClock clock = new ManualClock(1234L);
-        ValueTimestampProvider provider =
-                ValueTimestampProvider.forWrite(
+        RowTtlTimestampProvider provider =
+                RowTtlTimestampProvider.forWrite(
                         processTimeTableConfig(), schemaGetter(schema()), clock);
 
         provider.prepareForWriteBatch();
@@ -57,8 +57,8 @@ class ValueTimestampProviderTest {
 
     @Test
     void testProcessTimeRecoveryProviderUsesLogRecordTimestamp() {
-        ValueTimestampProvider provider =
-                ValueTimestampProvider.forRecovery(
+        RowTtlTimestampProvider provider =
+                RowTtlTimestampProvider.forRecovery(
                         processTimeTableConfig(), schemaGetter(schema()));
 
         provider.setLogRecordTimestampMs(5678L);
@@ -68,8 +68,8 @@ class ValueTimestampProviderTest {
 
     @Test
     void testBigintEventTimeProviderReadsEpochMillis() {
-        ValueTimestampProvider provider =
-                ValueTimestampProvider.forWrite(
+        RowTtlTimestampProvider provider =
+                RowTtlTimestampProvider.forWrite(
                         eventTimeTableConfig(schema().getColumn("event_time").getColumnId()),
                         schemaGetter(schema()),
                         new ManualClock(0L));
@@ -85,8 +85,8 @@ class ValueTimestampProviderTest {
                         .column("event_time", DataTypes.TIMESTAMP_LTZ(3))
                         .primaryKey("id")
                         .build();
-        ValueTimestampProvider provider =
-                ValueTimestampProvider.forWrite(
+        RowTtlTimestampProvider provider =
+                RowTtlTimestampProvider.forWrite(
                         eventTimeTableConfig(
                                 timestampLtzSchema.getColumn("event_time").getColumnId()),
                         schemaGetter(timestampLtzSchema),
@@ -102,14 +102,14 @@ class ValueTimestampProviderTest {
 
     @Test
     void testNullEventTimeNeverExpires() {
-        ValueTimestampProvider provider =
-                ValueTimestampProvider.forWrite(
+        RowTtlTimestampProvider provider =
+                RowTtlTimestampProvider.forWrite(
                         eventTimeTableConfig(schema().getColumn("event_time").getColumnId()),
                         schemaGetter(schema()),
                         new ManualClock(0L));
 
         assertThat(provider.applyAsLong(row(1, null)))
-                .isEqualTo(ValueTimestampProvider.NEVER_EXPIRE_TIMESTAMP_MS);
+                .isEqualTo(RowTtlTimestampProvider.NEVER_EXPIRE_TIMESTAMP_MS);
     }
 
     private static TableConfig processTimeTableConfig() {

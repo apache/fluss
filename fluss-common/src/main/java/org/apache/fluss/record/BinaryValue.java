@@ -27,37 +27,37 @@ public class BinaryValue {
 
     public final short schemaId;
     public final BinaryRow row;
-    private final long valueTimestampMs;
-    private final boolean hasValueTimestamp;
+    private final long valueTag;
+    private final boolean hasValueTag;
 
     public BinaryValue(short schemaId, BinaryRow row) {
         this.schemaId = schemaId;
         this.row = row;
-        this.valueTimestampMs = 0L;
-        this.hasValueTimestamp = false;
+        this.valueTag = 0L;
+        this.hasValueTag = false;
     }
 
-    public BinaryValue(short schemaId, long valueTimestampMs, BinaryRow row) {
+    public BinaryValue(short schemaId, long valueTag, BinaryRow row) {
         this.schemaId = schemaId;
         this.row = row;
-        this.valueTimestampMs = valueTimestampMs;
-        this.hasValueTimestamp = true;
+        this.valueTag = valueTag;
+        this.hasValueTag = true;
     }
 
-    /** Returns whether this value carries an internal value timestamp prefix. */
-    public boolean hasValueTimestamp() {
-        return hasValueTimestamp;
+    /** Returns whether this value carries an internal value tag. */
+    public boolean hasValueTag() {
+        return hasValueTag;
     }
 
-    /** Returns the internal value timestamp in milliseconds. */
-    public long getValueTimestampMs() {
-        return valueTimestampMs;
+    /** Returns the internal value tag. */
+    public long getValueTag() {
+        return valueTag;
     }
 
     /** Returns a value with a different row while preserving the value-layout metadata. */
     public BinaryValue withRow(short schemaId, BinaryRow row) {
-        return hasValueTimestamp
-                ? new BinaryValue(schemaId, valueTimestampMs, row)
+        return hasValueTag
+                ? new BinaryValue(schemaId, valueTag, row)
                 : new BinaryValue(schemaId, row);
     }
 
@@ -66,8 +66,8 @@ public class BinaryValue {
      * be expected persisted to kv store.
      */
     public byte[] encodeValue() {
-        return hasValueTimestamp
-                ? ValueEncoder.encodeValue(schemaId, valueTimestampMs, row)
+        return hasValueTag
+                ? ValueEncoder.encodeValueWithTag(schemaId, valueTag, row)
                 : ValueEncoder.encodeValue(schemaId, row);
     }
 
@@ -78,14 +78,14 @@ public class BinaryValue {
         }
         BinaryValue that = (BinaryValue) o;
         return schemaId == that.schemaId
-                && valueTimestampMs == that.valueTimestampMs
-                && hasValueTimestamp == that.hasValueTimestamp
+                && valueTag == that.valueTag
+                && hasValueTag == that.hasValueTag
                 && Objects.equals(row, that.row);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(schemaId, row, valueTimestampMs, hasValueTimestamp);
+        return Objects.hash(schemaId, row, valueTag, hasValueTag);
     }
 
     @Override
@@ -95,10 +95,10 @@ public class BinaryValue {
                 + schemaId
                 + ", row="
                 + row
-                + ", valueTimestampMs="
-                + valueTimestampMs
-                + ", hasValueTimestamp="
-                + hasValueTimestamp
+                + ", valueTag="
+                + valueTag
+                + ", hasValueTag="
+                + hasValueTag
                 + '}';
     }
 }

@@ -21,7 +21,7 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.MemorySegmentOutputView;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.decode.RowDecoder;
-import org.apache.fluss.row.encode.ValueLayout;
+import org.apache.fluss.row.encode.KvValueLayout;
 
 import java.io.IOException;
 
@@ -35,7 +35,7 @@ import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
  * <ul>
  *   <li>Length => int32
  *   <li>RawValue => schema id, optional internal fields, and {@link BinaryRow} as defined by {@link
- *       ValueLayout}
+ *       KvValueLayout}
  * </ul>
  *
  * @since 0.3
@@ -54,7 +54,7 @@ public class DefaultValueRecord implements ValueRecord {
                 schemaId,
                 row,
                 LENGTH_LENGTH
-                        + ValueLayout.forVersion(KV_FORMAT_VERSION_2).rowOffset()
+                        + KvValueLayout.forKvFormatVersion(KV_FORMAT_VERSION_2).rowPayloadOffset()
                         + row.getSizeInBytes());
     }
 
@@ -80,8 +80,8 @@ public class DefaultValueRecord implements ValueRecord {
     }
 
     public int writeTo(MemorySegmentOutputView outputView) throws IOException {
-        ValueLayout valueLayout = ValueLayout.forVersion(KV_FORMAT_VERSION_2);
-        int valueLength = valueLayout.rowOffset() + row.getSizeInBytes();
+        KvValueLayout kvValueLayout = KvValueLayout.forKvFormatVersion(KV_FORMAT_VERSION_2);
+        int valueLength = kvValueLayout.rowPayloadOffset() + row.getSizeInBytes();
         int sizeInBytes = LENGTH_LENGTH + valueLength;
         outputView.writeInt(valueLength);
         outputView.writeShort(schemaId);
@@ -93,14 +93,14 @@ public class DefaultValueRecord implements ValueRecord {
             MemorySegment segment, int position, ValueRecordBatch.ReadContext readContext) {
         int valueLength = segment.getInt(position + LENGTH_OFFSET);
         int valueOffset = position + LENGTH_LENGTH;
-        ValueLayout valueLayout = readContext.getValueLayout();
-        short schemaId = valueLayout.readSchemaId(segment, valueOffset);
+        KvValueLayout kvValueLayout = readContext.getKvValueLayout();
+        short schemaId = kvValueLayout.readSchemaId(segment, valueOffset);
         RowDecoder decoder = readContext.getRowDecoder(schemaId);
         BinaryRow value =
                 decoder.decode(
                         segment,
-                        valueOffset + valueLayout.rowOffset(),
-                        valueLayout.rowLength(valueLength));
+                        valueOffset + kvValueLayout.rowPayloadOffset(),
+                        kvValueLayout.rowPayloadLength(valueLength));
         return new DefaultValueRecord(schemaId, value, LENGTH_LENGTH + valueLength);
     }
 }
