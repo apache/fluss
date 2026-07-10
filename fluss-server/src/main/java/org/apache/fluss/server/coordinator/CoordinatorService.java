@@ -749,6 +749,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             // Historical system partitions are lookup metadata, so creating one requires the same
             // permission as reading the table instead of writing table data.
             authorizeTable(OperationType.READ, tablePath);
+            // CreatePartitionRequest uses a historical RPC field name of ignoreIfNotExists, but
+            // create-partition semantics and the public Admin API use ignoreIfExists.
             if (!request.isIgnoreIfNotExists()) {
                 throw new InvalidPartitionException(
                         "Creating historical system partition requires ignoreIfExists=true.");
