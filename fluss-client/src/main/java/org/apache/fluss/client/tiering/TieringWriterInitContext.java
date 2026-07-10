@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.tiering.source;
+package org.apache.fluss.client.tiering;
 
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.metadata.TableBucket;

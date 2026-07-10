@@ -23,6 +23,7 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.TableWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.client.tiering.TableBucketWriteResult;
 import org.apache.fluss.client.tiering.TieringLogSplit;
 import org.apache.fluss.client.tiering.TieringSnapshotSplit;
 import org.apache.fluss.client.write.HashBucketAssigner;
@@ -381,8 +382,14 @@ class TieringSplitReaderTest extends FlinkTestBase {
             tieringSplitReader.handleSplitsChanges(
                     new SplitsAddition<>(
                             Collections.singletonList(
-                                    new TieringLogSplit(
-                                            tablePath, tableBucket, null, EARLIEST_OFFSET, 2, 1))));
+                                    new FlinkTieringSplit(
+                                            new TieringLogSplit(
+                                                    tablePath,
+                                                    tableBucket,
+                                                    null,
+                                                    EARLIEST_OFFSET,
+                                                    2,
+                                                    1)))));
 
             // the injected complete() failure should propagate out of fetch()
             assertThatThrownBy(
@@ -417,7 +424,7 @@ class TieringSplitReaderTest extends FlinkTestBase {
 
             // add log splits with a stopping offset beyond the log end offset, so the splits
             // never finish and the lake writers stay in-flight
-            List<TieringSplit> logSplits = new ArrayList<>();
+            List<FlinkTieringSplit> logSplits = new ArrayList<>();
             for (Map.Entry<TableBucket, List<InternalRow>> entry : rows.entrySet()) {
                 logSplits.add(
                         createLogSplit(
