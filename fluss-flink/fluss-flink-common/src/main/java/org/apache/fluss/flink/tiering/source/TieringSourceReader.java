@@ -20,6 +20,7 @@ package org.apache.fluss.flink.tiering.source;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.tiering.TableBucketWriteResult;
 import org.apache.fluss.flink.adapter.SingleThreadMultiplexSourceReaderBaseAdapter;
 import org.apache.fluss.flink.tiering.event.TieringReachMaxDurationEvent;
 import org.apache.fluss.flink.tiering.source.metrics.TieringMetrics;

@@ -20,6 +20,7 @@ package org.apache.fluss.flink.tiering.source;
 
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.tiering.TableBucketWriteResult;
 import org.apache.fluss.client.tiering.TieringLogSplit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
