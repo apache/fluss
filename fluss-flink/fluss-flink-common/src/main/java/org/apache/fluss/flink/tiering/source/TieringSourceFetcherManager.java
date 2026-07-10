@@ -18,6 +18,7 @@
 
 package org.apache.fluss.flink.tiering.source;
 
+import org.apache.fluss.client.tiering.TableBucketWriteResult;
 import org.apache.fluss.flink.adapter.SingleThreadFetcherManagerAdapter;
 import org.apache.fluss.flink.tiering.source.split.FlinkTieringSplit;
 
