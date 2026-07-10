@@ -117,9 +117,6 @@ class HistoricalPartitionLookupITCase extends FlinkPaimonTieringTestBase {
             jobClient.cancel().get();
         }
 
-        // After the row is tiered to Paimon, shrink the retention and remove the Fluss partition.
-        // A fresh lookup client should then route the missing old partition to historical lookup.
-        // The returned Paimon rows should be decoded with the evolved Fluss schema.
         admin.alterTable(
                         tablePath,
                         Collections.singletonList(
@@ -128,17 +125,32 @@ class HistoricalPartitionLookupITCase extends FlinkPaimonTieringTestBase {
                                         String.valueOf(EXPIRED_PARTITION_RETENTION))),
                         false)
                 .get();
-        admin.dropPartition(tablePath, expiredPartitionSpec, true).get();
-        waitUntilPartitionDropped(tablePath, EXPIRED_PARTITION_NAME);
 
-        InternalRow lookupRow =
-                lookupWithFreshConnection(tablePath, row(1, EXPIRED_PARTITION_NAME));
-        assertThatRow(lookupRow)
-                .withSchema(evolvedSchema.getRowType())
-                .isEqualTo(row(1, EXPIRED_PARTITION_NAME, "Alice", null));
+        // Cache the still-existing normal partition route, then keep using the same lookuper after
+        // retention cleanup. It should invalidate the deleted partition and reroute to historical
+        // lookup.
+        try (Connection lookupConn = ConnectionFactory.createConnection(clientConf);
+                Table table = lookupConn.getTable(tablePath)) {
+            Lookuper lookuper = table.newLookup().createLookuper();
+            InternalRow lookupRow =
+                    lookuper.lookup(row(2, EXPIRED_PARTITION_NAME)).get().getSingletonRow();
+            assertThatRow(lookupRow)
+                    .withSchema(evolvedSchema.getRowType())
+                    .isEqualTo(expectedNewRow);
 
-        lookupRow = lookupWithFreshConnection(tablePath, row(2, EXPIRED_PARTITION_NAME));
-        assertThatRow(lookupRow).withSchema(evolvedSchema.getRowType()).isEqualTo(expectedNewRow);
+            admin.dropPartition(tablePath, expiredPartitionSpec, true).get();
+            waitUntilPartitionDropped(tablePath, EXPIRED_PARTITION_NAME);
+
+            lookupRow = lookuper.lookup(row(1, EXPIRED_PARTITION_NAME)).get().getSingletonRow();
+            assertThatRow(lookupRow)
+                    .withSchema(evolvedSchema.getRowType())
+                    .isEqualTo(row(1, EXPIRED_PARTITION_NAME, "Alice", null));
+
+            lookupRow = lookuper.lookup(row(2, EXPIRED_PARTITION_NAME)).get().getSingletonRow();
+            assertThatRow(lookupRow)
+                    .withSchema(evolvedSchema.getRowType())
+                    .isEqualTo(expectedNewRow);
+        }
     }
 
     @Override
@@ -202,14 +214,5 @@ class HistoricalPartitionLookupITCase extends FlinkPaimonTieringTestBase {
                 () ->
                         assertThat(admin.listPartitionInfos(tablePath).get())
                                 .noneMatch(p -> partitionName.equals(p.getPartitionName())));
-    }
-
-    private static InternalRow lookupWithFreshConnection(TablePath tablePath, InternalRow lookupKey)
-            throws Exception {
-        try (Connection lookupConn = ConnectionFactory.createConnection(clientConf);
-                Table table = lookupConn.getTable(tablePath)) {
-            Lookuper lookuper = table.newLookup().createLookuper();
-            return lookuper.lookup(lookupKey).get().getSingletonRow();
-        }
     }
 }

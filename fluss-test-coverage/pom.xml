@@ -448,6 +448,16 @@
                                         <exclude>org.apache.fluss.predicate.*</exclude>
                                         <!-- end exclude for lake source -->
                                         <exclude>org.apache.fluss.lake.source.*</exclude>
+                                        <exclude>org.apache.fluss.lake.lakestorage.LakeStorage</exclude>
+                                        <exclude>
+                                            org.apache.fluss.lake.lakestorage.LakeStorage.LookuperContext
+                                        </exclude>
+                                        <exclude>
+                                            org.apache.fluss.lake.lakestorage.LakeTableLookuper.LookupContext
+                                        </exclude>
+                                        <exclude>
+                                            org.apache.fluss.lake.lakestorage.PluginLakeStorageWrapper.ClassLoaderFixingLakeTableLookuper
+                                        </exclude>
                                         <!-- exclude for readiness-probe CLI tool and dist dummy class -->
                                         <exclude>org.apache.fluss.server.tools.ClusterHealthReadinessCheck</exclude>
                                         <exclude>org.apache.fluss.server.tools.ClusterHealthReadinessCheck.*</exclude>

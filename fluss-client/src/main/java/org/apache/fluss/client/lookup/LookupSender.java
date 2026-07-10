@@ -25,6 +25,7 @@ import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.HistoricalLookupThrottledException;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
+import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -176,6 +177,12 @@ class LookupSender implements Runnable {
                 // collecting the tables that need to be updated and then sending them together in
                 // one request.
                 leader = metadataUpdater.leaderFor(lookup.tablePath(), tb);
+            } catch (PartitionNotExistException e) {
+                // Metadata refresh confirmed that the queued lookup carries a deleted partition
+                // id. Complete it instead of repeatedly enqueueing the stale TableBucket; a
+                // primary key lookuper can then reroute by partition name.
+                lookup.future().completeExceptionally(e);
+                continue;
             } catch (Exception e) {
                 // if leader is not found, re-enqueue the lookup to send again.
                 LOG.warn("Failed to lookup the leader for {} when lookup", tb, e);

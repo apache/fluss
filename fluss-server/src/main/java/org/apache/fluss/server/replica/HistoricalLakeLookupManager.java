@@ -17,8 +17,10 @@
 
 package org.apache.fluss.server.replica;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.HistoricalLookupThrottledException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.LakeStorageNotConfiguredException;
@@ -35,13 +37,14 @@ import org.apache.fluss.plugin.PluginManager;
 import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.server.entity.LookupDataForBucket;
+import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -57,21 +60,27 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 /** Handles server-side point lookup for historical partitions stored in lake storage. */
 class HistoricalLakeLookupManager implements AutoCloseable {
 
-    private static final Logger LOG = LoggerFactory.getLogger(HistoricalLakeLookupManager.class);
+    private static final String PAIMON_LOOKUP_DIR_NAME = "paimon-lookup";
 
     private final Configuration conf;
     private final @Nullable PluginManager pluginManager;
     private final ExecutorService ioExecutor;
+    private final int serverId;
     private final Semaphore lookupPermits;
     // todo: consider add cache expire
-    private final ConcurrentHashMap<TablePath, LakeTableLookuper> lakeTableLookupers =
+    private final ConcurrentHashMap<Long, CachedLakeTableLookuper> lakeTableLookupers =
             new ConcurrentHashMap<>();
+    private @Nullable String paimonLookupTempDir;
 
     HistoricalLakeLookupManager(
-            Configuration conf, @Nullable PluginManager pluginManager, ExecutorService ioExecutor) {
+            Configuration conf,
+            @Nullable PluginManager pluginManager,
+            ExecutorService ioExecutor,
+            int serverId) {
         this.conf = checkNotNull(conf, "conf must not be null.");
         this.pluginManager = pluginManager;
         this.ioExecutor = checkNotNull(ioExecutor, "ioExecutor must not be null.");
+        this.serverId = serverId;
         int maxQueuedHistoricalRequests =
                 conf.get(ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS);
         checkArgument(
@@ -110,10 +119,17 @@ class HistoricalLakeLookupManager implements AutoCloseable {
 
     @Override
     public void close() {
-        for (LakeTableLookuper lookuper : lakeTableLookupers.values()) {
-            IOUtils.closeQuietly(lookuper, "historical lake table lookuper");
+        for (CachedLakeTableLookuper cachedLookuper : lakeTableLookupers.values()) {
+            closeLookuper(cachedLookuper);
         }
         lakeTableLookupers.clear();
+    }
+
+    void invalidateTableLookuper(long tableId) {
+        CachedLakeTableLookuper cachedLookuper = lakeTableLookupers.remove(tableId);
+        if (cachedLookuper != null) {
+            closeLookuper(cachedLookuper);
+        }
     }
 
     private LookupResultForBucket lookupInternal(
@@ -121,12 +137,26 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         TableBucket tableBucket = lookupData.tableBucket();
         try {
             LookupContext context = createLookupContext(lookupData, tableInfo);
-            LakeTableLookuper lookuper =
-                    lakeTableLookupers.computeIfAbsent(
-                            context.tablePath, this::createLakeTableLookuper);
+            CachedLakeTableLookuper cachedLookuper =
+                    lakeTableLookupers.compute(
+                            context.tableId,
+                            (ignored, currentLookuper) -> {
+                                if (currentLookuper != null
+                                        && currentLookuper.schemaId == context.schemaId) {
+                                    return currentLookuper;
+                                }
+                                LakeTableLookuper newLookuper =
+                                        createLakeTableLookuper(
+                                                context.tablePath,
+                                                getOrPreparePaimonLookupTempDir());
+                                if (currentLookuper != null) {
+                                    closeLookuper(currentLookuper);
+                                }
+                                return new CachedLakeTableLookuper(context.schemaId, newLookuper);
+                            });
             List<byte[]> values = new ArrayList<>(lookupData.keys().size());
             for (byte[] key : lookupData.keys()) {
-                values.add(lookuper.lookup(key, context.lookupContext));
+                values.add(cachedLookuper.lookuper.lookup(key, context.lookupContext));
             }
             return new LookupResultForBucket(tableBucket, values);
         } catch (Exception e) {
@@ -162,10 +192,12 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                         tableBucket.getBucket(),
                         (short) tableInfo.getSchemaInfo().getSchemaId(),
                         tableInfo.getRowType());
-        return new LookupContext(tablePath, lookupContext);
+        return new LookupContext(
+                tableInfo.getTableId(), tableInfo.getSchemaId(), tablePath, lookupContext);
     }
 
-    private LakeTableLookuper createLakeTableLookuper(TablePath tablePath) {
+    @VisibleForTesting
+    LakeTableLookuper createLakeTableLookuper(TablePath tablePath, String ioTmpDir) {
         DataLakeFormat dataLakeFormat = conf.get(ConfigOptions.DATALAKE_FORMAT);
         if (dataLakeFormat == null) {
             throw new LakeStorageNotConfiguredException(
@@ -189,16 +221,64 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         LakeStorage lakeStorage =
                 lakeStoragePlugin.createLakeStorage(Configuration.fromMap(lakeProperties));
         return lakeStorage.createLakeTableLookuper(
-                tablePath, new LakeStorage.LookuperContext(conf.get(ConfigOptions.IO_TMP_DIR)));
+                tablePath, new LakeStorage.LookuperContext(ioTmpDir));
+    }
+
+    private synchronized String getOrPreparePaimonLookupTempDir() {
+        if (paimonLookupTempDir == null) {
+            paimonLookupTempDir = preparePaimonLookupTempDir(conf, serverId);
+        }
+        return paimonLookupTempDir;
+    }
+
+    private static String preparePaimonLookupTempDir(Configuration conf, int serverId) {
+        File paimonLookupTempDir =
+                new File(
+                        new File(conf.get(ConfigOptions.IO_TMP_DIR), PAIMON_LOOKUP_DIR_NAME),
+                        String.valueOf(serverId));
+        try {
+            // A crashed server cannot close the Paimon IOManager, so lookup cache files may be
+            // left behind. Clean only this server's directory before creating the first table
+            // lookuper; cleaning in each table lookuper would delete files used by other tables.
+            FileUtils.deleteDirectory(paimonLookupTempDir);
+            Files.createDirectories(paimonLookupTempDir.toPath());
+            return paimonLookupTempDir.getAbsolutePath();
+        } catch (IOException e) {
+            throw new FlussRuntimeException(
+                    "Failed to prepare Paimon lookup temporary directory: " + paimonLookupTempDir,
+                    e);
+        }
+    }
+
+    private static void closeLookuper(CachedLakeTableLookuper cachedLookuper) {
+        IOUtils.closeQuietly(cachedLookuper.lookuper, "historical lake table lookuper");
     }
 
     private static final class LookupContext {
+        private final long tableId;
+        private final int schemaId;
         private final TablePath tablePath;
         private final LakeTableLookuper.LookupContext lookupContext;
 
-        private LookupContext(TablePath tablePath, LakeTableLookuper.LookupContext lookupContext) {
+        private LookupContext(
+                long tableId,
+                int schemaId,
+                TablePath tablePath,
+                LakeTableLookuper.LookupContext lookupContext) {
+            this.tableId = tableId;
+            this.schemaId = schemaId;
             this.tablePath = tablePath;
             this.lookupContext = lookupContext;
+        }
+    }
+
+    private static final class CachedLakeTableLookuper {
+        private final int schemaId;
+        private final LakeTableLookuper lookuper;
+
+        private CachedLakeTableLookuper(int schemaId, LakeTableLookuper lookuper) {
+            this.schemaId = schemaId;
+            this.lookuper = lookuper;
         }
     }
 }

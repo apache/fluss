@@ -20,13 +20,18 @@ package org.apache.fluss.server.replica;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.HistoricalLookupThrottledException;
+import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.entity.LookupDataForBucket;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -45,7 +50,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Tests for {@link HistoricalLakeLookupManager}. */
 class HistoricalLakeLookupManagerTest {
 
+    private static final int SERVER_ID = 1;
     private static final TableBucket HISTORICAL_BUCKET = new TableBucket(PARTITION_TABLE_ID, 1L, 0);
+
+    @TempDir private File ioTmpDir;
 
     @Test
     void testHistoricalLookupThrottledWhenPermitsExhausted() throws Exception {
@@ -117,28 +125,140 @@ class HistoricalLakeLookupManagerTest {
         Configuration conf = conf(0);
         ManualExecutor executor = new ManualExecutor();
 
-        assertThatThrownBy(() -> new HistoricalLakeLookupManager(conf, null, executor))
+        assertThatThrownBy(() -> new HistoricalLakeLookupManager(conf, null, executor, SERVER_ID))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(
                         ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS.key());
     }
 
-    private static HistoricalLakeLookupManager createManager(
-            int maxQueuedHistoricalRequests, ManualExecutor executor) {
-        return new HistoricalLakeLookupManager(conf(maxQueuedHistoricalRequests), null, executor);
+    @Test
+    void testLazilyCleansPaimonLookupTempDirectory() throws Exception {
+        File serverLookupDir =
+                new File(new File(ioTmpDir, "paimon-lookup"), String.valueOf(SERVER_ID));
+        assertThat(serverLookupDir.mkdirs()).isTrue();
+        File staleLookupFile = new File(serverLookupDir, "stale-lookup-file");
+        assertThat(staleLookupFile.createNewFile()).isTrue();
+
+        ManualExecutor executor = new ManualExecutor();
+        TestingHistoricalLakeLookupManager manager = createTestingManager(executor);
+
+        assertThat(staleLookupFile).exists();
+        lookupAndRun(manager, executor, PARTITION_TABLE_INFO);
+        assertThat(staleLookupFile).doesNotExist();
+        assertThat(serverLookupDir).isDirectory();
+        assertThat(manager.createdIoTmpDirs).containsExactly(serverLookupDir.getAbsolutePath());
     }
 
-    private static Configuration conf(int maxQueuedHistoricalRequests) {
+    @Test
+    void testDoesNotReuseLookuperForRecreatedTable() throws Exception {
+        ManualExecutor executor = new ManualExecutor();
+        TestingHistoricalLakeLookupManager manager = createTestingManager(executor);
+
+        lookupAndRun(manager, executor, PARTITION_TABLE_INFO);
+        TableInfo recreatedTableInfo =
+                tableInfo(PARTITION_TABLE_ID + 1, PARTITION_TABLE_INFO.getSchemaId());
+        lookupAndRun(manager, executor, recreatedTableInfo);
+
+        assertThat(manager.createdLookupers).hasSize(2);
+    }
+
+    @Test
+    void testInvalidatesLookuperOnSchemaAndLifecycleChanges() throws Exception {
+        ManualExecutor executor = new ManualExecutor();
+        TestingHistoricalLakeLookupManager manager = createTestingManager(executor);
+
+        lookupAndRun(manager, executor, PARTITION_TABLE_INFO);
+        TestingLakeTableLookuper initialLookuper = manager.createdLookupers.get(0);
+
+        TableInfo evolvedTableInfo =
+                tableInfo(PARTITION_TABLE_ID, PARTITION_TABLE_INFO.getSchemaId() + 1);
+        lookupAndRun(manager, executor, evolvedTableInfo);
+        assertThat(initialLookuper.closed).isTrue();
+        assertThat(manager.createdLookupers).hasSize(2);
+
+        TestingLakeTableLookuper evolvedLookuper = manager.createdLookupers.get(1);
+        manager.invalidateTableLookuper(PARTITION_TABLE_ID);
+        assertThat(evolvedLookuper.closed).isTrue();
+
+        lookupAndRun(manager, executor, evolvedTableInfo);
+        assertThat(manager.createdLookupers).hasSize(3);
+    }
+
+    private HistoricalLakeLookupManager createManager(
+            int maxQueuedHistoricalRequests, ManualExecutor executor) {
+        return new HistoricalLakeLookupManager(
+                conf(maxQueuedHistoricalRequests), null, executor, SERVER_ID);
+    }
+
+    private TestingHistoricalLakeLookupManager createTestingManager(ManualExecutor executor) {
+        return new TestingHistoricalLakeLookupManager(conf(1), executor);
+    }
+
+    private Configuration conf(int maxQueuedHistoricalRequests) {
         Configuration conf = new Configuration();
         conf.set(
                 ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS,
                 maxQueuedHistoricalRequests);
+        conf.set(ConfigOptions.IO_TMP_DIR, ioTmpDir.getAbsolutePath());
         return conf;
     }
 
     private static LookupDataForBucket lookupData(TableBucket tableBucket) {
         return new LookupDataForBucket(
                 tableBucket, Collections.singletonList(new byte[] {1}), "2024");
+    }
+
+    private static TableInfo tableInfo(long tableId, int schemaId) {
+        return TableInfo.of(
+                PARTITION_TABLE_INFO.getTablePath(),
+                tableId,
+                schemaId,
+                PARTITION_TABLE_INFO.toTableDescriptor(),
+                PARTITION_TABLE_INFO.getRemoteDataDir(),
+                PARTITION_TABLE_INFO.getCreatedTime(),
+                PARTITION_TABLE_INFO.getModifiedTime());
+    }
+
+    private static void lookupAndRun(
+            HistoricalLakeLookupManager manager, ManualExecutor executor, TableInfo tableInfo)
+            throws Exception {
+        TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), 1L, 0);
+        CompletableFuture<LookupResultForBucket> future =
+                manager.lookup(lookupData(tableBucket), tableInfo);
+        executor.runNext();
+        assertThat(future.get(1, TimeUnit.SECONDS).failed()).isFalse();
+    }
+
+    private static final class TestingHistoricalLakeLookupManager
+            extends HistoricalLakeLookupManager {
+        private final List<TestingLakeTableLookuper> createdLookupers = new ArrayList<>();
+        private final List<String> createdIoTmpDirs = new ArrayList<>();
+
+        private TestingHistoricalLakeLookupManager(Configuration conf, ManualExecutor executor) {
+            super(conf, null, executor, SERVER_ID);
+        }
+
+        @Override
+        LakeTableLookuper createLakeTableLookuper(TablePath tablePath, String ioTmpDir) {
+            TestingLakeTableLookuper lookuper = new TestingLakeTableLookuper();
+            createdLookupers.add(lookuper);
+            createdIoTmpDirs.add(ioTmpDir);
+            return lookuper;
+        }
+    }
+
+    private static final class TestingLakeTableLookuper implements LakeTableLookuper {
+        private boolean closed;
+
+        @Override
+        public byte[] lookup(byte[] key, LookupContext context) {
+            return key;
+        }
+
+        @Override
+        public void close() {
+            closed = true;
+        }
     }
 
     private static final class ManualExecutor extends AbstractExecutorService {
