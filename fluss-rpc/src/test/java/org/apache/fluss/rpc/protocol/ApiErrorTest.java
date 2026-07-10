@@ -17,6 +17,7 @@
 
 package org.apache.fluss.rpc.protocol;
 
+import org.apache.fluss.exception.HistoricalLookupThrottledException;
 import org.apache.fluss.exception.NotEnoughReplicasException;
 import org.apache.fluss.exception.TimeoutException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
@@ -79,6 +80,13 @@ public class ApiErrorTest {
                         new ExecutionException(new TimeoutException(requestTimeoutErrorMsg)),
                         Errors.REQUEST_TIME_OUT,
                         requestTimeoutErrorMsg));
+
+        String historicalLookupThrottledErrorMsg = "historical lookup throttled";
+        arguments.add(
+                Arguments.of(
+                        new HistoricalLookupThrottledException(historicalLookupThrottledErrorMsg),
+                        Errors.HISTORICAL_LOOKUP_THROTTLED,
+                        historicalLookupThrottledErrorMsg));
 
         return arguments;
     }

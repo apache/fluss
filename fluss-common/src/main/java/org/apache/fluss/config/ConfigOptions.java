@@ -1125,6 +1125,13 @@ public class ConfigOptions {
                     .withDescription(
                             "The number of queued requests allowed for worker threads, before blocking the I/O threads.");
 
+    public static final ConfigOption<Integer> NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS =
+            key("netty.server.max-queued-historical-requests")
+                    .intType()
+                    .defaultValue(50)
+                    .withDescription(
+                            "The number of historical lookup requests allowed to wait for lake lookup processing before throttling them.");
+
     public static final ConfigOption<MemorySize> NETTY_SERVER_MAX_REQUEST_SIZE =
             key("netty.server.max-request-size")
                     .memoryType()

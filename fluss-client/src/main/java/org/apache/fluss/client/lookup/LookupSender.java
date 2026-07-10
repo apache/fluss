@@ -22,6 +22,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.HistoricalLookupThrottledException;
 import org.apache.fluss.exception.InvalidMetadataException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.RetriableException;
@@ -37,6 +38,7 @@ import org.apache.fluss.rpc.messages.PbValueList;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.PrefixLookupResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.utils.ExponentialBackoff;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -83,6 +85,8 @@ class LookupSender implements Runnable {
 
     private final short acks;
 
+    private final ExponentialBackoff historicalThrottleBackoff;
+
     LookupSender(
             MetadataUpdater metadataUpdater,
             LookupQueue lookupQueue,
@@ -97,6 +101,7 @@ class LookupSender implements Runnable {
         this.running = true;
         this.acks = acks;
         this.maxRequestTimeoutMs = maxRequestTimeoutMs;
+        this.historicalThrottleBackoff = new ExponentialBackoff(100L, 2, 5000L, 0.2);
     }
 
     @Override
@@ -492,6 +497,18 @@ class LookupSender implements Runnable {
         lookupQueue.reEnqueue(lookup);
     }
 
+    private long prepareRetry(AbstractLookupQuery<?> lookup, Exception exception) {
+        long retryDelayMs = 0;
+        if (exception instanceof HistoricalLookupThrottledException) {
+            retryDelayMs = historicalThrottleBackoff.backoff(lookup.retries());
+            lookup.setNextRetryTimeMs(System.currentTimeMillis() + retryDelayMs);
+        } else {
+            lookup.setNextRetryTimeMs(0);
+        }
+        lookup.incrementRetries();
+        return retryDelayMs;
+    }
+
     private boolean canRetry(AbstractLookupQuery<?> lookup, Exception exception) {
         return lookup.retries() < maxRetries
                 && !lookup.future().isDone()
@@ -513,7 +530,7 @@ class LookupSender implements Runnable {
             ApiError error,
             List<? extends AbstractLookupQuery<?>> lookups,
             String lookupType) {
-        ApiException exception = error.error().exception();
+        ApiException exception = error.exception();
         LOG.error(
                 "Failed to {} from node {} for bucket {}",
                 lookupType,
@@ -540,14 +557,15 @@ class LookupSender implements Runnable {
         }
 
         for (AbstractLookupQuery<?> lookup : lookups) {
-            if (canRetry(lookup, error.exception())) {
+            if (canRetry(lookup, exception)) {
+                long retryDelayMs = prepareRetry(lookup, exception);
                 LOG.warn(
-                        "Get error {} response on table bucket {}, retrying ({} attempts left). Error: {}",
+                        "Get error {} response on table bucket {}, retrying after {} ms ({} attempts left). Error: {}",
                         lookupType,
                         tableBucket,
+                        retryDelayMs,
                         maxRetries - lookup.retries(),
                         error.formatErrMsg());
-                lookup.incrementRetries();
                 reEnqueueLookup(lookup);
             } else {
                 LOG.warn(
@@ -555,7 +573,7 @@ class LookupSender implements Runnable {
                         lookupType,
                         tableBucket,
                         error.formatErrMsg());
-                lookup.future().completeExceptionally(error.exception());
+                lookup.future().completeExceptionally(exception);
             }
         }
     }

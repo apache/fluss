@@ -19,6 +19,7 @@ package org.apache.fluss.server.replica;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.HistoricalLookupThrottledException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.LakeStorageNotConfiguredException;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
@@ -47,8 +48,10 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Semaphore;
 
 import static org.apache.fluss.server.utils.LakeStorageUtils.extractLakeProperties;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Handles server-side point lookup for historical partitions stored in lake storage. */
@@ -59,6 +62,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
     private final Configuration conf;
     private final @Nullable PluginManager pluginManager;
     private final ExecutorService ioExecutor;
+    private final Semaphore lookupPermits;
     // todo: consider add cache expire
     private final ConcurrentHashMap<TablePath, LakeTableLookuper> lakeTableLookupers =
             new ConcurrentHashMap<>();
@@ -68,12 +72,40 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         this.conf = checkNotNull(conf, "conf must not be null.");
         this.pluginManager = pluginManager;
         this.ioExecutor = checkNotNull(ioExecutor, "ioExecutor must not be null.");
+        int maxQueuedHistoricalRequests =
+                conf.get(ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS);
+        checkArgument(
+                maxQueuedHistoricalRequests > 0,
+                "%s must be greater than 0.",
+                ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS.key());
+        this.lookupPermits = new Semaphore(maxQueuedHistoricalRequests);
     }
 
     CompletableFuture<LookupResultForBucket> lookup(
             LookupDataForBucket lookupData, TableInfo tableInfo) {
-        return CompletableFuture.supplyAsync(
-                () -> lookupInternal(lookupData, tableInfo), ioExecutor);
+        TableBucket tableBucket = lookupData.tableBucket();
+        if (!lookupPermits.tryAcquire()) {
+            return CompletableFuture.completedFuture(
+                    new LookupResultForBucket(
+                            tableBucket,
+                            ApiError.fromThrowable(
+                                    new HistoricalLookupThrottledException(
+                                            "Historical lookup is throttled for "
+                                                    + tableBucket
+                                                    + "."))));
+        }
+
+        CompletableFuture<LookupResultForBucket> future;
+        try {
+            future =
+                    CompletableFuture.supplyAsync(
+                            () -> lookupInternal(lookupData, tableInfo), ioExecutor);
+        } catch (RuntimeException e) {
+            lookupPermits.release();
+            throw e;
+        }
+        future.whenComplete((ignored, error) -> lookupPermits.release());
+        return future;
     }
 
     @Override

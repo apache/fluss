@@ -40,6 +40,7 @@ public abstract class AbstractLookupQuery<T> {
     private final @Nullable String partitionName;
 
     private int retries;
+    private long nextRetryTimeMs;
 
     public AbstractLookupQuery(TablePath tablePath, TableBucket tableBucket, byte[] key) {
         this(tablePath, tableBucket, key, null);
@@ -55,6 +56,7 @@ public abstract class AbstractLookupQuery<T> {
         this.key = key;
         this.partitionName = partitionName;
         this.retries = 0;
+        this.nextRetryTimeMs = 0;
     }
 
     public byte[] key() {
@@ -79,6 +81,14 @@ public abstract class AbstractLookupQuery<T> {
 
     public void incrementRetries() {
         retries++;
+    }
+
+    public long nextRetryTimeMs() {
+        return nextRetryTimeMs;
+    }
+
+    public void setNextRetryTimeMs(long nextRetryTimeMs) {
+        this.nextRetryTimeMs = nextRetryTimeMs;
     }
 
     public abstract LookupType lookupType();

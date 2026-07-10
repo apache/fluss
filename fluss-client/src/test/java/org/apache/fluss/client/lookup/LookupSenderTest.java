@@ -21,6 +21,7 @@ import org.apache.fluss.client.metadata.TestingMetadataUpdater;
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.HistoricalLookupThrottledException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.TableNotExistException;
@@ -53,6 +54,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -348,6 +350,105 @@ public class LookupSenderTest {
     }
 
     @Test
+    void testHistoricalLookupThrottleRetryBackoffAndMaxRetries() throws Exception {
+        // Throttled historical lookup should be retried and eventually succeed.
+        AtomicInteger attemptCount = new AtomicInteger(0);
+        gateway.setLookupHandler(
+                request -> {
+                    int attempt = attemptCount.incrementAndGet();
+                    if (attempt == 1) {
+                        return createFailedResponse(
+                                request,
+                                new HistoricalLookupThrottledException(
+                                        "historical lookup throttled"));
+                    }
+                    return createSuccessResponse(request, bytes("historical-value"));
+                });
+
+        LookupQuery query =
+                new LookupQuery(
+                        DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key"), false, "dt=20200101");
+        lookupQueue.appendLookup(query);
+
+        assertThat(query.future().get(5, TimeUnit.SECONDS)).isEqualTo(bytes("historical-value"));
+        assertThat(attemptCount.get()).isEqualTo(2);
+        assertThat(query.retries()).isEqualTo(1);
+
+        // Delayed historical retry should not block a new normal lookup from the main queue.
+        AtomicInteger historicalAttempts = new AtomicInteger(0);
+        AtomicInteger normalAttempts = new AtomicInteger(0);
+        CountDownLatch firstHistoricalAttemptStarted = new CountDownLatch(1);
+        CountDownLatch normalQueryAppended = new CountDownLatch(1);
+        List<String> requestOrder = Collections.synchronizedList(new ArrayList<>());
+        gateway.setLookupHandler(
+                request -> {
+                    PbLookupReqForBucket bucketRequest = request.getBucketsReqAt(0);
+                    if (bucketRequest.hasPartitionName()) {
+                        int attempt = historicalAttempts.incrementAndGet();
+                        if (attempt == 1) {
+                            firstHistoricalAttemptStarted.countDown();
+                            awaitLatch(normalQueryAppended);
+                            requestOrder.add("historical-throttled");
+                            return createFailedResponse(
+                                    request,
+                                    new HistoricalLookupThrottledException(
+                                            "historical lookup throttled"));
+                        }
+                        requestOrder.add("historical-success");
+                        return createSuccessResponse(request, bytes("historical-value"));
+                    }
+
+                    normalAttempts.incrementAndGet();
+                    requestOrder.add("normal-success");
+                    return createSuccessResponse(request, bytes("normal-value"));
+                });
+
+        LookupQuery historicalQuery =
+                new LookupQuery(
+                        DATA1_TABLE_PATH_PK,
+                        TABLE_BUCKET,
+                        bytes("historical-key"),
+                        false,
+                        "dt=20200101");
+        lookupQueue.appendLookup(historicalQuery);
+
+        assertThat(firstHistoricalAttemptStarted.await(5, TimeUnit.SECONDS)).isTrue();
+        LookupQuery normalQuery =
+                new LookupQuery(DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("normal-key"));
+        lookupQueue.appendLookup(normalQuery);
+        normalQueryAppended.countDown();
+
+        assertThat(normalQuery.future().get(1, TimeUnit.SECONDS)).isEqualTo(bytes("normal-value"));
+        assertThat(historicalQuery.future().get(5, TimeUnit.SECONDS))
+                .isEqualTo(bytes("historical-value"));
+        assertThat(historicalAttempts.get()).isEqualTo(2);
+        assertThat(normalAttempts.get()).isEqualTo(1);
+        assertThat(requestOrder)
+                .containsExactly("historical-throttled", "normal-success", "historical-success");
+
+        // A historical lookup that keeps being throttled should fail after max retries.
+        AtomicInteger alwaysThrottledAttempts = new AtomicInteger(0);
+        gateway.setLookupHandler(
+                request -> {
+                    alwaysThrottledAttempts.incrementAndGet();
+                    return createFailedResponse(
+                            request,
+                            new HistoricalLookupThrottledException("historical lookup throttled"));
+                });
+
+        LookupQuery alwaysThrottledQuery =
+                new LookupQuery(
+                        DATA1_TABLE_PATH_PK, TABLE_BUCKET, bytes("key"), false, "dt=20200101");
+        lookupQueue.appendLookup(alwaysThrottledQuery);
+
+        assertThatThrownBy(() -> alwaysThrottledQuery.future().get(10, TimeUnit.SECONDS))
+                .isInstanceOf(ExecutionException.class)
+                .hasRootCauseInstanceOf(HistoricalLookupThrottledException.class);
+        assertThat(alwaysThrottledAttempts.get()).isEqualTo(1 + MAX_RETRIES);
+        assertThat(alwaysThrottledQuery.retries()).isEqualTo(MAX_RETRIES);
+    }
+
+    @Test
     void testNonRetriableExceptionDoesNotRetry() {
         // setup: fail with non-retriable exception
         gateway.setLookupHandler(
@@ -537,6 +638,15 @@ public class LookupSenderTest {
 
     private static byte[] responseValue(String partitionName, String key) {
         return bytes(partitionName + ":" + key);
+    }
+
+    private static void awaitLatch(CountDownLatch latch) {
+        try {
+            assertThat(latch.await(5, TimeUnit.SECONDS)).isTrue();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        }
     }
 
     private void testException(Exception exception, boolean shouldRetry, int expectedRetries)
