@@ -18,7 +18,7 @@
 package org.apache.fluss.record;
 
 import org.apache.fluss.row.decode.RowDecoder;
-import org.apache.fluss.row.encode.ValueLayout;
+import org.apache.fluss.row.encode.KvValueLayout;
 
 /**
  * A value record batch is a container for a batch of {@link ValueRecord}.
@@ -73,7 +73,7 @@ public interface ValueRecordBatch {
          */
         RowDecoder getRowDecoder(int schemaId);
 
-        /** Gets the raw value layout used to locate row bytes in this value record batch. */
-        ValueLayout getValueLayout();
+        /** Gets the KV value layout used to locate row bytes in this value record batch. */
+        KvValueLayout getKvValueLayout();
     }
 }

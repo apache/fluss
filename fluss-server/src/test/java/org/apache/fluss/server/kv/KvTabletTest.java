@@ -288,7 +288,7 @@ class KvTabletTest {
                                 schemaGetter, KvFormat.COMPACTED, ConfigOptions.KV_FORMAT_VERSION_3)
                         .decodeValue(value);
 
-        assertThat(decoded.getValueTimestampMs()).isEqualTo(writeTimestampMs);
+        assertThat(decoded.getValueTag()).isEqualTo(writeTimestampMs);
         assertThat(decoded.row.getInt(0)).isEqualTo(1);
         assertThat(decoded.row.getString(1).toString()).isEqualTo("a");
     }
@@ -310,7 +310,7 @@ class KvTabletTest {
 
         BinaryValue decoded = decodeVersion3Value("k1");
 
-        assertThat(decoded.getValueTimestampMs()).isEqualTo(1234L);
+        assertThat(decoded.getValueTag()).isEqualTo(1234L);
         assertThat(decoded.row.getInt(0)).isEqualTo(1);
         assertThat(decoded.row.getLong(1)).isEqualTo(1234L);
         assertThat(decoded.row.getString(2).toString()).isEqualTo("event-time-row");
@@ -333,8 +333,8 @@ class KvTabletTest {
 
         BinaryValue decoded = decodeVersion3Value("k1");
 
-        assertThat(decoded.getValueTimestampMs())
-                .isEqualTo(ValueTimestampProvider.NEVER_EXPIRE_TIMESTAMP_MS);
+        assertThat(decoded.getValueTag())
+                .isEqualTo(RowTtlTimestampProvider.NEVER_EXPIRE_TIMESTAMP_MS);
         assertThat(decoded.row.getInt(0)).isEqualTo(1);
         assertThat(decoded.row.isNullAt(1)).isTrue();
         assertThat(decoded.row.getString(2).toString()).isEqualTo("null-event-time-row");

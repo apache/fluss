@@ -40,27 +40,27 @@ public class ValueDecoder {
     private final Map<Short, RowDecoder> rowDecoders;
     private final SchemaGetter schemaGetter;
     private final KvFormat kvFormat;
-    private final ValueLayout valueLayout;
+    private final KvValueLayout kvValueLayout;
 
     public ValueDecoder(SchemaGetter schemaGetter, KvFormat kvFormat) {
         this(schemaGetter, kvFormat, KV_FORMAT_VERSION_2);
     }
 
     public ValueDecoder(SchemaGetter schemaGetter, KvFormat kvFormat, int kvFormatVersion) {
-        this(schemaGetter, kvFormat, ValueLayout.forVersion(kvFormatVersion));
+        this(schemaGetter, kvFormat, KvValueLayout.forKvFormatVersion(kvFormatVersion));
     }
 
-    public ValueDecoder(SchemaGetter schemaGetter, KvFormat kvFormat, ValueLayout valueLayout) {
+    public ValueDecoder(SchemaGetter schemaGetter, KvFormat kvFormat, KvValueLayout kvValueLayout) {
         this.rowDecoders = new ConcurrentHashMap<>();
         this.schemaGetter = schemaGetter;
         this.kvFormat = kvFormat;
-        this.valueLayout = valueLayout;
+        this.kvValueLayout = kvValueLayout;
     }
 
     /** Decode the value bytes and return the schema id and the row encoded in the value bytes. */
     public BinaryValue decodeValue(byte[] valueBytes) {
         MemorySegment memorySegment = MemorySegment.wrap(valueBytes);
-        short schemaId = valueLayout.readSchemaId(memorySegment);
+        short schemaId = kvValueLayout.readSchemaId(memorySegment);
 
         RowDecoder rowDecoder =
                 rowDecoders.computeIfAbsent(
@@ -75,10 +75,10 @@ public class ValueDecoder {
         BinaryRow row =
                 rowDecoder.decode(
                         memorySegment,
-                        valueLayout.rowOffset(),
-                        valueLayout.rowLength(valueBytes.length));
-        if (valueLayout.hasValueTimestamp()) {
-            return new BinaryValue(schemaId, valueLayout.readValueTimestamp(memorySegment), row);
+                        kvValueLayout.rowPayloadOffset(),
+                        kvValueLayout.rowPayloadLength(valueBytes.length));
+        if (kvValueLayout.hasValueTag()) {
+            return new BinaryValue(schemaId, kvValueLayout.readValueTag(memorySegment), row);
         }
         return new BinaryValue(schemaId, row);
     }

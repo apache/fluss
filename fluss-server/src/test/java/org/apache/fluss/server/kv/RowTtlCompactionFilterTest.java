@@ -64,9 +64,10 @@ class RowTtlCompactionFilterTest {
             handle.getDb()
                     .put(
                             expiredKey,
-                            ValueEncoder.encodeValue(
+                            ValueEncoder.encodeValueWithTag(
                                     DEFAULT_SCHEMA_ID, now - Duration.ofHours(2L).toMillis(), row));
-            handle.getDb().put(freshKey, ValueEncoder.encodeValue(DEFAULT_SCHEMA_ID, now, row));
+            handle.getDb()
+                    .put(freshKey, ValueEncoder.encodeValueWithTag(DEFAULT_SCHEMA_ID, now, row));
             handle.getDb().flush(flushOptions);
 
             handle.getDb().compactRange();

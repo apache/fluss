@@ -46,9 +46,9 @@ import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.PaddingRow;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.row.arrow.ArrowWriterProvider;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.row.encode.ValueEncoder;
-import org.apache.fluss.row.encode.ValueLayout;
 import org.apache.fluss.rpc.protocol.MergeMode;
 import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
 import org.apache.fluss.server.kv.autoinc.AutoIncrementManager;
@@ -137,7 +137,7 @@ public final class KvTablet {
     private final KvFormat kvFormat;
     private final int kvFormatVersion;
     private final ValueEncoder valueEncoder;
-    @Nullable private final ValueTimestampProvider valueTimestampProvider;
+    @Nullable private final RowTtlTimestampProvider rowTtlTimestampProvider;
     // defines how to merge rows on the same primary key
     private final RowMerger rowMerger;
     // Pre-created DefaultRowMerger for OVERWRITE mode (undo recovery scenarios)
@@ -186,7 +186,7 @@ public final class KvTablet {
             int kvFormatVersion,
             @Nullable RocksDBStatistics rocksDBStatistics,
             AutoIncrementManager autoIncrementManager,
-            @Nullable ValueTimestampProvider valueTimestampProvider,
+            @Nullable RowTtlTimestampProvider rowTtlTimestampProvider,
             boolean rowTtlEnabled) {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
@@ -201,8 +201,9 @@ public final class KvTablet {
         this.memorySegmentPool = memorySegmentPool;
         this.kvFormat = kvFormat;
         this.kvFormatVersion = kvFormatVersion;
-        this.valueTimestampProvider = valueTimestampProvider;
-        this.valueEncoder = ValueEncoder.forVersion(kvFormatVersion, valueTimestampProvider);
+        this.rowTtlTimestampProvider = rowTtlTimestampProvider;
+        this.valueEncoder =
+                ValueEncoder.forKvFormatVersion(kvFormatVersion, rowTtlTimestampProvider);
         this.rowMerger = rowMerger;
         // Pre-create DefaultRowMerger for OVERWRITE mode to avoid creating new instances
         // on every putAsLeader call. Used for undo recovery scenarios.
@@ -365,11 +366,11 @@ public final class KvTablet {
                         rowTtl.isPresent()
                                 ? RowTtlCompactionFilterFactory.create(rowTtl.get(), clock)
                                 : null;
-        ValueLayout valueLayout = ValueLayout.forVersion(kvFormatVersion);
+        KvValueLayout kvValueLayout = KvValueLayout.forKvFormatVersion(kvFormatVersion);
         @Nullable
-        ValueTimestampProvider valueTimestampProvider =
-                valueLayout.hasValueTimestamp()
-                        ? ValueTimestampProvider.forWrite(tableConfig, schemaGetter, clock)
+        RowTtlTimestampProvider rowTtlTimestampProvider =
+                kvValueLayout.hasValueTag()
+                        ? RowTtlTimestampProvider.forWrite(tableConfig, schemaGetter, clock)
                         : null;
         RocksDBKv kv =
                 buildRocksDBKv(serverConf, kvTabletDir, sharedRateLimiter, compactionFilterFactory);
@@ -405,7 +406,7 @@ public final class KvTablet {
                 kvFormatVersion,
                 rocksDBStatistics,
                 autoIncrementManager,
-                valueTimestampProvider,
+                rowTtlTimestampProvider,
                 rowTtl.isPresent());
     }
 
@@ -602,8 +603,8 @@ public final class KvTablet {
                     long logEndOffsetOfPrevBatch = logTablet.localLogEndOffset();
 
                     try {
-                        if (valueTimestampProvider != null) {
-                            valueTimestampProvider.prepareForWriteBatch();
+                        if (rowTtlTimestampProvider != null) {
+                            rowTtlTimestampProvider.prepareForWriteBatch();
                         }
                         processKvRecords(
                                 kvRecords,
@@ -807,7 +808,7 @@ public final class KvTablet {
             AutoIncrementUpdater autoIncrementUpdater)
             throws Exception {
         BinaryValue newValue = autoIncrementUpdater.updateAutoIncrementColumns(currentValue);
-        newValue = refreshValueTimestamp(newValue);
+        newValue = refreshValueTag(newValue);
         walBuilder.append(ChangeType.INSERT, latestSchemaRow.replaceRow(newValue.row));
         kvPreWriteBuffer.insert(key, newValue.encodeValue(), logOffset);
         return logOffset + 1;
@@ -821,7 +822,7 @@ public final class KvTablet {
             PaddingRow latestSchemaRow,
             long logOffset)
             throws Exception {
-        newValue = refreshValueTimestamp(newValue);
+        newValue = refreshValueTag(newValue);
         if (changelogImage == ChangelogImage.WAL) {
             walBuilder.append(ChangeType.UPDATE_AFTER, latestSchemaRow.replaceRow(newValue.row));
             kvPreWriteBuffer.update(key, newValue.encodeValue(), logOffset);
@@ -834,8 +835,8 @@ public final class KvTablet {
         }
     }
 
-    private BinaryValue refreshValueTimestamp(BinaryValue value) {
-        return valueEncoder.hasValueTimestamp()
+    private BinaryValue refreshValueTag(BinaryValue value) {
+        return valueEncoder.hasValueTag()
                 ? valueEncoder.createValue(value.schemaId, value.row)
                 : value;
     }

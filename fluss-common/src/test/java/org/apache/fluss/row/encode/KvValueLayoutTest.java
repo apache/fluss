@@ -39,30 +39,30 @@ import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Tests for versioned raw value layout. */
-class ValueLayoutTest {
+/** Tests for the versioned KV value layout. */
+class KvValueLayoutTest {
 
     @Test
-    void testVersion3ValueLayoutStoresBigEndianValueTimestamp() {
+    void testVersion3KvValueLayoutStoresBigEndianValueTag() {
         BinaryRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
-        long valueTimestampMs = 1234567890123L;
-        ValueLayout valueLayout = ValueLayout.forVersion(KV_FORMAT_VERSION_3);
+        long valueTag = 1234567890123L;
+        KvValueLayout kvValueLayout = KvValueLayout.forKvFormatVersion(KV_FORMAT_VERSION_3);
 
         BinaryValue value =
-                ValueEncoder.forVersion(KV_FORMAT_VERSION_3, ignored -> valueTimestampMs)
+                ValueEncoder.forKvFormatVersion(KV_FORMAT_VERSION_3, ignored -> valueTag)
                         .createValue(DEFAULT_SCHEMA_ID, row);
         byte[] encoded = value.encodeValue();
         MemorySegment segment = MemorySegment.wrap(encoded);
 
-        assertThat(encoded).hasSize(valueLayout.rowOffset() + row.getSizeInBytes());
-        assertThat(valueLayout.readSchemaId(segment)).isEqualTo(DEFAULT_SCHEMA_ID);
-        assertThat(valueLayout.readValueTimestamp(segment)).isEqualTo(valueTimestampMs);
-        assertThat(value.hasValueTimestamp()).isTrue();
-        assertThat(value.getValueTimestampMs()).isEqualTo(valueTimestampMs);
+        assertThat(encoded).hasSize(kvValueLayout.rowPayloadOffset() + row.getSizeInBytes());
+        assertThat(kvValueLayout.readSchemaId(segment)).isEqualTo(DEFAULT_SCHEMA_ID);
+        assertThat(kvValueLayout.readValueTag(segment)).isEqualTo(valueTag);
+        assertThat(value.hasValueTag()).isTrue();
+        assertThat(value.getValueTag()).isEqualTo(valueTag);
 
         byte[] expectedRowBytes = new byte[row.getSizeInBytes()];
         row.copyTo(expectedRowBytes, 0);
-        assertThat(Arrays.copyOfRange(encoded, valueLayout.rowOffset(), encoded.length))
+        assertThat(Arrays.copyOfRange(encoded, kvValueLayout.rowPayloadOffset(), encoded.length))
                 .isEqualTo(expectedRowBytes);
 
         BinaryValue decoded =
@@ -72,30 +72,30 @@ class ValueLayoutTest {
                                 KV_FORMAT_VERSION_3)
                         .decodeValue(encoded);
         assertThat(decoded.schemaId).isEqualTo(DEFAULT_SCHEMA_ID);
-        assertThat(decoded.getValueTimestampMs()).isEqualTo(valueTimestampMs);
+        assertThat(decoded.getValueTag()).isEqualTo(valueTag);
         assertThat(decoded.row.getInt(0)).isEqualTo(1);
         assertThat(decoded.row.getString(1).toString()).isEqualTo("a");
     }
 
     @Test
-    void testVersion3EncoderCanOverrideValueTimestampProvider() {
+    void testVersion3EncoderCanOverrideValueTagProvider() {
         BinaryRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
-        ValueEncoder writeEncoder = ValueEncoder.forVersion(KV_FORMAT_VERSION_3, ignored -> 100L);
+        ValueEncoder writeEncoder =
+                ValueEncoder.forKvFormatVersion(KV_FORMAT_VERSION_3, ignored -> 100L);
 
         BinaryValue recoveredValue =
                 writeEncoder
-                        .withTimestampProvider(ignored -> 200L)
+                        .withValueTagProvider(ignored -> 200L)
                         .createValue(DEFAULT_SCHEMA_ID, row);
 
-        assertThat(recoveredValue.getValueTimestampMs()).isEqualTo(200L);
-        assertThat(writeEncoder.createValue(DEFAULT_SCHEMA_ID, row).getValueTimestampMs())
-                .isEqualTo(100L);
+        assertThat(recoveredValue.getValueTag()).isEqualTo(200L);
+        assertThat(writeEncoder.createValue(DEFAULT_SCHEMA_ID, row).getValueTag()).isEqualTo(100L);
     }
 
     @Test
-    void testVersion3ValueRecordBatchDecodesThroughValueLayout() throws Exception {
+    void testVersion3ValueRecordBatchDecodesThroughKvValueLayout() throws Exception {
         BinaryRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
-        byte[] encodedValue = ValueEncoder.encodeValue(DEFAULT_SCHEMA_ID, 100L, row);
+        byte[] encodedValue = ValueEncoder.encodeValueWithTag(DEFAULT_SCHEMA_ID, 100L, row);
         DefaultValueRecordBatch.Builder builder = DefaultValueRecordBatch.builder();
         builder.append(encodedValue);
         DefaultValueRecordBatch recordBatch = builder.build();
@@ -106,7 +106,7 @@ class ValueLayoutTest {
                                 ValueRecordReadContext.createReadContext(
                                         new TestingSchemaGetter(DEFAULT_SCHEMA_ID, DATA1_SCHEMA),
                                         KvFormat.COMPACTED,
-                                        ValueLayout.forVersion(KV_FORMAT_VERSION_3)))
+                                        KvValueLayout.forKvFormatVersion(KV_FORMAT_VERSION_3)))
                         .iterator()
                         .next();
 
@@ -116,14 +116,14 @@ class ValueLayoutTest {
     }
 
     @Test
-    void testFixedSchemaDecoderDecodesVersion3ValueThroughValueLayout() {
+    void testFixedSchemaDecoderDecodesVersion3ValueThroughKvValueLayout() {
         BinaryRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
-        byte[] encodedValue = ValueEncoder.encodeValue(DEFAULT_SCHEMA_ID, 100L, row);
+        byte[] encodedValue = ValueEncoder.encodeValueWithTag(DEFAULT_SCHEMA_ID, 100L, row);
         FixedSchemaDecoder decoder =
                 new FixedSchemaDecoder(
                         KvFormat.COMPACTED,
                         DATA1_SCHEMA,
-                        ValueLayout.forVersion(KV_FORMAT_VERSION_3));
+                        KvValueLayout.forKvFormatVersion(KV_FORMAT_VERSION_3));
 
         InternalRow decoded = decoder.decode(MemorySegment.wrap(encodedValue));
 

@@ -30,7 +30,7 @@ import org.apache.fluss.record.ValueRecord;
 import org.apache.fluss.record.ValueRecordReadContext;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
-import org.apache.fluss.row.encode.ValueLayout;
+import org.apache.fluss.row.encode.KvValueLayout;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.PbScanReqForBucket;
 import org.apache.fluss.rpc.messages.ScanKvRequest;
@@ -114,7 +114,7 @@ public final class KvBatchScanner implements BatchScanner {
                 ValueRecordReadContext.createReadContext(
                         schemaGetter,
                         tableInfo.getTableConfig().getKvFormat(),
-                        ValueLayout.forVersion(
+                        KvValueLayout.forKvFormatVersion(
                                 tableInfo
                                         .getTableConfig()
                                         .getKvFormatVersion()
