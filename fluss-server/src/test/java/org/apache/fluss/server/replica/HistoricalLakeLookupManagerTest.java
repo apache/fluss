@@ -28,19 +28,25 @@ import org.apache.fluss.rpc.entity.LookupResultForBucket;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.entity.LookupDataForBucket;
 
+import com.github.benmanes.caffeine.cache.Scheduler;
+import com.github.benmanes.caffeine.cache.Ticker;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.apache.fluss.record.TestData.PARTITION_TABLE_ID;
 import static org.apache.fluss.record.TestData.PARTITION_TABLE_INFO;
@@ -125,7 +131,15 @@ class HistoricalLakeLookupManagerTest {
         Configuration conf = conf(0);
         ManualExecutor executor = new ManualExecutor();
 
-        assertThatThrownBy(() -> new HistoricalLakeLookupManager(conf, null, executor, SERVER_ID))
+        assertThatThrownBy(
+                        () ->
+                                new HistoricalLakeLookupManager(
+                                        conf,
+                                        null,
+                                        executor,
+                                        SERVER_ID,
+                                        Ticker.systemTicker(),
+                                        Scheduler.disabledScheduler()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(
                         ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS.key());
@@ -184,10 +198,47 @@ class HistoricalLakeLookupManagerTest {
         assertThat(manager.createdLookupers).hasSize(3);
     }
 
+    @Test
+    void testExpiresIdleLookuperWithoutAnotherLookup() throws Exception {
+        ManualExecutor executor = new ManualExecutor();
+        AtomicLong tickerNanos = new AtomicLong();
+        AtomicReference<FutureTask<Void>> expirationTask = new AtomicReference<>();
+        Scheduler cacheScheduler =
+                (cacheExecutor, command, delay, timeUnit) -> {
+                    FutureTask<Void> task =
+                            new FutureTask<>(
+                                    () -> {
+                                        cacheExecutor.execute(command);
+                                        return null;
+                                    });
+                    expirationTask.set(task);
+                    return task;
+                };
+        TestingHistoricalLakeLookupManager manager =
+                new TestingHistoricalLakeLookupManager(
+                        conf(1), executor, tickerNanos::get, cacheScheduler);
+
+        lookupAndRun(manager, executor, PARTITION_TABLE_INFO);
+        TestingLakeTableLookuper expiredLookuper = manager.createdLookupers.get(0);
+
+        tickerNanos.addAndGet(Duration.ofHours(4).toNanos());
+        assertThat(expirationTask.get()).isNotNull();
+        expirationTask.get().run();
+
+        assertThat(expiredLookuper.closed).isTrue();
+        lookupAndRun(manager, executor, PARTITION_TABLE_INFO);
+        assertThat(manager.createdLookupers).hasSize(2);
+    }
+
     private HistoricalLakeLookupManager createManager(
             int maxQueuedHistoricalRequests, ManualExecutor executor) {
         return new HistoricalLakeLookupManager(
-                conf(maxQueuedHistoricalRequests), null, executor, SERVER_ID);
+                conf(maxQueuedHistoricalRequests),
+                null,
+                executor,
+                SERVER_ID,
+                Ticker.systemTicker(),
+                Scheduler.disabledScheduler());
     }
 
     private TestingHistoricalLakeLookupManager createTestingManager(ManualExecutor executor) {
@@ -235,7 +286,21 @@ class HistoricalLakeLookupManagerTest {
         private final List<String> createdIoTmpDirs = new ArrayList<>();
 
         private TestingHistoricalLakeLookupManager(Configuration conf, ManualExecutor executor) {
-            super(conf, null, executor, SERVER_ID);
+            super(
+                    conf,
+                    null,
+                    executor,
+                    SERVER_ID,
+                    Ticker.systemTicker(),
+                    Scheduler.disabledScheduler());
+        }
+
+        private TestingHistoricalLakeLookupManager(
+                Configuration conf,
+                ManualExecutor executor,
+                Ticker ticker,
+                Scheduler cacheScheduler) {
+            super(conf, null, executor, SERVER_ID, ticker, cacheScheduler);
         }
 
         @Override

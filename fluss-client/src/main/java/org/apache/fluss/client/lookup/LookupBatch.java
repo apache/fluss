@@ -34,10 +34,6 @@ public class LookupBatch {
 
     private final List<LookupQuery> lookups;
 
-    public LookupBatch(TableBucket tableBucket, @Nullable String partitionName) {
-        this(new LookupBatchKey(tableBucket, partitionName));
-    }
-
     LookupBatch(LookupBatchKey lookupBatchKey) {
         this.lookupBatchKey = lookupBatchKey;
         this.lookups = new ArrayList<>();

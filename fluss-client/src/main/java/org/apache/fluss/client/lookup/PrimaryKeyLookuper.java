@@ -125,7 +125,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                                 tableInfo.getTablePath(),
                                 metadataUpdater);
             } catch (PartitionNotExistException e) {
-                return fallbackToHistoricalLookup(
+                return mayFallbackToHistoricalLookup(
                         bucketingFunction.bucketing(bkBytes, numBuckets), pkBytes, lookupKey);
             }
         }
@@ -136,7 +136,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
     }
 
     /** Falls back to historical lookup if the lookup key belongs to a historical partition. */
-    private CompletableFuture<LookupResult> fallbackToHistoricalLookup(
+    private CompletableFuture<LookupResult> mayFallbackToHistoricalLookup(
             int bucketId, byte[] keyBytes, InternalRow lookupKey) {
         String originalPartitionName = partitionGetter.getPartition(lookupKey);
         if (!isHistoricalLookupCandidatePartition(
@@ -151,11 +151,11 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                     new UnsupportedOperationException(
                             "Lookup with insertIfNotExists is not supported for historical partition lookup."));
         }
-        return historicalLookup(bucketId, keyBytes, originalPartitionName);
+        return historicalLookup(bucketId, keyBytes, originalPartitionName, lookupKey);
     }
 
     private CompletableFuture<LookupResult> historicalLookup(
-            int bucketId, byte[] keyBytes, String originalPartitionName) {
+            int bucketId, byte[] keyBytes, String originalPartitionName, InternalRow lookupKey) {
         return historicalPartitionResolver
                 .resolveHistoricalPartitionId(tableInfo, originalPartitionName)
                 .thenCompose(
@@ -166,7 +166,7 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                                             historicalPartitionId,
                                             bucketId);
                             return lookupBucket(
-                                    tableBucket, keyBytes, false, originalPartitionName, null);
+                                    tableBucket, keyBytes, false, originalPartitionName, lookupKey);
                         });
     }
 
@@ -174,8 +174,8 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
             TableBucket tableBucket,
             byte[] keyBytes,
             boolean insertIfNotExists,
-            @Nullable String partitionName,
-            @Nullable InternalRow lookupKey) {
+            @Nullable String originalPartitionName,
+            InternalRow lookupKey) {
         CompletableFuture<LookupResult> lookupFuture = new CompletableFuture<>();
         lookupClient
                 .lookup(
@@ -183,18 +183,21 @@ class PrimaryKeyLookuper extends AbstractLookuper implements Lookuper {
                         tableBucket,
                         keyBytes,
                         insertIfNotExists,
-                        partitionName)
+                        originalPartitionName)
                 .whenComplete(
                         (result, error) -> {
                             if (error != null) {
-                                if (!(error instanceof PartitionNotExistException)) {
+                                // A historical lookup already carries the original partition name.
+                                // Propagate its failure instead of falling back again.
+                                if (!(error instanceof PartitionNotExistException)
+                                        || originalPartitionName != null) {
                                     lookupFuture.completeExceptionally(error);
                                     return;
                                 }
 
                                 // The cached normal partition was deleted. Re-evaluate the routing
                                 // using the lookup key.
-                                fallbackToHistoricalLookup(
+                                mayFallbackToHistoricalLookup(
                                                 tableBucket.getBucket(), keyBytes, lookupKey)
                                         .whenComplete(
                                                 (historicalResult, historicalError) -> {

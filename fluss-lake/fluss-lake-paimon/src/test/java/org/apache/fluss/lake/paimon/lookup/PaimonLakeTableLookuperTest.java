@@ -35,23 +35,34 @@ import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.row.encode.paimon.PaimonKeyEncoder;
 import org.apache.fluss.types.DataTypes;
 
+import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
+import org.apache.paimon.data.BinaryRow;
+import org.apache.paimon.data.BinaryString;
 import org.apache.paimon.data.Timestamp;
+import org.apache.paimon.fs.Path;
+import org.apache.paimon.io.DataFileMeta;
+import org.apache.paimon.io.DataFilePathFactory;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.table.FileStoreTable;
+import org.apache.paimon.table.sink.TableCommitImpl;
+import org.apache.paimon.table.source.DataSplit;
+import org.apache.paimon.table.source.Split;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
+import static org.apache.fluss.lake.paimon.utils.PaimonTestUtils.CompactHelper;
 import static org.apache.fluss.lake.paimon.utils.PaimonTestUtils.writeAndCommitData;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -117,6 +128,62 @@ class PaimonLakeTableLookuperTest {
                                     lookupContext(schema, "20240101", 1, SCHEMA_ID)))
                     .isNull();
             assertThat(lookuper.lookup(compactedKey(schema, 1, "20240101"), context)).isNull();
+        }
+    }
+
+    @Test
+    void testRefreshFilesAfterCompactionAndSnapshotExpiration() throws Exception {
+        TablePath tablePath = TablePath.of(DB, "compacted_pk");
+        Schema schema = pkSchema();
+        FileStoreTable table = createPaimonTable(tablePath, partitionedPkDescriptor(schema));
+        for (int id = 1; id <= 5; id++) {
+            writeAndCommitData(
+                    table,
+                    Collections.singletonMap(
+                            0, Collections.singletonList(paimonRow(id, "20240101", "name-" + id))));
+        }
+
+        BinaryRow partition = BinaryRow.singleColumn(BinaryString.fromString("20240101"));
+        List<DataFileMeta> filesBeforeCompaction = dataFiles(table, partition, 0);
+        assertThat(filesBeforeCompaction).hasSize(5);
+
+        try (LakeTableLookuper lookuper = new PaimonLakeTableLookuper(paimonConfig, tablePath)) {
+            LakeTableLookuper.LookupContext context =
+                    lookupContext(schema, "20240101", 0, SCHEMA_ID);
+            assertThat(lookuper.lookup(paimonKey(schema, 5, "20240101"), context)).isNotNull();
+
+            new CompactHelper(table, new File(tempWarehouseDir, "compact"))
+                    .compactBucket(partition, 0)
+                    .commit();
+            assertThat(dataFiles(table, partition, 0)).hasSize(1);
+
+            DataFilePathFactory pathFactory =
+                    table.store().pathFactory().createDataFilePathFactory(partition, 0);
+            List<Path> filesBeforeCompactionPaths = new ArrayList<>();
+            for (DataFileMeta file : filesBeforeCompaction) {
+                Path path = pathFactory.toPath(file);
+                assertThat(table.store().snapshotManager().fileIO().exists(path)).isTrue();
+                filesBeforeCompactionPaths.add(path);
+            }
+
+            Options expireOptions = new Options();
+            expireOptions.set(CoreOptions.SNAPSHOT_NUM_RETAINED_MIN, 1);
+            expireOptions.set(CoreOptions.SNAPSHOT_NUM_RETAINED_MAX, 1);
+            // Compaction only marks the replaced files as deleted. Snapshot expiration performs
+            // the physical cleanup that makes the stale lookuper fail to open an old data file.
+            try (TableCommitImpl commit = table.copy(expireOptions.toMap()).newCommit("")) {
+                commit.expireSnapshots();
+            }
+            for (Path path : filesBeforeCompactionPaths) {
+                assertThat(table.store().snapshotManager().fileIO().exists(path)).isFalse();
+            }
+
+            BinaryValue decodedValue =
+                    decodeValue(
+                            lookuper.lookup(paimonKey(schema, 1, "20240101"), context),
+                            SCHEMA_ID,
+                            schema);
+            assertRow(decodedValue.row, 1, "20240101", "name-1");
         }
     }
 
@@ -304,6 +371,22 @@ class PaimonLakeTableLookuperTest {
                 bucket,
                 schemaId,
                 schema.getRowType());
+    }
+
+    private static List<DataFileMeta> dataFiles(
+            FileStoreTable table, BinaryRow partition, int bucket) {
+        List<DataFileMeta> files = new ArrayList<>();
+        for (Split split :
+                table.newScan()
+                        .withPartitionFilter(Collections.singletonList(partition))
+                        .withBucket(bucket)
+                        .plan()
+                        .splits()) {
+            if (split instanceof DataSplit) {
+                files.addAll(((DataSplit) split).dataFiles());
+            }
+        }
+        return files;
     }
 
     private static org.apache.paimon.data.GenericRow paimonRow(Object... fields) {

@@ -307,9 +307,6 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                                 + "historical partition lookup.");
             }
             Map<TableBucket, List<byte[]>> normalLookupData = toLookupData(request);
-            if (normalLookupData.isEmpty()) {
-                return CompletableFuture.completedFuture(makeLookupResponse(errorResponseMap));
-            }
             replicaManager.lookups(
                     request.isInsertIfNotExists(),
                     request.getTimeoutMs(),
@@ -320,6 +317,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         } else {
             boolean historicalLookupRequest = hasHistoricalLookup(request);
             if (historicalLookupRequest) {
+                // Route the entire request through historical lookup. Per-bucket validation
+                // reports malformed requests that mix normal and historical lookups.
                 Map<TableBucket, LookupDataForBucket> lookupDataByBucket =
                         toHistoricalLookupData(request);
                 Map<TableBucket, LookupDataForBucket> interesting =

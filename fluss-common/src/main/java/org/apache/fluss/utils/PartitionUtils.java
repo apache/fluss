@@ -267,11 +267,12 @@ public class PartitionUtils {
     }
 
     /**
-     * Returns true if the partition can be served by historical lookup.
+     * Returns whether a missing physical partition is eligible to fall back to historical lookup.
      *
-     * <p>This is stricter than checking whether the auto partition time is expired. Historical
-     * lookup is currently backed by Paimon lake data, so the table must also be a Paimon lake
-     * table.
+     * <p>The table must be an auto-partitioned Paimon lake table, and the partition must contain a
+     * valid auto-partition time older than the retention window. This method only determines
+     * routing eligibility; it does not verify that the historical partition or requested data
+     * exists.
      */
     public static boolean isHistoricalLookupCandidatePartition(
             TableInfo tableInfo, String partitionName, Instant now) {

@@ -19,6 +19,7 @@ package org.apache.fluss.lake.paimon.lookup;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.lake.lakestorage.LakeTableLookuper;
 import org.apache.fluss.lake.paimon.utils.PaimonPartitionBucket;
 import org.apache.fluss.lake.paimon.utils.PaimonRowAsFlussRow;
@@ -50,6 +51,7 @@ import org.apache.paimon.types.DataField;
 
 import javax.annotation.Nullable;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -62,7 +64,23 @@ import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonPartition;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** Paimon implementation of {@link LakeTableLookuper}. */
+/**
+ * Paimon implementation of {@link LakeTableLookuper} for primary-key tables.
+ *
+ * <p>The catalog, table, local query, and I/O manager are initialized lazily on the first lookup.
+ * For each partition and bucket, the lookuper scans the latest Paimon snapshot once and registers
+ * its data files with {@link LocalTableQuery}. Paimon then creates local lookup files lazily as
+ * individual remote data files are queried.
+ *
+ * <p>A cached partition-bucket file set can become stale when Paimon compaction replaces its data
+ * files and snapshot expiration physically deletes the old files. Because {@code FileIO}
+ * implementations may represent a missing file with different {@link IOException} types, the first
+ * lookup I/O failure closes the cached query state, reopens the table from the latest snapshot, and
+ * retries once.
+ *
+ * <p>Lookup and close operations are synchronized because they share mutable Paimon query, local
+ * cache, and value-encoding state.
+ */
 public class PaimonLakeTableLookuper implements LakeTableLookuper {
 
     // Hard-code a conservative 1GB default for now to avoid unbounded lookup cache growth.
@@ -112,7 +130,7 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
         initializeFilesIfNeeded(partition, context.bucketId());
 
         org.apache.paimon.data.InternalRow paimonRow =
-                localTableQuery().lookup(partition, context.bucketId(), keyRow);
+                lookupWithFileRefresh(partition, context.bucketId(), keyRow);
         if (paimonRow == null) {
             return null;
         }
@@ -153,21 +171,20 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
                     "Point lookup is only supported for primary-key Paimon tables.");
         }
         ioManager = createIOManager(ioTmpDir);
-        localTableQuery =
-                fileStoreTable
-                        .newLocalTableQuery()
-                        .withValueProjection(businessFieldProjection(fileStoreTable))
-                        .withIOManager(ioManager);
+        localTableQuery = createLocalTableQuery();
         partitionKeyExtractor = new RowPartitionKeyExtractor(fileStoreTable.schema());
         primaryKeyFieldCount = fileStoreTable.primaryKeys().size();
     }
 
+    private LocalTableQuery createLocalTableQuery() {
+        return fileStoreTable()
+                .newLocalTableQuery()
+                .withValueProjection(businessFieldProjection(fileStoreTable()))
+                .withIOManager(checkNotNull(ioManager, "ioManager must be initialized."));
+    }
+
     private FileStoreTable withLookupCacheOptions(FileStoreTable table) {
         String key = CoreOptions.LOOKUP_CACHE_MAX_DISK_SIZE.key();
-        String configuredSize = paimonConfig.toMap().get(key);
-        if (configuredSize != null) {
-            return table.copy(Collections.singletonMap(key, configuredSize));
-        }
         if (table.options().containsKey(key)) {
             return table;
         }
@@ -233,7 +250,6 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
             addFilesByName(dataFilesByName, dataSplit.dataFiles());
         }
 
-        // TODO: Refresh files when historical lookup needs to observe new lake snapshots.
         localTableQuery()
                 .refreshFiles(
                         partition,
@@ -241,6 +257,50 @@ public class PaimonLakeTableLookuper implements LakeTableLookuper {
                         new ArrayList<>(beforeFilesByName.values()),
                         new ArrayList<>(dataFilesByName.values()));
         initializedBuckets.add(partitionBucket);
+    }
+
+    private org.apache.paimon.data.InternalRow lookupWithFileRefresh(
+            org.apache.paimon.data.BinaryRow partition,
+            int bucketId,
+            org.apache.paimon.data.InternalRow keyRow)
+            throws Exception {
+        try {
+            return localTableQuery().lookup(partition, bucketId, keyRow);
+        } catch (IOException e) {
+            // FileIO only guarantees IOException and storage plugins may use different exception
+            // types for a missing file. The missing old file after compaction may therefore
+            // surface as any IOException. Refresh and retry only once so persistent I/O failures
+            // do not repeatedly rebuild Paimon lookup state within one request.
+            try {
+                refreshFiles(partition, bucketId);
+                return localTableQuery().lookup(partition, bucketId, keyRow);
+            } catch (IOException retryError) {
+                retryError.addSuppressed(e);
+                // Historical Paimon point lookup is part of the Fluss KV lookup path. Expose a
+                // persistent I/O failure as a retriable KV error so the existing KV RPC retry
+                // semantics can handle it consistently.
+                throw new KvStorageException(
+                        "Failed to lookup historical data from Paimon after refreshing files for "
+                                + tablePath
+                                + ".",
+                        retryError);
+            }
+        }
+    }
+
+    private void refreshFiles(org.apache.paimon.data.BinaryRow partition, int bucketId)
+            throws Exception {
+        IOUtils.closeQuietly(localTableQuery, "Paimon local table query");
+        IOUtils.closeQuietly(ioManager, "Paimon lookup IO manager");
+        IOUtils.closeQuietly(catalog, "Paimon catalog");
+        localTableQuery = null;
+        ioManager = null;
+        catalog = null;
+        fileStoreTable = null;
+        partitionKeyExtractor = null;
+        initializedBuckets.clear();
+        ensureInitialized();
+        initializeFilesIfNeeded(partition, bucketId);
     }
 
     private static void addFilesByName(

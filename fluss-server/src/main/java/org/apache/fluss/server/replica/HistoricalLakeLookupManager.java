@@ -39,17 +39,23 @@ import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.server.entity.LookupDataForBucket;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
+import org.apache.fluss.utils.concurrent.Scheduler;
+
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.RemovalCause;
+import com.github.benmanes.caffeine.cache.Ticker;
 
 import javax.annotation.Nullable;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Semaphore;
 
@@ -57,30 +63,79 @@ import static org.apache.fluss.server.utils.LakeStorageUtils.extractLakeProperti
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** Handles server-side point lookup for historical partitions stored in lake storage. */
+/**
+ * Handles server-side point lookup for historical partitions stored in lake storage.
+ *
+ * <p>Accepted requests run on the TabletServer I/O executor. A semaphore bounds the total number of
+ * accepted historical lookup tasks so slow lake storage cannot create an unbounded request backlog.
+ *
+ * <p>Creating a lake table lookuper may initialize catalog, table, and query state and allocate
+ * local lookup files, so lookupers are cached and reused. The cache is keyed by table ID rather
+ * than table path to prevent a deleted and recreated table from reusing the old table's lookuper. A
+ * cached lookuper is replaced when its schema ID no longer matches the requested table schema.
+ *
+ * <p>A lookuper is closed when replaced, explicitly invalidated by a replica lifecycle event, the
+ * manager shuts down, or after three hours without access. Caffeine expiration is scheduled on the
+ * shared TabletServer scheduler, allowing idle resources to be released even if no subsequent
+ * lookup accesses the cache.
+ */
 class HistoricalLakeLookupManager implements AutoCloseable {
 
     private static final String PAIMON_LOOKUP_DIR_NAME = "paimon-lookup";
+    private static final String LOOKUPER_CACHE_EXPIRATION_TASK_NAME =
+            "historical-lookuper-cache-expiration";
+    private static final Duration LOOKUPER_CACHE_EXPIRATION = Duration.ofHours(3);
 
     private final Configuration conf;
     private final @Nullable PluginManager pluginManager;
     private final ExecutorService ioExecutor;
     private final int serverId;
     private final Semaphore lookupPermits;
-    // todo: consider add cache expire
-    private final ConcurrentHashMap<Long, CachedLakeTableLookuper> lakeTableLookupers =
-            new ConcurrentHashMap<>();
+    private final Cache<Long, CachedLakeTableLookuper> lakeTableLookupers;
     private @Nullable String paimonLookupTempDir;
 
     HistoricalLakeLookupManager(
             Configuration conf,
             @Nullable PluginManager pluginManager,
             ExecutorService ioExecutor,
-            int serverId) {
+            int serverId,
+            Scheduler scheduler) {
+        this(
+                conf,
+                pluginManager,
+                ioExecutor,
+                serverId,
+                Ticker.systemTicker(),
+                createCacheScheduler(scheduler));
+    }
+
+    @VisibleForTesting
+    HistoricalLakeLookupManager(
+            Configuration conf,
+            @Nullable PluginManager pluginManager,
+            ExecutorService ioExecutor,
+            int serverId,
+            Ticker ticker,
+            com.github.benmanes.caffeine.cache.Scheduler cacheScheduler) {
         this.conf = checkNotNull(conf, "conf must not be null.");
         this.pluginManager = pluginManager;
         this.ioExecutor = checkNotNull(ioExecutor, "ioExecutor must not be null.");
         this.serverId = serverId;
+        this.lakeTableLookupers =
+                Caffeine.newBuilder()
+                        .expireAfterAccess(LOOKUPER_CACHE_EXPIRATION)
+                        .ticker(checkNotNull(ticker, "ticker must not be null."))
+                        .scheduler(checkNotNull(cacheScheduler, "cacheScheduler must not be null."))
+                        .executor(Runnable::run)
+                        .removalListener(
+                                (Long ignored,
+                                        CachedLakeTableLookuper cachedLookuper,
+                                        RemovalCause ignoredCause) -> {
+                                    if (cachedLookuper != null) {
+                                        closeLookuper(cachedLookuper);
+                                    }
+                                })
+                        .build();
         int maxQueuedHistoricalRequests =
                 conf.get(ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS);
         checkArgument(
@@ -88,6 +143,18 @@ class HistoricalLakeLookupManager implements AutoCloseable {
                 "%s must be greater than 0.",
                 ConfigOptions.NETTY_SERVER_MAX_QUEUED_HISTORICAL_REQUESTS.key());
         this.lookupPermits = new Semaphore(maxQueuedHistoricalRequests);
+    }
+
+    private static com.github.benmanes.caffeine.cache.Scheduler createCacheScheduler(
+            Scheduler scheduler) {
+        checkNotNull(scheduler, "scheduler must not be null.");
+        // Schedule expiration maintenance so idle lookupers are closed even if no more lookups
+        // arrive.
+        return (executor, command, delay, timeUnit) ->
+                scheduler.scheduleOnce(
+                        LOOKUPER_CACHE_EXPIRATION_TASK_NAME,
+                        () -> executor.execute(command),
+                        timeUnit.toMillis(delay));
     }
 
     CompletableFuture<LookupResultForBucket> lookup(
@@ -119,17 +186,12 @@ class HistoricalLakeLookupManager implements AutoCloseable {
 
     @Override
     public void close() {
-        for (CachedLakeTableLookuper cachedLookuper : lakeTableLookupers.values()) {
-            closeLookuper(cachedLookuper);
-        }
-        lakeTableLookupers.clear();
+        lakeTableLookupers.invalidateAll();
+        lakeTableLookupers.cleanUp();
     }
 
     void invalidateTableLookuper(long tableId) {
-        CachedLakeTableLookuper cachedLookuper = lakeTableLookupers.remove(tableId);
-        if (cachedLookuper != null) {
-            closeLookuper(cachedLookuper);
-        }
+        lakeTableLookupers.invalidate(tableId);
     }
 
     private LookupResultForBucket lookupInternal(
@@ -138,22 +200,22 @@ class HistoricalLakeLookupManager implements AutoCloseable {
         try {
             LookupContext context = createLookupContext(lookupData, tableInfo);
             CachedLakeTableLookuper cachedLookuper =
-                    lakeTableLookupers.compute(
-                            context.tableId,
-                            (ignored, currentLookuper) -> {
-                                if (currentLookuper != null
-                                        && currentLookuper.schemaId == context.schemaId) {
-                                    return currentLookuper;
-                                }
-                                LakeTableLookuper newLookuper =
-                                        createLakeTableLookuper(
-                                                context.tablePath,
-                                                getOrPreparePaimonLookupTempDir());
-                                if (currentLookuper != null) {
-                                    closeLookuper(currentLookuper);
-                                }
-                                return new CachedLakeTableLookuper(context.schemaId, newLookuper);
-                            });
+                    lakeTableLookupers
+                            .asMap()
+                            .compute(
+                                    context.tableId,
+                                    (ignored, currentLookuper) -> {
+                                        if (currentLookuper != null
+                                                && currentLookuper.schemaId == context.schemaId) {
+                                            return currentLookuper;
+                                        }
+                                        LakeTableLookuper newLookuper =
+                                                createLakeTableLookuper(
+                                                        context.tablePath,
+                                                        getOrPreparePaimonLookupTempDir());
+                                        return new CachedLakeTableLookuper(
+                                                context.schemaId, newLookuper);
+                                    });
             List<byte[]> values = new ArrayList<>(lookupData.keys().size());
             for (byte[] key : lookupData.keys()) {
                 values.add(cachedLookuper.lookuper.lookup(key, context.lookupContext));

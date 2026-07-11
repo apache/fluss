@@ -17,7 +17,14 @@
 
 package org.apache.fluss.exception;
 
-/** Indicates that historical lookup is throttled by server-side admission control. */
+import org.apache.fluss.annotation.PublicEvolving;
+
+/**
+ * Indicates that historical lookup is throttled by server-side admission control.
+ *
+ * @since 1.0
+ */
+@PublicEvolving
 public class HistoricalLookupThrottledException extends RetriableException {
 
     private static final long serialVersionUID = 1L;
