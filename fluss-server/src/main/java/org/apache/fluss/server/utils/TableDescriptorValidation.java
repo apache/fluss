@@ -191,7 +191,9 @@ public class TableDescriptorValidation {
     }
 
     public static void validateAlterTableProperties(
-            TableInfo currentTable, Set<String> tableKeysToChange, boolean hasLakeTieringProgress) {
+            TableInfo currentTable,
+            Set<String> tableKeysToChange,
+            boolean lakeTablePathChangeForbidden) {
         TableConfig currentConfig = currentTable.getTableConfig();
 
         List<String> unsupportedKeys =
@@ -216,24 +218,13 @@ public class TableDescriptorValidation {
                             ConfigOptions.TABLE_KV_STANDBY_REPLICA_ENABLED.key()));
         }
 
-        List<String> lakePathKeys =
-                tableKeysToChange.stream()
-                        .filter(TableDescriptorValidation::isLakePathOption)
-                        .collect(Collectors.toList());
-        if (currentConfig.isDataLakeEnabled() && !lakePathKeys.isEmpty()) {
+        if (lakeTablePathChangeForbidden) {
             throw new InvalidAlterTableException(
                     String.format(
-                            "The name mapping options '%s' and '%s' can only be altered when '%s' is false.",
+                            "The name mapping options '%s' and '%s' cannot be altered when '%s' is true or the table has tiering progress.",
                             ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(),
                             ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(),
                             ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
-        }
-        if (hasLakeTieringProgress && !lakePathKeys.isEmpty()) {
-            throw new InvalidAlterTableException(
-                    String.format(
-                            "Tiering progress already exists for this table, so the name mapping options '%s' and '%s' cannot be altered.",
-                            ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(),
-                            ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key()));
         }
 
         if (!currentConfig.getDataLakeFormat().isPresent()) {
@@ -267,11 +258,6 @@ public class TableDescriptorValidation {
                                         .collect(Collectors.joining(", "))));
             }
         }
-    }
-
-    private static boolean isLakePathOption(String key) {
-        return ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key().equals(key)
-                || ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key().equals(key);
     }
 
     private static void checkSystemColumns(RowType schema) {
