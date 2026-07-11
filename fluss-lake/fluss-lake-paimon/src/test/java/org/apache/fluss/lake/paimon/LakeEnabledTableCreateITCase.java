@@ -1218,7 +1218,8 @@ class LakeEnabledTableCreateITCase {
                                         .get())
                 .cause()
                 .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessageContaining("can only be altered when 'table.datalake.enabled' is false")
+                .hasMessageContaining(
+                        "cannot be altered when 'table.datalake.enabled' is true or the table has tiering progress")
                 .hasMessageContaining(ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key());
 
         admin.alterTable(
@@ -1256,7 +1257,8 @@ class LakeEnabledTableCreateITCase {
                                         .get())
                 .cause()
                 .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessageContaining("Tiering progress already exists for this table")
+                .hasMessageContaining(
+                        "cannot be altered when 'table.datalake.enabled' is true or the table has tiering progress")
                 .hasMessageContaining(ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key());
     }
 
