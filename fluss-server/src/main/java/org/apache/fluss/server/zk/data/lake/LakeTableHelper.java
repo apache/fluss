@@ -79,24 +79,6 @@ public class LakeTableHelper {
         registerLakeTableSnapshotV2(tableId, lakeSnapshotMetadata, null);
     }
 
-    /** Clears the committed lake table progress for the given table. */
-    public void clearLakeTableProgress(long tableId) throws Exception {
-        Optional<LakeTable> optLakeTable = zkClient.getLakeTable(tableId);
-        if (!optLakeTable.isPresent()) {
-            return;
-        }
-
-        LakeTable lakeTable = optLakeTable.get();
-        List<LakeTable.LakeSnapshotMetadata> lakeSnapshotMetadatas =
-                lakeTable.getLakeSnapshotMetadatas();
-        if (lakeSnapshotMetadatas != null) {
-            for (LakeTable.LakeSnapshotMetadata lakeSnapshotMetadata : lakeSnapshotMetadatas) {
-                lakeSnapshotMetadata.discard();
-            }
-        }
-        zkClient.deleteLakeTable(tableId);
-    }
-
     /**
      * Register a lake table snapshot and clean up old snapshots based on the table type.
      *
