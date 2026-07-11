@@ -413,7 +413,7 @@ public class TableMetricGroup extends AbstractMetricGroup {
 
     /**
      * Register table-level KV backpressure gauge. Reports the peak normalized pressure across all
-     * buckets, in {@code [0, 1]}. Per-bucket pressure values are written from successful PutKv
+     * buckets, in {@code [0, 1)}. Per-bucket pressure values are written from successful PutKv
      * response sampling; the gauge reads them via {@link
      * BucketMetricGroup#getKvBackpressureLevel()} without going through RocksDB.
      */

@@ -1126,7 +1126,7 @@ KV backpressure metrics report the cooperative backpressure signal computed by p
       <th rowspan="2"><strong>tabletserver</strong></th>
       <td rowspan="2">table</td>
       <td>kvBackpressureMaxPressure</td>
-      <td>Maximum normalized backpressure value across all buckets of this table, in <code>[0, 1]</code>. A value approaching <code>1</code> indicates the hottest bucket is close to the storage engine's hard-rejection trigger.</td>
+      <td>Maximum normalized backpressure value across all buckets of this table, in <code>[0, 1)</code>. A value approaching <code>1</code> indicates the hottest bucket is close to the storage engine's hard-rejection trigger.</td>
       <td>Gauge</td>
     </tr>
     <tr>
