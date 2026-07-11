@@ -27,7 +27,6 @@ import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.fs.FsPath;
-import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -88,8 +87,6 @@ import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.TableIdsZNode;
-import org.apache.fluss.server.zk.data.lake.LakeTable;
-import org.apache.fluss.server.zk.data.lake.LakeTableHelper;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
 import org.apache.fluss.types.DataTypes;
@@ -98,7 +95,6 @@ import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
 import org.apache.fluss.utils.concurrent.Scheduler;
-import org.apache.fluss.utils.json.TableBucketOffsets;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.AfterEach;
@@ -1813,57 +1809,6 @@ class CoordinatorEventProcessorTest {
     }
 
     @Test
-    void testAlterLakePathClearsProgressWhenDatalakeDisabled() throws Exception {
-        initCoordinatorChannel();
-        TablePath tablePath = TablePath.of(defaultDatabase, "test_lake_path_progress_cleanup");
-        String oldLakeDatabaseName = "lake_db_1";
-        String oldLakeTableName = "lake_table_1";
-        String lakeDatabaseName = "lake_db_2";
-        String lakeTableName = "lake_table_2";
-        TableDescriptor tableDescriptor =
-                tableDescriptorWithLakePath(false, oldLakeDatabaseName, oldLakeTableName);
-        TableAssignment tableAssignment =
-                generateAssignment(
-                        1,
-                        REPLICATION_FACTOR,
-                        new TabletServerInfo[] {
-                            new TabletServerInfo(0, "rack0"),
-                            new TabletServerInfo(1, "rack1"),
-                            new TabletServerInfo(2, "rack2")
-                        });
-        long tableId =
-                metadataManager.createTable(
-                        tablePath, remoteDataDir, tableDescriptor, tableAssignment, false);
-
-        LakeTableHelper lakeTableHelper = new LakeTableHelper(zookeeperClient, remoteDataDir);
-        Map<TableBucket, Long> offsets = new HashMap<>();
-        offsets.put(new TableBucket(tableId, 0), 100L);
-        FsPath offsetsPath =
-                lakeTableHelper.storeLakeTableOffsetsFile(
-                        tablePath, new TableBucketOffsets(tableId, offsets));
-        lakeTableHelper.registerLakeTableSnapshotV2(
-                tableId,
-                new LakeTable.LakeSnapshotMetadata(1L, offsetsPath, offsetsPath),
-                LakeCommitResult.KEEP_ALL_PREVIOUS);
-        assertThat(zookeeperClient.getLakeTable(tableId)).isPresent();
-
-        TablePropertyChanges.Builder builder = TablePropertyChanges.builder();
-        builder.setTableProperty(
-                ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(), lakeDatabaseName);
-        builder.setTableProperty(ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(), lakeTableName);
-        metadataManager.alterTableProperties(
-                tablePath, Collections.emptyList(), builder.build(), false, null);
-
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    assertThat(metadataManager.getTable(tablePath).getLakeTablePath())
-                            .isEqualTo(TablePath.of(lakeDatabaseName, lakeTableName));
-                    assertThat(zookeeperClient.getLakeTable(tableId)).isNotPresent();
-                });
-    }
-
-    @Test
     void testDoBucketReassignment() throws Exception {
         zookeeperClient.registerTabletServer(
                 3,
@@ -2543,17 +2488,6 @@ class CoordinatorEventProcessorTest {
 
     private void alterTable(TablePath tablePath, List<TableChange> schemaChanges) {
         metadataManager.alterTableSchema(tablePath, schemaChanges, true, null);
-    }
-
-    private TableDescriptor tableDescriptorWithLakePath(
-            boolean dataLakeEnabled, String lakeDatabaseName, String lakeTableName) {
-        Map<String, String> properties =
-                new HashMap<>(CoordinatorEventProcessorTest.TEST_TABLE.getProperties());
-        properties.put(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), String.valueOf(dataLakeEnabled));
-        properties.put(ConfigOptions.TABLE_DATALAKE_FORMAT.key(), "paimon");
-        properties.put(ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(), lakeDatabaseName);
-        properties.put(ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(), lakeTableName);
-        return CoordinatorEventProcessorTest.TEST_TABLE.withProperties(properties);
     }
 
     private TableDescriptor getPartitionedTable() {

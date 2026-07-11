@@ -191,7 +191,7 @@ public class TableDescriptorValidation {
     }
 
     public static void validateAlterTableProperties(
-            TableInfo currentTable, Set<String> tableKeysToChange) {
+            TableInfo currentTable, Set<String> tableKeysToChange, boolean hasLakeTieringProgress) {
         TableConfig currentConfig = currentTable.getTableConfig();
 
         List<String> unsupportedKeys =
@@ -223,10 +223,17 @@ public class TableDescriptorValidation {
         if (currentConfig.isDataLakeEnabled() && !lakePathKeys.isEmpty()) {
             throw new InvalidAlterTableException(
                     String.format(
-                            "The following options cannot be altered for datalake enabled tables: %s.",
-                            lakePathKeys.stream()
-                                    .map(k -> "'" + k + "'")
-                                    .collect(Collectors.joining(", "))));
+                            "The name mapping options '%s' and '%s' can only be altered when '%s' is false.",
+                            ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(),
+                            ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key(),
+                            ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
+        }
+        if (hasLakeTieringProgress && !lakePathKeys.isEmpty()) {
+            throw new InvalidAlterTableException(
+                    String.format(
+                            "Tiering progress already exists for this table, so the name mapping options '%s' and '%s' cannot be altered.",
+                            ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key(),
+                            ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key()));
         }
 
         if (!currentConfig.getDataLakeFormat().isPresent()) {

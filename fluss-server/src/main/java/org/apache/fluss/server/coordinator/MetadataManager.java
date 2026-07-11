@@ -520,7 +520,16 @@ public class MetadataManager {
             TableInfo tableInfo = tableReg.toTableInfo(tablePath, schemaInfo);
 
             // validate the changes
-            validateAlterTableProperties(tableInfo, tablePropertyChanges.tableKeysToChange());
+            Set<String> tableKeysToChange = tablePropertyChanges.tableKeysToChange();
+            boolean lakeTablePathChanged =
+                    tableKeysToChange.contains(ConfigOptions.TABLE_DATALAKE_DATABASE_NAME.key())
+                            || tableKeysToChange.contains(
+                                    ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key());
+            boolean hasLakeTieringProgress =
+                    lakeTablePathChanged
+                            && !tableInfo.getTableConfig().isDataLakeEnabled()
+                            && zookeeperClient.getLakeTable(tableInfo.getTableId()).isPresent();
+            validateAlterTableProperties(tableInfo, tableKeysToChange, hasLakeTieringProgress);
 
             TableDescriptor tableDescriptor = tableInfo.toTableDescriptor();
             TableDescriptor newDescriptor =

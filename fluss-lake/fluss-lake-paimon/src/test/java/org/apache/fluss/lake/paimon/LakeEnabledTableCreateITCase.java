@@ -27,6 +27,7 @@ import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
@@ -35,6 +36,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.server.zk.data.lake.LakeTable;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.paimon.CoreOptions;
@@ -1158,7 +1160,45 @@ class LakeEnabledTableCreateITCase {
                                         .get())
                 .cause()
                 .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessageContaining("cannot be altered for datalake enabled tables")
+                .hasMessageContaining("can only be altered when 'table.datalake.enabled' is false")
+                .hasMessageContaining(ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key());
+
+        admin.alterTable(
+                        lakeEnabledTablePath,
+                        Collections.singletonList(
+                                TableChange.set(
+                                        ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "false")),
+                        false)
+                .get();
+        TableInfo lakeTableWithProgress = admin.getTableInfo(lakeEnabledTablePath).get();
+        FLUSS_CLUSTER_EXTENSION
+                .getZooKeeperClient()
+                .upsertLakeTable(
+                        lakeTableWithProgress.getTableId(),
+                        new LakeTable(
+                                new LakeTable.LakeSnapshotMetadata(
+                                        1L,
+                                        new FsPath(
+                                                FLUSS_CLUSTER_EXTENSION.getRemoteDataDir(),
+                                                "lake-path-progress"),
+                                        null)),
+                        false);
+
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                lakeEnabledTablePath,
+                                                Collections.singletonList(
+                                                        TableChange.set(
+                                                                ConfigOptions
+                                                                        .TABLE_DATALAKE_TABLE_NAME
+                                                                        .key(),
+                                                                "another_lake_table")),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessageContaining("Tiering progress already exists for this table")
                 .hasMessageContaining(ConfigOptions.TABLE_DATALAKE_TABLE_NAME.key());
     }
 
