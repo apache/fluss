@@ -166,6 +166,50 @@ defmodule Fluss.Integration.LogTableTest do
 
       cleanup_table(admin, table_name)
     end
+
+    test "round-trips array, map, and row values", %{conn: conn, admin: admin} do
+      table_name = "ex_test_complex_#{:rand.uniform(100_000)}"
+      cleanup_table(admin, table_name)
+
+      schema =
+        Fluss.Schema.new()
+        |> Fluss.Schema.column("id", :int)
+        |> Fluss.Schema.column("tags", {:array, :string})
+        |> Fluss.Schema.column("attrs", {:map, :string, :int})
+        |> Fluss.Schema.column("point", {:row, [{"x", :int}, {"y", :int}]})
+
+      descriptor = Fluss.TableDescriptor.new!(schema)
+      :ok = Fluss.Admin.create_table(admin, @database, table_name, descriptor, false)
+
+      table = Fluss.Table.get!(conn, @database, table_name)
+      writer = Fluss.AppendWriter.new!(table)
+
+      # A MAP<string,int> takes string keys (data); a ROW takes atom keys
+      # (field names — the write side resolves them via Atom.from_str/2).
+      {:ok, _} =
+        Fluss.AppendWriter.append(writer, [
+          1,
+          ["a", "b", "c"],
+          %{"x" => 1, "y" => 2},
+          %{x: 10, y: 20}
+        ])
+
+      :ok = Fluss.AppendWriter.flush(writer)
+
+      scanner = Fluss.LogScanner.new!(table)
+      :ok = Fluss.LogScanner.subscribe(scanner, 0, Fluss.earliest_offset())
+
+      records = poll_records(scanner, 1)
+      assert length(records) == 1
+
+      row = Enum.at(records, 0)[:row]
+      assert row[:id] == 1
+      assert row[:tags] == ["a", "b", "c"]
+      assert row[:attrs] == %{"x" => 1, "y" => 2}
+      assert row[:point] == %{x: 10, y: 20}
+
+      cleanup_table(admin, table_name)
+    end
   end
 
   describe "subscribe_buckets" do

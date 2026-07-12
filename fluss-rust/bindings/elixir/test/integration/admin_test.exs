@@ -262,7 +262,7 @@ defmodule Fluss.Integration.AdminTest do
 
       # Schema round-trips: columns in definition order, PK preserved.
       assert info.schema == %Fluss.Schema{
-               columns: [{"id", :int}, {"name", :string}],
+               columns: [{"id", {:not_null, :int}}, {"name", :string}],
                primary_key: ["id"]
              }
 
@@ -307,7 +307,11 @@ defmodule Fluss.Integration.AdminTest do
       assert info.physical_primary_keys == ["id", "region"]
 
       assert info.schema == %Fluss.Schema{
-               columns: [{"id", :int}, {"region", :string}, {"name", :string}],
+               columns: [
+                 {"id", {:not_null, :int}},
+                 {"region", {:not_null, :string}},
+                 {"name", :string}
+               ],
                primary_key: ["id", "region"]
              }
     end
@@ -363,11 +367,43 @@ defmodule Fluss.Integration.AdminTest do
                Fluss.Admin.get_table_schema(admin, @database, table)
 
       assert info.schema == %Fluss.Schema{
-               columns: [{"id", :int}, {"name", :string}],
+               columns: [{"id", {:not_null, :int}}, {"name", :string}],
                primary_key: ["id"]
              }
 
       assert is_integer(info.schema_id) and info.schema_id >= 1
+    end
+
+    test "round-trips complex types and nullability", %{admin: admin} do
+      table = "fluss_table_#{:rand.uniform(100_000)}"
+
+      schema =
+        Fluss.Schema.new()
+        |> Fluss.Schema.column("id", :int)
+        |> Fluss.Schema.column("tags", {:array, :string})
+        |> Fluss.Schema.column("scores", {:array, {:not_null, :int}})
+        |> Fluss.Schema.column("attrs", {:map, :string, :int})
+        |> Fluss.Schema.column("point", {:row, [{"x", :int}, {"y", :int}]})
+        |> Fluss.Schema.primary_key(["id"])
+
+      descriptor = Fluss.TableDescriptor.new!(schema)
+      :ok = Fluss.Admin.create_table(admin, @database, table, descriptor, true)
+      on_exit(fn -> Fluss.Admin.drop_table(admin, @database, table, true) end)
+
+      assert {:ok, info} = Fluss.Admin.get_table_schema(admin, @database, table)
+
+      assert info.schema == %Fluss.Schema{
+               columns: [
+                 {"id", {:not_null, :int}},
+                 {"tags", {:array, :string}},
+                 {"scores", {:array, {:not_null, :int}}},
+                 # map keys are non-null by Fluss spec, so the `:string`
+                 # key reads back wrapped even though it was written bare.
+                 {"attrs", {:map, {:not_null, :string}, :int}},
+                 {"point", {:row, [{"x", :int}, {"y", :int}]}}
+               ],
+               primary_key: ["id"]
+             }
     end
 
     test "fetches a specific schema version by id", %{admin: admin} do
