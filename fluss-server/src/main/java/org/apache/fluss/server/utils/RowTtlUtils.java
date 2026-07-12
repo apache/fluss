@@ -35,7 +35,7 @@ public final class RowTtlUtils {
         checkArgument(
                 ttl.compareTo(Duration.ZERO) > 0,
                 "'%s' must be positive.",
-                ConfigOptions.TABLE_ROW_TTL.key());
+                ConfigOptions.TABLE_KV_ROW_TTL.key());
 
         try {
             return Math.addExact(
@@ -45,7 +45,7 @@ public final class RowTtlUtils {
             throw new IllegalArgumentException(
                     String.format(
                             "'%s' exceeds the maximum supported row TTL.",
-                            ConfigOptions.TABLE_ROW_TTL.key()),
+                            ConfigOptions.TABLE_KV_ROW_TTL.key()),
                     e);
         }
     }

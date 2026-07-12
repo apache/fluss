@@ -474,7 +474,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                         + "  primary key (id) NOT ENFORCED)"
                                         + " with ("
                                         + "  'bucket.num' = '4',"
-                                        + "  'table.row.ttl' = '1 h',"
+                                        + "  'table.kv.row.ttl' = '1 h',"
                                         + "  'table.kv.format-version' = '3')",
                                 tableName))
                 .await();

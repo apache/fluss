@@ -75,7 +75,7 @@ class ReplicaManagerRowTtlClientVersionTest {
     private static TableInfo rowTTLTableInfo() {
         Map<String, String> properties =
                 new HashMap<>(TestData.DATA1_TABLE_DESCRIPTOR_PK.getProperties());
-        properties.put(ConfigOptions.TABLE_ROW_TTL.key(), "1 h");
+        properties.put(ConfigOptions.TABLE_KV_ROW_TTL.key(), "1 h");
         properties.put(
                 ConfigOptions.TABLE_KV_FORMAT_VERSION.key(), String.valueOf(KV_FORMAT_VERSION_3));
         TableDescriptor descriptor = TestData.DATA1_TABLE_DESCRIPTOR_PK.withProperties(properties);

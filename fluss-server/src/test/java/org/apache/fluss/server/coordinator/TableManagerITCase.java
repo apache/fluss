@@ -699,7 +699,8 @@ class TableManagerITCase {
         TableDescriptor tableDescriptor =
                 newPkTable()
                         .withProperties(
-                                Collections.singletonMap(ConfigOptions.TABLE_ROW_TTL.key(), "1 h"));
+                                Collections.singletonMap(
+                                        ConfigOptions.TABLE_KV_ROW_TTL.key(), "1 h"));
         adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
 
         GetTableInfoResponse response =
@@ -733,8 +734,8 @@ class TableManagerITCase {
                 TableDescriptor.builder()
                         .schema(schema)
                         .distributedBy(3, "id")
-                        .property(ConfigOptions.TABLE_ROW_TTL.key(), "1 h")
-                        .property(ConfigOptions.TABLE_ROW_TTL_TIME_COLUMN.key(), "event_time")
+                        .property(ConfigOptions.TABLE_KV_ROW_TTL.key(), "1 h")
+                        .property(ConfigOptions.TABLE_KV_ROW_TTL_TIME_COLUMN.key(), "event_time")
                         .build();
         adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
 
@@ -747,7 +748,7 @@ class TableManagerITCase {
                         ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                         String.valueOf(KV_FORMAT_VERSION_3))
                 .containsEntry(
-                        TableConfig.ROW_TTL_TIME_COLUMN_ID_KEY,
+                        TableConfig.KV_ROW_TTL_TIME_COLUMN_ID_KEY,
                         String.valueOf(schema.getColumn("event_time").getColumnId()));
     }
 

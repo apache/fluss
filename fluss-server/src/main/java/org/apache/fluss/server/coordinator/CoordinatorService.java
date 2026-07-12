@@ -699,7 +699,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             Integer formatVersion = newTableConf.get(ConfigOptions.TABLE_KV_FORMAT_VERSION);
             if (formatVersion == null) {
                 int defaultKvFormatVersion =
-                        newTableConf.getOptional(ConfigOptions.TABLE_ROW_TTL).isPresent()
+                        newTableConf.getOptional(ConfigOptions.TABLE_KV_ROW_TTL).isPresent()
                                 ? KV_FORMAT_VERSION_3
                                 : CURRENT_KV_FORMAT_VERSION;
                 newProperties.put(
@@ -721,13 +721,13 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             }
 
             Optional<String> rowTtlTimeColumn =
-                    newTableConf.getOptional(ConfigOptions.TABLE_ROW_TTL_TIME_COLUMN);
+                    newTableConf.getOptional(ConfigOptions.TABLE_KV_ROW_TTL_TIME_COLUMN);
             if (rowTtlTimeColumn.isPresent()) {
                 Optional<Integer> rowTtlTimeColumnId =
                         getColumnId(newDescriptor.getSchema(), rowTtlTimeColumn.get());
                 if (rowTtlTimeColumnId.isPresent()) {
                     newProperties.put(
-                            TableConfig.ROW_TTL_TIME_COLUMN_ID_KEY,
+                            TableConfig.KV_ROW_TTL_TIME_COLUMN_ID_KEY,
                             String.valueOf(rowTtlTimeColumnId.get()));
                 }
             }

@@ -114,16 +114,16 @@ class RowTtlTimestampProviderTest {
 
     private static TableConfig processTimeTableConfig() {
         Configuration configuration = new Configuration();
-        configuration.set(ConfigOptions.TABLE_ROW_TTL, java.time.Duration.ofHours(1));
+        configuration.set(ConfigOptions.TABLE_KV_ROW_TTL, java.time.Duration.ofHours(1));
         return new TableConfig(configuration);
     }
 
     private static TableConfig eventTimeTableConfig(int timeColumnId) {
         Configuration configuration = new Configuration();
-        configuration.set(ConfigOptions.TABLE_ROW_TTL, java.time.Duration.ofHours(1));
-        configuration.setString(ConfigOptions.TABLE_ROW_TTL_TIME_COLUMN, "event_time");
+        configuration.set(ConfigOptions.TABLE_KV_ROW_TTL, java.time.Duration.ofHours(1));
+        configuration.setString(ConfigOptions.TABLE_KV_ROW_TTL_TIME_COLUMN, "event_time");
         configuration.setString(
-                TableConfig.ROW_TTL_TIME_COLUMN_ID_KEY, String.valueOf(timeColumnId));
+                TableConfig.KV_ROW_TTL_TIME_COLUMN_ID_KEY, String.valueOf(timeColumnId));
         return new TableConfig(configuration);
     }
 

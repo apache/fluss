@@ -1673,8 +1673,8 @@ public class ConfigOptions {
                                     + "Tables created before this option was introduced are treated as disabled. "
                                     + "Can be dynamically enabled via ALTER TABLE.");
 
-    public static final ConfigOption<Duration> TABLE_ROW_TTL =
-            key("table.row.ttl")
+    public static final ConfigOption<Duration> TABLE_KV_ROW_TTL =
+            key("table.kv.row.ttl")
                     .durationType()
                     .noDefaultValue()
                     .withDescription(
@@ -1682,16 +1682,16 @@ public class ConfigOptions {
                                     + "If not set, row-level TTL is disabled. "
                                     + "Expired rows may remain visible until RocksDB compaction removes them.");
 
-    public static final ConfigOption<RowTtlChangelogMode> TABLE_ROW_TTL_CHANGELOG_MODE =
-            key("table.row.ttl.changelog-mode")
+    public static final ConfigOption<RowTtlChangelogMode> TABLE_KV_ROW_TTL_CHANGELOG_MODE =
+            key("table.kv.row.ttl.changelog-mode")
                     .enumType(RowTtlChangelogMode.class)
                     .defaultValue(RowTtlChangelogMode.NONE)
                     .withDescription(
                             "The changelog mode for row-level TTL cleanup. "
                                     + "Only 'none' is supported in this version, which means TTL cleanup does not emit delete records.");
 
-    public static final ConfigOption<String> TABLE_ROW_TTL_TIME_COLUMN =
-            key("table.row.ttl.time-column")
+    public static final ConfigOption<String> TABLE_KV_ROW_TTL_TIME_COLUMN =
+            key("table.kv.row.ttl.time-column")
                     .stringType()
                     .noDefaultValue()
                     .withDescription(

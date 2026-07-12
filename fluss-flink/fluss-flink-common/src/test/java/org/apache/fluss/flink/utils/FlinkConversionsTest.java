@@ -384,14 +384,14 @@ public class FlinkConversionsTest {
                                         ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE
                                                 .description()));
 
-        flinkOption = FlinkConversions.toFlinkOption(ConfigOptions.TABLE_ROW_TTL);
+        flinkOption = FlinkConversions.toFlinkOption(ConfigOptions.TABLE_KV_ROW_TTL);
         assertThat(flinkOption)
                 .isEqualTo(
                         org.apache.flink.configuration.ConfigOptions.key(
-                                        ConfigOptions.TABLE_ROW_TTL.key())
+                                        ConfigOptions.TABLE_KV_ROW_TTL.key())
                                 .stringType()
                                 .noDefaultValue()
-                                .withDescription(ConfigOptions.TABLE_ROW_TTL.description()));
+                                .withDescription(ConfigOptions.TABLE_KV_ROW_TTL.description()));
     }
 
     @Test

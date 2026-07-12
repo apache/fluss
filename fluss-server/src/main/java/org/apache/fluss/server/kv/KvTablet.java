@@ -414,7 +414,7 @@ public final class KvTablet {
         checkNotNull(rowTtl, "rowTtl must not be null.");
         Configuration configuration = new Configuration();
         if (rowTtl.isPresent()) {
-            configuration.set(ConfigOptions.TABLE_ROW_TTL, rowTtl.get());
+            configuration.set(ConfigOptions.TABLE_KV_ROW_TTL, rowTtl.get());
         }
         return new TableConfig(configuration);
     }

@@ -1349,7 +1349,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
         TablePath tablePath = TablePath.of("test_db", "ttl_limit_scan_table");
         long tableId = 150006L;
         Map<String, String> properties = new HashMap<>(DATA1_TABLE_DESCRIPTOR_PK.getProperties());
-        properties.put(ConfigOptions.TABLE_ROW_TTL.key(), "1 h");
+        properties.put(ConfigOptions.TABLE_KV_ROW_TTL.key(), "1 h");
         properties.put(
                 ConfigOptions.TABLE_KV_FORMAT_VERSION.key(), String.valueOf(KV_FORMAT_VERSION_3));
         TableDescriptor descriptor = DATA1_TABLE_DESCRIPTOR_PK.withProperties(properties);
@@ -1379,7 +1379,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
         TablePath tablePath = TablePath.of("test_db", "ttl_raw_kv_table");
         long tableId = 150007L;
         Map<String, String> properties = new HashMap<>(DATA1_TABLE_DESCRIPTOR_PK.getProperties());
-        properties.put(ConfigOptions.TABLE_ROW_TTL.key(), "1 h");
+        properties.put(ConfigOptions.TABLE_KV_ROW_TTL.key(), "1 h");
         properties.put(
                 ConfigOptions.TABLE_KV_FORMAT_VERSION.key(), String.valueOf(KV_FORMAT_VERSION_3));
         TableDescriptor descriptor = DATA1_TABLE_DESCRIPTOR_PK.withProperties(properties);

@@ -283,7 +283,7 @@ ALTER TABLE my_table SET ('table.log.tiered.local-segments' = '5');
 
 **Limits**
 - If lakehouse storage (`table.datalake.enabled`) is already enabled for a table, options with lakehouse format prefixes (e.g., `paimon.*`) cannot be modified again.
-- `table.row.ttl` cannot be modified with `ALTER TABLE ... SET` in this version. Configure row-level TTL when creating the primary-key table.
+- `table.kv.row.ttl` cannot be modified with `ALTER TABLE ... SET` in this version. Configure row-level TTL when creating the primary-key table.
 
 
 ### RESET properties
@@ -295,7 +295,7 @@ The following example illustrates reset the `table.datalake.enabled` option to i
 ALTER TABLE my_table RESET ('table.datalake.enabled');
 ```
 
-`table.row.ttl` cannot be reset to disable row-level TTL. To change or disable row-level TTL, create a new table with the desired TTL configuration and migrate the data.
+`table.kv.row.ttl` cannot be reset to disable row-level TTL. To change or disable row-level TTL, create a new table with the desired TTL configuration and migrate the data.
 
 ## Add Partition
 
