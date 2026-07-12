@@ -393,11 +393,11 @@ public final class KvTablet {
                         rowTtl.isPresent()
                                 ? RowTtlCompactionFilterFactory.create(rowTtl.get(), clock)
                                 : null;
-        ValueLayout valueLayout = ValueLayout.forVersion(kvFormatVersion);
+        KvValueLayout kvValueLayout = KvValueLayout.forKvFormatVersion(kvFormatVersion);
         @Nullable
-        ValueTimestampProvider valueTimestampProvider =
-                valueLayout.hasValueTimestamp()
-                        ? ValueTimestampProvider.forWrite(tableConfig, schemaGetter, clock)
+        RowTtlTimestampProvider rowTtlTimestampProvider =
+                kvValueLayout.hasValueTag()
+                        ? RowTtlTimestampProvider.forWrite(tableConfig, schemaGetter, clock)
                         : null;
         RocksDBKv kv =
                 buildRocksDBKv(serverConf, kvTabletDir, sharedRateLimiter, compactionFilterFactory);
@@ -432,7 +432,7 @@ public final class KvTablet {
                 closeFlushScheduler,
                 flushCompleteListener,
                 autoIncrementManager,
-                valueTimestampProvider,
+                rowTtlTimestampProvider,
                 rowTtl.isPresent());
     }
 
@@ -565,7 +565,7 @@ public final class KvTablet {
         checkNotNull(rowTtl, "rowTtl must not be null.");
         Configuration configuration = new Configuration();
         if (rowTtl.isPresent()) {
-            configuration.set(ConfigOptions.TABLE_ROW_TTL, rowTtl.get());
+            configuration.set(ConfigOptions.TABLE_KV_ROW_TTL, rowTtl.get());
         }
         return new TableConfig(configuration);
     }

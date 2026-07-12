@@ -102,7 +102,7 @@ public class TableDescriptorValidation {
         // check properties should only contain table.* options,
         // and this cluster know it, and value is valid
         for (String key : tableConf.keySet()) {
-            if (TableConfig.ROW_TTL_TIME_COLUMN_ID_KEY.equals(key)) {
+            if (TableConfig.KV_ROW_TTL_TIME_COLUMN_ID_KEY.equals(key)) {
                 continue;
             }
 
@@ -137,7 +137,7 @@ public class TableDescriptorValidation {
         checkHistoricalPartition(tableDescriptor, tableConf);
         checkRowTTL(tableConf, schema, hasPrimaryKey);
         checkKvFormatVersion(
-                tableConf, tableConf.getOptional(ConfigOptions.TABLE_ROW_TTL).isPresent());
+                tableConf, tableConf.getOptional(ConfigOptions.TABLE_KV_ROW_TTL).isPresent());
         checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema.getRowType());
         checkSystemColumns(schema.getRowType());
         validateStatisticsConfig(tableDescriptor);
@@ -314,26 +314,27 @@ public class TableDescriptorValidation {
     }
 
     private static void checkRowTTL(Configuration tableConf, Schema schema, boolean hasPrimaryKey) {
-        Optional<Duration> rowTTL = tableConf.getOptional(ConfigOptions.TABLE_ROW_TTL);
+        Optional<Duration> rowTTL = tableConf.getOptional(ConfigOptions.TABLE_KV_ROW_TTL);
         Optional<String> timeColumn =
-                tableConf.getOptional(ConfigOptions.TABLE_ROW_TTL_TIME_COLUMN);
+                tableConf.getOptional(ConfigOptions.TABLE_KV_ROW_TTL_TIME_COLUMN);
         Optional<String> timeColumnId =
-                Optional.ofNullable(tableConf.toMap().get(TableConfig.ROW_TTL_TIME_COLUMN_ID_KEY));
+                Optional.ofNullable(
+                        tableConf.toMap().get(TableConfig.KV_ROW_TTL_TIME_COLUMN_ID_KEY));
 
         if (timeColumn.isPresent() && !rowTTL.isPresent()) {
             throw new InvalidConfigException(
                     String.format(
                             "'%s' requires '%s' to be set.",
-                            ConfigOptions.TABLE_ROW_TTL_TIME_COLUMN.key(),
-                            ConfigOptions.TABLE_ROW_TTL.key()));
+                            ConfigOptions.TABLE_KV_ROW_TTL_TIME_COLUMN.key(),
+                            ConfigOptions.TABLE_KV_ROW_TTL.key()));
         }
 
         if (timeColumnId.isPresent() && !timeColumn.isPresent()) {
             throw new InvalidConfigException(
                     String.format(
                             "'%s' requires '%s' to be set.",
-                            TableConfig.ROW_TTL_TIME_COLUMN_ID_KEY,
-                            ConfigOptions.TABLE_ROW_TTL_TIME_COLUMN.key()));
+                            TableConfig.KV_ROW_TTL_TIME_COLUMN_ID_KEY,
+                            ConfigOptions.TABLE_KV_ROW_TTL_TIME_COLUMN.key()));
         }
 
         if (!rowTTL.isPresent()) {
@@ -344,7 +345,7 @@ public class TableDescriptorValidation {
             throw new InvalidTableException(
                     String.format(
                             "'%s' is only supported for primary key tables.",
-                            ConfigOptions.TABLE_ROW_TTL.key()));
+                            ConfigOptions.TABLE_KV_ROW_TTL.key()));
         }
 
         validateRowTTLDuration(rowTTL.get());
@@ -358,12 +359,12 @@ public class TableDescriptorValidation {
         }
 
         RowTtlChangelogMode changelogMode =
-                tableConf.get(ConfigOptions.TABLE_ROW_TTL_CHANGELOG_MODE);
+                tableConf.get(ConfigOptions.TABLE_KV_ROW_TTL_CHANGELOG_MODE);
         if (changelogMode != RowTtlChangelogMode.NONE) {
             throw new InvalidConfigException(
                     String.format(
                             "'%s' only supports '%s' in this version.",
-                            ConfigOptions.TABLE_ROW_TTL_CHANGELOG_MODE.key(),
+                            ConfigOptions.TABLE_KV_ROW_TTL_CHANGELOG_MODE.key(),
                             RowTtlChangelogMode.NONE));
         }
     }
@@ -377,7 +378,7 @@ public class TableDescriptorValidation {
         throw new InvalidConfigException(
                 String.format(
                         "'%s' refers to unknown column '%s'.",
-                        ConfigOptions.TABLE_ROW_TTL_TIME_COLUMN.key(), timeColumn));
+                        ConfigOptions.TABLE_KV_ROW_TTL_TIME_COLUMN.key(), timeColumn));
     }
 
     private static void validateRowTTLTimeColumnType(DataType dataType) {
@@ -388,7 +389,7 @@ public class TableDescriptorValidation {
         throw new InvalidConfigException(
                 String.format(
                         "'%s' only supports BIGINT or TIMESTAMP_LTZ columns, but was %s.",
-                        ConfigOptions.TABLE_ROW_TTL_TIME_COLUMN.key(), dataType));
+                        ConfigOptions.TABLE_KV_ROW_TTL_TIME_COLUMN.key(), dataType));
     }
 
     private static void validateRowTTLTimeColumnId(String configuredColumnId, int actualColumnId) {
@@ -401,13 +402,13 @@ public class TableDescriptorValidation {
             throw new InvalidConfigException(
                     String.format(
                             "Invalid value for '%s': %s.",
-                            TableConfig.ROW_TTL_TIME_COLUMN_ID_KEY, configuredColumnId));
+                            TableConfig.KV_ROW_TTL_TIME_COLUMN_ID_KEY, configuredColumnId));
         }
         throw new InvalidConfigException(
                 String.format(
                         "'%s' must match the column id of '%s'.",
-                        TableConfig.ROW_TTL_TIME_COLUMN_ID_KEY,
-                        ConfigOptions.TABLE_ROW_TTL_TIME_COLUMN.key()));
+                        TableConfig.KV_ROW_TTL_TIME_COLUMN_ID_KEY,
+                        ConfigOptions.TABLE_KV_ROW_TTL_TIME_COLUMN.key()));
     }
 
     private static void validateRowTTLDuration(Duration ttl) {
@@ -417,7 +418,7 @@ public class TableDescriptorValidation {
             throw new InvalidConfigException(
                     String.format(
                             "Invalid value for '%s': %s",
-                            ConfigOptions.TABLE_ROW_TTL.key(), e.getMessage()));
+                            ConfigOptions.TABLE_KV_ROW_TTL.key(), e.getMessage()));
         }
     }
 
@@ -431,7 +432,7 @@ public class TableDescriptorValidation {
                                 "'%s' must be set to %d when '%s' is set.",
                                 ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                                 KV_FORMAT_VERSION_3,
-                                ConfigOptions.TABLE_ROW_TTL.key()));
+                                ConfigOptions.TABLE_KV_ROW_TTL.key()));
             }
             return;
         }
@@ -449,7 +450,7 @@ public class TableDescriptorValidation {
                             "'%s' must be at least %d when '%s' is set.",
                             ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                             KV_FORMAT_VERSION_3,
-                            ConfigOptions.TABLE_ROW_TTL.key()));
+                            ConfigOptions.TABLE_KV_ROW_TTL.key()));
         }
         if (!rowTtlEnabled && version >= KV_FORMAT_VERSION_3) {
             throw new InvalidConfigException(
@@ -457,7 +458,7 @@ public class TableDescriptorValidation {
                             "'%s' version %d requires '%s' in this version.",
                             ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                             version,
-                            ConfigOptions.TABLE_ROW_TTL.key()));
+                            ConfigOptions.TABLE_KV_ROW_TTL.key()));
         }
     }
 

@@ -83,7 +83,7 @@ class KvRecoverHelperTest {
 
     private static TableConfig rowTtlProcessTimeConfig() {
         Configuration configuration = new Configuration();
-        configuration.set(ConfigOptions.TABLE_ROW_TTL, java.time.Duration.ofHours(1));
+        configuration.set(ConfigOptions.TABLE_KV_ROW_TTL, java.time.Duration.ofHours(1));
         configuration.set(ConfigOptions.TABLE_KV_FORMAT_VERSION, KV_FORMAT_VERSION_3);
         return new TableConfig(configuration);
     }
@@ -99,11 +99,11 @@ class KvRecoverHelperTest {
 
     private static TableConfig rowTtlEventTimeConfig(Schema schema) {
         Configuration configuration = new Configuration();
-        configuration.set(ConfigOptions.TABLE_ROW_TTL, java.time.Duration.ofHours(1));
+        configuration.set(ConfigOptions.TABLE_KV_ROW_TTL, java.time.Duration.ofHours(1));
         configuration.set(ConfigOptions.TABLE_KV_FORMAT_VERSION, KV_FORMAT_VERSION_3);
-        configuration.setString(ConfigOptions.TABLE_ROW_TTL_TIME_COLUMN, "event_time");
+        configuration.setString(ConfigOptions.TABLE_KV_ROW_TTL_TIME_COLUMN, "event_time");
         configuration.setString(
-                TableConfig.ROW_TTL_TIME_COLUMN_ID_KEY,
+                TableConfig.KV_ROW_TTL_TIME_COLUMN_ID_KEY,
                 String.valueOf(schema.getColumn("event_time").getColumnId()));
         return new TableConfig(configuration);
     }

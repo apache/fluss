@@ -50,7 +50,7 @@ class TableDescriptorValidationTest {
     void testCreatePkTableWithRowTTL() {
         TableDescriptorValidation.validateTableDescriptor(
                 pkTableWithProperties(
-                        ConfigOptions.TABLE_ROW_TTL.key(),
+                        ConfigOptions.TABLE_KV_ROW_TTL.key(),
                         "1 h",
                         ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                         String.valueOf(KV_FORMAT_VERSION_3)),
@@ -64,11 +64,11 @@ class TableDescriptorValidationTest {
                         () ->
                                 TableDescriptorValidation.validateTableDescriptor(
                                         logTableWithProperty(
-                                                ConfigOptions.TABLE_ROW_TTL.key(), "1 h"),
+                                                ConfigOptions.TABLE_KV_ROW_TTL.key(), "1 h"),
                                         100,
                                         null))
                 .isInstanceOf(InvalidTableException.class)
-                .hasMessageContaining(ConfigOptions.TABLE_ROW_TTL.key())
+                .hasMessageContaining(ConfigOptions.TABLE_KV_ROW_TTL.key())
                 .hasMessageContaining("primary key");
     }
 
@@ -86,8 +86,8 @@ class TableDescriptorValidationTest {
                 TableDescriptor.builder()
                         .schema(TestData.DATA1_SCHEMA_PK)
                         .distributedBy(3)
-                        .property(ConfigOptions.TABLE_ROW_TTL.key(), "1 h")
-                        .property(ConfigOptions.TABLE_ROW_TTL_TIME_COLUMN.key(), "event_time")
+                        .property(ConfigOptions.TABLE_KV_ROW_TTL.key(), "1 h")
+                        .property(ConfigOptions.TABLE_KV_ROW_TTL_TIME_COLUMN.key(), "event_time")
                         .property(
                                 ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                                 String.valueOf(KV_FORMAT_VERSION_3))
@@ -99,7 +99,7 @@ class TableDescriptorValidationTest {
                                 TableDescriptorValidation.validateTableDescriptor(
                                         descriptor, 100, null))
                 .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining(ConfigOptions.TABLE_ROW_TTL_TIME_COLUMN.key());
+                .hasMessageContaining(ConfigOptions.TABLE_KV_ROW_TTL_TIME_COLUMN.key());
     }
 
     @ParameterizedTest
@@ -112,7 +112,7 @@ class TableDescriptorValidationTest {
                                         100,
                                         null))
                 .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining(ConfigOptions.TABLE_ROW_TTL_TIME_COLUMN.key())
+                .hasMessageContaining(ConfigOptions.TABLE_KV_ROW_TTL_TIME_COLUMN.key())
                 .hasMessageContaining("BIGINT")
                 .hasMessageContaining("TIMESTAMP_LTZ");
     }
@@ -121,7 +121,7 @@ class TableDescriptorValidationTest {
     void testCreateTableWithLargeRowTTL() {
         TableDescriptor descriptor =
                 pkTableWithProperties(
-                        ConfigOptions.TABLE_ROW_TTL.key(),
+                        ConfigOptions.TABLE_KV_ROW_TTL.key(),
                         "3000000000 s",
                         ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                         String.valueOf(KV_FORMAT_VERSION_3));
@@ -133,7 +133,7 @@ class TableDescriptorValidationTest {
     void testCreateTableWithRowTTLMillisOverflowFails() {
         TableDescriptor descriptor =
                 pkTableWithProperties(
-                        ConfigOptions.TABLE_ROW_TTL.key(),
+                        ConfigOptions.TABLE_KV_ROW_TTL.key(),
                         "9223372036854776 s",
                         ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                         String.valueOf(KV_FORMAT_VERSION_3));
@@ -143,7 +143,7 @@ class TableDescriptorValidationTest {
                                 TableDescriptorValidation.validateTableDescriptor(
                                         descriptor, 100, null))
                 .isInstanceOf(InvalidConfigException.class)
-                .hasMessageContaining(ConfigOptions.TABLE_ROW_TTL.key())
+                .hasMessageContaining(ConfigOptions.TABLE_KV_ROW_TTL.key())
                 .hasMessageContaining("exceeds");
     }
 
@@ -151,7 +151,7 @@ class TableDescriptorValidationTest {
     void testCreateRowTTLTableWithKvFormatVersion2Fails() {
         TableDescriptor descriptor =
                 pkTableWithProperties(
-                        ConfigOptions.TABLE_ROW_TTL.key(),
+                        ConfigOptions.TABLE_KV_ROW_TTL.key(),
                         "1 h",
                         ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                         String.valueOf(KV_FORMAT_VERSION_2));
@@ -162,7 +162,7 @@ class TableDescriptorValidationTest {
                                         descriptor, 100, null))
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining(ConfigOptions.TABLE_KV_FORMAT_VERSION.key())
-                .hasMessageContaining(ConfigOptions.TABLE_ROW_TTL.key());
+                .hasMessageContaining(ConfigOptions.TABLE_KV_ROW_TTL.key());
     }
 
     @Test
@@ -178,7 +178,7 @@ class TableDescriptorValidationTest {
                                         descriptor, 100, null))
                 .isInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining(ConfigOptions.TABLE_KV_FORMAT_VERSION.key())
-                .hasMessageContaining(ConfigOptions.TABLE_ROW_TTL.key());
+                .hasMessageContaining(ConfigOptions.TABLE_KV_ROW_TTL.key());
     }
 
     @Test
@@ -188,7 +188,7 @@ class TableDescriptorValidationTest {
                         TablePath.of("db", "t"),
                         1L,
                         1,
-                        pkTableWithProperty(ConfigOptions.TABLE_ROW_TTL.key(), "1 h"),
+                        pkTableWithProperty(ConfigOptions.TABLE_KV_ROW_TTL.key(), "1 h"),
                         "file://remote",
                         1L,
                         1L);
@@ -197,9 +197,10 @@ class TableDescriptorValidationTest {
                         () ->
                                 TableDescriptorValidation.validateAlterTableProperties(
                                         currentTable,
-                                        Collections.singleton(ConfigOptions.TABLE_ROW_TTL.key())))
+                                        Collections.singleton(
+                                                ConfigOptions.TABLE_KV_ROW_TTL.key())))
                 .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessageContaining(ConfigOptions.TABLE_ROW_TTL.key());
+                .hasMessageContaining(ConfigOptions.TABLE_KV_ROW_TTL.key());
     }
 
     private static Stream<Arguments> supportedRowTTLTimeColumnTypes() {
@@ -243,8 +244,8 @@ class TableDescriptorValidationTest {
         return TableDescriptor.builder()
                 .schema(schema)
                 .distributedBy(3)
-                .property(ConfigOptions.TABLE_ROW_TTL.key(), "1 h")
-                .property(ConfigOptions.TABLE_ROW_TTL_TIME_COLUMN.key(), timeColumn)
+                .property(ConfigOptions.TABLE_KV_ROW_TTL.key(), "1 h")
+                .property(ConfigOptions.TABLE_KV_ROW_TTL_TIME_COLUMN.key(), timeColumn)
                 .property(
                         ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                         String.valueOf(KV_FORMAT_VERSION_3))

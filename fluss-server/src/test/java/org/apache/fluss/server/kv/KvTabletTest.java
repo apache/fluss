@@ -356,7 +356,7 @@ class KvTabletTest {
         long writeTimestampMs = 123456789L;
         ManualClock clock = new ManualClock(writeTimestampMs);
         Map<String, String> tableConfig = new HashMap<>();
-        tableConfig.put(ConfigOptions.TABLE_ROW_TTL.key(), "1 h");
+        tableConfig.put(ConfigOptions.TABLE_KV_ROW_TTL.key(), "1 h");
         tableConfig.put(
                 ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                 String.valueOf(ConfigOptions.KV_FORMAT_VERSION_3));
@@ -430,7 +430,7 @@ class KvTabletTest {
         long writeTimestampMs = 1000L;
         ManualClock clock = new ManualClock(writeTimestampMs);
         Map<String, String> tableConfig = new HashMap<>();
-        tableConfig.put(ConfigOptions.TABLE_ROW_TTL.key(), "1 h");
+        tableConfig.put(ConfigOptions.TABLE_KV_ROW_TTL.key(), "1 h");
         tableConfig.put(
                 ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                 String.valueOf(ConfigOptions.KV_FORMAT_VERSION_3));
@@ -2436,13 +2436,13 @@ class KvTabletTest {
 
     private static Map<String, String> rowTtlEventTimeConfig(Schema schema) {
         Map<String, String> tableConfig = new HashMap<>();
-        tableConfig.put(ConfigOptions.TABLE_ROW_TTL.key(), "1 h");
+        tableConfig.put(ConfigOptions.TABLE_KV_ROW_TTL.key(), "1 h");
         tableConfig.put(
                 ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                 String.valueOf(ConfigOptions.KV_FORMAT_VERSION_3));
-        tableConfig.put(ConfigOptions.TABLE_ROW_TTL_TIME_COLUMN.key(), "event_time");
+        tableConfig.put(ConfigOptions.TABLE_KV_ROW_TTL_TIME_COLUMN.key(), "event_time");
         tableConfig.put(
-                TableConfig.ROW_TTL_TIME_COLUMN_ID_KEY,
+                TableConfig.KV_ROW_TTL_TIME_COLUMN_ID_KEY,
                 String.valueOf(schema.getColumn("event_time").getColumnId()));
         return tableConfig;
     }
@@ -2506,7 +2506,7 @@ class KvTabletTest {
     @Test
     void testRowCountDisabledForRowTTL() throws Exception {
         Map<String, String> tableConfig = new HashMap<>();
-        tableConfig.put(ConfigOptions.TABLE_ROW_TTL.key(), "1 h");
+        tableConfig.put(ConfigOptions.TABLE_KV_ROW_TTL.key(), "1 h");
         tableConfig.put(
                 ConfigOptions.TABLE_KV_FORMAT_VERSION.key(),
                 String.valueOf(ConfigOptions.KV_FORMAT_VERSION_3));

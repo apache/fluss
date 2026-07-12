@@ -81,6 +81,6 @@ class RowTtlCompactionFilterTest {
     void testCreateRejectsInvalidTtlDuration() {
         assertThatThrownBy(() -> RowTtlCompactionFilterFactory.create(Duration.ZERO, 1L))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining(ConfigOptions.TABLE_ROW_TTL.key());
+                .hasMessageContaining(ConfigOptions.TABLE_KV_ROW_TTL.key());
     }
 }
