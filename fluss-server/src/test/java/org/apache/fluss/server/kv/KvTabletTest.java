@@ -341,6 +341,43 @@ class KvTabletTest {
     }
 
     @Test
+    void testPartialUpdateFromNullEventTimeExpiresWholeRowAfterCompaction() throws Exception {
+        long eventTimestampMs = 1000L;
+        ManualClock clock = new ManualClock(eventTimestampMs);
+        Schema eventTimeSchema = eventTimeSchema();
+        initLogTabletAndKvTablet(eventTimeSchema, rowTtlEventTimeConfig(eventTimeSchema), clock);
+
+        String key = "partial-event-time";
+        KvRecordTestUtils.KvRecordFactory eventTimeRecordFactory =
+                KvRecordTestUtils.KvRecordFactory.of(eventTimeSchema.getRowType());
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        eventTimeRecordFactory.ofRecord(
+                                key.getBytes(), new Object[] {1, null, "retained-name"})),
+                null);
+        // Persist the never-expiring version before overwriting it with a partial update.
+        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+
+        kvTablet.putAsLeader(
+                kvRecordBatchFactory.ofRecords(
+                        eventTimeRecordFactory.ofRecord(
+                                key.getBytes(),
+                                new Object[] {1, eventTimestampMs, "ignored-name"})),
+                new int[] {0, 1});
+        kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
+
+        BinaryValue updatedValue = decodeVersion3Value(key);
+        assertThat(updatedValue.getValueTag()).isEqualTo(eventTimestampMs);
+        assertThat(updatedValue.row.getLong(1)).isEqualTo(eventTimestampMs);
+        assertThat(updatedValue.row.getString(2).toString()).isEqualTo("retained-name");
+
+        clock.advanceTime(Duration.ofHours(2L));
+        kvTablet.getRocksDBKv().getDb().compactRange();
+
+        assertThat(kvTablet.multiGet(Collections.singletonList(key.getBytes())).get(0)).isNull();
+    }
+
+    @Test
     void testRowTTLCompactionRemovesExpiredRowsFromLookupAndScan() throws Exception {
         long writeTimestampMs = 1000L;
         ManualClock clock = new ManualClock(writeTimestampMs);
