@@ -109,9 +109,10 @@ public class LookupClient {
             TableBucket tableBucket,
             byte[] keyBytes,
             boolean insertIfNotExists,
-            @Nullable String partitionName) {
+            @Nullable String originalPartitionName) {
         LookupQuery lookup =
-                new LookupQuery(tablePath, tableBucket, keyBytes, insertIfNotExists, partitionName);
+                new LookupQuery(
+                        tablePath, tableBucket, keyBytes, insertIfNotExists, originalPartitionName);
         lookupQueue.appendLookup(lookup);
         return lookup.future();
     }

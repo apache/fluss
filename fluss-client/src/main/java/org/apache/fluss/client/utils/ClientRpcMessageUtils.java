@@ -226,8 +226,9 @@ public class ClientRpcMessageUtils {
                     if (tb.getPartitionId() != null) {
                         pbLookupReqForBucket.setPartitionId(tb.getPartitionId());
                     }
-                    if (batch.partitionName() != null) {
-                        pbLookupReqForBucket.setPartitionName(batch.partitionName());
+                    if (batch.originalPartitionName() != null) {
+                        pbLookupReqForBucket.setOriginalPartitionName(
+                                batch.originalPartitionName());
                     }
                     batch.lookups().forEach(get -> pbLookupReqForBucket.addKey(get.key()));
                 });

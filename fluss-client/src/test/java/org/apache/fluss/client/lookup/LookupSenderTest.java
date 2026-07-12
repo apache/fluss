@@ -167,14 +167,15 @@ public class LookupSenderTest {
         LookupRequest firstRequest = receivedRequests.get(0);
         assertThat(firstRequest.getBucketsReqsCount()).isEqualTo(1);
         assertThat(firstRequest.getBucketsReqAt(0).getBucketId()).isEqualTo(0);
-        assertThat(firstRequest.getBucketsReqAt(0).getPartitionName()).isEqualTo("dt=20200101");
+        assertThat(firstRequest.getBucketsReqAt(0).getOriginalPartitionName())
+                .isEqualTo("dt=20200101");
 
         LookupRequest secondRequest = receivedRequests.get(1);
         assertThat(secondRequest.getBucketsReqsList())
                 .extracting(PbLookupReqForBucket::getBucketId)
                 .containsExactly(0, 1);
         assertThat(secondRequest.getBucketsReqsList())
-                .extracting(PbLookupReqForBucket::getPartitionName)
+                .extracting(PbLookupReqForBucket::getOriginalPartitionName)
                 .containsExactly("dt=20200102", "dt=20200103");
     }
 
@@ -211,12 +212,12 @@ public class LookupSenderTest {
         LookupRequest normalRequest = receivedRequests.get(0);
         assertThat(normalRequest.getBucketsReqsCount()).isEqualTo(1);
         assertThat(normalRequest.getBucketsReqAt(0).getBucketId()).isEqualTo(0);
-        assertThat(normalRequest.getBucketsReqAt(0).hasPartitionName()).isFalse();
+        assertThat(normalRequest.getBucketsReqAt(0).hasOriginalPartitionName()).isFalse();
 
         LookupRequest historicalRequest = receivedRequests.get(1);
         assertThat(historicalRequest.getBucketsReqsCount()).isEqualTo(1);
         assertThat(historicalRequest.getBucketsReqAt(0).getBucketId()).isEqualTo(1);
-        assertThat(historicalRequest.getBucketsReqAt(0).getPartitionName())
+        assertThat(historicalRequest.getBucketsReqAt(0).getOriginalPartitionName())
                 .isEqualTo("dt=20200101");
     }
 
@@ -240,7 +241,7 @@ public class LookupSenderTest {
         LookupRequest request = receivedRequests.get(0);
         assertThat(request.getBucketsReqsCount()).isEqualTo(1);
         assertThat(request.getBucketsReqAt(0).getKeysCount()).isEqualTo(2);
-        assertThat(request.getBucketsReqAt(0).hasPartitionName()).isFalse();
+        assertThat(request.getBucketsReqAt(0).hasOriginalPartitionName()).isFalse();
     }
 
     @Test
@@ -383,7 +384,7 @@ public class LookupSenderTest {
         gateway.setLookupHandler(
                 request -> {
                     PbLookupReqForBucket bucketRequest = request.getBucketsReqAt(0);
-                    if (bucketRequest.hasPartitionName()) {
+                    if (bucketRequest.hasOriginalPartitionName()) {
                         int attempt = historicalAttempts.incrementAndGet();
                         if (attempt == 1) {
                             firstHistoricalAttemptStarted.countDown();
@@ -617,7 +618,9 @@ public class LookupSenderTest {
                 bucketResponse.setPartitionId(bucketRequest.getPartitionId());
             }
             String partitionName =
-                    bucketRequest.hasPartitionName() ? bucketRequest.getPartitionName() : "";
+                    bucketRequest.hasOriginalPartitionName()
+                            ? bucketRequest.getOriginalPartitionName()
+                            : "";
             for (int i = 0; i < bucketRequest.getKeysCount(); i++) {
                 bucketResponse
                         .addValue()

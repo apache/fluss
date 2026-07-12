@@ -31,11 +31,11 @@ class LookupBatchKey {
     private final TableBucket tableBucket;
 
     /** Null for normal lookup batches; non-null for historical batches. */
-    private final @Nullable String partitionName;
+    private final @Nullable String originalPartitionName;
 
-    LookupBatchKey(TableBucket tableBucket, @Nullable String partitionName) {
+    LookupBatchKey(TableBucket tableBucket, @Nullable String originalPartitionName) {
         this.tableBucket = tableBucket;
-        this.partitionName = partitionName;
+        this.originalPartitionName = originalPartitionName;
     }
 
     TableBucket tableBucket() {
@@ -43,8 +43,8 @@ class LookupBatchKey {
     }
 
     @Nullable
-    String partitionName() {
-        return partitionName;
+    String originalPartitionName() {
+        return originalPartitionName;
     }
 
     @Override
@@ -57,12 +57,12 @@ class LookupBatchKey {
         }
         LookupBatchKey that = (LookupBatchKey) o;
         return Objects.equals(tableBucket, that.tableBucket)
-                && Objects.equals(partitionName, that.partitionName);
+                && Objects.equals(originalPartitionName, that.originalPartitionName);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(tableBucket, partitionName);
+        return Objects.hash(tableBucket, originalPartitionName);
     }
 
     @Override
@@ -70,8 +70,8 @@ class LookupBatchKey {
         return "LookupBatchKey{"
                 + "tableBucket="
                 + tableBucket
-                + ", partitionName='"
-                + partitionName
+                + ", originalPartitionName='"
+                + originalPartitionName
                 + '\''
                 + '}';
     }

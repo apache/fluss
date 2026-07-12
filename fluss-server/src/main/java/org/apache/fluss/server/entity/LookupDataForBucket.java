@@ -33,13 +33,13 @@ public final class LookupDataForBucket {
 
     // Null for normal local KV lookup. Set to the original partition name when the target
     // TableBucket is the historical system partition.
-    private final @Nullable String partitionName;
+    private final @Nullable String originalPartitionName;
 
     public LookupDataForBucket(
-            TableBucket tableBucket, List<byte[]> keys, @Nullable String partitionName) {
+            TableBucket tableBucket, List<byte[]> keys, @Nullable String originalPartitionName) {
         this.tableBucket = checkNotNull(tableBucket, "tableBucket must not be null.");
         this.keys = checkNotNull(keys, "keys must not be null.");
-        this.partitionName = partitionName;
+        this.originalPartitionName = originalPartitionName;
     }
 
     public TableBucket tableBucket() {
@@ -50,7 +50,7 @@ public final class LookupDataForBucket {
         return keys;
     }
 
-    public @Nullable String partitionName() {
-        return partitionName;
+    public @Nullable String originalPartitionName() {
+        return originalPartitionName;
     }
 }

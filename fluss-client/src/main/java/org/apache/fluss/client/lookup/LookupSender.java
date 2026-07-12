@@ -218,7 +218,7 @@ class LookupSender implements Runnable {
             LookupQuery lookup = (LookupQuery) abstractLookupQuery;
             TableBucket tb = lookup.tableBucket();
             long tableId = tb.getTableId();
-            LookupBatchKey batchKey = new LookupBatchKey(tb, lookup.partitionName());
+            LookupBatchKey batchKey = new LookupBatchKey(tb, lookup.originalPartitionName());
             lookupByTableId
                     .computeIfAbsent(tableId, k -> new LinkedHashMap<>())
                     .computeIfAbsent(batchKey, k -> new LookupBatch(batchKey))
@@ -278,7 +278,7 @@ class LookupSender implements Runnable {
         boolean currentGroupHistorical = false;
         for (LookupBatch lookupBatch : lookupBatches) {
             TableBucket tableBucket = lookupBatch.tableBucket();
-            boolean historicalLookup = lookupBatch.partitionName() != null;
+            boolean historicalLookup = lookupBatch.originalPartitionName() != null;
             boolean tableBucketAlreadyInCurrentGroup = currentRequestGroup.containsKey(tableBucket);
             boolean differentLookupKind =
                     !currentRequestGroup.isEmpty() && currentGroupHistorical != historicalLookup;

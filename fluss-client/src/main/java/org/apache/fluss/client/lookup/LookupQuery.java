@@ -49,8 +49,8 @@ public class LookupQuery extends AbstractLookupQuery<byte[]> {
             TableBucket tableBucket,
             byte[] key,
             boolean insertIfNotExists,
-            @Nullable String partitionName) {
-        super(tablePath, tableBucket, key, partitionName);
+            @Nullable String originalPartitionName) {
+        super(tablePath, tableBucket, key, originalPartitionName);
         this.future = new CompletableFuture<>();
         this.insertIfNotExists = insertIfNotExists;
     }

@@ -26,6 +26,7 @@ import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
+import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
@@ -153,6 +154,7 @@ import java.util.stream.Stream;
 
 import static org.apache.fluss.config.ConfigOptions.KV_FORMAT_VERSION_2;
 import static org.apache.fluss.server.TabletManagerBase.getTableInfo;
+import static org.apache.fluss.utils.PartitionUtils.isHistoricalPartitionName;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -885,6 +887,10 @@ public class ReplicaManager implements ServerReconfigurable {
             CompletableFuture<LookupResultForBucket> lookupFuture;
             try {
                 Replica replica = getReplicaOrException(data.tableBucket());
+                if (!isHistoricalPartitionReplica(replica)) {
+                    throw new InvalidPartitionException(
+                            "Historical lookup request must target a historical partition.");
+                }
                 lookupFuture = historicalLakeLookupManager.lookup(data, replica.getTableInfo());
             } catch (Exception e) {
                 lookupFuture =
@@ -996,6 +1002,12 @@ public class ReplicaManager implements ServerReconfigurable {
             responseCallback.accept(lookupResultForBucketMap);
         }
         LOG.debug("Lookup from local kv in {}ms", System.currentTimeMillis() - startTime);
+    }
+
+    private boolean isHistoricalPartitionReplica(Replica replica) {
+        String partitionName = replica.getPhysicalTablePath().getPartitionName();
+        return partitionName != null
+                && isHistoricalPartitionName(replica.getTableInfo(), partitionName);
     }
 
     /**

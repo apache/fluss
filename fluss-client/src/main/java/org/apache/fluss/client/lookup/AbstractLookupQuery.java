@@ -37,7 +37,7 @@ public abstract class AbstractLookupQuery<T> {
      * Null for normal and prefix lookups. Historical lookups use this to carry the original
      * partition name.
      */
-    private final @Nullable String partitionName;
+    private final @Nullable String originalPartitionName;
 
     private int retries;
     private long nextRetryTimeMs;
@@ -50,11 +50,11 @@ public abstract class AbstractLookupQuery<T> {
             TablePath tablePath,
             TableBucket tableBucket,
             byte[] key,
-            @Nullable String partitionName) {
+            @Nullable String originalPartitionName) {
         this.tablePath = tablePath;
         this.tableBucket = tableBucket;
         this.key = key;
-        this.partitionName = partitionName;
+        this.originalPartitionName = originalPartitionName;
         this.retries = 0;
         this.nextRetryTimeMs = 0;
     }
@@ -71,8 +71,8 @@ public abstract class AbstractLookupQuery<T> {
         return tableBucket;
     }
 
-    public @Nullable String partitionName() {
-        return partitionName;
+    public @Nullable String originalPartitionName() {
+        return originalPartitionName;
     }
 
     public int retries() {

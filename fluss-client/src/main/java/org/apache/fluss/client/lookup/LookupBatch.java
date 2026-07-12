@@ -51,8 +51,8 @@ public class LookupBatch {
         return lookupBatchKey.tableBucket();
     }
 
-    public @Nullable String partitionName() {
-        return lookupBatchKey.partitionName();
+    public @Nullable String originalPartitionName() {
+        return lookupBatchKey.originalPartitionName();
     }
 
     LookupBatchKey lookupBatchKey() {

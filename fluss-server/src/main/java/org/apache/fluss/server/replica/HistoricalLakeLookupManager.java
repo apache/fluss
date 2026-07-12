@@ -228,7 +228,7 @@ class HistoricalLakeLookupManager implements AutoCloseable {
 
     private LookupContext createLookupContext(LookupDataForBucket lookupData, TableInfo tableInfo) {
         TableBucket tableBucket = lookupData.tableBucket();
-        String originalPartitionName = lookupData.partitionName();
+        String originalPartitionName = lookupData.originalPartitionName();
         if (originalPartitionName == null) {
             throw new InvalidPartitionException(
                     "Historical lookup request must carry the original partition name.");

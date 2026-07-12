@@ -947,7 +947,7 @@ message PbLookupReqForBucket {
   required int32 bucket_id = 2;
   repeated bytes keys = 3;
   // The original partition name for historical lookup. It is unset for normal lookup.
-  optional string partition_name = 4;
+  optional string original_partition_name = 4;
 }
 
 message PbLookupRespForBucket {

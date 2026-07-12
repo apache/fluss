@@ -374,9 +374,10 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     private boolean hasHistoricalLookup(LookupRequest request) {
         for (PbLookupReqForBucket lookupReqForBucket : request.getBucketsReqsList()) {
-            if (lookupReqForBucket.hasPartitionName()) {
-                // A partition name is only set for historical lookups, so route the whole request
-                // to the historical path and let per-bucket validation report malformed buckets.
+            if (lookupReqForBucket.hasOriginalPartitionName()) {
+                // An original partition name is only set for historical lookups, so route the
+                // whole request to the historical path and let per-bucket validation report
+                // malformed buckets.
                 return true;
             }
         }

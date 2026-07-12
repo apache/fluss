@@ -1167,8 +1167,8 @@ public class ServerRpcMessageUtils {
                     new LookupDataForBucket(
                             tb,
                             keys,
-                            lookupReqForBucket.hasPartitionName()
-                                    ? lookupReqForBucket.getPartitionName()
+                            lookupReqForBucket.hasOriginalPartitionName()
+                                    ? lookupReqForBucket.getOriginalPartitionName()
                                     : null));
         }
         return lookupEntryData;
