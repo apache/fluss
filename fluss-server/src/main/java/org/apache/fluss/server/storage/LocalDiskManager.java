@@ -537,18 +537,15 @@ public final class LocalDiskManager implements Closeable, ServerReconfigurable {
         double newRatio = newConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO);
         double newRecoverGap =
                 newConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP);
-        String validationError =
-                DiskWriteLimitConfigValidator.getValidationError(newRatio, newRecoverGap);
-        if (validationError != null) {
-            throw new ConfigException(validationError);
-        }
+        validateDiskWriteLimitConfig(newRatio, newRecoverGap);
     }
 
     @Override
-    public void reconfigure(Configuration newConfig) {
+    public void reconfigure(Configuration newConfig) throws ConfigException {
         double newRatio = newConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO);
         double newRecoverGap =
                 newConfig.get(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP);
+        validateDiskWriteLimitConfig(newRatio, newRecoverGap);
         if (Double.compare(newRatio, diskWriteLimitRatio) == 0
                 && Double.compare(newRecoverGap, diskWriteLimitRecoverGap) == 0) {
             LOG.debug(
@@ -575,6 +572,15 @@ public final class LocalDiskManager implements Closeable, ServerReconfigurable {
                 oldRecoverGap,
                 newRatio,
                 newRecoverGap);
+    }
+
+    private static void validateDiskWriteLimitConfig(double newRatio, double newRecoverGap)
+            throws ConfigException {
+        String validationError =
+                DiskWriteLimitConfigValidator.getValidationError(newRatio, newRecoverGap);
+        if (validationError != null) {
+            throw new ConfigException(validationError);
+        }
     }
 
     /**

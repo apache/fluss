@@ -150,7 +150,7 @@ public final class DiskUsageMonitor {
      * call.
      *
      * @param newRatio the new write-limit ratio, must be within (recoverGap, 1.0]
-     * @param newRecoverGap the new recover gap, must be within (0.0, writeLimitRatio)
+     * @param newRecoverGap the new recover gap, must be within (0.0, newRatio)
      */
     public void updateWriteLimitConfig(double newRatio, double newRecoverGap) {
         checkValidWriteLimitConfig(newRatio, newRecoverGap);

@@ -702,8 +702,16 @@ public class DynamicConfigChangeTest {
             assertThatThrownBy(() -> alterDiskWriteLimitRecoverGap(dynamicConfigManager, "0.70"))
                     .isInstanceOf(ConfigException.class);
 
+            Configuration invalidReconfigure = new Configuration(configuration);
+            invalidReconfigure.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 0.10);
+            invalidReconfigure.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RECOVER_GAP, 0.10);
+            assertThatThrownBy(() -> localDiskManager.reconfigure(invalidReconfigure))
+                    .isInstanceOf(ConfigException.class);
+
             assertThat(localDiskManager.getDiskWriteLimitRatio()).isEqualTo(0.70);
             assertThat(localDiskManager.getDiskWriteLimitRecoverGap()).isEqualTo(0.10);
+            assertThat(localDiskManager.getDiskUsageMonitor().getWriteLimitRatio()).isEqualTo(0.70);
+            assertThat(localDiskManager.getDiskUsageMonitor().getRecoverGap()).isEqualTo(0.10);
         }
     }
 
