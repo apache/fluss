@@ -628,7 +628,7 @@ public class FlinkSourceEnumerator
                     partitionInfos.stream()
                             .map(p -> new Partition(p.getPartitionId(), p.getPartitionName()))
                             .collect(Collectors.toList());
-            return this.initLogTablePartitionSplits(partitions);
+            return this.initLogTablePartitionSplits(partitions, startingOffsetsInitializer);
         }
         return this.getLogSplit(null, null);
     }
