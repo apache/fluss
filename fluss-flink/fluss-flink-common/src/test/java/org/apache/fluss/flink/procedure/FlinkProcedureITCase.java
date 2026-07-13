@@ -63,6 +63,7 @@ import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DA
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** ITCase for Flink Procedure. */
@@ -139,6 +140,8 @@ public abstract class FlinkProcedureITCase {
                             "+I[sys.list_acl]",
                             "+I[sys.set_cluster_configs]",
                             "+I[sys.reset_cluster_configs]",
+                            "+I[sys.append_cluster_configs]",
+                            "+I[sys.subtract_cluster_configs]",
                             "+I[sys.add_server_tag]",
                             "+I[sys.remove_server_tag]",
                             "+I[sys.rebalance]",
@@ -784,6 +787,209 @@ public abstract class FlinkProcedureITCase {
     }
 
     @Test
+    void testAddAndDeleteUser() throws Exception {
+        String bobBootstrapServers =
+                String.join(
+                        ",",
+                        FLUSS_CLUSTER_EXTENSION
+                                .getClientConfig("CLIENT")
+                                .get(ConfigOptions.BOOTSTRAP_SERVERS));
+        String bobCatalog = "bob_catalog";
+        String createCatalogDDL =
+                String.format(
+                        "create catalog %s with ("
+                                + "'type' = 'fluss', "
+                                + "'bootstrap.servers' = '%s', "
+                                + "'client.security.protocol' = 'sasl', "
+                                + "'client.security.sasl.mechanism' = 'PLAIN', "
+                                + "'client.security.sasl.username' = 'bob', "
+                                + "'client.security.sasl.password' = 'bob_pass'"
+                                + ")",
+                        bobCatalog, bobBootstrapServers);
+
+        assertThatThrownBy(() -> tEnv.executeSql(createCatalogDDL).await())
+                .hasMessageContaining("Invalid username or password");
+
+        // Step 1: Add user "bob" via append_cluster_configs
+        try (CloseableIterator<Row> resultIterator =
+                tEnv.executeSql(
+                                String.format(
+                                        "Call %s.sys.append_cluster_configs('%s', 'bob:bob_pass')",
+                                        CATALOG_NAME, ConfigOptions.SERVER_SASL_CREDENTIALS.key()))
+                        .collect()) {
+            List<Row> results = CollectionUtil.iteratorToList(resultIterator);
+            assertThat(results).hasSize(1);
+            assertThat(results.get(0).getField(0))
+                    .asString()
+                    .contains("Successfully appended")
+                    .contains(ConfigOptions.SERVER_SASL_CREDENTIALS.key());
+        }
+
+        // Verify user "bob" was added
+        try (CloseableIterator<Row> resultIterator =
+                tEnv.executeSql(
+                                String.format(
+                                        "Call %s.sys.get_cluster_configs('%s')",
+                                        CATALOG_NAME, ConfigOptions.SERVER_SASL_CREDENTIALS.key()))
+                        .collect()) {
+            List<Row> results = CollectionUtil.iteratorToList(resultIterator);
+            assertThat(results).hasSize(1);
+            assertThat(results.stream().map(Row::toString).collect(Collectors.toList()))
+                    .containsExactly(
+                            "+I[security.sasl.plain.credentials, root:******,guest:******,bob:******, DYNAMIC_SERVER_CONFIG]");
+        }
+
+        // Verify "bob" can authenticate by creating a catalog with bob's credentials.
+        // Use retry to wait for ZK config notification to propagate to all TabletServers.
+        retry(
+                Duration.ofSeconds(30),
+                () ->
+                        assertThatNoException()
+                                .isThrownBy(() -> tEnv.executeSql(createCatalogDDL).await()));
+
+        // Grant bob DESCRIBE permission on cluster so bob can query configs
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.add_acl('CLUSTER', 'ALLOW', 'User:bob', 'DESCRIBE', '*')",
+                                CATALOG_NAME))
+                .await();
+
+        // Bob should be able to get cluster configs
+        try (CloseableIterator<Row> resultIterator =
+                tEnv.executeSql(
+                                String.format(
+                                        "Call %s.sys.get_cluster_configs('%s')",
+                                        bobCatalog, ConfigOptions.SERVER_SASL_CREDENTIALS.key()))
+                        .collect()) {
+            List<Row> results = CollectionUtil.iteratorToList(resultIterator);
+            assertThat(results.stream().map(Row::toString).collect(Collectors.toList()))
+                    .containsExactly(
+                            "+I[security.sasl.plain.credentials, root:******,guest:******,bob:******, DYNAMIC_SERVER_CONFIG]");
+        }
+        tEnv.executeSql("drop catalog " + bobCatalog);
+
+        // Step 2: Delete user "bob" via subtract_cluster_configs
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.subtract_cluster_configs('%s', 'bob:bob_pass')",
+                                CATALOG_NAME, ConfigOptions.SERVER_SASL_CREDENTIALS.key()))
+                .await();
+
+        // Verify "bob" was deleted from config
+        try (CloseableIterator<Row> resultIterator =
+                tEnv.executeSql(
+                                String.format(
+                                        "Call %s.sys.get_cluster_configs('%s')",
+                                        CATALOG_NAME, ConfigOptions.SERVER_SASL_CREDENTIALS.key()))
+                        .collect()) {
+            List<Row> results = CollectionUtil.iteratorToList(resultIterator);
+            // After subtracting the only dynamically-added entry, the config may be empty
+            assertThat(results.stream().map(Row::toString).collect(Collectors.toList()))
+                    .containsExactly(
+                            "+I[security.sasl.plain.credentials, root:******,guest:******, DYNAMIC_SERVER_CONFIG]");
+        }
+
+        // Verify "bob" can no longer authenticate.
+        // Use retry to wait for ZK config notification to propagate to all TabletServers.
+        retry(
+                Duration.ofSeconds(30),
+                () ->
+                        assertThatThrownBy(() -> tEnv.executeSql(createCatalogDDL).await())
+                                .hasMessageContaining("Invalid username or password"));
+        // Cleanup: remove bob's ACL
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.drop_acl('CLUSTER', 'ALLOW', 'User:bob', 'DESCRIBE', '*')",
+                                CATALOG_NAME))
+                .await();
+        // Try to append a map entry with the same key as the existing "root" entry
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "Call %s.sys.append_cluster_configs('%s', 'root:another-pass')",
+                                                        CATALOG_NAME,
+                                                        ConfigOptions.SERVER_SASL_CREDENTIALS
+                                                                .key()))
+                                        .await())
+                .hasMessageContaining("duplicate map entry keys")
+                .hasMessageContaining("root");
+
+        // Try to append a user with no colon (invalid format)
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "Call %s.sys.append_cluster_configs('%s', 'usernameonly')",
+                                                        CATALOG_NAME,
+                                                        ConfigOptions.SERVER_SASL_CREDENTIALS
+                                                                .key()))
+                                        .await())
+                .hasMessageContaining("Invalid map entry");
+
+        // Try to append a user with invalid username characters (@)
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "Call %s.sys.append_cluster_configs('%s', 'user@domain:pass')",
+                                                        CATALOG_NAME,
+                                                        ConfigOptions.SERVER_SASL_CREDENTIALS
+                                                                .key()))
+                                        .await())
+                .hasMessageContaining("contains invalid characters");
+
+        // Try to append a user with invalid username characters (-)
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "Call %s.sys.append_cluster_configs('%s', 'user-name:pass')",
+                                                        CATALOG_NAME,
+                                                        ConfigOptions.SERVER_SASL_CREDENTIALS
+                                                                .key()))
+                                        .await())
+                .hasMessageContaining("contains invalid characters");
+
+        // Try to append a user with double-quote in password (breaks JAAS value)
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "Call %s.sys.append_cluster_configs('%s', 'eve:pass\"word')",
+                                                        CATALOG_NAME,
+                                                        ConfigOptions.SERVER_SASL_CREDENTIALS
+                                                                .key()))
+                                        .await())
+                .hasMessageContaining("contains invalid characters");
+
+        // Try to append a user with semicolon in password (breaks JAAS statement)
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                                String.format(
+                                                        "Call %s.sys.append_cluster_configs('%s', 'eve:pass;word')",
+                                                        CATALOG_NAME,
+                                                        ConfigOptions.SERVER_SASL_CREDENTIALS
+                                                                .key()))
+                                        .await())
+                .hasMessageContaining("contains invalid characters");
+
+        // Subtract a non-existent user - should be a no-op (no error)
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.subtract_cluster_configs('%s', 'nonexistent:whatever')",
+                                CATALOG_NAME, ConfigOptions.SERVER_SASL_CREDENTIALS.key()))
+                .await();
+
+        tEnv.executeSql(
+                        String.format(
+                                "Call %s.sys.subtract_cluster_configs('%s', 'special_user:P@ss!w0rd#$&*()')",
+                                CATALOG_NAME, ConfigOptions.SERVER_SASL_CREDENTIALS.key()))
+                .await();
+    }
+
+    @Test
     void testDropKvSnapshotLeaseProcedure() throws Exception {
         tEnv.executeSql(
                 "create table testcatalog.fluss.pk_table_test_kv_snapshot_lease ("
@@ -838,10 +1044,7 @@ public abstract class FlinkProcedureITCase {
         conf.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT:sasl");
         conf.setString("security.sasl.enabled.mechanisms", "plain");
         conf.setString(
-                "security.sasl.plain.jaas.config",
-                "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required "
-                        + "    user_root=\"password\" "
-                        + "    user_guest=\"password2\";");
+                ConfigOptions.SERVER_SASL_CREDENTIALS.key(), "root:password,guest:passwords");
         conf.set(ConfigOptions.SUPER_USERS, "User:root");
         conf.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         return conf;

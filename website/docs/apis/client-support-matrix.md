@@ -1,6 +1,6 @@
 ---
 title: "Client Support Matrix"
-sidebar_position: 5
+sidebar_position: 6
 ---
 
 # Client Feature Support Matrix
@@ -11,7 +11,7 @@ Fluss has a rich set of features and native data types available to users. The f
 
 These data operations are available under TableAppend, TableScan, TableUpsert and TableLookup interfaces.
 
-| Table Type   | Operations                 | [Java Client](/apis/java-client.md) | Rust Client | Python Client | C++ Client |
+| Table Type   | Operations                 | [Java Client](./java/index.md) | Rust Client | Python Client | C++ Client |
 |--------------|----------------------------|-------------------------------------|-------------|---------------|------------|
 | Log          | Append                     | ✔️                                  | ✔️          | ✔️            | ✔️         |
 | Log          | Typed Append               | ✔️                                  |             |               |            |
@@ -30,14 +30,14 @@ These data operations are available under TableAppend, TableScan, TableUpsert an
 | Primary Key  | Batch Scan (Snapshot)      | ✔️                                  |             |               |            |
 
 :::tip
-For more details, see [Table Overview](/table-design/overview.md).
+For more details, see [Table Overview](../table-design/overview.md).
 :::
 
 ## Data Types
 
 Client support for Fluss data types are as follows:
 
-| DataType                                                        | [Java Client](/apis/java-client.md) | Rust Client | Python Client | C++ Client |
+| DataType                                                        | [Java Client](./java/index.md) | Rust Client | Python Client | C++ Client |
 |-----------------------------------------------------------------|-------------------------------------|-------------|---------------|------------|
 | BOOLEAN                                                         | ✔️                                  | ✔️          | ✔️            | ✔️         |
 | TINYINT                                                         | ✔️                                  | ✔️          | ✔️            | ✔️         |
@@ -63,14 +63,14 @@ Client support for Fluss data types are as follows:
 | ROW\<n0 t0, n1 t1, ...\><br/>ROW\<n0 t0 'd0', n1 t1 'd1', ...\> | ✔️                                  |             |               |            |
 
 :::tip
-For more details, see [Data Types](table-design/data-types.md).
+For more details, see [Data Types](../table-design/data-types.md).
 :::
 
 ## Admin Operations
 
 Admin operations are available under FlussAdmin interface.
 
-| Entity    | Operations             | [Java Client](/apis/java-client.md) | Rust Client | Python Client | C++ Client |
+| Entity    | Operations             | [Java Client](./java/index.md) | Rust Client | Python Client | C++ Client |
 |-----------|------------------------|-------------------------------------|-------------|---------------|------------|
 | Database  | CreateDatabase         | ✔️                                  | ✔️          |               |            |
 | Database  | DropDatabase           | ✔️                                  | ✔️          |               |            |
@@ -103,12 +103,12 @@ Admin operations are available under FlussAdmin interface.
 
 ## Data Lake Formats
 
-| Format  | [Java Client](/apis/java-client.md) | Rust Client | Python Client | C++ Client |
+| Format  | [Java Client](./java/index.md) | Rust Client | Python Client | C++ Client |
 |---------|-------------------------------------|-------------|---------------|------------|
 | Iceberg | ✔️                                  |             |               |            |
 | Lance   | ✔️                                  | ✔️          |               |            |
 | Paimon  | ✔️                                  |             |               |            |
 
 :::tip
-For more details, see [Streaming Lakehouse](/streaming-lakehouse/overview.md).
+For more details, see [Streaming Lakehouse](../streaming-lakehouse/overview.md).
 :::

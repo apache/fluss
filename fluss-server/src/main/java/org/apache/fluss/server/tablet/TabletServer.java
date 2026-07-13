@@ -227,7 +227,6 @@ public class TabletServer extends ServerBase {
             MetadataManager metadataManager =
                     new MetadataManager(zkClient, conf, lakeCatalogDynamicLoader);
             this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf, false);
-            dynamicConfigManager.register(lakeCatalogDynamicLoader);
 
             this.metadataCache = new TabletServerMetadataCache(metadataManager);
 
@@ -246,9 +245,6 @@ public class TabletServer extends ServerBase {
                     KvManager.create(
                             conf, zkClient, logManager, tabletServerMetricGroup, localDiskManager);
             kvManager.startup();
-
-            // Register kvManager to dynamicConfigManager for dynamic reconfiguration
-            dynamicConfigManager.register(kvManager);
 
             this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);
             if (authorizer != null) {
@@ -295,15 +291,6 @@ public class TabletServer extends ServerBase {
                             localDiskManager);
             replicaManager.startup();
 
-            // Register DefaultSnapshotContext for dynamic kv.snapshot.interval
-            dynamicConfigManager.register(replicaManager.getKvSnapshotContext());
-            // Register replicaManager to dynamicConfigManager for dynamic config
-            dynamicConfigManager.register(replicaManager);
-            // Register localDiskManager for dynamic server.data-disk.write-limit-ratio
-            dynamicConfigManager.register(localDiskManager);
-            // Start dynamicConfigManager after all reconfigurable components are registered
-            dynamicConfigManager.startup();
-
             this.tabletService =
                     new TabletService(
                             serverId,
@@ -328,6 +315,21 @@ public class TabletServer extends ServerBase {
                             tabletService,
                             tabletServerMetricGroup,
                             requestsMetrics);
+
+            dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            // Register kvManager to dynamicConfigManager for dynamic reconfiguration
+            dynamicConfigManager.register(kvManager);
+            // Register DefaultSnapshotContext for dynamic kv.snapshot.interval
+            dynamicConfigManager.register(replicaManager.getKvSnapshotContext());
+            // Register replicaManager to dynamicConfigManager for dynamic config
+            dynamicConfigManager.register(replicaManager);
+            // Register localDiskManager for dynamic server.data-disk.write-limit-ratio
+            dynamicConfigManager.register(localDiskManager);
+            rpcServer.getServerReconfigurables().forEach(dynamicConfigManager::register);
+
+            // Start dynamicConfigManager after all reconfigurable components are registered
+            dynamicConfigManager.startup();
+
             rpcServer.start();
 
             registerTabletServer();

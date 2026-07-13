@@ -21,6 +21,8 @@ import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.predicate.Predicate;
 
+import javax.annotation.Nullable;
+
 import java.io.IOException;
 import java.io.Serializable;
 import java.util.List;
@@ -91,12 +93,28 @@ public interface LakeSource<Split extends LakeSplit> extends Serializable {
     }
 
     /**
-     * Context interface for record readers, providing access to the lake split being read.
+     * Context interface for record readers, providing access to the lake split being read and the
+     * required reading semantics.
      *
      * @param <Split> The type of lake split
      */
     interface ReaderContext<Split extends LakeSplit> extends Serializable {
+        /**
+         * Returns the lake split to read.
+         *
+         * <p>The split can be null when the caller only needs reader-level metadata, such as a sort
+         * comparator.
+         */
+        @Nullable
         Split lakeSplit();
+
+        /**
+         * Returns whether records produced by this reader must follow the order defined by {@link
+         * SortedRecordReader#order()}.
+         */
+        default boolean requireSortedRecords() {
+            return false;
+        }
     }
 
     /**

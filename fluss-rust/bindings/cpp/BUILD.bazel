@@ -1,0 +1,436 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+licenses(["notice"])
+
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_import", "cc_library")
+
+config_setting(
+    name = "debug_mode",
+    values = {"compilation_mode": "dbg"},
+)
+
+config_setting(
+    name = "fastbuild_mode",
+    values = {"compilation_mode": "fastbuild"},
+)
+
+config_setting(
+    name = "release_mode",
+    values = {"compilation_mode": "opt"},
+)
+
+_PROTOC_SETUP_SNIPPET = """
+        set -e
+        if [ -n "$${CARGO:-}" ]; then
+            if [ ! -x "$$CARGO" ]; then
+                echo "Error: CARGO is set but not executable: $$CARGO" >&2
+                exit 1
+            fi
+            CARGO_BIN="$$CARGO"
+        else
+            CARGO_BIN=$$(command -v cargo || true)
+            if [ -z "$$CARGO_BIN" ]; then
+                echo "Error: cargo not found in PATH and CARGO is not set" >&2
+                exit 1
+            fi
+        fi
+        if [ -n "$${PROTOC:-}" ]; then
+            if [ ! -x "$$PROTOC" ]; then
+                echo "Error: PROTOC is set but not executable: $$PROTOC" >&2
+                exit 1
+            fi
+            export PROTOC
+        else
+            PROTOC_BIN=$$(command -v protoc || true)
+            if [ -z "$$PROTOC_BIN" ]; then
+                echo "Error: protoc not found in PATH and PROTOC is not set" >&2
+                exit 1
+            fi
+            export PROTOC="$$PROTOC_BIN"
+        fi
+"""
+
+genrule(
+    name = "cargo_build_debug",
+    srcs = glob([
+        "src/**/*.rs",
+        "Cargo.toml",
+    ]),
+    outs = [
+        "rust_lib_debug.a",
+        "rust_bridge_cc_debug.cc",
+        "rust_bridge_h_debug.h",
+        "src/lib.rs_debug.h",
+        "cxxbridge/rust/cxx_debug.h",
+    ],
+    cmd = _PROTOC_SETUP_SNIPPET + """
+        EXECROOT=$$(pwd)
+        OUTPUT_LIB=$(location rust_lib_debug.a)
+        OUTPUT_CC=$(location rust_bridge_cc_debug.cc)
+        OUTPUT_H=$(location rust_bridge_h_debug.h)
+        OUTPUT_SRC_H=$(location src/lib.rs_debug.h)
+        OUTPUT_CXX_H=$(location cxxbridge/rust/cxx_debug.h)
+        # Resolve real source path from sandbox symlink
+        SANDBOX_CARGO=$(location Cargo.toml)
+        REAL_CARGO=$$(readlink -f $$SANDBOX_CARGO 2>/dev/null || python3 -c "import os; print(os.path.realpath('$$SANDBOX_CARGO'))")
+        CARGO_DIR=$$(dirname $$REAL_CARGO)
+        # Find Cargo workspace root (fluss-rust directory, 2 levels up from bindings/cpp)
+        WORKSPACE_ROOT=$$(cd $$CARGO_DIR/../.. && pwd)
+        if [ ! -f $$WORKSPACE_ROOT/Cargo.toml ]; then
+            echo "Error: Cannot find workspace root Cargo.toml at $$WORKSPACE_ROOT" >&2
+            exit 1
+        fi
+        cd $$WORKSPACE_ROOT
+        "$$CARGO_BIN" build --manifest-path $$CARGO_DIR/Cargo.toml
+        CARGO_TARGET_DIR=$$WORKSPACE_ROOT/target
+        # cxxbridge uses the Cargo package name (with hyphen): fluss-cpp
+        RUST_BRIDGE_DIR=$$CARGO_TARGET_DIR/cxxbridge/fluss-cpp/src
+        # Cargo converts hyphens to underscores in library file names: libfluss_cpp.a
+        RUST_LIB=$$CARGO_TARGET_DIR/debug/libfluss_cpp.a
+        if [ ! -f $$RUST_LIB ]; then
+            echo "Error: Rust library not found at $$RUST_LIB" >&2
+            exit 1
+        fi
+        if [ ! -f $$RUST_BRIDGE_DIR/lib.rs.cc ]; then
+            echo "Error: cxxbridge CC file not found at $$RUST_BRIDGE_DIR/lib.rs.cc" >&2
+            exit 1
+        fi
+        if [ ! -f $$RUST_BRIDGE_DIR/lib.rs.h ]; then
+            echo "Error: cxxbridge header file not found at $$RUST_BRIDGE_DIR/lib.rs.h" >&2
+            exit 1
+        fi
+        cd $$EXECROOT
+        mkdir -p $$(dirname $$OUTPUT_SRC_H) $$(dirname $$OUTPUT_CXX_H)
+        cp $$RUST_LIB $$OUTPUT_LIB || (echo "Failed to copy $$RUST_LIB to $$OUTPUT_LIB" >&2; exit 1)
+        cp $$RUST_BRIDGE_DIR/lib.rs.cc $$OUTPUT_CC || (echo "Failed to copy $$RUST_BRIDGE_DIR/lib.rs.cc to $$OUTPUT_CC" >&2; exit 1)
+        cp $$RUST_BRIDGE_DIR/lib.rs.h $$OUTPUT_H || (echo "Failed to copy $$RUST_BRIDGE_DIR/lib.rs.h to $$OUTPUT_H" >&2; exit 1)
+        cp $$RUST_BRIDGE_DIR/lib.rs.h $$OUTPUT_SRC_H || (echo "Failed to copy $$RUST_BRIDGE_DIR/lib.rs.h to $$OUTPUT_SRC_H" >&2; exit 1)
+        CXX_H_SOURCE=$$CARGO_TARGET_DIR/cxxbridge/rust/cxx.h
+        if [ ! -f $$CXX_H_SOURCE ] && [ ! -L $$CXX_H_SOURCE ]; then
+            echo "Error: cxx.h not found at $$CXX_H_SOURCE" >&2
+            exit 1
+        fi
+        cp -L $$CXX_H_SOURCE $$OUTPUT_CXX_H || (echo "Failed to copy $$CXX_H_SOURCE to $$OUTPUT_CXX_H" >&2; exit 1)
+    """,
+    message = "Building Rust library (debug) with cargo...",
+    local = 1,
+)
+
+genrule(
+    name = "cargo_build_release",
+    srcs = glob([
+        "src/**/*.rs",
+        "Cargo.toml",
+    ]),
+    outs = [
+        "rust_lib_release.a",
+        "rust_bridge_cc_release.cc",
+        "rust_bridge_h_release.h",
+        "src/lib.rs_release.h",
+        "cxxbridge/rust/cxx_release.h",
+    ],
+    cmd = _PROTOC_SETUP_SNIPPET + """
+        EXECROOT=$$(pwd)
+        OUTPUT_LIB=$(location rust_lib_release.a)
+        OUTPUT_CC=$(location rust_bridge_cc_release.cc)
+        OUTPUT_H=$(location rust_bridge_h_release.h)
+        OUTPUT_SRC_H=$(location src/lib.rs_release.h)
+        OUTPUT_CXX_H=$(location cxxbridge/rust/cxx_release.h)
+        # Resolve real source path from sandbox symlink
+        SANDBOX_CARGO=$(location Cargo.toml)
+        REAL_CARGO=$$(readlink -f $$SANDBOX_CARGO 2>/dev/null || python3 -c "import os; print(os.path.realpath('$$SANDBOX_CARGO'))")
+        CARGO_DIR=$$(dirname $$REAL_CARGO)
+        # Find Cargo workspace root (fluss-rust directory, 2 levels up from bindings/cpp)
+        WORKSPACE_ROOT=$$(cd $$CARGO_DIR/../.. && pwd)
+        if [ ! -f $$WORKSPACE_ROOT/Cargo.toml ]; then
+            echo "Error: Cannot find workspace root Cargo.toml at $$WORKSPACE_ROOT" >&2
+            exit 1
+        fi
+        cd $$WORKSPACE_ROOT
+        "$$CARGO_BIN" build --release --manifest-path $$CARGO_DIR/Cargo.toml
+        CARGO_TARGET_DIR=$$WORKSPACE_ROOT/target
+        # cxxbridge uses the Cargo package name (with hyphen): fluss-cpp
+        RUST_BRIDGE_DIR=$$CARGO_TARGET_DIR/cxxbridge/fluss-cpp/src
+        # Cargo converts hyphens to underscores in library file names: libfluss_cpp.a
+        RUST_LIB=$$CARGO_TARGET_DIR/release/libfluss_cpp.a
+        if [ ! -f $$RUST_LIB ]; then
+            echo "Error: Rust library not found at $$RUST_LIB" >&2
+            exit 1
+        fi
+        if [ ! -f $$RUST_BRIDGE_DIR/lib.rs.cc ]; then
+            echo "Error: cxxbridge CC file not found at $$RUST_BRIDGE_DIR/lib.rs.cc" >&2
+            exit 1
+        fi
+        if [ ! -f $$RUST_BRIDGE_DIR/lib.rs.h ]; then
+            echo "Error: cxxbridge header file not found at $$RUST_BRIDGE_DIR/lib.rs.h" >&2
+            exit 1
+        fi
+        cd $$EXECROOT
+        mkdir -p $$(dirname $$OUTPUT_SRC_H) $$(dirname $$OUTPUT_CXX_H)
+        cp $$RUST_LIB $$OUTPUT_LIB || (echo "Failed to copy $$RUST_LIB to $$OUTPUT_LIB" >&2; exit 1)
+        cp $$RUST_BRIDGE_DIR/lib.rs.cc $$OUTPUT_CC || (echo "Failed to copy $$RUST_BRIDGE_DIR/lib.rs.cc to $$OUTPUT_CC" >&2; exit 1)
+        cp $$RUST_BRIDGE_DIR/lib.rs.h $$OUTPUT_H || (echo "Failed to copy $$RUST_BRIDGE_DIR/lib.rs.h to $$OUTPUT_H" >&2; exit 1)
+        cp $$RUST_BRIDGE_DIR/lib.rs.h $$OUTPUT_SRC_H || (echo "Failed to copy $$RUST_BRIDGE_DIR/lib.rs.h to $$OUTPUT_SRC_H" >&2; exit 1)
+        CXX_H_SOURCE=$$CARGO_TARGET_DIR/cxxbridge/rust/cxx.h
+        if [ ! -f $$CXX_H_SOURCE ] && [ ! -L $$CXX_H_SOURCE ]; then
+            echo "Error: cxx.h not found at $$CXX_H_SOURCE" >&2
+            exit 1
+        fi
+        cp -L $$CXX_H_SOURCE $$OUTPUT_CXX_H || (echo "Failed to copy $$CXX_H_SOURCE to $$OUTPUT_CXX_H" >&2; exit 1)
+    """,
+    message = "Building Rust library (release) with cargo...",
+    local = 1,
+)
+
+filegroup(
+    name = "lib_rs_h_selected",
+    srcs = select({
+        ":debug_mode": [":src/lib.rs_debug.h"],
+        ":fastbuild_mode": [":src/lib.rs_debug.h"],
+        ":release_mode": [":src/lib.rs_release.h"],
+    }),
+)
+
+genrule(
+    name = "lib_rs_h_unified",
+    srcs = [":lib_rs_h_selected"],
+    outs = ["src/lib.rs.h"],
+    cmd = "cp $(location :lib_rs_h_selected) $(location src/lib.rs.h)",
+    message = "Unifying lib.rs.h for C++ includes",
+)
+
+filegroup(
+    name = "rust_bridge_cc_selected",
+    srcs = select({
+        ":debug_mode": [":rust_bridge_cc_debug.cc"],
+        ":fastbuild_mode": [":rust_bridge_cc_debug.cc"],
+        ":release_mode": [":rust_bridge_cc_release.cc"],
+    }),
+)
+
+genrule(
+    name = "rust_bridge_cc_unified",
+    srcs = [":rust_bridge_cc_selected"],
+    outs = ["rust_bridge_cc.cc"],
+    cmd = "cp $(location :rust_bridge_cc_selected) $(location rust_bridge_cc.cc)",
+    message = "Unifying rust_bridge_cc.cc for C++ compilation",
+)
+
+filegroup(
+    name = "rust_bridge_h_selected",
+    srcs = select({
+        ":debug_mode": [":rust_bridge_h_debug.h"],
+        ":fastbuild_mode": [":rust_bridge_h_debug.h"],
+        ":release_mode": [":rust_bridge_h_release.h"],
+    }),
+)
+
+genrule(
+    name = "rust_bridge_h_unified",
+    srcs = [":rust_bridge_h_selected"],
+    outs = ["rust_bridge_h.h"],
+    cmd = "cp $(location :rust_bridge_h_selected) $(location rust_bridge_h.h)",
+    message = "Unifying rust_bridge_h.h for C++ includes",
+)
+
+filegroup(
+    name = "cxx_h_selected",
+    srcs = select({
+        ":debug_mode": [":cxxbridge/rust/cxx_debug.h"],
+        ":fastbuild_mode": [":cxxbridge/rust/cxx_debug.h"],
+        ":release_mode": [":cxxbridge/rust/cxx_release.h"],
+    }),
+)
+
+genrule(
+    name = "cxx_h_unified",
+    srcs = [":cxx_h_selected"],
+    outs = ["cxxbridge/rust/cxx.h"],
+    cmd = "mkdir -p $$(dirname $(location cxxbridge/rust/cxx.h)) && cp $(location :cxx_h_selected) $(location cxxbridge/rust/cxx.h)",
+    message = "Unifying cxx.h for C++ includes",
+)
+
+cc_import(
+    name = "rust_lib",
+    static_library = select({
+        ":debug_mode": ":rust_lib_debug.a",
+        ":fastbuild_mode": ":rust_lib_debug.a",
+        ":release_mode": ":rust_lib_release.a",
+    }),
+    alwayslink = True,
+)
+
+cc_library(
+    name = "fluss_cpp",
+    srcs = [
+        "src/admin.cpp",
+        "src/connection.cpp",
+        "src/table.cpp",
+    ],
+    hdrs = [
+        "include/fluss.hpp",
+    ],
+    textual_hdrs = [
+        "src/ffi_converter.hpp",
+        ":rust_bridge_h_unified",
+        ":lib_rs_h_unified",
+        ":cxx_h_unified",
+    ],
+    strip_include_prefix = "include",
+    copts = [
+        "-std=c++17",
+    ] + select({
+        ":debug_mode": [
+            "-g3",
+            "-O0",
+            "-ggdb",
+            "-fno-omit-frame-pointer",
+            "-DDEBUG",
+        ],
+        ":fastbuild_mode": [
+            "-g",
+            "-O0",
+        ],
+        ":release_mode": [
+            "-O2",
+            "-DNDEBUG",
+        ],
+    }),
+    includes = [
+        "src",
+        "cxxbridge",
+    ],
+    linkopts = [
+        "-ldl",
+        "-lpthread",
+    ] + select({
+        ":debug_mode": ["-g"],
+        ":fastbuild_mode": ["-g"],
+        ":release_mode": [],
+    }) + select({
+        "@platforms//os:macos": [
+            "-framework", "CoreFoundation",
+            "-framework", "Security",
+        ],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":rust_lib",
+        "//bindings/cpp/bazel/cpp:arrow_cpp_dep",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_binary(
+    name = "fluss_cpp_example",
+    srcs = [
+        "examples/example.cpp",
+    ],
+    deps = [":fluss_cpp"],
+    copts = [
+        "-std=c++17",
+    ] + select({
+        ":debug_mode": [
+            "-g3",
+            "-O0",
+            "-ggdb",
+            "-fno-omit-frame-pointer",
+            "-DDEBUG",
+        ],
+        ":fastbuild_mode": [
+            "-g",
+            "-O0",
+        ],
+        ":release_mode": [
+            "-O2",
+            "-DNDEBUG",
+        ],
+    }),
+    linkopts = select({
+        ":debug_mode": ["-g"],
+        ":fastbuild_mode": ["-g"],
+        ":release_mode": [],
+    }),
+    visibility = ["//visibility:public"],
+)
+
+cc_binary(
+    name = "fluss_cpp_admin_example",
+    srcs = [
+        "examples/admin_example.cpp",
+    ],
+    deps = [":fluss_cpp"],
+    copts = [
+        "-std=c++17",
+    ] + select({
+        ":debug_mode": [
+            "-g3",
+            "-O0",
+            "-ggdb",
+            "-fno-omit-frame-pointer",
+            "-DDEBUG",
+        ],
+        ":fastbuild_mode": [
+            "-g",
+            "-O0",
+        ],
+        ":release_mode": [
+            "-O2",
+            "-DNDEBUG",
+        ],
+    }),
+    linkopts = select({
+        ":debug_mode": ["-g"],
+        ":fastbuild_mode": ["-g"],
+        ":release_mode": [],
+    }),
+    visibility = ["//visibility:public"],
+)
+
+cc_binary(
+    name = "fluss_cpp_kv_example",
+    srcs = [
+        "examples/kv_example.cpp",
+    ],
+    deps = [":fluss_cpp"],
+    copts = [
+        "-std=c++17",
+    ] + select({
+        ":debug_mode": [
+            "-g3",
+            "-O0",
+            "-ggdb",
+            "-fno-omit-frame-pointer",
+            "-DDEBUG",
+        ],
+        ":fastbuild_mode": [
+            "-g",
+            "-O0",
+        ],
+        ":release_mode": [
+            "-O2",
+            "-DNDEBUG",
+        ],
+    }),
+    linkopts = select({
+        ":debug_mode": ["-g"],
+        ":fastbuild_mode": ["-g"],
+        ":release_mode": [],
+    }),
+    visibility = ["//visibility:public"],
+)

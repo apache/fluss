@@ -155,6 +155,46 @@ public class FlinkSourceEnumerator
     private final OffsetsInitializer startingOffsetsInitializer;
     private final OffsetsInitializer stoppingOffsetsInitializer;
 
+    /**
+     * The offsets initializer used for partitions discovered after the initial startup. Following
+     * <a
+     * href="https://cwiki.apache.org/confluence/spaces/FLINK/pages/240881147/FLIP-288+Enable+Dynamic+Partition+Discovery+by+Default+in+Kafka+Source">FLIP-288</a>)
+     * semantics, newly discovered partitions always start from earliest to prevent data loss.
+     */
+    private final OffsetsInitializer newDiscoveryOffsetsInitializer;
+
+    /**
+     * Splits whose starting offsets have been initialized but that have not yet been assigned to
+     * any reader. This map is persisted in checkpoint state (via {@link #snapshotState}) so that on
+     * failover restore these splits are directly placed into {@link #pendingSplitAssignment}
+     * without re-initialization, preserving the original offset strategy determined at first
+     * discovery time (FLIP-288).
+     *
+     * <p>Lifecycle:
+     *
+     * <pre>
+     * ┌───────────────────────────────────┐   ┌───────────────────────────────────┐
+     * │ Fluss splits (periodic discovery) │   │ Lake splits (one-time generation) │
+     * └──────────────┬────────────────────┘   └────────────────┬──────────────────┘
+     *                │                                         │
+     *                ▼                                         ▼
+     *        ┌───────────────————————————————————————————————————┐
+     *        │unassignedSplits,(initialDiscoveryFinished = true) │◄──── addSplitsBack (reader failure)
+     *        └───────┬──────————————————————————————————————————─┘
+     *                │ addSplitToPendingAssignments, copy from unassignedSplits.
+     *                ▼
+     *        ┌────────────────────────┐
+     *        │ pendingSplitAssignment │
+     *        └───────────┬────────────┘
+     *                    │ assignPendingSplits, remove from unassignedSplits and pendingSplitAssignment.
+     *                    ▼
+     *        ┌────────────────────────┐
+     *        │  assignedTableBuckets  │
+     *        └────────────────────────┘
+     * </pre>
+     */
+    private final Collection<SourceSplitBase> unassignedSplits;
+
     private final LeaseContext leaseContext;
 
     /** checkpointId -> tableBuckets who finished consume kv snapshots. */
@@ -169,6 +209,14 @@ public class FlinkSourceEnumerator
     // This flag will be marked as true if periodically partition discovery is disabled AND the
     // split initializing has finished.
     private boolean noMoreNewSplits = false;
+
+    /**
+     * Whether the initial partition discovery has been completed. Following FLIP-288, this flag
+     * alone determines offset strategy: partitions discovered before this flag is set to {@code
+     * true} use the user-configured {@link #startingOffsetsInitializer}, while partitions
+     * discovered after use {@link #newDiscoveryOffsetsInitializer} (earliest) to prevent data loss.
+     */
+    private boolean initialDiscoveryFinished;
 
     private boolean lakeEnabled = false;
 
@@ -260,7 +308,9 @@ public class FlinkSourceEnumerator
                 partitionFilters,
                 lakeSource,
                 leaseContext,
-                checkpointTriggeredBefore);
+                checkpointTriggeredBefore,
+                false,
+                Collections.emptyList());
     }
 
     public FlinkSourceEnumerator(
@@ -278,7 +328,9 @@ public class FlinkSourceEnumerator
             @Nullable Predicate partitionFilters,
             @Nullable LakeSource<LakeSplit> lakeSource,
             LeaseContext leaseContext,
-            boolean checkpointTriggeredBefore) {
+            boolean checkpointTriggeredBefore,
+            boolean initialDiscoveryFinished,
+            List<SourceSplitBase> unassignedSplits) {
         this(
                 tablePath,
                 flussConf,
@@ -295,7 +347,9 @@ public class FlinkSourceEnumerator
                 partitionFilters,
                 lakeSource,
                 leaseContext,
-                checkpointTriggeredBefore);
+                checkpointTriggeredBefore,
+                initialDiscoveryFinished,
+                unassignedSplits);
     }
 
     public FlinkSourceEnumerator(
@@ -314,7 +368,9 @@ public class FlinkSourceEnumerator
             @Nullable Predicate partitionFilters,
             @Nullable LakeSource<LakeSplit> lakeSource,
             LeaseContext leaseContext,
-            boolean checkpointTriggeredBefore) {
+            boolean checkpointTriggeredBefore,
+            boolean initialDiscoveryFinished,
+            Collection<SourceSplitBase> unassignedSplits) {
         this(
                 tablePath,
                 flussConf,
@@ -332,7 +388,9 @@ public class FlinkSourceEnumerator
                 lakeSource,
                 new WorkerExecutor(context),
                 leaseContext,
-                checkpointTriggeredBefore);
+                checkpointTriggeredBefore,
+                initialDiscoveryFinished,
+                unassignedSplits);
     }
 
     FlinkSourceEnumerator(
@@ -369,7 +427,9 @@ public class FlinkSourceEnumerator
                 lakeSource,
                 workerExecutor,
                 leaseContext,
-                checkpointTriggeredBefore);
+                checkpointTriggeredBefore,
+                false,
+                Collections.emptyList());
     }
 
     FlinkSourceEnumerator(
@@ -389,7 +449,9 @@ public class FlinkSourceEnumerator
             @Nullable LakeSource<LakeSplit> lakeSource,
             WorkerExecutor workerExecutor,
             LeaseContext leaseContext,
-            boolean checkpointTriggeredBefore) {
+            boolean checkpointTriggeredBefore,
+            boolean initialDiscoveryFinished,
+            Collection<SourceSplitBase> unassignedSplits) {
         checkArgument(
                 splitPerAssignmentBatchSize > 0,
                 "Split assignment batch size must be positive, but was %s.",
@@ -407,6 +469,7 @@ public class FlinkSourceEnumerator
                         ? null
                         : new LinkedList<>(pendingHybridLakeFlussSplits);
         this.startingOffsetsInitializer = startingOffsetsInitializer;
+        this.newDiscoveryOffsetsInitializer = OffsetsInitializer.earliest();
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.streaming = streaming;
         this.partitionFilters = partitionFilters;
@@ -417,10 +480,29 @@ public class FlinkSourceEnumerator
         this.leaseContext = leaseContext;
         this.checkpointTriggeredBefore = checkpointTriggeredBefore;
         this.splitPerAssignmentBatchSize = splitPerAssignmentBatchSize;
+        this.initialDiscoveryFinished = initialDiscoveryFinished;
+        this.unassignedSplits = new ArrayList<>(unassignedSplits);
     }
 
     @Override
     public void start() {
+        LOG.info(
+                "Starting FlinkSourceEnumerator for table {}: "
+                        + "isPartitioned={}, hasPrimaryKey={}, streaming={}, lakeSource={}, "
+                        + "initialDiscoveryFinished={}, restoredUnassignedSplits={}, "
+                        + "restoredAssignedBuckets={}, restoredPendingLakeSplits={}",
+                tablePath,
+                isPartitioned,
+                hasPrimaryKey,
+                streaming,
+                lakeSource != null,
+                initialDiscoveryFinished,
+                unassignedSplits.size(),
+                assignedTableBuckets.size(),
+                pendingHybridLakeFlussSplits == null
+                        ? "null"
+                        : pendingHybridLakeFlussSplits.size());
+
         // init admin client
         connection = ConnectionFactory.createConnection(flussConf);
         flussAdmin = connection.getAdmin();
@@ -432,6 +514,17 @@ public class FlinkSourceEnumerator
             throw new FlinkRuntimeException(
                     String.format("Failed to get table info for %s", tablePath),
                     ExceptionUtils.stripCompletionException(e));
+        }
+
+        // Find splits where the start offset has been initialized but not yet assigned to readers.
+        // These splits must not be reinitialized to keep offsets consistent with first discovery.
+        if (!unassignedSplits.isEmpty()) {
+            LOG.info(
+                    "Restoring {} unassigned splits from checkpoint state "
+                            + "into pendingSplitAssignment for table {}.",
+                    unassignedSplits.size(),
+                    tablePath);
+            addSplitToPendingAssignments(unassignedSplits);
         }
 
         if (isPartitioned) {
@@ -509,7 +602,9 @@ public class FlinkSourceEnumerator
                                 // Use log-only splits to avoid generating mixed split
                                 // types (HybridSnapshotLogSplit + LogSplit) for
                                 // primary-key tables, which is not supported.
-                                splits = this.initLogTablePartitionSplits(partitions);
+                                splits =
+                                        this.initLogTablePartitionSplits(
+                                                partitions, startingOffsetsInitializer);
                             } else {
                                 splits = this.getLogSplit(null, null);
                             }
@@ -526,6 +621,19 @@ public class FlinkSourceEnumerator
     }
 
     private void startInStreamModeForNonPartitionedTable() {
+        // If we have restored unassigned splits from checkpoint state, skip re-initialization.
+        // These splits already have their offsets resolved and will be assigned to readers
+        // when they register (via addReader -> assignPendingSplits).
+        if (!pendingSplitAssignment.isEmpty()) {
+            LOG.info(
+                    "Skipping split re-initialization for non-partitioned table {}: "
+                            + "{} splits already restored from checkpoint state.",
+                    tablePath,
+                    pendingSplitAssignment.values().stream().mapToInt(List::size).sum());
+            initialDiscoveryFinished = true;
+            return;
+        }
+
         if (lakeSource != null) {
             // Generate lake splits synchronously so that they are available before the
             // first checkpoint. This is consistent with the partitioned-table path in
@@ -620,8 +728,16 @@ public class FlinkSourceEnumerator
                 tablePath,
                 partitionInfos.size());
 
-        final PartitionChange partitionChange = getPartitionChange(partitionInfos);
+        final PartitionChange partitionChange =
+                getPartitionChange(partitionInfos, !initialDiscoveryFinished);
+
         if (partitionChange.isEmpty()) {
+            // No partition changes found. For the empty-table case (no initial partitions
+            // to track), mark initial discovery as finished immediately since there are
+            // no splits that need to be persisted in state first.
+            if (!initialDiscoveryFinished) {
+                initialDiscoveryFinished = true;
+            }
             LOG.debug("No partition changes detected for table {}", tablePath);
             return;
         }
@@ -636,21 +752,32 @@ public class FlinkSourceEnumerator
             handlePartitionsRemoved(partitionChange.removedPartitions);
         }
 
-        // handle new partitions
-        if (!partitionChange.newPartitions.isEmpty()) {
+        // handle initial partitions and new partitions
+        boolean hasNewOrInitialPartitions =
+                !partitionChange.initialPartitions.isEmpty()
+                        || !partitionChange.newPartitions.isEmpty();
+        if (hasNewOrInitialPartitions) {
+            Collection<Partition> allNewPartitions = new ArrayList<>();
+            allNewPartitions.addAll(partitionChange.initialPartitions);
+            allNewPartitions.addAll(partitionChange.newPartitions);
             LOG.info(
-                    "Handling {} new partitions for table {}: {}",
-                    partitionChange.newPartitions.size(),
+                    "Handling {} partitions for table {} (initial={}, new={}): {}",
+                    allNewPartitions.size(),
                     tablePath,
-                    partitionChange.newPartitions);
+                    partitionChange.initialPartitions.size(),
+                    partitionChange.newPartitions.size(),
+                    allNewPartitions);
             workerExecutor.callAsync(
-                    () -> initPartitionedSplits(partitionChange.newPartitions),
-                    this::handleSplitsAdd);
+                    () -> initPartitionedSplits(partitionChange),
+                    (splits, throwable) -> {
+                        handleSplitsAdd(splits, throwable);
+                    });
         }
     }
 
-    private PartitionChange getPartitionChange(Set<PartitionInfo> fetchedPartitionInfos) {
-        final Set<Partition> newPartitions =
+    private PartitionChange getPartitionChange(
+            Set<PartitionInfo> fetchedPartitionInfos, boolean initialDiscovery) {
+        final Set<Partition> allNewPartitions =
                 fetchedPartitionInfos.stream()
                         .map(p -> new Partition(p.getPartitionId(), p.getPartitionName()))
                         .collect(Collectors.toSet());
@@ -679,7 +806,7 @@ public class FlinkSourceEnumerator
 
         assignedOrPendingPartitions.forEach(
                 p -> {
-                    if (!newPartitions.remove(p)) {
+                    if (!allNewPartitions.remove(p)) {
                         removedPartitions.add(p);
                     }
                 });
@@ -687,25 +814,63 @@ public class FlinkSourceEnumerator
         if (!removedPartitions.isEmpty()) {
             LOG.info("Discovered removed partitions: {}", removedPartitions);
         }
-        if (!newPartitions.isEmpty()) {
-            LOG.info("Discovered new partitions: {}", newPartitions);
+        if (!allNewPartitions.isEmpty()) {
+            LOG.info("Discovered new partitions: {}", allNewPartitions);
         }
 
-        return new PartitionChange(newPartitions, removedPartitions);
-    }
-
-    private List<SourceSplitBase> initPartitionedSplits(Collection<Partition> newPartitions) {
-        if (hasPrimaryKey && startingOffsetsInitializer instanceof SnapshotOffsetsInitializer) {
-            return initPrimaryKeyTablePartitionSplits(newPartitions);
+        // Following Kafka's FLIP-288 pattern: if this is the initial discovery,
+        // all new partitions are classified as "initial partitions" and will use
+        // the user-configured offset initializer. After initial discovery is done,
+        // all new partitions are classified as "new partitions" and will use earliest.
+        Set<Partition> initialPartitions = new HashSet<>();
+        Set<Partition> newPartitions;
+        if (initialDiscovery) {
+            initialPartitions.addAll(allNewPartitions);
+            newPartitions = Collections.emptySet();
         } else {
-            return initLogTablePartitionSplits(newPartitions);
+            newPartitions = allNewPartitions;
+        }
+
+        return new PartitionChange(initialPartitions, newPartitions, removedPartitions);
+    }
+
+    private List<SourceSplitBase> initPartitionedSplits(PartitionChange partitionChange) {
+        Collection<Partition> initialPartitions = partitionChange.initialPartitions;
+        Collection<Partition> newPartitions = partitionChange.newPartitions;
+
+        if (hasPrimaryKey && startingOffsetsInitializer instanceof SnapshotOffsetsInitializer) {
+            // Snapshot mode for PK tables is already safe: it reads the snapshot or falls back
+            // to the earliest offsets when no snapshot is available.
+            List<Partition> allPartitions = new ArrayList<>();
+            allPartitions.addAll(initialPartitions);
+            allPartitions.addAll(newPartitions);
+            return initPrimaryKeyTablePartitionSplits(allPartitions);
+        } else {
+            // For log tables (or PK tables in non-snapshot mode), use FLIP-288 semantics:
+            // - Initial partitions: use user-configured offset
+            // - New partitions: use earliest to prevent data loss
+            List<SourceSplitBase> splits = new ArrayList<>();
+            if (!initialPartitions.isEmpty()) {
+                splits.addAll(
+                        initLogTablePartitionSplits(initialPartitions, startingOffsetsInitializer));
+            }
+            if (!newPartitions.isEmpty()) {
+                splits.addAll(
+                        initLogTablePartitionSplits(newPartitions, newDiscoveryOffsetsInitializer));
+            }
+            return splits;
         }
     }
 
-    private List<SourceSplitBase> initLogTablePartitionSplits(Collection<Partition> newPartitions) {
+    private List<SourceSplitBase> initLogTablePartitionSplits(
+            Collection<Partition> newPartitions, OffsetsInitializer effectiveOffsetsInitializer) {
         List<SourceSplitBase> splits = new ArrayList<>();
         for (Partition partition : newPartitions) {
-            splits.addAll(getLogSplit(partition.getPartitionId(), partition.getPartitionName()));
+            splits.addAll(
+                    getLogSplit(
+                            partition.getPartitionId(),
+                            partition.getPartitionName(),
+                            effectiveOffsetsInitializer));
         }
         return splits;
     }
@@ -848,6 +1013,13 @@ public class FlinkSourceEnumerator
 
     private List<SourceSplitBase> getLogSplit(
             @Nullable Long partitionId, @Nullable String partitionName) {
+        return getLogSplit(partitionId, partitionName, startingOffsetsInitializer);
+    }
+
+    private List<SourceSplitBase> getLogSplit(
+            @Nullable Long partitionId,
+            @Nullable String partitionName,
+            OffsetsInitializer effectiveStartingOffsetsInitializer) {
         // always assume the bucket is from 0 to bucket num
         List<SourceSplitBase> splits = new ArrayList<>();
         List<Integer> bucketsNeedInitOffset = new ArrayList<>();
@@ -862,7 +1034,7 @@ public class FlinkSourceEnumerator
 
         if (!bucketsNeedInitOffset.isEmpty()) {
             Map<Integer, Long> startingOffsets =
-                    startingOffsetsInitializer.getBucketOffsets(
+                    effectiveStartingOffsetsInitializer.getBucketOffsets(
                             partitionName, bucketsNeedInitOffset, bucketOffsetsRetriever);
             Map<Integer, Long> stoppingOffsets =
                     stoppingOffsetsInitializer.getBucketOffsets(
@@ -887,7 +1059,7 @@ public class FlinkSourceEnumerator
         // without re-generating.
         if (pendingHybridLakeFlussSplits != null) {
             LOG.info("Still have pending lake fluss splits, shouldn't list splits again.");
-            return pendingHybridLakeFlussSplits;
+            return new ArrayList<>(pendingHybridLakeFlussSplits);
         }
         try {
             LakeSplitGenerator lakeSplitGenerator =
@@ -907,7 +1079,7 @@ public class FlinkSourceEnumerator
                 return null;
             } else {
                 pendingHybridLakeFlussSplits = generatedSplits;
-                return generatedSplits;
+                return new ArrayList<>(generatedSplits);
             }
         } catch (Exception e) {
             throw new FlinkRuntimeException("Failed to generate hybrid lake fluss splits", e);
@@ -935,34 +1107,54 @@ public class FlinkSourceEnumerator
         pendingSplitAssignment.forEach(
                 (reader, splits) ->
                         splits.removeIf(
-                                split -> {
-                                    // Never remove LakeSnapshotSplit, because during union reads,
-                                    // data from the lake must still be read even if the partition
-                                    // has already expired in Fluss.
-                                    if (split instanceof LakeSnapshotSplit) {
-                                        return false;
-                                    }
+                                split ->
+                                        shouldRemoveForDroppedPartition(
+                                                split, removedPartitionsMap)));
 
-                                    // Similar to LakeSnapshotSplit, if it contains any lake split,
-                                    // never remove it; otherwise, it can be removed when the Fluss
-                                    // partition expires.
-                                    if (split instanceof LakeSnapshotAndFlussLogSplit) {
-                                        LakeSnapshotAndFlussLogSplit hybridSplit =
-                                                (LakeSnapshotAndFlussLogSplit) split;
-                                        if (!hybridSplit.isLakeSplitFinished()) {
-                                            return false;
-                                        }
-                                    }
+        // remove from unassignedSplits to prevent stale splits from being checkpointed
+        // and restored after failover for a deleted partition
+        unassignedSplits.removeIf(
+                split -> shouldRemoveForDroppedPartition(split, removedPartitionsMap));
 
-                                    return removedPartitionsMap.containsKey(
-                                            split.getTableBucket().getPartitionId());
-                                }));
+        // remove from pendingHybridLakeFlussSplits as well
+        if (pendingHybridLakeFlussSplits != null) {
+            pendingHybridLakeFlussSplits.removeIf(
+                    split -> shouldRemoveForDroppedPartition(split, removedPartitionsMap));
+        }
 
         // send partition removed event to all readers
         PartitionsRemovedEvent event = new PartitionsRemovedEvent(removedPartitionsMap);
         for (int readerId : context.registeredReaders().keySet()) {
             context.sendEventToSourceReader(readerId, event);
         }
+    }
+
+    /**
+     * Determines whether a split should be removed when its partition is dropped.
+     *
+     * <p>Lake-related splits are preserved because lake data must still be read even if the
+     * partition has expired in Fluss (union reads scenario).
+     */
+    private static boolean shouldRemoveForDroppedPartition(
+            SourceSplitBase split, Map<Long, String> removedPartitionsMap) {
+        // Never remove LakeSnapshotSplit, because during union reads,
+        // data from the lake must still be read even if the partition
+        // has already expired in Fluss.
+        if (split instanceof LakeSnapshotSplit) {
+            return false;
+        }
+
+        // Similar to LakeSnapshotSplit, if it contains any lake split,
+        // never remove it; otherwise, it can be removed when the Fluss
+        // partition expires.
+        if (split instanceof LakeSnapshotAndFlussLogSplit) {
+            LakeSnapshotAndFlussLogSplit hybridSplit = (LakeSnapshotAndFlussLogSplit) split;
+            if (!hybridSplit.isLakeSplitFinished()) {
+                return false;
+            }
+        }
+
+        return removedPartitionsMap.containsKey(split.getTableBucket().getPartitionId());
     }
 
     private void handleSplitsAdd(List<SourceSplitBase> splits, Throwable t) {
@@ -978,6 +1170,26 @@ public class FlinkSourceEnumerator
                         t);
             }
         }
+
+        initialDiscoveryFinished = true;
+        if (pendingHybridLakeFlussSplits != null) {
+            // removed from the pendingHybridLakeFlussSplits since this split already be moved to
+            // unassignedSplits
+            pendingHybridLakeFlussSplits.removeAll(splits);
+        }
+        unassignedSplits.addAll(splits);
+        LOG.info(
+                "Added {} new splits to unassignedSplits for table {}: "
+                        + "totalUnassigned={}, initialDiscoveryFinished={}, "
+                        + "remainingLakeSplits={}",
+                splits.size(),
+                tablePath,
+                unassignedSplits.size(),
+                initialDiscoveryFinished,
+                pendingHybridLakeFlussSplits == null
+                        ? "null"
+                        : pendingHybridLakeFlussSplits.size());
+
         if (isPartitioned) {
             if (!streaming || scanPartitionDiscoveryIntervalMs <= 0) {
                 // if not streaming or partition discovery is disabled
@@ -1026,6 +1238,7 @@ public class FlinkSourceEnumerator
                         split -> {
                             TableBucket tableBucket = split.getTableBucket();
                             assignedTableBuckets.add(tableBucket);
+                            unassignedSplits.remove(split);
 
                             if (isPartitioned) {
                                 long partitionId =
@@ -1039,17 +1252,6 @@ public class FlinkSourceEnumerator
                                 assignedPartitions.put(partitionId, partitionName);
                             }
                         });
-
-                if (pendingHybridLakeFlussSplits != null) {
-                    Set<String> splitIdsToRemove =
-                            pendingAssignmentForReader.stream()
-                                    .map(SourceSplitBase::splitId)
-                                    .collect(Collectors.toSet());
-                    // removed from the pendingHybridLakeFlussSplits
-                    // since this split already be assigned
-                    pendingHybridLakeFlussSplits.removeIf(
-                            split -> splitIdsToRemove.contains(split.splitId()));
-                }
             }
         }
 
@@ -1203,7 +1405,19 @@ public class FlinkSourceEnumerator
 
     @Override
     public void addSplitsBack(List<SourceSplitBase> splits, int subtaskId) {
-        LOG.debug("Flink Source Enumerator adds splits back: {}", splits);
+        LOG.info(
+                "Adding {} splits back from failed reader {} for table {}: {}",
+                splits.size(),
+                subtaskId,
+                tablePath,
+                splits);
+        for (SourceSplitBase split : splits) {
+            unassignedSplits.add(split);
+            assignedTableBuckets.remove(split.getTableBucket());
+            if (isPartitioned) {
+                assignedPartitions.remove(split.getTableBucket().getPartitionId());
+            }
+        }
         addSplitToPendingAssignments(splits);
 
         // If the failed subtask has already restarted, we need to assign pending splits to it
@@ -1214,7 +1428,14 @@ public class FlinkSourceEnumerator
 
     @Override
     public void addReader(int subtaskId) {
-        LOG.debug("Adding reader: {} to Flink Source enumerator.", subtaskId);
+        LOG.info(
+                "Adding reader {} to FlinkSourceEnumerator for table {}, "
+                        + "pendingSplitAssignment has {} splits for this reader.",
+                subtaskId,
+                tablePath,
+                pendingSplitAssignment.containsKey(subtaskId)
+                        ? pendingSplitAssignment.get(subtaskId).size()
+                        : 0);
         assignPendingSplits(Collections.singleton(subtaskId));
     }
 
@@ -1225,8 +1446,21 @@ public class FlinkSourceEnumerator
                         assignedTableBuckets,
                         assignedPartitions,
                         pendingHybridLakeFlussSplits,
-                        leaseContext.getKvSnapshotLeaseId());
-        LOG.debug("Source Checkpoint is {}", enumeratorState);
+                        leaseContext.getKvSnapshotLeaseId(),
+                        initialDiscoveryFinished,
+                        unassignedSplits);
+        LOG.debug(
+                "Snapshot state for table {} at checkpoint {}: "
+                        + "assignedBuckets={}, assignedPartitions={}, "
+                        + "unassignedSplits={}, pendingLakeSplits={}, "
+                        + "initialDiscoveryFinished={}",
+                tablePath,
+                checkpointId,
+                assignedTableBuckets.size(),
+                assignedPartitions.size(),
+                unassignedSplits.size(),
+                pendingHybridLakeFlussSplits == null ? "null" : pendingHybridLakeFlussSplits.size(),
+                initialDiscoveryFinished);
         return enumeratorState;
     }
 
@@ -1293,6 +1527,14 @@ public class FlinkSourceEnumerator
 
     @Override
     public void close() throws IOException {
+        LOG.info(
+                "Closing FlinkSourceEnumerator for table {}: "
+                        + "assignedBuckets={}, unassignedSplits={}, "
+                        + "checkpointTriggeredBefore={}",
+                tablePath,
+                assignedTableBuckets.size(),
+                unassignedSplits.size(),
+                checkpointTriggeredBefore);
         try {
             maybeDropKvSnapshotLease();
 
@@ -1352,17 +1594,23 @@ public class FlinkSourceEnumerator
     // --------------- private class ---------------
     /** A container class to hold the newly added partitions and removed partitions. */
     private static class PartitionChange {
+        private final Collection<Partition> initialPartitions;
         private final Collection<Partition> newPartitions;
         private final Collection<Partition> removedPartitions;
 
         PartitionChange(
-                Collection<Partition> newPartitions, Collection<Partition> removedPartitions) {
+                Collection<Partition> initialPartitions,
+                Collection<Partition> newPartitions,
+                Collection<Partition> removedPartitions) {
+            this.initialPartitions = initialPartitions;
             this.newPartitions = newPartitions;
             this.removedPartitions = removedPartitions;
         }
 
         public boolean isEmpty() {
-            return newPartitions.isEmpty() && removedPartitions.isEmpty();
+            return initialPartitions.isEmpty()
+                    && newPartitions.isEmpty()
+                    && removedPartitions.isEmpty();
         }
     }
 

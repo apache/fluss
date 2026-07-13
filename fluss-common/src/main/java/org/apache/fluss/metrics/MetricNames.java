@@ -231,6 +231,7 @@ public class MetricNames {
 
     // for tablet
     public static final String LAKE_PENDING_RECORDS = "pendingRecords";
+    public static final String LAKE_PENDING_RECORDS_LAG = "pendingRecordsLag";
 
     // for log tablet
     public static final String LOG_NUM_SEGMENTS = "numSegments";

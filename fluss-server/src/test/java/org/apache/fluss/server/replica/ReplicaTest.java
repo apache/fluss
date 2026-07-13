@@ -25,6 +25,10 @@ import org.apache.fluss.metadata.SchemaGetter;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.groups.AbstractMetricGroup;
+import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.KvRecordTestUtils;
@@ -749,6 +753,57 @@ final class ReplicaTest extends ReplicaTestBase {
     }
 
     @Test
+    void testPendingRecordsLagStartsFromNewBacklogAfterIdle() throws Exception {
+        Replica logReplica =
+                makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1));
+        makeLogReplicaAsLeader(logReplica);
+        logReplica.updateIsDataLakeEnabled(true);
+
+        long initialTimestamp = manualClock.milliseconds();
+        MemoryLogRecords firstBatch =
+                createRecordsWithoutBaseLogOffset(
+                        DATA1_ROW_TYPE,
+                        DEFAULT_SCHEMA_ID,
+                        0,
+                        initialTimestamp,
+                        CURRENT_LOG_MAGIC_VALUE,
+                        DATA1,
+                        LogFormat.ARROW);
+        logReplica.appendRecordsToLeader(firstBatch, 0);
+        logReplica.getLogTablet().updateHighWatermark(logReplica.getLocalLogEndOffset());
+        logReplica.getLogTablet().updateLakeLogEndOffset(logReplica.getLocalLogEndOffset());
+        logReplica.getLogTablet().updateLakeMaxTimestamp(initialTimestamp);
+
+        assertThat(getLakeTieringGaugeValue(logReplica, MetricNames.LAKE_PENDING_RECORDS_LAG))
+                .isZero();
+
+        manualClock.advanceTime(Duration.ofMinutes(10));
+        long newBatchTimestamp = manualClock.milliseconds();
+        MemoryLogRecords secondBatch =
+                createRecordsWithoutBaseLogOffset(
+                        DATA1_ROW_TYPE,
+                        DEFAULT_SCHEMA_ID,
+                        0,
+                        newBatchTimestamp,
+                        CURRENT_LOG_MAGIC_VALUE,
+                        DATA1,
+                        LogFormat.ARROW);
+        logReplica.appendRecordsToLeader(secondBatch, 0);
+        logReplica.getLogTablet().updateHighWatermark(logReplica.getLocalLogEndOffset());
+
+        assertThat(getLakeTieringGaugeValue(logReplica, MetricNames.LOG_LAKE_TIMESTAMP_LAG))
+                .isEqualTo(Duration.ofMinutes(10).toMillis());
+        assertThat(getLakeTieringGaugeValue(logReplica, MetricNames.LAKE_PENDING_RECORDS_LAG))
+                .isZero();
+        assertThat(logReplica.getLogTablet().getEstimatedPendingStartTimeMs())
+                .isEqualTo(manualClock.milliseconds());
+
+        manualClock.advanceTime(Duration.ofSeconds(5));
+        assertThat(getLakeTieringGaugeValue(logReplica, MetricNames.LAKE_PENDING_RECORDS_LAG))
+                .isEqualTo(Duration.ofSeconds(5).toMillis());
+    }
+
+    @Test
     void testUpdateIsDataLakeEnabled() throws Exception {
         Replica logReplica =
                 makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1));
@@ -768,6 +823,15 @@ final class ReplicaTest extends ReplicaTestBase {
         // update to false
         logReplica.updateIsDataLakeEnabled(false);
         assertThat(logReplica.getLogTablet().isDataLakeEnabled()).isFalse();
+    }
+
+    @SuppressWarnings("unchecked")
+    private long getLakeTieringGaugeValue(Replica replica, String metricName) {
+        MetricGroup lakeTieringMetricGroup = replica.bucketMetrics().addGroup("lakeTiering");
+        Gauge<Long> gauge =
+                (Gauge<Long>)
+                        ((AbstractMetricGroup) lakeTieringMetricGroup).getMetrics().get(metricName);
+        return gauge.getValue();
     }
 
     private void makeLogReplicaAsLeader(Replica replica) throws Exception {

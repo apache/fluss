@@ -19,6 +19,8 @@ package org.apache.fluss.fs.s3;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.s3.token.DynamicTemporaryAWSCredentialsProvider;
+import org.apache.fluss.fs.s3.token.S3DelegationTokenProvider;
+import org.apache.fluss.fs.s3.token.S3DelegationTokenProviderTest;
 import org.apache.fluss.fs.s3.token.S3DelegationTokenReceiver;
 import org.apache.fluss.fs.token.Credentials;
 import org.apache.fluss.fs.token.CredentialsJsonSerde;
@@ -29,6 +31,7 @@ import org.junit.jupiter.api.Test;
 import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for server/client detection in {@link S3FileSystemPlugin}. */
 class S3FileSystemPluginTest {
@@ -64,6 +67,66 @@ class S3FileSystemPluginTest {
     }
 
     @Test
+    void testServerModeWithConfiguredCredentialProvider() {
+        Configuration flussConfig = new Configuration();
+        flussConfig.setString(
+                PROVIDER_CONFIG,
+                S3DelegationTokenProviderTest.RefreshableCredentialsProvider.class.getName());
+
+        S3FileSystemPlugin plugin = new S3FileSystemPlugin();
+        org.apache.hadoop.conf.Configuration hadoopConfig =
+                plugin.buildHadoopConfiguration(flussConfig);
+
+        String providers = hadoopConfig.get(PROVIDER_CONFIG, "");
+        assertThat(providers)
+                .isEqualTo(
+                        S3DelegationTokenProviderTest.RefreshableCredentialsProvider.class
+                                .getName());
+        assertThat(providers).doesNotContain(DynamicTemporaryAWSCredentialsProvider.NAME);
+        assertThat(
+                        hadoopConfig.getBoolean(
+                                S3DelegationTokenProvider.CREDENTIAL_PROVIDER_EXPLICITLY_CONFIGURED,
+                                false))
+                .isTrue();
+    }
+
+    @Test
+    void testServerModeWithConfiguredCredentialProviderForS3A() {
+        Configuration flussConfig = new Configuration();
+        flussConfig.setString(
+                PROVIDER_CONFIG,
+                S3DelegationTokenProviderTest.RefreshableCredentialsProvider.class.getName());
+
+        S3AFileSystemPlugin plugin = new S3AFileSystemPlugin();
+        org.apache.hadoop.conf.Configuration hadoopConfig =
+                plugin.buildHadoopConfiguration(flussConfig);
+
+        String providers = hadoopConfig.get(PROVIDER_CONFIG, "");
+        assertThat(providers)
+                .isEqualTo(
+                        S3DelegationTokenProviderTest.RefreshableCredentialsProvider.class
+                                .getName());
+        assertThat(providers).doesNotContain(DynamicTemporaryAWSCredentialsProvider.NAME);
+    }
+
+    @Test
+    void testConfiguredCredentialProviderWithRoleArnThrows() {
+        Configuration flussConfig = new Configuration();
+        flussConfig.setString(
+                PROVIDER_CONFIG,
+                S3DelegationTokenProviderTest.RefreshableCredentialsProvider.class.getName());
+        flussConfig.setString(
+                "fs.s3a.assumed.role.arn", "arn:aws:iam::123456789012:role/test-role");
+
+        S3FileSystemPlugin plugin = new S3FileSystemPlugin();
+
+        assertThatThrownBy(() -> plugin.buildHadoopConfiguration(flussConfig))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("AssumeRole")
+                .hasMessageContaining("custom AWS credentials provider");
+    }
+
+    @Test
     void testClientModeWithDelegatedCredentials() {
         // Pre-populate receiver so updateHadoopConfig does not throw.
         Credentials creds = new Credentials("testKey", "testSecret", "testToken");
@@ -84,5 +147,10 @@ class S3FileSystemPluginTest {
 
         String providers = hadoopConfig.get(PROVIDER_CONFIG, "");
         assertThat(providers).contains(DynamicTemporaryAWSCredentialsProvider.NAME);
+        assertThat(
+                        hadoopConfig.getBoolean(
+                                S3DelegationTokenProvider.CREDENTIAL_PROVIDER_EXPLICITLY_CONFIGURED,
+                                false))
+                .isFalse();
     }
 }

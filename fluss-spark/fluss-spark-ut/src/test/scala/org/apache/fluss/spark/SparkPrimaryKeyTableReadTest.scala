@@ -519,6 +519,35 @@ class SparkPrimaryKeyTableReadTest extends FlussSparkTestBase {
     }
   }
 
+  test("Spark Read: primary key table batch read has no data hole with monotonic keys") {
+    withTable("fluss_fault_test_pk") {
+      val tablePath = createTablePath("fluss_fault_test_pk")
+      sql(s"""
+             |CREATE TABLE $DEFAULT_DATABASE.fluss_fault_test_pk (seq_id BIGINT, payload STRING)
+             |TBLPROPERTIES("primary.key" = "seq_id", "bucket.num" = 1)
+             |""".stripMargin)
+
+      // First batch: seq_id 1..100, materialized into a kv snapshot.
+      val firstBatch = (1 to 100).map(i => s"($i, 'v$i')").mkString(", ")
+      sql(s"INSERT INTO $DEFAULT_DATABASE.fluss_fault_test_pk VALUES $firstBatch")
+      flussServer.triggerAndWaitSnapshot(tablePath)
+
+      // Second batch: seq_id 101..200, only present in the log tail. All keys are
+      // strictly greater than the max key in the snapshot, mimicking a datagen job
+      // that keeps appending monotonically increasing primary keys.
+      val secondBatch = (101 to 200).map(i => s"($i, 'v$i')").mkString(", ")
+      sql(s"INSERT INTO $DEFAULT_DATABASE.fluss_fault_test_pk VALUES $secondBatch")
+
+      // total_count must equal max_seq - min_seq + 1, i.e. no data hole.
+      checkAnswer(
+        sql(s"""
+               |SELECT COUNT(*) AS total_count, MAX(seq_id) AS max_seq, MIN(seq_id) AS min_seq
+               |FROM $DEFAULT_DATABASE.fluss_fault_test_pk""".stripMargin),
+        Row(200L, 200L, 1L) :: Nil
+      )
+    }
+  }
+
   private def partitionPredicate(df: DataFrame): Option[org.apache.fluss.predicate.Predicate] = {
     flussUpsertScan(df).flatMap(_.partitionPredicate)
   }

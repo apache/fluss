@@ -219,6 +219,14 @@
                                     <include>org.apache.fluss:fluss-client</include>
                                 </includes>
                             </artifactSet>
+                            <filters combine.children="append">
+                                <filter>
+                                    <artifact>org.apache.fluss:fluss-flink-common</artifact>
+                                    <excludes>
+                                        <exclude>org/apache/fluss/flink/action/**</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
                         </configuration>
                     </execution>
                 </executions>

@@ -17,10 +17,11 @@
 
 package org.apache.fluss.rpc.netty.server;
 
-import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
+import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.rpc.RpcGatewayService;
 import org.apache.fluss.rpc.protocol.ApiManager;
 import org.apache.fluss.rpc.protocol.NetworkProtocolPlugin;
@@ -28,15 +29,47 @@ import org.apache.fluss.security.auth.AuthenticationFactory;
 import org.apache.fluss.security.auth.PlainTextAuthenticationPlugin;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** Build-in protocol plugin for Fluss. */
-public class FlussProtocolPlugin implements NetworkProtocolPlugin {
+public class FlussProtocolPlugin implements NetworkProtocolPlugin, ServerReconfigurable {
+
+    private static final String PLAIN_CREDENTIALS_CONFIG =
+            ConfigOptions.SERVER_SASL_CREDENTIALS.key();
+
+    /** Pattern to match {@code user_<username>="<password>"} entries in JAAS config strings. */
+    private static final Pattern JAAS_USER_PATTERN = Pattern.compile("user_(\\w+)=\"([^\"]*)\"");
+
+    /**
+     * Valid username pattern. Only letters, digits, and underscores are allowed because the
+     * username is used as part of the JAAS option key {@code user_<username>}.
+     */
+    private static final Pattern VALID_USERNAME_PATTERN = Pattern.compile("\\w+");
+
+    /**
+     * Characters forbidden in passwords. These would break the map format or the generated JAAS
+     * config string: comma (entry separator), colon (key-value separator), double-quote (JAAS value
+     * delimiter), semicolon (JAAS statement terminator), backslash (escape char), and control
+     * characters.
+     */
+    private static final Pattern INVALID_PASSWORD_PATTERN =
+            Pattern.compile("[,:\"\\\\;]|[\\x00-\\x1F\\x7F]");
+
     private final ApiManager apiManager;
     private final List<String> listeners;
     private final RequestsMetrics requestsMetrics;
     private Configuration conf;
+    /** Initial credentials from `security.sasl.plain.jaas.config`. */
+    private Map<String, String> initialPlainCredentialsFromJaasConfig;
+
+    /** Current config `security.sasl.plain.credentials`. */
+    private Map<String, String> currentPlainCredentials;
 
     public FlussProtocolPlugin(
             ServerType serverType, List<String> listeners, RequestsMetrics requestsMetrics) {
@@ -52,7 +85,9 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin {
 
     @Override
     public void setup(Configuration conf) {
-        this.conf = conf;
+        this.conf = new Configuration(conf);
+        this.initialPlainCredentialsFromJaasConfig = parseCredentialsFromJaasConfig(conf);
+        enrichWithJaasConfig(conf);
     }
 
     @Override
@@ -72,7 +107,7 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin {
                 conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds(),
                 (int) conf.get(ConfigOptions.NETTY_SERVER_MAX_REQUEST_SIZE).getBytes(),
                 Optional.ofNullable(
-                                AuthenticationFactory.loadServerAuthenticatorSuppliers(conf)
+                                AuthenticationFactory.loadServerAuthenticatorSuppliers(this.conf)
                                         .get(listenerName))
                         .orElse(PlainTextAuthenticationPlugin.PlainTextServerAuthenticator::new));
     }
@@ -82,8 +117,123 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin {
         return new FlussRequestHandler(service);
     }
 
-    @VisibleForTesting
-    ApiManager getApiManager() {
-        return apiManager;
+    // --- ServerReconfigurable ---
+
+    @Override
+    public void validate(Configuration newConfig) throws ConfigException {
+        Map<String, String> newCredentials = readPlainCredentials(newConfig);
+        if (Objects.equals(newCredentials, currentPlainCredentials)) {
+            return;
+        }
+        if (newCredentials != null && !newCredentials.isEmpty()) {
+            int index = 0;
+            for (Map.Entry<String, String> credential : newCredentials.entrySet()) {
+                validateUsername(credential.getKey());
+                validatePassword(index, credential.getKey(), credential.getValue());
+                index++;
+            }
+        }
+
+        // Generate the merged JAAS config value to ensure it is valid.
+        generateMergedJaasConfig(newCredentials);
+    }
+
+    @Override
+    public void reconfigure(Configuration newConfig) throws ConfigException {
+        enrichWithJaasConfig(newConfig);
+    }
+
+    /**
+     * Enriches the plugin's configuration with a generated JAAS config string by merging:
+     *
+     * <ol>
+     *   <li>Existing credentials parsed from the current {@code security.sasl.plain.jaas.config}
+     *   <li>New credentials from the {@code security.sasl.plain.credentials} map in {@code
+     *       newConfig}
+     * </ol>
+     *
+     * <p>New credentials take priority when a username exists in both sources. If the credentials
+     * map is not present in {@code newConfig}, the configuration is returned unchanged.
+     */
+    private void enrichWithJaasConfig(Configuration newConfig) throws ConfigException {
+        Map<String, String> newCredentials = readPlainCredentials(newConfig);
+        if (Objects.equals(newCredentials, currentPlainCredentials)) {
+            return;
+        }
+
+        conf.setString(
+                ConfigOptions.SERVER_SASL_PLAIN_JAAS_CONFIG,
+                generateMergedJaasConfig(newCredentials));
+        currentPlainCredentials = newCredentials;
+    }
+
+    private static Map<String, String> readPlainCredentials(Configuration config)
+            throws ConfigException {
+        try {
+            return config.get(ConfigOptions.SERVER_SASL_CREDENTIALS);
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            throw new ConfigException(
+                    String.format(
+                            "Failed to parse %s: %s", PLAIN_CREDENTIALS_CONFIG, e.getMessage()),
+                    e);
+        }
+    }
+
+    private static void validateUsername(String username) throws ConfigException {
+        if (!VALID_USERNAME_PATTERN.matcher(username).matches()) {
+            throw new ConfigException(
+                    String.format(
+                            "%s: username '%s' contains invalid characters. "
+                                    + "Only letters, digits, and underscores are allowed.",
+                            PLAIN_CREDENTIALS_CONFIG, username));
+        }
+    }
+
+    private static void validatePassword(int index, String username, String password)
+            throws ConfigException {
+        if (password == null || INVALID_PASSWORD_PATTERN.matcher(password).find()) {
+            throw new ConfigException(
+                    String.format(
+                            "%s[%d]: password for user '%s' contains invalid characters. "
+                                    + "Commas, colons, quotes, semicolons, backslashes, and control characters are not allowed.",
+                            PLAIN_CREDENTIALS_CONFIG, index, username));
+        }
+    }
+
+    /**
+     * Generates the merged JAAS config string by combining existing credentials from the current
+     * {@code security.sasl.plain.jaas.config} with the given new credentials map. New credentials
+     * take priority on username conflict.
+     *
+     * @param newCredentials map of username to password from SERVER_SASL_CREDENTIALS
+     * @return the generated JAAS config string
+     */
+    private String generateMergedJaasConfig(Map<String, String> newCredentials) {
+        Map<String, String> mergedCredentials =
+                new LinkedHashMap<>(initialPlainCredentialsFromJaasConfig);
+        if (newCredentials != null) {
+            mergedCredentials.putAll(newCredentials);
+        }
+
+        StringBuilder sb =
+                new StringBuilder(
+                        "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required");
+        for (Map.Entry<String, String> entry : mergedCredentials.entrySet()) {
+            sb.append(String.format(" user_%s=\"%s\"", entry.getKey(), entry.getValue()));
+        }
+        sb.append(";");
+        return sb.toString();
+    }
+
+    private static Map<String, String> parseCredentialsFromJaasConfig(Configuration configuration) {
+        Map<String, String> credentials = new LinkedHashMap<>();
+        String existingJaas = configuration.getString(ConfigOptions.SERVER_SASL_PLAIN_JAAS_CONFIG);
+        if (existingJaas != null) {
+            Matcher matcher = JAAS_USER_PATTERN.matcher(existingJaas);
+            while (matcher.find()) {
+                credentials.put(matcher.group(1), matcher.group(2));
+            }
+        }
+        return credentials;
     }
 }

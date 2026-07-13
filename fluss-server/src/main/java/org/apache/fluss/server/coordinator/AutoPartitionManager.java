@@ -122,6 +122,8 @@ public class AutoPartitionManager implements AutoCloseable {
                 remoteDirDynamicLoader,
                 conf,
                 SystemClock.getInstance(),
+                // TODO: Reuse the CoordinatorServer shared scheduler for this lightweight
+                // coordinator periodic task instead of creating a component-owned scheduler.
                 Executors.newScheduledThreadPool(
                         1, new ExecutorThreadFactory("periodic-auto-partition-manager")));
     }
@@ -441,7 +443,7 @@ public class AutoPartitionManager implements AutoCloseable {
             } catch (TooManyBucketsException t) {
                 LOG.warn(
                         "Auto partitioning skip to create partition {} for table [{}], "
-                                + "because exceed the maximum number of buckets.",
+                                + "because exceed the maximum number of buckets per partition.",
                         partition,
                         tablePath);
             } catch (Exception e) {

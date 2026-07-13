@@ -18,8 +18,10 @@
 package org.apache.fluss.flink.tiering.committer;
 
 import org.apache.fluss.client.metadata.LakeSnapshot;
+import org.apache.fluss.exception.ApiException;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.flink.utils.FlinkTestBase;
+import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.lake.committer.LakeCommitResult;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
@@ -33,9 +35,11 @@ import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.io.IOException;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -205,6 +209,38 @@ class FlussTableLakeSnapshotCommitterTest extends FlinkTestBase {
                 JsonSerdeUtils.readValue(jsonBytes, LakeTableSnapshotLegacyJsonSerde.INSTANCE);
         assertThat(lakeTableSnapshot.getSnapshotId()).isEqualTo(snapshotId);
         assertThat(lakeTableSnapshot.getBucketLogEndOffset()).isEqualTo(logEndOffsets);
+    }
+
+    @Test
+    void testPrepareLakeSnapshotSurfacesServerError() throws Exception {
+        TablePath tablePath = TablePath.of("fluss", "test_prepare_error");
+        Tuple2<Long, Collection<Long>> tableIdAndPartitions = createTable(tablePath, false);
+        long tableId = tableIdAndPartitions.f0;
+        Map<TableBucket, Long> offsets = mockLogEndOffsets(tableId, tableIdAndPartitions.f1);
+
+        String offsetsPath =
+                flussTableLakeSnapshotCommitter.prepareLakeSnapshot(tableId, tablePath, offsets);
+        flussTableLakeSnapshotCommitter.commit(
+                tableId,
+                1L,
+                offsetsPath,
+                null,
+                Collections.emptyMap(),
+                Collections.emptyMap(),
+                null);
+
+        // delete that file so the server's merge-read fails on the next prepare
+        FsPath offsetsFile = new FsPath(offsetsPath);
+        offsetsFile.getFileSystem().delete(offsetsFile, false);
+
+        assertThatThrownBy(
+                        () ->
+                                flussTableLakeSnapshotCommitter.prepareLakeSnapshot(
+                                        tableId, tablePath, offsets))
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("Fail to prepare commit table lake snapshot")
+                .rootCause()
+                .isInstanceOf(ApiException.class);
     }
 
     private Map<TableBucket, Long> mockLogEndOffsets(long tableId, Collection<Long> partitionsIds) {

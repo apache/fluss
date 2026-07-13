@@ -73,6 +73,9 @@ public class ProcedureManager {
         SET_CLUSTER_CONFIGS("sys.set_cluster_configs", SetClusterConfigsProcedure.class),
         GET_CLUSTER_CONFIGS("sys.get_cluster_configs", GetClusterConfigsProcedure.class),
         RESET_CLUSTER_CONFIGS("sys.reset_cluster_configs", ResetClusterConfigsProcedure.class),
+        APPEND_CLUSTER_CONFIGS("sys.append_cluster_configs", AppendClusterConfigsProcedure.class),
+        SUBTRACT_CLUSTER_CONFIGS(
+                "sys.subtract_cluster_configs", SubtractClusterConfigsProcedure.class),
         ADD_SERVER_TAG("sys.add_server_tag", AddServerTagProcedure.class),
         REMOVE_SERVER_TAG("sys.remove_server_tag", RemoveServerTagProcedure.class),
         REBALANCE("sys.rebalance", RebalanceProcedure.class),

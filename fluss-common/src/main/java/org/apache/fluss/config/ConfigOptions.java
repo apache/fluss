@@ -221,6 +221,17 @@ public class ConfigOptions {
                                             + "TableLifecycleThrottler scans in-flight drops for "
                                             + "timeouts.");
 
+    public static final ConfigOption<Duration> COORDINATOR_OFFLINE_LEADER_RETRY_DELAY =
+            key("coordinator.offline-leader.retry-delay")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(1))
+                    .withDescription(
+                            "The delay before the coordinator retries offline leaders on live "
+                                    + "tablet servers after they are marked offline. This lets a "
+                                    + "leader that was rejected because of temporary tablet-server "
+                                    + "conditions, such as disk write protection, become electable "
+                                    + "again after recovery.");
+
     public static final ConfigOption<Boolean> LOG_TABLE_ALLOW_CREATION =
             key("allow.create.log.tables")
                     .booleanType()
@@ -287,13 +298,26 @@ public class ConfigOptions {
                                     + "and each super user should be specified in the format `principal_type:principal_name`, e.g., `User:admin;User:bob`. "
                                     + "This configuration is critical for defining administrative privileges in the system.");
 
+    public static final ConfigOption<Boolean> SECURITY_ACL_PRINCIPAL_IGNORE_CASE =
+            key("security.acl.principal.ignore-case")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to perform case-insensitive matching on principal name and type "
+                                    + "during ACL authorization checks. When set to true, principals "
+                                    + "such as 'User:Admin' and 'user:admin' will be treated as the same principal. "
+                                    + "Default is false for strict case-sensitive matching.");
+
     public static final ConfigOption<Integer> MAX_BUCKET_NUM =
             key("max.bucket.num")
                     .intType()
-                    .defaultValue(128000)
+                    .defaultValue(4096)
                     .withDescription(
-                            "The maximum number of buckets that can be created for a table."
-                                    + "The default value is 128000");
+                            "The maximum number of buckets that can be created for a non-partitioned table "
+                                    + "or for each partition of a partitioned table. "
+                                    + "The default value is 4096. "
+                                    + "This default is capped to reduce the risk that an assignment znode exceeds "
+                                    + "ZooKeeper's packet size limit.");
 
     /**
      * The network address and port the server binds to for accepting connections.
@@ -518,6 +542,26 @@ public class ConfigOptions {
                                     + "The format is `listenerName1:protocol1,listenerName2:protocol2`, e.g., `INTERNAL:PLAINTEXT,CLIENT:GSSAPI`. "
                                     + "Each listener can be associated with a specific authentication protocol. "
                                     + "Listeners not included in the map will use PLAINTEXT by default, which does not require authentication.");
+
+    public static final ConfigOption<Map<String, String>> SERVER_SASL_CREDENTIALS =
+            key("security.sasl.plain.credentials")
+                    .mapType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Map of user credentials for SASL/PLAIN authentication in 'username:password' format. "
+                                    + "For example: 'admin:admin-secret,bob:bob-secret'. "
+                                    + "This is syntactic sugar that auto-generates the JAAS config string.");
+
+    public static final ConfigOption<String> SERVER_SASL_PLAIN_JAAS_CONFIG =
+            key("security.sasl.plain.jaas.config")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "JAAS configuration string for server-side SASL/PLAIN authentication. "
+                                    + "The value should use PlainLoginModule and define users with "
+                                    + "'user_<username>=\"<password>\"' options. This option is generated "
+                                    + "from 'security.sasl.plain.credentials' when that credential map is set, "
+                                    + "and can also be configured directly for compatibility.");
 
     public static final ConfigOption<Integer> TABLET_SERVER_ID =
             key("tablet-server.id")
@@ -828,6 +872,15 @@ public class ConfigOptions {
                                     + "fsync of data written to the log. For example if this was set to 1, "
                                     + "we would fsync after every message; if it were 5 we would fsync after every "
                                     + "five messages.");
+
+    public static final ConfigOption<Duration> LOG_FLUSH_OFFSET_CHECKPOINT_INTERVAL =
+            key("log.flush.offset.checkpoint-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofSeconds(60))
+                    .withDescription(
+                            "The frequency with which we update the persistent record of the last "
+                                    + "flush which acts as the log recovery point. The default "
+                                    + "setting is 60 seconds.");
 
     public static final ConfigOption<Duration> LOG_REPLICA_HIGH_WATERMARK_CHECKPOINT_INTERVAL =
             key("log.replica.high-watermark.checkpoint-interval")
@@ -2170,6 +2223,24 @@ public class ConfigOptions {
                             .defaultValue(Duration.ofSeconds(10))
                             .withDescription(
                                     "The interval of pushing metrics to Prometheus PushGateway.");
+
+    public static final ConfigOption<String> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_USERNAME =
+            key("metrics.reporter.prometheus-push.username")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The username for Basic Auth of the Prometheus PushGateway. "
+                                    + "Leave it unset to disable authentication.");
+
+    public static final ConfigOption<Password> METRICS_REPORTER_PROMETHEUS_PUSHGATEWAY_PASSWORD =
+            key("metrics.reporter.prometheus-push.password")
+                    .passwordType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The password for Basic Auth of the Prometheus PushGateway. "
+                                    + "Only takes effect when username is configured. "
+                                    + "The value is automatically redacted when the configuration "
+                                    + "is logged or displayed.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for jmx reporter

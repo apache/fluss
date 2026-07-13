@@ -772,33 +772,28 @@ public final class FlussClusterExtension
     }
 
     private Long triggerSnapshot(TableBucket tableBucket) {
-        Long snapshotId = null;
-        Long nextSnapshotId = null;
         for (TabletServer ts : tabletServers.values()) {
             ReplicaManager.HostedReplica replica = ts.getReplicaManager().getReplica(tableBucket);
             if (replica instanceof ReplicaManager.OnlineReplica) {
                 Replica r = ((ReplicaManager.OnlineReplica) replica).getReplica();
                 PeriodicSnapshotManager kvSnapshotManager = r.getKvSnapshotManager();
                 if (r.isLeader() && kvSnapshotManager != null) {
-                    snapshotId = kvSnapshotManager.currentSnapshotId();
+                    long snapshotId = kvSnapshotManager.currentSnapshotId();
+                    // KvTablet#getGuardedExecutor runs the submitted task synchronously
+                    // on the calling thread inside the kv write lock, so initSnapshot()
+                    // has already completed by the time triggerSnapshot() returns. The
+                    // counter is either bumped (a new snapshot was scheduled) or left
+                    // unchanged (no new data since the last snapshot — legitimate no-op).
                     kvSnapshotManager.triggerSnapshot();
-                    nextSnapshotId = kvSnapshotManager.currentSnapshotId();
-                    break;
+                    if (kvSnapshotManager.currentSnapshotId() > snapshotId) {
+                        return snapshotId;
+                    }
+                    return null;
                 }
             }
         }
-
-        if (snapshotId != null) {
-            if (nextSnapshotId > snapshotId) {
-                // only there is a new snapshot triggered, we return the snapshot id
-                return snapshotId;
-            } else {
-                return null;
-            }
-        } else {
-            fail("No KV snapshot manager found for table bucket " + tableBucket);
-            return null;
-        }
+        fail("No KV snapshot manager found for table bucket " + tableBucket);
+        return null;
     }
 
     public CompletedSnapshot waitUntilSnapshotFinished(TableBucket tableBucket, long snapshotId) {
@@ -1006,6 +1001,8 @@ public final class FlussClusterExtension
             clusterConf.set(
                     ConfigOptions.COORDINATOR_LIFECYCLE_THROTTLER_TIMEOUT_CHECK_INTERVAL,
                     Duration.ofSeconds(1));
+            // Set a high data disk write limit ratio to avoid disk write limit when testing
+            clusterConf.set(ConfigOptions.SERVER_DATA_DISK_WRITE_LIMIT_RATIO, 0.99);
         }
 
         /** Sets the number of tablet servers. */

@@ -88,6 +88,7 @@ import org.apache.fluss.server.coordinator.event.RebalanceEvent;
 import org.apache.fluss.server.coordinator.event.RebalanceTaskTimeoutEvent;
 import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
 import org.apache.fluss.server.coordinator.event.ResumeDropEvent;
+import org.apache.fluss.server.coordinator.event.RetryOfflineLeaderEvent;
 import org.apache.fluss.server.coordinator.event.SchemaChangeEvent;
 import org.apache.fluss.server.coordinator.event.TableRegistrationChangeEvent;
 import org.apache.fluss.server.coordinator.event.watcher.CoordinatorChangeWatcher;
@@ -126,6 +127,7 @@ import org.apache.fluss.server.zk.data.lake.LakeTableSnapshot;
 import org.apache.fluss.utils.AutoPartitionStrategy;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
+import org.apache.fluss.utils.concurrent.Scheduler;
 import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
@@ -146,6 +148,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
@@ -188,8 +191,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final String internalListenerName;
     private final CoordinatorMetricGroup coordinatorMetricGroup;
     private final RebalanceManager rebalanceManager;
+    private final Scheduler scheduler;
+    private final long offlineLeaderRetryDelayMs;
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
     private final LakeTableHelper lakeTableHelper;
+    private ScheduledFuture<?> offlineLeaderRetryTask;
 
     public CoordinatorEventProcessor(
             ZooKeeperClient zooKeeperClient,
@@ -203,6 +209,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
             ExecutorService ioExecutor,
             MetadataManager metadataManager,
             KvSnapshotLeaseManager kvSnapshotLeaseManager,
+            Scheduler scheduler,
             Clock clock) {
         this.zooKeeperClient = zooKeeperClient;
         this.serverMetadataCache = serverMetadataCache;
@@ -262,6 +269,16 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.rebalanceManager =
                 new RebalanceManager(
                         this, zooKeeperClient, coordinatorEventManager, SystemClock.getInstance());
+        this.offlineLeaderRetryDelayMs =
+                conf.get(ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY).toMillis();
+        if (offlineLeaderRetryDelayMs <= 0) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "%s must be positive, but was %d ms.",
+                            ConfigOptions.COORDINATOR_OFFLINE_LEADER_RETRY_DELAY.key(),
+                            offlineLeaderRetryDelayMs));
+        }
+        this.scheduler = scheduler;
         this.ioExecutor = ioExecutor;
         this.lakeTableHelper =
                 new LakeTableHelper(zooKeeperClient, conf.getString(ConfigOptions.REMOTE_DATA_DIR));
@@ -282,6 +299,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
     @VisibleForTesting
     TableLifecycleThrottler getLifecycleThrottler() {
         return lifecycleThrottler;
+    }
+
+    @VisibleForTesting
+    boolean hasOfflineLeaderRetryTaskScheduled() {
+        return offlineLeaderRetryTask != null;
     }
 
     public void startup() {
@@ -325,6 +347,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     public void shutdown() {
+        clearOfflineLeaderRetryTask();
         // close the event manager
         coordinatorEventManager.close();
         rebalanceManager.close();
@@ -587,6 +610,39 @@ public class CoordinatorEventProcessor implements EventProcessor {
         tabletServerChangeWatcher.stop();
     }
 
+    private void scheduleOfflineLeaderRetryIfNeeded() {
+        if (offlineLeaderRetryTask != null) {
+            return;
+        }
+
+        // Keep CoordinatorContext access on the coordinator event thread. The scheduled task only
+        // enqueues a retry event.
+        Set<TableBucketReplica> retryableOfflineReplicas =
+                retryableOfflineReplicasOnLiveTabletServers();
+        if (retryableOfflineReplicas.isEmpty()) {
+            return;
+        }
+
+        offlineLeaderRetryTask =
+                scheduler.scheduleOnce(
+                        "offline-leader-retry",
+                        this::enqueueRetryOfflineLeaderEventSafely,
+                        offlineLeaderRetryDelayMs);
+        LOG.info(
+                "Offline leader retry task scheduled after {} ms for {} replicas: {}.",
+                offlineLeaderRetryDelayMs,
+                retryableOfflineReplicas.size(),
+                retryableOfflineReplicas);
+    }
+
+    private void enqueueRetryOfflineLeaderEventSafely() {
+        try {
+            coordinatorEventManager.put(new RetryOfflineLeaderEvent());
+        } catch (Throwable t) {
+            LOG.warn("Failed to enqueue retry offline leader event.", t);
+        }
+    }
+
     @Override
     public void process(CoordinatorEvent event) {
         if (event instanceof CreateTableEvent) {
@@ -605,6 +661,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         } else if (event instanceof NotifyLeaderAndIsrResponseReceivedEvent) {
             processNotifyLeaderAndIsrResponseReceivedEvent(
                     (NotifyLeaderAndIsrResponseReceivedEvent) event);
+        } else if (event instanceof RetryOfflineLeaderEvent) {
+            processRetryOfflineLeader();
         } else if (event instanceof DeleteReplicaResponseReceivedEvent) {
             processDeleteReplicaResponseReceived((DeleteReplicaResponseReceivedEvent) event);
         } else if (event instanceof NewCoordinatorEvent) {
@@ -699,6 +757,56 @@ public class CoordinatorEventProcessor implements EventProcessor {
             processAccessContext(accessContextEvent);
         } else {
             LOG.warn("Unknown event type: {}", event.getClass().getName());
+        }
+    }
+
+    private void processRetryOfflineLeader() {
+        // This event consumes the currently scheduled one-shot retry. If the NotifyLeaderAndIsr
+        // request sent below is rejected by the target tablet server again, its response handler
+        // will call onReplicaBecomeOffline(), put the offline marker back, and schedule the next
+        // one-shot retry.
+        clearOfflineLeaderRetryTask();
+        Set<TableBucketReplica> offlineReplicas = retryableOfflineReplicasOnLiveTabletServers();
+
+        if (offlineReplicas.isEmpty()) {
+            return;
+        }
+
+        LOG.info(
+                "Retrying {} offline replicas on live tablet servers before triggering "
+                        + "offline leader election: {}.",
+                offlineReplicas.size(),
+                offlineReplicas);
+
+        // replicasOnOffline is checked by CoordinatorContext#isReplicaOnline and therefore also
+        // by leader election. Remove the marker before probing the live server again; if the
+        // server still cannot become leader, NotifyLeaderAndIsr will fail and the replica will be
+        // put back to OfflineReplica. TODO: once standby replicas maintain local KV snapshots,
+        // distinguish standby promotion from fresh snapshot download when retrying KV leaders.
+        for (TableBucketReplica offlineReplica : offlineReplicas) {
+            coordinatorContext.removeOfflineBucketInServer(
+                    offlineReplica.getTableBucket(), offlineReplica.getReplica());
+        }
+
+        replicaStateMachine.handleStateChanges(offlineReplicas, OnlineReplica);
+        tableBucketStateMachine.triggerOnlineBucketStateChange();
+    }
+
+    private Set<TableBucketReplica> retryableOfflineReplicasOnLiveTabletServers() {
+        // offlineReplicasOnLiveTabletServers() returns replicas from replicasOnOffline, which is
+        // only a leader-election exclusion marker. The replica state may have changed after the
+        // marker was added, for example because deletion or migration started. Retry only replicas
+        // that are still OfflineReplica in the state machine.
+        return coordinatorContext.offlineReplicasOnLiveTabletServers().stream()
+                .filter(replica -> !coordinatorContext.isToBeDeleted(replica.getTableBucket()))
+                .filter(replica -> coordinatorContext.getReplicaState(replica) == OfflineReplica)
+                .collect(Collectors.toSet());
+    }
+
+    private void clearOfflineLeaderRetryTask() {
+        if (offlineLeaderRetryTask != null) {
+            offlineLeaderRetryTask.cancel(false);
+            offlineLeaderRetryTask = null;
         }
     }
 
@@ -1087,7 +1195,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // server to acknowledge the leader change before proceeding to the next migration.
         for (NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket :
                 notifyLeaderAndIsrResultForBuckets) {
-            tryToCompleteRebalanceTask(notifyLeaderAndIsrResultForBucket.getTableBucket());
+            tryToCompleteRebalanceTask(notifyLeaderAndIsrResultForBucket, serverId);
         }
     }
 
@@ -1122,6 +1230,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // kafka, todo: but we may need to select another tablet server to put
         // replica
         replicaStateMachine.handleStateChanges(offlineReplicas, OfflineReplica);
+        scheduleOfflineLeaderRetryIfNeeded();
     }
 
     private void processNewCoordinator(NewCoordinatorEvent newCoordinatorEvent) {
@@ -1499,7 +1608,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
     }
 
     /** try to finish rebalance tasks after receive notify leader and isr response. */
-    private void tryToCompleteRebalanceTask(TableBucket tableBucket) {
+    private void tryToCompleteRebalanceTask(
+            NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket,
+            int responseServerId) {
+        TableBucket tableBucket = notifyLeaderAndIsrResultForBucket.getTableBucket();
         RebalancePlanForBucket planForBucket =
                 rebalanceManager.getRebalancePlanForBucket(tableBucket);
         if (planForBucket != null) {
@@ -1508,6 +1620,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
                             planForBucket.getOriginReplicas(), planForBucket.getNewReplicas());
             try {
                 if (planForBucket.isLeaderChanged() && !reassignment.isBeingReassigned()) {
+                    if (!isSuccessfulLeaderOnlyRebalanceResponseFromNewLeader(
+                            notifyLeaderAndIsrResultForBucket, responseServerId, planForBucket)) {
+                        return;
+                    }
                     LeaderAndIsr leaderAndIsr = zooKeeperClient.getLeaderAndIsr(tableBucket).get();
                     int currentLeader = leaderAndIsr.leader();
                     if (currentLeader == planForBucket.getNewLeader()) {
@@ -1515,16 +1631,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         rebalanceManager.finishRebalanceTask(
                                 tableBucket, RebalanceStatus.COMPLETED);
                     }
-                } else {
-                    boolean isReassignmentComplete =
-                            isReassignmentComplete(tableBucket, reassignment);
-                    if (isReassignmentComplete) {
-                        LOG.info(
-                                "Target replicas {} have all caught up with the leader for reassigning bucket {}",
-                                reassignment.getTargetReplicas(),
-                                tableBucket);
-                        onBucketReassignment(tableBucket, reassignment, true);
-                    }
+                } else if (notifyLeaderAndIsrResultForBucket.succeeded()) {
+                    tryToCompleteReassignmentTask(tableBucket, reassignment);
                 }
             } catch (Exception e) {
                 LOG.error(
@@ -1532,6 +1640,47 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 rebalanceManager.finishRebalanceTask(tableBucket, RebalanceStatus.FAILED);
             }
         }
+    }
+
+    private void tryToCompleteRebalanceTaskOnLeaderAndIsrChange(TableBucket tableBucket) {
+        RebalancePlanForBucket planForBucket =
+                rebalanceManager.getRebalancePlanForBucket(tableBucket);
+        if (planForBucket != null) {
+            ReplicaReassignment reassignment =
+                    ReplicaReassignment.build(
+                            planForBucket.getOriginReplicas(), planForBucket.getNewReplicas());
+            if (planForBucket.isLeaderChanged() && !reassignment.isBeingReassigned()) {
+                return;
+            }
+            try {
+                tryToCompleteReassignmentTask(tableBucket, reassignment);
+            } catch (Exception e) {
+                LOG.error(
+                        "Failed to complete the reassignment for table bucket {}", tableBucket, e);
+                rebalanceManager.finishRebalanceTask(tableBucket, RebalanceStatus.FAILED);
+            }
+        }
+    }
+
+    private void tryToCompleteReassignmentTask(
+            TableBucket tableBucket, ReplicaReassignment reassignment) throws Exception {
+        boolean isReassignmentComplete = isReassignmentComplete(tableBucket, reassignment);
+        if (isReassignmentComplete) {
+            LOG.info(
+                    "Target replicas {} have all caught up with the leader for reassigning bucket {}",
+                    reassignment.getTargetReplicas(),
+                    tableBucket);
+            onBucketReassignment(tableBucket, reassignment, true);
+        }
+    }
+
+    @VisibleForTesting
+    static boolean isSuccessfulLeaderOnlyRebalanceResponseFromNewLeader(
+            NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket,
+            int responseServerId,
+            RebalancePlanForBucket planForBucket) {
+        return notifyLeaderAndIsrResultForBucket.succeeded()
+                && responseServerId == planForBucket.getNewLeader();
     }
 
     /**
@@ -1825,7 +1974,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         newLeaderAndIsrList.forEach(coordinatorContext::putBucketLeaderAndIsr);
 
         // First, try to judge whether the bucket is in rebalance task when isr change.
-        newLeaderAndIsrList.keySet().forEach(this::tryToCompleteRebalanceTask);
+        newLeaderAndIsrList.keySet().forEach(this::tryToCompleteRebalanceTaskOnLeaderAndIsrChange);
 
         // TODO update metadata for all alive tablet servers.
 

@@ -103,9 +103,9 @@ We have listed them in the table below the figure.
                 Fluss uses file systems as remote storage to store snapshots for Primary-Key Table and store tiered log segments for Log Table.
             </td>
             <td>
-            <li>[HDFS](maintenance/filesystems/hdfs.md)</li>
-            <li>[Aliyun OSS](maintenance/filesystems/oss.md)</li>
-            <li>[Amazon S3](maintenance/filesystems/s3.md)</li>
+            <li>[HDFS](../maintenance/tiered-storage/filesystems/hdfs.md)</li>
+            <li>[Aliyun OSS](../maintenance/tiered-storage/filesystems/oss.md)</li>
+            <li>[Amazon S3](../maintenance/tiered-storage/filesystems/s3.md)</li>
             </td>
         </tr>
         <tr>
@@ -116,9 +116,9 @@ We have listed them in the table below the figure.
                by query engines such as Flink, Spark, StarRocks, Trino.
             </td>
             <td>
-                <li>[Paimon](streaming-lakehouse/integrate-data-lakes/formats/paimon.md)</li>
-                <li>[Iceberg](streaming-lakehouse/integrate-data-lakes/formats/iceberg.md)</li>
-                <li>[Lance](streaming-lakehouse/integrate-data-lakes/formats/lance.md)</li>
+                <li>[Paimon](../streaming-lakehouse/datalake-formats/paimon.md)</li>
+                <li>[Iceberg](../streaming-lakehouse/datalake-formats/iceberg.md)</li>
+                <li>[Lance](../streaming-lakehouse/datalake-formats/lance.md)</li>
             </td>
         </tr>
         <tr>
@@ -129,6 +129,8 @@ We have listed them in the table below the figure.
             <td>
                <li>[JMX](maintenance/observability/metric-reporters.md#jmx)</li>
                <li>[Prometheus](maintenance/observability/metric-reporters.md#prometheus)</li>
+               <li>[PrometheusPushGateway](maintenance/observability/metric-reporters.md#prometheuspushgateway)</li>
+               <li>[InfluxDB](maintenance/observability/metric-reporters.md#influxdb)</li>
             </td>
         </tr>
     </tbody>

@@ -1,0 +1,44 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+module(name = "fluss_cpp_consumer_system")
+
+bazel_dep(name = "rules_cc", version = "0.2.14")
+bazel_dep(name = "fluss-cpp", version = "0.1.0")
+
+# Repository-local example path (repository root containing `bindings/cpp`).
+# If you copy this example out of tree, replace this with an absolute path
+# (for example: /path/to/fluss-rust).
+local_path_override(
+    module_name = "fluss-cpp",
+    path = "../../../../../",
+)
+
+# Intended interface for preinstalled protoc + Arrow C++ environments.
+fluss_cpp = use_extension("@fluss-cpp//bindings/cpp/bazel/cpp:deps.bzl", "cpp_sdk")
+fluss_cpp.config(
+    mode = "system",
+    protobuf_version = "3.25.5",
+    arrow_cpp_version = "19.0.1",
+    # Adjust these paths for your environment.
+    # Ubuntu 22.04 (apt / custom package) commonly uses lib/x86_64-linux-gnu.
+    system_arrow_prefix = "/usr",
+    system_arrow_include_dir = "include",
+    system_arrow_shared_library = "lib/x86_64-linux-gnu/libarrow.so",
+    system_arrow_runtime_glob = "lib/x86_64-linux-gnu/libarrow.so*",
+)
+use_repo(fluss_cpp, "apache_arrow_cpp")
