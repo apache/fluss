@@ -68,11 +68,20 @@ public class DynamicConfigManager {
     public void startup() throws Exception {
         try {
             configChangeListener.start();
-            Map<String, String> entityConfigs = zooKeeperClient.fetchEntityConfig();
-            dynamicServerConfig.updateDynamicConfig(entityConfigs, true);
+            refreshFromZooKeeper();
         } catch (Exception e) {
             LOG.error("Failed to update dynamic configs from zookeeper", e);
         }
+    }
+
+    /**
+     * Refresh dynamic configurations from ZooKeeper and notify registered reconfigurables.
+     *
+     * @throws Exception if the configurations cannot be fetched or applied
+     */
+    public void refreshFromZooKeeper() throws Exception {
+        Map<String, String> entityConfigs = zooKeeperClient.fetchEntityConfig();
+        dynamicServerConfig.updateDynamicConfig(entityConfigs, true);
     }
 
     /** Register a ServerReconfigurable which listens to configuration changes. */
@@ -349,8 +358,7 @@ public class DynamicConfigManager {
                         "Config change notification of this version is only empty");
             }
 
-            Map<String, String> entityConfig = zooKeeperClient.fetchEntityConfig();
-            dynamicServerConfig.updateDynamicConfig(entityConfig, true);
+            refreshFromZooKeeper();
         }
     }
 }

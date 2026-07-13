@@ -23,14 +23,20 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.cluster.AlterConfigOpType;
+import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.NotCoordinatorLeaderException;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
+import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
+import org.apache.fluss.rpc.messages.DescribeClusterConfigsResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
@@ -40,6 +46,7 @@ import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.ZkData.ConfigZNode;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.Watcher;
@@ -121,6 +128,7 @@ class CoordinatorHighAvailabilityITCase {
         if (rpcClient != null) {
             rpcClient.close();
         }
+        ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupPath(ConfigZNode.path());
     }
 
     @Test
@@ -220,6 +228,63 @@ class CoordinatorHighAvailabilityITCase {
 
         verifyServerIsLeader(leader, "test_reentrant_db_3");
         createGatewayForServer(leader).metadata(new MetadataRequest()).get();
+    }
+
+    @Test
+    void testDynamicConfigsRefreshedAfterFailover() throws Exception {
+        coordinatorServer1 = new CoordinatorServer(createConfiguration());
+        coordinatorServer2 = new CoordinatorServer(createConfiguration());
+
+        coordinatorServer1.start();
+        coordinatorServer2.start();
+
+        waitUntilCoordinatorServerElected();
+        CoordinatorAddress firstLeaderAddress = zookeeperClient.getCoordinatorLeaderAddress().get();
+        CoordinatorServer leader = findServerById(firstLeaderAddress.getId());
+        CoordinatorServer standby = findServerByNotId(firstLeaderAddress.getId());
+        assertThat(leader).isNotNull();
+        assertThat(standby).isNotNull();
+
+        AlterClusterConfigsRequest alterRequest = new AlterClusterConfigsRequest();
+        alterRequest
+                .addAlterConfig()
+                .setConfigKey(ConfigOptions.DATALAKE_ENABLED.key())
+                .setConfigValue("false")
+                .setOpType(AlterConfigOpType.SET.value());
+        alterRequest
+                .addAlterConfig()
+                .setConfigKey(ConfigOptions.DATALAKE_FORMAT.key())
+                .setConfigValue(DataLakeFormat.PAIMON.toString())
+                .setOpType(AlterConfigOpType.SET.value());
+        createGatewayForServer(leader).alterClusterConfigs(alterRequest).get();
+
+        assertThat(zookeeperClient.fetchEntityConfig())
+                .containsEntry(ConfigOptions.DATALAKE_ENABLED.key(), "false")
+                .containsEntry(
+                        ConfigOptions.DATALAKE_FORMAT.key(), DataLakeFormat.PAIMON.toString());
+
+        killZkSession(leader);
+        waitUntilNewLeaderElected(leader.getServerId());
+        assertThat(zookeeperClient.getCoordinatorLeaderAddress().get().getId())
+                .isEqualTo(standby.getServerId());
+
+        DescribeClusterConfigsResponse response =
+                createGatewayForServer(standby)
+                        .describeClusterConfigs(new DescribeClusterConfigsRequest())
+                        .get();
+        assertThat(response.getConfigsList())
+                .anyMatch(
+                        config ->
+                                ConfigOptions.DATALAKE_FORMAT.key().equals(config.getConfigKey())
+                                        && config.hasConfigValue()
+                                        && DataLakeFormat.PAIMON
+                                                .toString()
+                                                .equals(config.getConfigValue())
+                                        && ConfigEntry.ConfigSource.DYNAMIC_SERVER_CONFIG
+                                                .name()
+                                                .equals(config.getConfigSource()));
+        assertThat(standby.getCoordinatorService().getDataLakeFormat())
+                .isEqualTo(DataLakeFormat.PAIMON);
     }
 
     @Test

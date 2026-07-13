@@ -314,6 +314,7 @@ public class CoordinatorServer extends ServerBase {
     protected void initCoordinatorLeader() throws Exception {
         // to avoid split-brain
         ZkEpoch zkEpoch = zkClient.fenceBecomeCoordinatorLeader(serverId);
+        dynamicConfigManager.refreshFromZooKeeper();
         registerCoordinatorLeader();
 
         synchronized (lock) {
