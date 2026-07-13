@@ -95,6 +95,7 @@ class TableBucketStateMachineTest {
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
     private CoordinatorRequestBatch coordinatorRequestBatch;
     private AutoPartitionManager autoPartitionManager;
+    private ReplicaCapacityController replicaCapacityController;
     private LakeTableTieringManager lakeTableTieringManager;
     private CoordinatorMetadataCache serverMetadataCache;
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
@@ -125,6 +126,9 @@ class TableBucketStateMachineTest {
                         },
                         coordinatorContext);
         serverMetadataCache = new CoordinatorMetadataCache();
+        replicaCapacityController =
+                new ReplicaCapacityController(
+                        conf, serverMetadataCache, TestingMetricGroups.COORDINATOR_METRICS);
         autoPartitionManager =
                 new AutoPartitionManager(
                         serverMetadataCache,
@@ -134,10 +138,7 @@ class TableBucketStateMachineTest {
                                 new LakeCatalogDynamicLoader(new Configuration(), null, true)),
                         new RemoteDirDynamicLoader(conf),
                         conf,
-                        new ReplicaCapacityController(
-                                conf,
-                                serverMetadataCache,
-                                TestingMetricGroups.COORDINATOR_METRICS));
+                        replicaCapacityController);
         lakeTableTieringManager =
                 new LakeTableTieringManager(TestingMetricGroups.LAKE_TIERING_METRICS);
 
@@ -321,6 +322,7 @@ class TableBucketStateMachineTest {
                                         new Configuration(),
                                         TestingClientMetricGroup.newInstance())),
                         coordinatorContext,
+                        replicaCapacityController,
                         autoPartitionManager,
                         lakeTableTieringManager,
                         TestingMetricGroups.COORDINATOR_METRICS,

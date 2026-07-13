@@ -650,7 +650,7 @@ class AutoPartitionManagerTest {
     }
 
     @Test
-    void testAutoCreatePartitionReservesKvLeaderReplicaCapacity() throws Exception {
+    void testAutoCreatePartitionChecksCapacityWithoutReservation() throws Exception {
         ZonedDateTime startTime =
                 LocalDateTime.parse("2025-04-26T00:00:00").atZone(ZoneId.systemDefault());
         ManualClock clock = new ManualClock(startTime.toInstant().toEpochMilli());
@@ -675,12 +675,14 @@ class AutoPartitionManagerTest {
 
         Map<String, PartitionRegistration> partitions =
                 zookeeperClient.getPartitionRegistrations(tablePath);
-        assertThat(partitions.keySet()).containsExactly("2025042600");
-        assertThat(capacityController.getKvLeaderReplicaCount()).isEqualTo(table.getNumBuckets());
+        // This unit test has no coordinator event thread to publish the created partition buckets
+        // back as observed state, so both best-effort checks pass without reserving capacity.
+        assertThat(partitions.keySet()).containsExactlyInAnyOrder("2025042600", "2025042601");
+        assertThat(capacityController.getKvLeaderReplicaCount()).isZero();
     }
 
     @Test
-    void testAutoDropPartitionReleasesKvLeaderReplicaCapacity() throws Exception {
+    void testAutoDropPartitionDoesNotMutateObservedKvLeaderReplicaCount() throws Exception {
         ZonedDateTime startTime =
                 LocalDateTime.parse("2025-04-26T00:00:00").atZone(ZoneId.systemDefault());
         ManualClock clock = new ManualClock(startTime.toInstant().toEpochMilli());
@@ -718,7 +720,7 @@ class AutoPartitionManagerTest {
                 false);
         autoPartitionManager.addPartition(table.getTableId(), "2025042600");
         autoPartitionManager.addPartition(table.getTableId(), "2025042601");
-        capacityController.checkAndIncreaseKvLeaderReplicaCount((long) table.getNumBuckets() * 2);
+        capacityController.updateObservedKvLeaderReplicaCount((long) table.getNumBuckets() * 2);
 
         clock.advanceTime(Duration.ofHours(2));
         periodicExecutor.triggerPeriodicScheduledTasks();
@@ -726,7 +728,8 @@ class AutoPartitionManagerTest {
         Map<String, PartitionRegistration> partitions =
                 zookeeperClient.getPartitionRegistrations(tablePath);
         assertThat(partitions.keySet()).containsExactly("2025042601");
-        assertThat(capacityController.getKvLeaderReplicaCount()).isEqualTo(table.getNumBuckets());
+        assertThat(capacityController.getKvLeaderReplicaCount())
+                .isEqualTo((long) table.getNumBuckets() * 2);
     }
 
     @Test

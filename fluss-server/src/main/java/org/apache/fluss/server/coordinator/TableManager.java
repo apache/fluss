@@ -165,6 +165,10 @@ public class TableManager {
                 "New table buckets: {} for table {}.",
                 tableBuckets,
                 coordinatorContext.getTablePathById(tableId));
+        TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
+        if (tableInfo != null && tableInfo.hasPrimaryKey()) {
+            coordinatorContext.addKvBuckets(tableBuckets);
+        }
         // first, we transmit it to state NewBucket
         tableBucketStateMachine.handleStateChange(tableBuckets, BucketState.NewBucket);
         // then get all the replicas of the all table buckets
@@ -182,7 +186,7 @@ public class TableManager {
         Set<TableBucket> tableBuckets = coordinatorContext.getAllBucketsForTable(tableId);
         tableBucketStateMachine.handleStateChange(tableBuckets, BucketState.OfflineBucket);
         tableBucketStateMachine.handleStateChange(tableBuckets, BucketState.NonExistentBucket);
-        onDeleteTableBucket(coordinatorContext.getAllReplicasForTable(tableId));
+        onDeleteTableBucket(tableBuckets, coordinatorContext.getAllReplicasForTable(tableId));
     }
 
     /** Invoked with partitions of a table to be deleted. */
@@ -191,7 +195,8 @@ public class TableManager {
                 coordinatorContext.getAllBucketsForPartition(tableId, partitionId);
         tableBucketStateMachine.handleStateChange(deleteBuckets, BucketState.OfflineBucket);
         tableBucketStateMachine.handleStateChange(deleteBuckets, BucketState.NonExistentBucket);
-        onDeleteTableBucket(coordinatorContext.getAllReplicasForPartition(tableId, partitionId));
+        onDeleteTableBucket(
+                deleteBuckets, coordinatorContext.getAllReplicasForPartition(tableId, partitionId));
     }
 
     /**
@@ -207,7 +212,9 @@ public class TableManager {
      * with delete=true which will delete all persistent data from all the replicas of the all the
      * respective buckets.
      */
-    private void onDeleteTableBucket(Set<TableBucketReplica> allReplicas) {
+    private void onDeleteTableBucket(
+            Set<TableBucket> tableBuckets, Set<TableBucketReplica> allReplicas) {
+        coordinatorContext.removeKvBuckets(tableBuckets);
         // to offline, send stop replica to all followers that are not in the OfflineReplica state
         // so they stop sending fetch requests to the leader
         replicaStateMachine.handleStateChanges(allReplicas, ReplicaState.OfflineReplica);

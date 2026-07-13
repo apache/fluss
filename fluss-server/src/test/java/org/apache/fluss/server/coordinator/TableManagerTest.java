@@ -181,6 +181,7 @@ class TableManagerTest {
                         System.currentTimeMillis()));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, assignment);
 
+        assertThat(coordinatorContext.getKvBucketCount()).isZero();
         // all replica should be online
         checkReplicaOnline(tableId, null, assignment);
         // clear the assignment for the table
@@ -204,10 +205,12 @@ class TableManagerTest {
                         System.currentTimeMillis(),
                         System.currentTimeMillis()));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH_PK, tableId, assignment);
+        assertThat(coordinatorContext.getKvBucketCount()).isEqualTo(assignment.getBuckets().size());
 
         // now, delete the created table
         coordinatorContext.queueTableDeletion(Collections.singleton(tableId));
         tableManager.onDeleteTable(tableId);
+        assertThat(coordinatorContext.getKvBucketCount()).isZero();
 
         // make sure the delete replica success events in event manager is equal to the expected
         checkReplicaDelete(tableId, null, assignment);

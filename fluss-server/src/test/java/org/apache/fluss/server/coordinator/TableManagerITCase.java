@@ -942,6 +942,7 @@ class TableManagerITCase {
             TablePath firstTablePath = TablePath.of("fluss", "kv_capacity_first");
             TablePath secondTablePath = TablePath.of("fluss", "kv_capacity_second");
             gateway.createTable(newCreateTableRequest(firstTablePath, newPkTable(), false)).get();
+            waitForKvLeaderReplicaCount(limitedCluster, 3);
 
             assertThatThrownBy(
                             () ->
@@ -953,11 +954,12 @@ class TableManagerITCase {
                                             .get())
                     .cause()
                     .isInstanceOf(InsufficientKvLeaderReplicaCapacityException.class)
-                    .hasMessageContaining("currentKvLeaderReplicaCount=3")
-                    .hasMessageContaining("newKvLeaderReplicaCount=1")
+                    .hasMessageContaining("observedKvLeaderReplicaCount=3")
+                    .hasMessageContaining("requestedKvLeaderReplicaCount=1")
                     .hasMessageContaining("kvLeaderReplicaCapacity=3");
 
             gateway.dropTable(newDropTableRequest("fluss", "kv_capacity_first", false)).get();
+            waitForKvLeaderReplicaCount(limitedCluster, 0);
             gateway.createTable(
                             newCreateTableRequest(
                                     secondTablePath, newPkTable().withBucketCount(1), false))
@@ -995,6 +997,7 @@ class TableManagerITCase {
             PartitionSpec firstPartition = partitionSpec("20260707");
             PartitionSpec secondPartition = partitionSpec("20260708");
             createPartition(limitedCluster, tablePath, firstPartition, false);
+            waitForKvLeaderReplicaCount(limitedCluster, 3);
 
             assertThatThrownBy(
                             () ->
@@ -1002,11 +1005,12 @@ class TableManagerITCase {
                                             limitedCluster, tablePath, secondPartition, false))
                     .cause()
                     .isInstanceOf(InsufficientKvLeaderReplicaCapacityException.class)
-                    .hasMessageContaining("currentKvLeaderReplicaCount=3")
-                    .hasMessageContaining("newKvLeaderReplicaCount=3")
+                    .hasMessageContaining("observedKvLeaderReplicaCount=3")
+                    .hasMessageContaining("requestedKvLeaderReplicaCount=3")
                     .hasMessageContaining("kvLeaderReplicaCapacity=3");
 
             gateway.dropPartition(newDropPartitionRequest(tablePath, firstPartition, false)).get();
+            waitForKvLeaderReplicaCount(limitedCluster, 0);
             createPartition(limitedCluster, tablePath, secondPartition, false);
 
             assertThat(limitedCluster.getZooKeeperClient().getPartition(tablePath, "20260708"))
@@ -1014,6 +1018,18 @@ class TableManagerITCase {
         } finally {
             limitedCluster.close();
         }
+    }
+
+    private static void waitForKvLeaderReplicaCount(
+            FlussClusterExtension cluster, long expectedCount) {
+        retry(
+                Duration.ofSeconds(30),
+                () ->
+                        assertThat(
+                                        cluster.getCoordinatorServer()
+                                                .getReplicaCapacityController()
+                                                .getKvLeaderReplicaCount())
+                                .isEqualTo(expectedCount));
     }
 
     @Test

@@ -388,7 +388,8 @@ public class AutoPartitionManager implements AutoCloseable {
             }
 
             dropPartitions(
-                    tableInfo,
+                    tablePath,
+                    tableInfo.getPartitionKeys(),
                     now,
                     tableInfo.getTableConfig().getAutoPartitionStrategy(),
                     currentPartitions);
@@ -419,11 +420,8 @@ public class AutoPartitionManager implements AutoCloseable {
             TabletServerInfo[] servers = metadataCache.getLiveServers();
             long newKvLeaderReplicaCount =
                     tableInfo.hasPrimaryKey() ? tableInfo.getNumBuckets() : 0;
-            boolean capacityIncreased = false;
             try {
-                replicaCapacityController.checkAndIncreaseKvLeaderReplicaCount(
-                        newKvLeaderReplicaCount);
-                capacityIncreased = newKvLeaderReplicaCount > 0;
+                replicaCapacityController.checkCanCreateKvLeaderReplicas(newKvLeaderReplicaCount);
 
                 Map<Integer, BucketAssignment> bucketAssignments =
                         generateAssignment(tableInfo.getNumBuckets(), replicaFactor, servers)
@@ -446,21 +444,18 @@ public class AutoPartitionManager implements AutoCloseable {
                         "Auto partitioning skip to create partition {} for table [{}] as the partition is exist.",
                         partition,
                         tablePath);
-                rollbackKvLeaderReplicaCapacity(capacityIncreased, newKvLeaderReplicaCount);
             } catch (TooManyPartitionsException t) {
                 LOG.warn(
                         "Auto partitioning skip to create partition {} for table [{}], "
                                 + "because exceed the maximum number of partitions.",
                         partition,
                         tablePath);
-                rollbackKvLeaderReplicaCapacity(capacityIncreased, newKvLeaderReplicaCount);
             } catch (TooManyBucketsException t) {
                 LOG.warn(
                         "Auto partitioning skip to create partition {} for table [{}], "
                                 + "because exceed the maximum number of buckets per partition.",
                         partition,
                         tablePath);
-                rollbackKvLeaderReplicaCapacity(capacityIncreased, newKvLeaderReplicaCount);
             } catch (InsufficientKvLeaderReplicaCapacityException t) {
                 LOG.warn(
                         "Auto partitioning skip to create partition {} for table [{}], "
@@ -474,15 +469,7 @@ public class AutoPartitionManager implements AutoCloseable {
                         partition,
                         tablePath,
                         e);
-                rollbackKvLeaderReplicaCapacity(capacityIncreased, newKvLeaderReplicaCount);
             }
-        }
-    }
-
-    private void rollbackKvLeaderReplicaCapacity(
-            boolean capacityIncreased, long kvLeaderReplicaCount) {
-        if (capacityIncreased) {
-            replicaCapacityController.decreaseKvLeaderReplicaCount(kvLeaderReplicaCount);
         }
     }
 
@@ -511,12 +498,11 @@ public class AutoPartitionManager implements AutoCloseable {
     }
 
     private void dropPartitions(
-            TableInfo tableInfo,
+            TablePath tablePath,
+            List<String> partitionKeys,
             Instant currentInstant,
             AutoPartitionStrategy autoPartitionStrategy,
             NavigableMap<String, Set<String>> currentPartitions) {
-        TablePath tablePath = tableInfo.getTablePath();
-        List<String> partitionKeys = tableInfo.getPartitionKeys();
         int numToRetain = autoPartitionStrategy.numToRetain();
         // negative value means not to drop partitions
         if (numToRetain < 0) {
@@ -559,22 +545,16 @@ public class AutoPartitionManager implements AutoCloseable {
             while (dropIterator.hasNext()) {
                 String partitionName = dropIterator.next();
                 // drop the partition
-                boolean partitionDropped = true;
                 try {
                     metadataManager.dropPartition(
                             tablePath,
                             ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName),
                             false);
                 } catch (PartitionNotExistException e) {
-                    partitionDropped = false;
                     LOG.info(
                             "Auto partitioning skip to delete partition {} for table [{}] as the partition is not exist.",
                             partitionName,
                             tablePath);
-                }
-                if (partitionDropped && tableInfo.hasPrimaryKey()) {
-                    replicaCapacityController.decreaseKvLeaderReplicaCount(
-                            tableInfo.getNumBuckets());
                 }
 
                 // only remove when zk success, this reflects to the partitionsByTable

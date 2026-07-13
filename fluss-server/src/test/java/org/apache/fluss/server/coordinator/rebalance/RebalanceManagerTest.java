@@ -84,6 +84,7 @@ public class RebalanceManagerTest {
     private CoordinatorMetadataCache serverMetadataCache;
     private TestCoordinatorChannelManager testCoordinatorChannelManager;
     private AutoPartitionManager autoPartitionManager;
+    private ReplicaCapacityController replicaCapacityController;
     private LakeTableTieringManager lakeTableTieringManager;
     private RebalanceManager rebalanceManager;
     private KvSnapshotLeaseManager kvSnapshotLeaseManager;
@@ -118,16 +119,16 @@ public class RebalanceManagerTest {
         scheduler = new FlussScheduler(1);
         scheduler.startup();
 
+        replicaCapacityController =
+                new ReplicaCapacityController(
+                        conf, serverMetadataCache, TestingMetricGroups.COORDINATOR_METRICS);
         autoPartitionManager =
                 new AutoPartitionManager(
                         serverMetadataCache,
                         metadataManager,
                         new RemoteDirDynamicLoader(conf),
                         conf,
-                        new ReplicaCapacityController(
-                                conf,
-                                serverMetadataCache,
-                                TestingMetricGroups.COORDINATOR_METRICS));
+                        replicaCapacityController);
         lakeTableTieringManager =
                 new LakeTableTieringManager(TestingMetricGroups.LAKE_TIERING_METRICS);
         CoordinatorEventProcessor eventProcessor = buildCoordinatorEventProcessor(conf);
@@ -319,6 +320,7 @@ public class RebalanceManagerTest {
                 serverMetadataCache,
                 testCoordinatorChannelManager,
                 new CoordinatorContext(zkEpoch),
+                replicaCapacityController,
                 autoPartitionManager,
                 lakeTableTieringManager,
                 TestingMetricGroups.COORDINATOR_METRICS,

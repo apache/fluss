@@ -22,12 +22,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
-import org.apache.fluss.exception.DatabaseNotExistException;
-import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InsufficientKvLeaderReplicaCapacityException;
-import org.apache.fluss.exception.TableNotExistException;
-import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerInfo;
@@ -36,9 +31,9 @@ import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.List;
 import java.util.Set;
 
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Controls replica creation admission based on in-memory cluster capacity. */
@@ -53,7 +48,7 @@ public class ReplicaCapacityController implements ServerReconfigurable {
     private final CoordinatorMetadataCache metadataCache;
 
     private long kvLeaderReplicaMemoryReservedBytes;
-    private long currentKvLeaderReplicaCount;
+    private volatile long observedKvLeaderReplicaCount;
 
     public ReplicaCapacityController(
             Configuration conf,
@@ -86,87 +81,40 @@ public class ReplicaCapacityController implements ServerReconfigurable {
         }
     }
 
-    /**
-     * Checks whether the requested KV leader replicas fit the current capacity and reserves them if
-     * they do.
-     */
-    public void checkAndIncreaseKvLeaderReplicaCount(long newKvLeaderReplicaCount) {
-        if (newKvLeaderReplicaCount <= 0) {
+    /** Checks whether the requested KV leader replicas fit the current observed capacity. */
+    public void checkCanCreateKvLeaderReplicas(long requestedKvLeaderReplicaCount) {
+        if (requestedKvLeaderReplicaCount <= 0) {
             return;
         }
 
         synchronized (lock) {
             long capacity = getKvLeaderReplicaCapacityLocked();
-            long newTotal = currentKvLeaderReplicaCount + newKvLeaderReplicaCount;
-            if (capacity != CAPACITY_LIMIT_DISABLED && newTotal > capacity) {
+            long observedCount = observedKvLeaderReplicaCount;
+            if (capacity != CAPACITY_LIMIT_DISABLED
+                    && (observedCount > capacity
+                            || requestedKvLeaderReplicaCount > capacity - observedCount)) {
                 throw new InsufficientKvLeaderReplicaCapacityException(
                         String.format(
                                 "Not enough KV leader replica capacity. "
-                                        + "currentKvLeaderReplicaCount=%s, "
-                                        + "newKvLeaderReplicaCount=%s, "
+                                        + "observedKvLeaderReplicaCount=%s, "
+                                        + "requestedKvLeaderReplicaCount=%s, "
                                         + "kvLeaderReplicaCapacity=%s.",
-                                currentKvLeaderReplicaCount, newKvLeaderReplicaCount, capacity));
+                                observedCount, requestedKvLeaderReplicaCount, capacity));
             }
-
-            currentKvLeaderReplicaCount = newTotal;
         }
     }
 
-    /** Releases KV leader replicas removed from metadata or reserved by a failed creation. */
-    public void decreaseKvLeaderReplicaCount(long removedKvLeaderReplicaCount) {
-        if (removedKvLeaderReplicaCount <= 0) {
-            return;
-        }
-
-        synchronized (lock) {
-            currentKvLeaderReplicaCount =
-                    Math.max(0, currentKvLeaderReplicaCount - removedKvLeaderReplicaCount);
-        }
+    /** Replaces the observed KV leader replica count with a CoordinatorContext-derived snapshot. */
+    public void updateObservedKvLeaderReplicaCount(long observedKvLeaderReplicaCount) {
+        checkArgument(
+                observedKvLeaderReplicaCount >= 0,
+                "Observed KV leader replica count must be greater than or equal to 0.");
+        this.observedKvLeaderReplicaCount = observedKvLeaderReplicaCount;
     }
 
-    /** Rebuilds the current KV leader replica count from metadata. */
-    public void rebuildCurrentKvLeaderReplicaCount(MetadataManager metadataManager) {
-        long rebuiltCount = 0;
-        List<String> databases = metadataManager.listDatabases();
-        for (String database : databases) {
-            List<String> tables;
-            try {
-                tables = metadataManager.listTables(database);
-            } catch (DatabaseNotExistException e) {
-                continue;
-            } catch (FlussRuntimeException e) {
-                if (!metadataManager.databaseExists(database)) {
-                    continue;
-                }
-                throw e;
-            }
-            for (String table : tables) {
-                TablePath tablePath = TablePath.of(database, table);
-                TableInfo tableInfo;
-                try {
-                    tableInfo = metadataManager.getTable(tablePath);
-                } catch (TableNotExistException e) {
-                    continue;
-                } catch (FlussRuntimeException e) {
-                    if (!metadataManager.tableExists(tablePath)) {
-                        continue;
-                    }
-                    throw e;
-                }
-                rebuiltCount += getKvLeaderReplicaCount(tableInfo, metadataManager);
-            }
-        }
-
-        synchronized (lock) {
-            currentKvLeaderReplicaCount = rebuiltCount;
-        }
-    }
-
-    /** Returns the current in-memory KV leader replica count. */
+    /** Returns the latest CoordinatorContext-derived KV leader replica count. */
     public long getKvLeaderReplicaCount() {
-        synchronized (lock) {
-            return currentKvLeaderReplicaCount;
-        }
+        return observedKvLeaderReplicaCount;
     }
 
     /** Returns the current cluster KV leader replica capacity, or -1 if disabled. */
@@ -244,25 +192,6 @@ public class ReplicaCapacityController implements ServerReconfigurable {
             throw new ConfigException(
                     ConfigOptions.KV_LEADER_REPLICA_MEMORY_RESERVED.key()
                             + " must be greater than or equal to 0.");
-        }
-    }
-
-    private static long getKvLeaderReplicaCount(
-            TableInfo tableInfo, MetadataManager metadataManager) {
-        if (!tableInfo.hasPrimaryKey()) {
-            return 0;
-        }
-        if (!tableInfo.isPartitioned()) {
-            return tableInfo.getNumBuckets();
-        }
-        try {
-            return (long) metadataManager.getPartitions(tableInfo.getTablePath()).size()
-                    * tableInfo.getNumBuckets();
-        } catch (FlussRuntimeException e) {
-            if (!metadataManager.tableExists(tableInfo.getTablePath())) {
-                return 0;
-            }
-            throw e;
         }
     }
 }

@@ -94,6 +94,7 @@ public class CoordinatorContext {
     private final Map<Long, TableInfo> tableInfoById = new HashMap<>();
 
     private final Map<TableBucket, LeaderAndIsr> bucketLeaderAndIsr = new HashMap<>();
+    private final Set<TableBucket> kvBuckets = new HashSet<>();
     private final Set<Long> tablesToBeDeleted = new HashSet<>();
 
     private final Set<TablePartition> partitionsToBeDeleted = new HashSet<>();
@@ -345,6 +346,21 @@ public class CoordinatorContext {
                                                     bucket)));
         }
         return allBuckets;
+    }
+
+    /** Idempotently adds buckets observed as KV buckets. */
+    public void addKvBuckets(Collection<TableBucket> tableBuckets) {
+        kvBuckets.addAll(tableBuckets);
+    }
+
+    /** Idempotently removes buckets that are no longer observed as KV buckets. */
+    public void removeKvBuckets(Collection<TableBucket> tableBuckets) {
+        kvBuckets.removeAll(tableBuckets);
+    }
+
+    /** Returns the number of KV buckets currently observed by the Coordinator. */
+    public long getKvBucketCount() {
+        return kvBuckets.size();
     }
 
     public Set<TableBucketReplica> replicasOnTabletServer(int server) {
@@ -818,6 +834,7 @@ public class CoordinatorContext {
         tableInfoById.clear();
         pathByPartitionId.clear();
         partitionIdByPath.clear();
+        kvBuckets.clear();
     }
 
     public void resetContext() {

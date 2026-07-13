@@ -174,6 +174,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final ZooKeeperClient zooKeeperClient;
     private final ExecutorService ioExecutor;
     private final CoordinatorContext coordinatorContext;
+    private final ReplicaCapacityController replicaCapacityController;
     private final ReplicaStateMachine replicaStateMachine;
     private final TableBucketStateMachine tableBucketStateMachine;
     private final CoordinatorEventManager coordinatorEventManager;
@@ -202,6 +203,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
             CoordinatorMetadataCache serverMetadataCache,
             CoordinatorChannelManager coordinatorChannelManager,
             CoordinatorContext coordinatorContext,
+            ReplicaCapacityController replicaCapacityController,
             AutoPartitionManager autoPartitionManager,
             LakeTableTieringManager lakeTableTieringManager,
             CoordinatorMetricGroup coordinatorMetricGroup,
@@ -215,6 +217,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.serverMetadataCache = serverMetadataCache;
         this.coordinatorChannelManager = coordinatorChannelManager;
         this.coordinatorContext = coordinatorContext;
+        this.replicaCapacityController = replicaCapacityController;
         this.coordinatorEventManager = new CoordinatorEventManager(this, coordinatorMetricGroup);
         this.replicaStateMachine =
                 new ReplicaStateMachine(
@@ -318,6 +321,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         } catch (Exception e) {
             throw new FlussRuntimeException("Fail to initialize coordinator context.", e);
         }
+        updateObservedKvLeaderReplicaCount();
 
         // We need to send UpdateMetadataRequest after the coordinator context is initialized and
         // before the state machines in tableManager are started. This is because tablet servers
@@ -353,6 +357,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         rebalanceManager.close();
         onShutdown();
         coordinatorContext.resetContext();
+        updateObservedKvLeaderReplicaCount();
     }
 
     private ServerInfo getCoordinatorServerInfo() {
@@ -573,6 +578,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
             coordinatorContext.updateBucketReplicaAssignment(
                     tableBucket, bucketAssignment.getReplicas());
         }
+        trackKvBucketsForLoadedAssignment(tableId, tableBucketSet);
         Map<TableBucket, LeaderAndIsr> leaderAndIsrMap =
                 zooKeeperClient.getLeaderAndIsrs(tableBucketSet);
         for (TableBucket tableBucket : tableBucketSet) {
@@ -595,6 +601,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     tableId,
                     partitionId,
                     tableAssignment.getBucketAssignments().keySet());
+        }
+    }
+
+    @VisibleForTesting
+    void trackKvBucketsForLoadedAssignment(long tableId, Set<TableBucket> tableBuckets) {
+        TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
+        if (tableInfo == null || tableInfo.hasPrimaryKey()) {
+            coordinatorContext.addKvBuckets(tableBuckets);
         }
     }
 
@@ -747,6 +761,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 tableManager.onDeletePartition(
                         resumeDropEvent.getTableId(), resumeDropEvent.getPartitionId());
             }
+            updateObservedKvLeaderReplicaCount();
         } else if (event instanceof ListRebalanceProgressEvent) {
             ListRebalanceProgressEvent listRebalanceProgressEvent =
                     (ListRebalanceProgressEvent) event;
@@ -759,6 +774,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
         } else {
             LOG.warn("Unknown event type: {}", event.getClass().getName());
         }
+    }
+
+    private void updateObservedKvLeaderReplicaCount() {
+        replicaCapacityController.updateObservedKvLeaderReplicaCount(
+                coordinatorContext.getKvBucketCount());
     }
 
     private void processRetryOfflineLeader() {
@@ -822,6 +842,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorContext.putTableInfo(tableInfo);
         TableAssignment tableAssignment = createTableEvent.getTableAssignment();
         tableManager.onCreateNewTable(tablePath, tableInfo.getTableId(), tableAssignment);
+        updateObservedKvLeaderReplicaCount();
         if (createTableEvent.isAutoPartitionTable()) {
             autoPartitionManager.addAutoPartitionTable(tableInfo, true);
         }
@@ -1016,6 +1037,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 createPartitionEvent.getPartitionId(),
                 partitionName,
                 partitionAssignment);
+        updateObservedKvLeaderReplicaCount();
         autoPartitionManager.addPartition(tableId, partitionName);
 
         Set<TableBucket> tableBuckets = new HashSet<>();
@@ -1052,6 +1074,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         coordinatorContext.queueTableDeletion(Collections.singleton(tableId));
         tableManager.onDeleteTable(tableId);
+        updateObservedKvLeaderReplicaCount();
         if (dropTableEvent.isAutoPartitionTable()) {
             autoPartitionManager.removeAutoPartitionTable(tableId);
         }
@@ -1098,6 +1121,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         coordinatorContext.queuePartitionDeletion(Collections.singleton(tablePartition));
         tableManager.onDeletePartition(tableId, dropPartitionEvent.getPartitionId());
+        updateObservedKvLeaderReplicaCount();
         autoPartitionManager.removePartition(tableId, dropPartitionEvent.getPartitionName());
 
         // send update metadata request.

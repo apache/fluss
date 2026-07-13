@@ -330,8 +330,6 @@ public class CoordinatorServer extends ServerBase {
 
             this.coordinatorChannelManager = new CoordinatorChannelManager(rpcClient);
 
-            replicaCapacityController.rebuildCurrentKvLeaderReplicaCount(metadataManager);
-
             this.autoPartitionManager =
                     new AutoPartitionManager(
                             metadataCache,
@@ -352,6 +350,7 @@ public class CoordinatorServer extends ServerBase {
                             metadataCache,
                             coordinatorChannelManager,
                             coordinatorContext,
+                            replicaCapacityController,
                             autoPartitionManager,
                             lakeTableTieringManager,
                             serverMetricGroup,
@@ -568,6 +567,11 @@ public class CoordinatorServer extends ServerBase {
         } else {
             throw new IllegalStateException("CoordinatorEventProcessor is not initialized yet.");
         }
+    }
+
+    @VisibleForTesting
+    ReplicaCapacityController getReplicaCapacityController() {
+        return replicaCapacityController;
     }
 
     CompletableFuture<Void> stopServices() {
